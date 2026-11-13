@@ -42,7 +42,7 @@ no verb-specific flags. the table has these columns, or prints `no api keys`:
 | `created`, `last used`, `expires` | dates as `YYYY-MM-DD`, `—` when unset |
 | `scopes` | `<resource>=<id>:<perm>,<perm>` per scope, space-separated, or `legacy (full access)` |
 
-`--json` prints the raw response, `{ success, keys }`, where each key has `id`, `name`, `keyPrefix`, `environment`, `scopes`, `expiresAt`, `createdAt` and `lastUsedAt`.
+`--json` prints the raw response, `{ success, keys }`, where each key has `id`, `name`, `keyPrefix`, `environment`, `scopes`, `maxToolTier`, `expiresAt`, `createdAt` and `lastUsedAt`.
 
 ### examples
 
@@ -80,7 +80,7 @@ copy this now — it is not shown again:
 owk_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-`--json` prints the raw response: `success`, `key` (the raw value), `keyId`, `name`, `environment`, `scopes`, `expiresAt` and `keyPrefix`.
+`--json` prints the raw response: `success`, `key` (the raw value), `keyId`, `name`, `environment`, `scopes`, `maxToolTier` (always `1`), `expiresAt` and `keyPrefix`.
 
 ### examples
 

@@ -14,9 +14,10 @@ and the four server-only collections described under [what owlette stores](#what
 
 ---
 
-## current state: dormant
+## current state
 
-Every gate is shipped and none of them is enforced. A gate enforces for a site only when **all** of
+Every gate is shipped. As of 2026-11-12, plans are enforced on dev (since 19:13 UTC that day) and
+ship off on prod, where every gate is dormant. A gate enforces for a site only when **all** of
 these hold on the origin that answers the request:
 
 1. `PLAN_ENFORCEMENT` is exactly `on`. `On`, `true` and `1` all count as off.
@@ -184,7 +185,9 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
 - [ ] **Test accounts ready.** A non-superadmin account with a verified email that **owns a site**,
   and a fresh password account left **unverified** that owns a site. A superadmin's sites always
   read `reason: "superadmin"` and prove nothing, and an account that owns no site proves nothing
-  either (see step 4 below).
+  either (see step 4 below). A person has to register them: sign-up on dev runs a Turnstile check
+  that refuses an automated browser, and a new account sets up a second factor before it reaches
+  the dashboard.
 
 ---
 
@@ -346,7 +349,23 @@ switch, and `trial.status: "active"` after it.
 - [ ] Dev has been on and clean: smoke and billing checks passed, one 23:30 run read with
   `recorded` equal to `reported`, no `[plan]`, `[billing]` or `[plan-daily]` errors in the logs.
 - [ ] tridant id **production** has site billing, the owlette products and their prices. Verify
-  with the probe against `https://api.tridant.io`, using the prod key.
+  with the probe against `https://api.tridant.io`, using the prod key. As of 2026-11-12 it does not
+  (tridant-id #124, #125): its billing routes answer `404`, and `id.tridant.io` serves no OIDC
+  discovery document. These need no key: each route answers `401` once it exists and `404` before,
+  and the public catalogue shows `site_billed: true` on `prd_owlette_core` and `prd_owlette_pro`
+  once it is ready.
+
+  ```bash
+  for p in billing/trial billing/sites usage billing/link; do
+    curl -s -o /dev/null -w "%{http_code} POST /v1/$p\n" -X POST "https://api.tridant.io/v1/$p"
+  done
+  curl -s -o /dev/null -w "%{http_code} GET /v1/billing/checkout/probe\n" "https://api.tridant.io/v1/billing/checkout/probe"
+  curl -s -o /dev/null -w "%{http_code} oidc discovery\n" "https://id.tridant.io/.well-known/openid-configuration"
+  curl -s "https://api.tridant.io/v1/products"
+  ```
+
+  Until then railway-prod and vercel-prod hold no `TRIDANT_LICENSE_KEY` and no `TRIDANT_OIDC_*`,
+  and `node scripts/sync-env.mjs check` listing them as missing there is expected.
 - [ ] The pricing copy no longer says "free during beta". That covers `STATUS`, `PRICE_LINE`,
   `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "applies after beta" framing in
   the plans docs. The change is on `main` and deployed.
@@ -361,7 +380,8 @@ switch, and `trial.status: "active"` after it.
   `curl -s https://vercel-origin.owlette.app/api/health`.
 - [ ] Functions are deployed to prod (`--project prod`, explicitly: `.firebaserc` defaults to dev).
 - [ ] `plan-daily` is registered for prod at `https://owlette.app/api/cron/plan-daily`, `30 23 * * *`
-  UTC, with the prod `CRON_SECRET`, and a manual run returns `200` with `errors: 0`.
+  UTC, with the prod `CRON_SECRET`, and a manual run returns `200` with `errors: 0`. Register it
+  only once prod serves the route: before the web release that carries it, it answers `404`.
 - [ ] The customer notice (below) has been signed off by the owner.
 
 ### the flip

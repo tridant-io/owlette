@@ -85,7 +85,7 @@ and `startDesktop(root, port, args)`.
 
 **One app launch per take, not per suite.** The launch argv is part of the subject: episode
 3 films the dialog that `--pair --server prod` opens at startup, which is the handoff the
-installer performs (`owlette_installer.iss:841-857`). So `global-setup` only pins the layout
+installer performs (`owlette_installer.iss:934-957`). So `global-setup` only pins the layout
 and builds the scratch tree; each scene calls `startTake([...argv])` and `endTake()`.
 
 ### Framing

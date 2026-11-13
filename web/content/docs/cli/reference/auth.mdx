@@ -14,7 +14,7 @@ verbs:
 
 ## login
 
-requests a device code, prints a 3-word pairing phrase and the pairing URL, opens the URL in your browser, and polls until you approve the request in the dashboard. the issued key is then stored for the active profile.
+requests a device code, prints a 3-word pairing phrase and the pairing URL, opens the URL in your browser, and polls until you approve the request in the dashboard. the issued key is then stored for the active profile. it starts at [tool tier](/docs/api/authentication#tool-tiers) 1; raise it in the dashboard under **settings → api keys**.
 
 ```bash
 owlette auth login [--no-browser]

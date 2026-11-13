@@ -43,7 +43,7 @@ push software silently to any number of Windows machines: NSIS, Inno Setup, MSI,
 drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; a new version uploads only the chunks that changed, and a machine that already holds a chunk skips it. every upload is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowed extract path.
 
 **hoot: ai assistant**
-LLM-powered fleet management in natural language, on your own Anthropic or OpenAI key. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, and shareable conversations. with hoot mcp, an AI agent running on one of your machines gets the same tools on the others, and the machine's pairing is the credential: no API key.
+LLM-powered fleet management in natural language, on your own Anthropic or OpenAI key. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval, and a change to what a machine launches always waits for it. screenshot analysis, autonomous crash investigation, and shareable conversations. with hoot mcp, an AI agent running on one of your machines gets the same tools on the others, and the machine's pairing is the credential: no API key.
 
 **talons: automations**
 site-scoped automations: a trigger (a schedule, a machine or process event, a metric threshold), an optional condition, and one or more outputs. hoot can write them for you, and every run is recorded.
@@ -58,7 +58,7 @@ organize machines into sites by location, department or project. roles are per s
 threshold and offline alerts by email, signed webhooks for external systems, and an activity log across the fleet. a public REST API with an [OpenAPI reference](https://owlette.app/docs/api), a command line client (`@owlette/cli`), and SDKs for Node (`@owlette/sdk`) and Python (`owlette-sdk`).
 
 **desktop app**
-the local window and tray (menu bar on macOS) icon on each machine: the process list, launch modes and schedules, drag and drop to add a process, joining or leaving a site, and the service's status. **submit issue** sends support a problem or a request with the machine's system info and, if you tick it, its logs; the dashboard's help menu has it too, with screenshots and video. light, dark or system appearance, like the dashboard.
+the local window and tray (menu bar on macOS) icon on each machine: the process list, launch modes and schedules, drag and drop to add a process, joining or leaving a site, and the service's status. **submit issue** sends support a problem or a request with the machine's system info, any screenshots and videos you add and, if you tick it, its logs; the dashboard's help menu has it too, with screenshots and videos but no logs. light, dark or system appearance, like the dashboard.
 
 > **[full documentation →](https://owlette.app/docs)**
 

@@ -10,7 +10,8 @@ This is the canonical first-time path for an engineer cloning Owlette to develop
 | Node.js | 22.x (see [/.nvmrc](../.nvmrc)) | web, desktop, functions, cli, sdks | [package.json engines field](../package.json) |
 | npm | >=10.0.0 | all js packages | [package.json](../package.json) |
 | Python | 3.11 | agent venv + tests, SDK dev (SDK requires >=3.10). The installer build downloads its own embedded 3.11.8 | [scripts/bootstrap-windows.ps1](../scripts/bootstrap-windows.ps1), [sdks/python/pyproject.toml](../sdks/python/pyproject.toml) |
-| Rust (rustup) + MSVC C++ build tools + WebView2 | stable | desktop app (`desktop/`) and the `owlette-host` service host (`agent/host`), both compiled by the full installer build | [desktop/README.md](../desktop/README.md) |
+| Rust (rustup) + MSVC C++ build tools + WebView2 | stable | the desktop app and owlette swoop (`desktop/`), the `owlette-host` service host (`agent/host`) and the streamer (`agent/swoop`), all compiled by the full installer build | [desktop/README.md](../desktop/README.md) |
+| CMake | any (the copy inside Visual Studio is found on its own) | the streamer's vendored opus; the full installer build stops without it | [agent/build_installer_full.bat](../agent/build_installer_full.bat) |
 | JDK 21 (Temurin) | 21.x | Firebase emulators in rules tests and e2e | [web/e2e/README.md](../web/e2e/README.md) |
 | firebase-tools | 15.x (global) | emulators + rules/functions deploy (13.x cannot run the functions emulator) | [web/e2e/README.md](../web/e2e/README.md) |
 | Inno Setup | 6.x | installer build | [agent/build_installer_full.bat](../agent/build_installer_full.bat) (set `%ISCC%`, put `iscc` on PATH, or use the default install path) |
@@ -99,7 +100,7 @@ Run the checks for what you changed:
 
 ## week-1: ship a new installer
 
-The release recipe is [agent-installer-release.md](runbooks/agent-installer-release.md), [docs/internal/version-management.md](internal/version-management.md) says what a version bump writes, and [docs/changelog.md](changelog.md) is the release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust for the desktop app and `owlette-host`. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
+The release recipe is [agent-installer-release.md](runbooks/agent-installer-release.md), [docs/internal/version-management.md](internal/version-management.md) says what a version bump writes, and [docs/changelog.md](changelog.md) is the release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust and CMake for the desktop apps, `owlette-host` and the streamer. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
 
 ## credentials bootstrap order
 

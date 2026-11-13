@@ -236,9 +236,9 @@ rules.
     `initializeApp()` 104ms, `getFirestore()` 478ms, full `lib/index.js` load
     530ms — about a second all in. The 10s default is blown by process spawn
     and scheduling on a loaded machine, which is why it is intermittent: the
-    same code passes and fails run to run. Four files do initialise Firestore at
-    module scope (`deploymentStatus`, `deploymentSweeper`, `distributionFanout`,
-    `metricsHistory`), and making that lazy is still tidier, but the numbers say
+    same code passes and fails run to run. Two files do initialise Firestore at
+    module scope (`distributionFanout`, `metricsHistory`), and making that lazy
+    is still tidier, but the numbers say
     it would not fix this — do not reach for that refactor expecting it to.
 
     **firebase-tools must be 15.x.** 13.x cannot deploy or emulate a

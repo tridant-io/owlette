@@ -30,13 +30,11 @@ npm run videos                       # every scene
 npm run videos:debug                 # headed + inspector, to tune selectors/pacing
 ```
 
-Grep by a **slug word**, not by episode number: the v2 renumbering (`d2387247`) renamed
-the files but not the `test('episode N — …')` titles inside them, so every scene title
-still carries its pre-renumbering number — `04-dashboard-tour.video.ts` is titled
-`episode 3`, and `--grep "episode 4"` therefore selects nothing. Until the titles are
-resynced, the map at the bottom of this file is the authority on which episode a scene
-serves. (If you renumber another episode, the title is part of the rename — one more step
-than `series-outline.md`'s migration-mechanics list currently names.)
+Grep by a **slug word**, not by episode number: every scene title carries its file's
+number (`04-dashboard-tour.video.ts` is `episode 4 — …`), but `--grep "episode 1"` also
+selects `episode 10`–`17` and the `b02` scene. (If you renumber an episode, the title is
+part of the rename — one more step than `series-outline.md`'s migration-mechanics list
+currently names.)
 
 Never runs in CI — it needs a real desktop. Output: `dev/video-tutorials/footage/web/<scene>.mp4`.
 A capture in flight writes `<scene>.mp4.tmp.mp4` and is renamed only after ffmpeg exits
@@ -160,7 +158,7 @@ its front matter (`dev/video-tutorials/scripts/NN-slug.md`).
 
 | Scenario (fixtures.ts) | Episodes | Scene file(s) |
 |---|---|---|
-| `dashboard-mixed-states` | 1 (b-roll), 4 (dashboard), 7 (health), 8 (remote actions), 17 (fleet maintenance) | `01-what-is-owlette`, `04-dashboard-tour`, `07-reading-machine-health`, `08-remote-actions`, `17-fleet-maintenance` |
+| `dashboard-mixed-states` | 1 (b-roll, and beat b02), 4 (dashboard), 7 (health), 8 (remote actions), 17 (fleet maintenance) | `01-what-is-owlette`, `01-what-is-owlette-b02`, `04-dashboard-tour`, `07-reading-machine-health`, `08-remote-actions`, `17-fleet-maintenance` |
 | `pairing-first-machine` | 3 (web beats) | `03-install-and-pair` |
 | `control-process-restarting` | 5 (keep alive), 16 (logs) | `05-keep-a-process-alive`, `16-logs-and-troubleshooting` |
 | `automate-schedule-editor` | 6 (schedule), 14 (team & alerts) | `06-run-on-a-schedule`, `14-team-and-alerts` |

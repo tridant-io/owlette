@@ -132,8 +132,9 @@ window. The main window opens at 1120×678 and a swoop window at 1280×768: a
 with the bar on top (its default) it fills the window with no bars. Each new
 swoop window opens 32 px right and down from the newest one still open; it is
 centred when there is none, when that one is minimised, and again after eight
-steps. There is no tray and no agent coupling: the app reads and writes nothing under the
-owlette data root, so it runs on a workstation without an agent. It has icons of
+steps. There is no tray and no agent coupling: the app writes nothing under the
+owlette data root and reads only the agent's `config.json` there (below), so it
+runs on a workstation without an agent. It has icons of
 its own (`desktop/viewer/icons`, the small eye, beside the desktop app's full one;
 on macOS 26 the `Assets.car` in `icons/macos`, compiled from its Icon Composer
 source with `desktop/src-tauri/icons/macos/compile.sh desktop/viewer/icons/macos`,
@@ -215,7 +216,8 @@ strip across the top of the window holding nothing else: the controls and a
 160 px drag handle beside them at the right (on macOS only the traffic lights'
 room), with presses everywhere else going through to the picture. Fullscreen
 hides all of it. The login page is the app's own: the whole page is the drag
-surface, under an "owlette | swoop" lockup with no tagline, one "sign in with
+surface, under owlette swoop's small eye and its name (for screen readers only
+on macOS, where the menu bar names the app) with no tagline, one "sign in with
 your browser" button, and the email form behind an "or use your email and
 password" link. The site footer (docs, privacy, terms) shows on no page in the
 app.
@@ -318,8 +320,9 @@ desktop/
 │  ├─ globals.css        # design tokens + unlayered interaction rules
 │  ├─ assets/fonts/      # self-hosted Geist / Geist Mono (variable woff2)
 │  ├─ components/        # the process list and detail, schedule editor, join/leave site, drop confirm,
-│  │                     #   restart countdown, permission banner (macOS), report issue, status footer
-│  ├─ components/ui/     # 14 shadcn primitives, verbatim from web/
+│  │                     #   missing path, restart countdown, permission banner (macOS), submit issue,
+│  │                     #   connect an ai agent, status footer
+│  ├─ components/ui/     # 14 shadcn primitives, copied from web/ (see "Design system")
 │  ├─ hooks/             # config, app states, file watch, service health, file drop, launch flags
 │  ├─ lib/ipc.ts         # typed wrappers for every host command + event
 │  ├─ lib/owletteConfig.ts   # config.json schema + the transforms behind every write
@@ -337,12 +340,14 @@ desktop/
    ├─ binaries/          # the staged swoop sidecar (macOS; gitignored)
    ├─ src/paths.rs       # the data root (%PROGRAMDATA%\Owlette, /Library/Application Support/Owlette,
    │                     #   /var/lib/owlette, or OWLETTE_DATA_ROOT) + path scoping
+   ├─ src/path_status.rs # is a typed path a file, a folder, a link or missing (the missing-path warning)
    ├─ src/json_io.rs     # locked + atomic JSON read/write (named mutex on Windows, flock off it)
    ├─ src/watchers.rs    # directory watchers for the three seam files
    ├─ src/service_ctl.rs # service state / start / stop: the SCM, launchd or systemd
    ├─ src/seam.rs        # macOS / Linux: requests to the root daemon (pair, leave, restart, reboot)
    ├─ src/jobrunner.rs   # macOS / Linux: GUI jobs the daemon asks of the app (captures, notifications)
    ├─ src/agent_cli.rs   # runs the agent's python CLI (pairing, leaving, issues) and streams progress
+   ├─ src/issue_attachments.rs # screenshots and videos staged in ipc/issue-attachments for submit issue
    ├─ src/tcc.rs         # macOS: reports the Screen Recording grant to the daemon
    ├─ src/awake.rs       # keep screens awake: the session's half (idle lock, screensaver)
    ├─ src/process_ctl.rs # WM_CLOSE-then-terminate with an identity check
@@ -361,11 +366,13 @@ desktop/
 
 ## Tray, window lifetime and launch arguments
 
-This is a tray app: `src-tauri/tauri.conf.json` starts the window hidden and
-closing it hides it again, so the tray icon (the menu bar item on macOS, where
+The desktop app lives in the tray: `src-tauri/tauri.conf.json` starts the
+window hidden and closing it hides it again, so the tray icon (the menu bar item on macOS, where
 there is no Dock icon until the window opens), not a window, is what keeps the
 process alive. `src/tray.rs` replaced the old `agent/src/owlette_tray.py` and
-carries the porting notes for the status, icon and toast semantics.
+carries the porting notes for the status, icon and toast semantics. While a
+swoop session is capturing, the icon is yellow whatever the site's indicator
+setting, which steers only the toast; an error still shows red (`icon_code`).
 
 The tray menu is the status rows, then `swoop`, `open owlette`, `restart
 service`, `start on login` and `exit`. While a swoop session is capturing, its
@@ -376,9 +383,15 @@ the same kill a dashboard kill without a session id makes, logged with the
 reason `local_tray`. No elevation. macOS and Linux do not offer it yet: there
 the daemon refuses a flag the console user wrote, and the request seam has no
 kill verb. `exit` stops the service and quits; the stop needs administrator
-rights, so it raises one UAC prompt (the one elevation a click may cause). The window's menu (`AppMenu`) is `swoop`,
-`docs`, `submit issue`, `config`, `logs`, `appearance`, `start on login`,
-`restart service`, `reload window`, and the site action last. Both `swoop` entries
+rights, so it raises one UAC prompt, as `restart service` on a stopped service
+and the footer's `start service` can; nothing elevates without a click. The
+window's menu (`AppMenu`) is `swoop`, `docs`, `connect an ai agent`,
+`submit issue`, `config`, `logs`, `appearance`, `start on login`,
+`restart service`, `reload window`, and the site action last.
+`connect an ai agent` shows the command that connects an AI agent on this
+machine to hoot mcp (`ConnectAgentDialog`), and is there only on Windows and
+macOS with the agent's `fleet_mcp.py` installed (`hoot_mcp_command` in
+`src/agent_cli.rs`). Both `swoop` entries
 open owlette swoop, the viewer app, on `<dashboard>/swoop` (`src/viewer_launch.rs`):
 the dashboard is the one `config.json`'s `firebase.api_base` names, and the app
 is looked for beside this exe on Windows and Linux and at
@@ -389,11 +402,12 @@ is greyed out and the window's row is hidden.
 | --- | --- |
 | `--tray` | supply the tray icon, no window. What the service passes when it starts the app (`_try_launch_tray` on Windows), and what the startup shortcut, the macOS LaunchAgent and the Linux user unit pass. |
 | `--restart-prompt` | a process exceeded its relaunch budget (`OwletteService.reached_max_relaunch_attempts`): show the reboot countdown (`RestartCountdown`, armed by `useRestartPrompt`). |
+| `--pair` | open on the join site dialog, pairing against the server `--server dev` or `--server prod` names (without it, the one `config.json` names). What the Windows installer passes on an interactive install (`ExecAsOriginalUser` in `agent/owlette_installer.iss`). |
 
 A second launch never becomes a second process: the single-instance plugin
 forwards its argv on `owlette://second-instance`, and a forwarded launch without
 `--tray` shows the window. `launchArgs()` covers the *first* launch only, so a UI
-that reacts to either flag handles both; `useLaunchFlag` watches both routes.
+that reacts to a flag handles both; `useLaunchFlag` watches both routes.
 
 Two pid markers tell the service what is open (`src/pid_file.rs`):
 `tmp/tray.pid` for the life of the process, `tmp/gui.pid` only while the window
@@ -485,7 +499,8 @@ Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
   `config/` and `tmp/`, not on the files, and coalesce each replace burst into
   one `owlette://file-changed` event.
 - `service_status.json` older than 120 s means the service is not writing, no
-  matter what the service manager reports (`owlette_tray.read_service_status`);
+  matter what the service manager reports (`STATUS_STALE_AFTER` in
+  `src/service_ctl.rs`);
   the service refreshes it on a 30 s throttle, so anything under two minutes is
   normal.
 
@@ -497,10 +512,14 @@ agent CLI's in `src/lib/agentCli.ts` and the issue attachments' in
 ### The request seam (macOS and Linux)
 
 Off Windows this app runs as the console user, who can neither use the token
-store nor control the root daemon. Joining a site, leaving it, restarting the
-machine and dismissing a pending reboot (and, on macOS, restarting the service)
-are requests the daemon carries out (`src-tauri/src/seam.rs`; the daemon half
-is "The privileged-request seam" in `agent/src/configure_site.py`). The app
+store nor control the root daemon. Joining a site, leaving it, submitting an
+issue, restarting the machine and dismissing a pending reboot (and, on macOS,
+restarting the service) are requests the daemon carries out
+(`src-tauri/src/seam.rs`; the daemon half is "The privileged-request seam" in
+`agent/src/configure_site.py`). On a machine that already has a site, the daemon
+carries out a join or a leave only for root or a member of `admin`, `sudo` or
+`wheel`, and tells anyone else that only an administrator can change the site
+(`_site_change_refused`). The app
 writes `{"verb", "nonce"}` 0600 to `ipc/requests/<id>.json.tmp`, renames it into
 place, and reads the daemon's JSON-line answer from `<id>.result` until a
 terminal event: the same stream the Windows helper prints, forwarded as the
@@ -596,11 +615,12 @@ testable on its own:
 Two rules the classifier will not bend:
 
 - **`file_path` only ever holds a real file**, never a command-line argument
-  string. The service runs that field through `os.path.abspath()`
-  (`OwletteService._validate_path`), which turns `-File C:\x.ps1` into a path
-  under the service's working directory. That is a known agent-side bug, not a
-  classifier limitation, and it is why a `.ps1` travels as a bare quoted path
-  and why `.bat` files are launched directly.
+  string: a `.ps1` travels as a bare quoted path and `.bat` files go in as the
+  executable. It began as a guard against the service running that field
+  through `os.path.abspath()` (`OwletteService._validate_path`), which turned
+  `-File C:\x.ps1` into a path under its working directory; 4.1.25 fixed that,
+  and a value that is not one whole file now reaches the program as arguments
+  (`launch_process_as_user` in `agent/src/owlette_service.py`).
 - **A dropped process starts with `launch_mode: 'off'`.** Configuring something
   is not the same as starting it, and its numbers come from
   `NEW_PROCESS_DEFAULTS` so that a dropped entry and one added with the `+`
@@ -615,7 +635,11 @@ file can be misread but never read.
 
 Everything visual is ported from `web/` and **must stay a verbatim copy** where
 it is marked as one. `src/components/ui/*` and `src/lib/utils.ts` are byte-for-byte
-the files in `web/components/ui/` and `web/lib/utils.ts`; the `@` alias in
+the files in `web/components/ui/` and `web/lib/utils.ts`, except two desktop
+edits a re-copy must keep: `dialog.tsx` does not dismiss on a press on the
+title bar (`[data-titlebar]`), so a modal never pins the frameless window, and
+aligns its close button with the title line; `sonner.tsx` takes the theme
+`HostTheme` forces (`forcedTheme`). The `@` alias in
 `vite.config.ts` and `tsconfig.app.json` exists specifically so those files
 compile here with their `@/lib/utils` imports untouched. When a primitive changes
 in `web/`, re-copy it rather than editing this copy. (`.oxlintrc.json` turns
@@ -670,7 +694,8 @@ files across, and delete the dependency again.
 alias, `cn()` + `cva()` + `tailwind-merge`, the `button.tsx` customisations, and
 the integrity of `globals.css` (unlayered rules present, font variables bound,
 stripped blocks still stripped). CI runs `npm run lint`, `npm test` and
-`npm run typecheck` on every change under `desktop/` (`.github/workflows/desktop.yml`).
+`npm run typecheck` on every change under `desktop/` outside `src-tauri/`
+(`.github/workflows/desktop.yml`).
 The Rust crate is `rust-build.yml`'s: clippy and `cargo test` on Windows, macOS
 and Linux.
 
@@ -687,6 +712,9 @@ app's background instead of white before setup runs. `dragDropEnabled` is on.
 On Windows and Linux the window draws its own title bar (`decorations: false`,
 `components/WindowControls.tsx`); `tauri.macos.conf.json` keeps the native
 traffic lights over an overlay title bar. Neither config pins a `theme`.
+`app.security.csp` holds the window to the app's own scripts, styles and images
+and lets it connect to Tauri's IPC alone, so the page fetches nothing from
+the network.
 
 ### Appearance
 

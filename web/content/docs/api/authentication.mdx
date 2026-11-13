@@ -4,7 +4,7 @@ description: "owlette public API calls authenticate with scoped, expiring owk_li
 keywords: ["api key", "api token", "bearer token", "credentials", "scopes", "permissions", "x-api-key", "401", "403", "tool tier", "maxToolTier", "second factor", "id token"]
 ---
 
-**last updated**: 2026-11-11
+**last updated**: 2026-11-12
 
 ---
 
@@ -200,6 +200,7 @@ some surfaces need a person, not a key:
 - **key management.** `/api/keys/*` takes a session or Firebase ID token only, subject to [the second factor](#sessions-and-id-tokens).
 - **swoop.** every swoop session route, the site swoop list, and `swoop-settings` refuse a key with `403 api_key_not_permitted` — swoop is a human-in-the-loop surface and a key has no second factor. see [swoop](/docs/dashboard/swoop).
 - **display settings.** `GET`/`PATCH /api/sites/{siteId}/display-settings` refuse a key the same way.
+- **hoot mcp grants.** `GET`/`PATCH /api/sites/{siteId}/fleet-settings`, which say which machines may act on others through [hoot mcp](/docs/agent/hoot-mcp), refuse a key the same way: granting a machine is a person's decision.
 - **member candidates.** `GET /api/sites/{siteId}/member-candidates` refuses a key the same way: a key scoped to one site must not read the rosters of its owner's other sites.
 - **hoot tools.** a key can hold conversations, but every reply is capped at read-only tools. see [hoot](/docs/api/hoot#access).
 

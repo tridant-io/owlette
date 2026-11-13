@@ -8,7 +8,7 @@ keywords: ["agent token", "refresh token", "revoke machine", "decommission", "re
 
 <Callout type="info" title={"permissions"}>
 
-the page opens for anyone who is an owner or admin on at least one site. listing and revoking both need `AGENT_TOKEN_REVOKE` on the site, so a token you cannot list is a token you cannot revoke. issuing one, by authorizing a pairing phrase or generating one, needs `MACHINE_ENROLL`, which the same roles hold.
+the page opens for anyone who is an owner or admin of the whole site on at least one site. listing and revoking both need `AGENT_TOKEN_REVOKE` on the site, so a token you cannot list is a token you cannot revoke. issuing one, by authorizing a pairing phrase or generating one, needs `MACHINE_ENROLL`, which the same roles hold.
 
 </Callout>
 
@@ -31,13 +31,13 @@ the header holds a refresh button and, when the site has tokens, **revoke all**.
 | column | what it shows |
 |---|---|
 | **machine ID** | the ID the agent paired with, normally its hostname. a `duplicate` badge marks an ID with more than one live token |
-| **version** | the agent version recorded when it paired, or `N/A`. rotation carries it forward unchanged, so it does not follow later agent updates |
+| **version** | the version of the agent that last refreshed with the token, from its `X-Owlette-Agent-Version` header, or the one it paired with until then. `N/A` when none is recorded |
 | **status** | `Never expires` for a token with no expiry, which is nearly all of them; otherwise `Expires in Nd`, `Expires <date>` or `Expired` |
 | **created** | when this token record was created. an agent that rotates gets a new record at every refresh, so for a running agent this is usually within the last hour |
 | **last used** | when the agent last refreshed with this token. for a rotating agent it is the same moment as **created** |
 | **actions** | **revoke** |
 
-**duplicates** come from repeated re-pairs, or from separate machines cloned with the same hostname. compare **last used** before revoking one: revoking disconnects whichever agent holds that token.
+**duplicates** come from separate machines cloned with the same hostname, or from a re-pair in the last few hours: a re-paired machine's old token is deleted at a refresh once it is three hours old (see [rotation](#rotation)). compare **last used** before revoking one: revoking disconnects whichever agent holds that token.
 
 ---
 
@@ -45,9 +45,10 @@ the header holds a refresh button and, when the site has tokens, **revoke all**.
 
 every refresh from agent 2.12.0 or later, which identifies itself with an `X-Owlette-Agent-Version` header, returns a **new** refresh token:
 
-- a new record is written for it, carrying the old record's site, machine ID, version, creator and agent identity, plus `predecessorHash` pointing back at the old one
+- a new record is written for it, carrying the old record's site, machine ID, creator and agent identity, the version the agent reports, plus `predecessorHash` pointing back at the old one
 - the old record gets `supersededAt`, `supersededBy` and `retiresAt`: it keeps working for 5 more minutes, so an agent that lost the response can retry
 - the record before that is deleted once it is dead, so a machine normally holds about two records
+- any other live record for the same machine ID on the site that is more than three hours old, which no running agent holds since every holder rotates hourly, is deleted too, so the list keeps one current token per machine
 
 an older agent, or a request without the header, keeps its token: the refresh only updates `lastUsed`.
 
@@ -122,7 +123,7 @@ records live in the `agent_refresh_tokens` collection, server-side only. the doc
 |---|---|
 | `siteId` | the site the token authorizes |
 | `machineId` | the machine ID. a refresh from a different machine ID is refused with `403` |
-| `version` | the agent version from pairing |
+| `version` | the agent version: from pairing, then from each rotation's `X-Owlette-Agent-Version` header |
 | `createdBy` | the user who authorized the pairing |
 | `createdAt` | when this record was created |
 | `lastUsed` | when it was last used to refresh |

@@ -178,20 +178,17 @@ Full functions rollback:
 ```bash
 git status
 git checkout <prev-sha> -- functions/
-firebase use prod
-firebase deploy --only functions
+firebase deploy --only functions --project prod
 ```
 Single known function source rollback:
 ```bash
 git status
 git checkout <prev-sha> -- functions/<path-to-function-file>
-firebase use prod
-firebase deploy --only functions:<functionName>
+firebase deploy --only functions:<functionName> --project prod
 ```
 If per-function targeting is uncertain, deploy all functions from known-good source:
 ```bash
-firebase use prod
-firebase deploy --only functions
+firebase deploy --only functions --project prod
 ```
 After deploy:
 - Run matching production smoke.
@@ -213,15 +210,14 @@ Git path:
 ```bash
 git status
 git checkout <prev-sha> -- firestore.rules
-firebase use prod
-firebase deploy --only firestore:rules
+firebase deploy --only firestore:rules --project prod
 ```
 Migration ordering trap:
 - Rule changes paired with data migrations cannot be rolled back out-of-order.
 - Rules older than 2.12.0 widen every scoped member: see "machine scope trap" above.
-- Rules floor from 4.2.0: 2.13.0. The service runs whatever lands in `commands/pending`, and from 2.13.0 only the server adds to it; an agent's token only takes entries out. Never restore an older file: fix a rules regression forward on top of 2.13.0.
+- Rules floor from 4.2.0: 2.13.0, under which only the server adds to `commands/pending` and an agent's token only takes entries out. Never restore an older file: fix a rules regression forward on top of 2.13.0.
 - Live admins can lose access if rules are restored before compatible data state.
-- See `scripts/README.md:111-114`.
+- See `scripts/README.md` ("migrations/") for the migration scripts and their `--rollback` paths.
 After deploy:
 - Confirm live admins retain access.
 - Confirm unauthorized users remain blocked.
@@ -238,8 +234,7 @@ Git path:
 ```bash
 git status
 git checkout <prev-sha> -- storage.rules
-firebase use prod
-firebase deploy --only storage
+firebase deploy --only storage --project prod
 ```
 After deploy:
 - Verify expected uploads.
@@ -368,7 +363,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 |---|------|--------------------|
 | 1 | `OwletteService` has no constructor: `agent/src/owlette_service.py` `_init_state()` is the single place instance attributes are set, and `agent/src/owlette_runner.py` builds the instance with `object.__new__` and calls it. | Any new `self._foo` goes in `_init_state()`. The two-copy version of this was bitten 3 times before the second copy was deleted. |
 | 2 | Main loop is 5 seconds (`SLEEP_INTERVAL` in `agent/src/owlette_service.py`). `_upload_metrics()` is the recurring heartbeat, not `_update_presence`. Adaptive: about 5s GUI, 30s monitored procs, 120s idle. Dashboard checks `online && heartbeatAge < 300s`. | Do not strip `online` or `lastHeartbeat` from `_upload_metrics()`. |
-| 3 | `ConnectionManager` backoff: `BACKOFF_BASE=30s`, `BACKOFF_MAX=3600s`, `BACKOFF_JITTER=0.5`, `FATAL_ERROR_BACKOFF=3600s`, `WATCHDOG_INTERVAL=10s` at `agent/src/connection_manager.py:225-234`. | Older "5 minute" docs refer to recovery probe cadence, not backoff cap. Backoff has 1 hour ceiling and never gives up. |
+| 3 | `ConnectionManager` backoff: `BACKOFF_BASE=30s`, `BACKOFF_MAX=3600s`, `BACKOFF_JITTER=0.5`, `FATAL_ERROR_BACKOFF=3600s`, `WATCHDOG_INTERVAL=10s` at `agent/src/connection_manager.py:219-231`. | Older "5 minute" docs refer to recovery probe cadence, not backoff cap. Backoff has 1 hour ceiling and never gives up. |
 | 4 | Agent uses a custom Firestore REST client and never imports `firebase_admin`. Auth is Firebase ID token custom claims `{role:'agent', site_id, machine_id}`. Agents do not have `users/{uid}` docs. | Do not debug agent auth by looking for user docs or adding Admin SDK. |
 | 5 | `.tokens.enc` is machine-bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux. The hostname term was dropped when identity moved to `config/machine_id`, so a rename no longer bricks the store; another machine still cannot read it. A store written under the old derivation is re-encrypted on first load and the original is kept beside it as `.tokens.enc.v1` for one minor. | Re-pair via device code on transfer. Never read, log, or commit it. Rolling the agent back below that change: rename `.tokens.enc.v1` over `.tokens.enc` first, or the old build cannot decrypt the store — but the copy is never refreshed, so once the agent has refreshed once (hourly, 5-minute grace on the superseded token) the rename restores a dead refresh token and the 401 clears both files: copy `.tokens.enc` aside first and expect a re-pair. `cortex.apiKeyEncrypted` in `config.json` is re-encrypted in place with no copy kept, so re-provision the hoot key from the dashboard after any such rollback. |
 | 6 | Under LocalSystem, `os.path.expanduser('~')` -> `C:\Windows\System32\config\systemprofile\`. `agent/src/destination_allowlist.py` resolves via auto-login user, most-recently-modified non-system profile, then `C:\Users\Public`. | Test service-context path behavior as a real Windows service. |
@@ -380,7 +375,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 | 12 | Agent dev restart sequence is in `.claude/CLAUDE.md` (agent dev testing workflow): close the desktop app by PID, restart `OwletteService` elevated, and the service relaunches the app. | Use the correct sequence or you may verify stale service behavior. |
 ## landmines: don't do this
 ### files not to touch
-- `web/components/ui/*`: auto-generated.
+- `web/components/ui/*`: shadcn primitives the repo owns; a change there reaches every screen, so keep it out of a hotfix unless the defect is in one.
 - `firestore.rules`: do not touch without asking, unless the active rollback is specifically Firestore rules.
 - `.tokens.enc`: never read, log, or commit.
 - `agent/owlette_installer.iss`: only touch if you understand the build.

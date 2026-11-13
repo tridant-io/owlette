@@ -73,7 +73,7 @@ Synthetic checks run from internal cron infrastructure and publish component sta
 
 Do not put cron URLs, vendor API keys, component ids, or Firestore collection names in customer handoff material.
 
-Before marking 5.1 live, run the operator readiness check from a shell that has the production or dev/staging status-page variables loaded:
+Before marking 5.1 live, run the operator readiness check from a shell that has the prod or dev status-page variables loaded:
 
 ```powershell
 node scripts/check-status-page-ready.mjs --env-only
@@ -82,7 +82,7 @@ node scripts/check-status-page-ready.mjs --base-url https://owlette.app
 
 The command reports only variable names and component health. It does not print secret values.
 
-Run the degraded/recovery drill on dev or staging before using it on the public page: temporarily point `OWLETTE_STATUS_BASE_URL` at an intentionally invalid target, call `/api/cron/status-ping` twice with `X-Cron-Secret`, restore the real base URL, call the route again, then verify the API component degraded and recovered in Instatus. Record the hosted page URL and screenshots or incident links in the launch ticket.
+Run the degraded/recovery drill on dev before using it on the public page: temporarily point `OWLETTE_STATUS_BASE_URL` at an intentionally invalid target, call `/api/cron/status-ping` twice with `X-Cron-Secret`, restore the real base URL, call the route again, then verify the API component degraded and recovered in Instatus. Record the hosted page URL and screenshots or incident links in the launch ticket.
 
 ---
 

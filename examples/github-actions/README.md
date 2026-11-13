@@ -1,6 +1,6 @@
 # Owlette GitHub Actions examples
 
-Copy these workflow templates into consumer repositories after the Wave 5.3 package distribution gate is complete.
+Copy these workflow templates into consumer repositories once `@owlette/cli` is published to npm. It is not yet, so until then the action's install step fails.
 
 | file | purpose |
 |---|---|
@@ -15,5 +15,5 @@ Required repository configuration:
 
 Recommended key scope:
 
-- `site:<site-id>:read`
-- `roost:<roost-id>:write,deploy`
+- `site=<site-id>:write`
+- `roost=<roost-id>:write,deploy`

@@ -236,7 +236,7 @@ commands that accept `--json` write one JSON document to stdout. newer commands 
 { "ok": false, "error": { "code": "<stable_string>", "message": "human-readable", "detail": { /* optional */ } } }
 ```
 
-when a command surfaces API problem+json details, the stable `code` values match the API's (`scope_insufficient`, `token_expired`, `idempotency_key_mismatch`, `manifest_stale`, `rate_limited`, `unsupported_version`).
+when a command surfaces API problem+json details, the stable `code` values match the API's (`scope_insufficient`, `token_expired`, `idempotency_key_mismatch`, `version_stale`, `rate_limited`, `unsupported_version`).
 
 **stub (exit 3 only)**
 ```json

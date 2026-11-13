@@ -1,6 +1,6 @@
 # roost test infrastructure
 
-**Wave 1.6 (piecemeal).** Local + CI stand-ins for the Cloudflare R2 production dependencies. Lets the wave-2a routes (`/api/chunks/*`, `/api/roosts/*/manifests`) get wired against real S3-compatible storage without waiting on Cloudflare R2 procurement or service-account keys.
+**Wave 1.6 (piecemeal).** Local + CI stand-ins for the Cloudflare R2 production dependencies. Lets the wave-2a routes (`/api/chunks/*`, `/api/roosts/*/versions`) get wired against real S3-compatible storage without waiting on Cloudflare R2 procurement or service-account keys.
 
 ## versitygw — local R2 stand-in
 
@@ -20,17 +20,17 @@ After that:
 
 ### Wiring the web API
 
-When wave 2a.1–2a.6 wire up real handlers, point the S3 client at the gateway via env var:
+Point the web app's S3 client (`web/lib/r2Client.server.ts`) at the gateway via env var:
 
 ```bash
-# web/.env.local for local dev (or CI env for emulator runs)
-OWLETTE_R2_ENDPOINT=http://localhost:9000
-OWLETTE_R2_ACCESS_KEY_ID=minioadmin
-OWLETTE_R2_SECRET_ACCESS_KEY=minioadmin
-OWLETTE_R2_BUCKET_CONTENT=owlette-dev-content
-OWLETTE_R2_BUCKET_MANIFESTS=owlette-dev-manifests
-OWLETTE_R2_REGION=auto    # R2 uses "auto"; the gateway accepts anything
+# web/.env.local for local dev
+R2_S3_ENDPOINT=http://localhost:9000
+R2_S3_ACCESS_KEY_ID=minioadmin
+R2_S3_SECRET_ACCESS_KEY=minioadmin
+ROOST_ENV=dev    # buckets are owlette-<ROOST_ENV>-content and -manifests; region is fixed at "auto"
 ```
+
+The agent's sync modules read their own names (`OWLETTE_R2_ENDPOINT`, `OWLETTE_R2_ACCESS_KEY_ID`, `OWLETTE_R2_SECRET_ACCESS_KEY`, `OWLETTE_R2_CONTENT_BUCKET`, `OWLETTE_R2_MANIFESTS_BUCKET`); see `agent-runner/README.md`.
 
 The `@aws-sdk/client-s3` library speaks both R2 and the gateway unchanged — no code changes needed to swap between them.
 
@@ -54,29 +54,14 @@ docker compose -f test/infra/docker-compose.yml down -v
 
 | wave-1.6 target | status | location |
 |---|---|---|
-| firebase emulator wired into test setup | partial (phase A in commit `cb8d06e`) | `web/e2e/` |
+| firebase emulator wired into test setup | done: the whole Playwright suite runs on the emulators | `web/e2e/` |
 | S3-compatible stand-in for R2 mocking (versitygw) | **here** | `test/infra/` |
 | k6 load-test scaffold | done (wave 5.5) | `test/load/k6/` |
-| containerised agent runner for e2e | not started | — |
+| containerised agent runner for the roost sync engine | **here** | `test/infra/agent-runner/` |
 | pact contract test scaffold | not started | — |
 
-The containerised agent runner + pact are the remaining blockers for wave 4c.5 (e2e agent test in CI).
+## CI integration
 
-## CI integration (future)
+The `sync-pipeline` job in `.github/workflows/agent-tests.yml` starts the stand-in from this compose file (`up -d --wait s3`, then `run --rm init-buckets`) and runs the roost sync engine's tests against it on the runner itself, on every pull request and push to `dev`/`main` that touches `agent/` (outside `agent/host` and `agent/swoop`) or `test/infra/`. `agent-runner/README.md` has the commands.
 
-The docker-compose file is CI-friendly — GitHub Actions' `docker compose` action runs it unchanged. Add a job step:
-
-```yaml
-- name: start test infra
-  run: |
-    docker compose -f test/infra/docker-compose.yml up -d
-    docker compose -f test/infra/docker-compose.yml run --rm init-buckets
-- name: web tests against the s3 stand-in
-  env:
-    OWLETTE_R2_ENDPOINT: http://localhost:9000
-    OWLETTE_R2_ACCESS_KEY_ID: minioadmin
-    OWLETTE_R2_SECRET_ACCESS_KEY: minioadmin
-  run: cd web && npm test
-```
-
-Wiring this into existing workflows is deferred until 2a routes are real — running this setup for a test suite that doesn't actually touch the stand-in is burning runner minutes for nothing.
+The web suites do not use the stand-in: the e2e suite stubs R2 in Firestore (`OWLETTE_E2E=1`, `web/lib/r2Client.server.ts`), and the Jest specs mock the R2 client, so running it for them would burn runner minutes for nothing.

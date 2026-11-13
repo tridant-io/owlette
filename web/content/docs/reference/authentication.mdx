@@ -1,7 +1,7 @@
 ---
 title: "platform authentication internals"
 description: "how people and machines prove who they are to owlette: browser sessions, device-code pairing and agent tokens on Windows, macOS and Linux, passkeys, mandatory two-factor, and per-site roles. scoped API keys are covered in API authentication."
-keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner", "owlette swoop", "app-link", "sign in with your browser", "verify in your browser"]
+keywords: ["login", "sign in", "cookie", "session secret", "pairing phrase", "device code", "machine token", "refresh token", "tokens.enc", "fido2", "totp", "2fa", "mfa", "remember this device", "rbac", "permissions", "superadmin", "owner", "owlette swoop", "app-link", "sign in with your browser", "verify in your browser", "fleet session", "hoot mcp", "sender"]
 ---
 
 owlette has four ways in: a browser session for people, device-code pairing and refresh tokens for agents, passkeys, and the two-factor check every account must pass. scoped `owk_*` API keys, bearer headers and API error behaviour are in [API authentication](/docs/api/authentication).
@@ -99,7 +99,8 @@ an agent holds a one-hour Firebase ID token for its Firestore and API calls, and
 
 3. the agent polls every 5 seconds: POST /api/agent/auth/device-code/poll
    ├── body: deviceCode
-   ├── 202 pending · 410 expired · 404 unknown
+   ├── 202 pending · 410 expired · 404 unknown · 402 refused by the plan's
+   │     machine limit, with the reason
    └── 200 with the encrypted bundle; the document is deleted in the same
          transaction, so a bundle is handed out once
 
@@ -149,13 +150,17 @@ every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a 
 
 `POST /api/agent/auth/refresh` takes `refreshToken` and `machineId`. the server checks the hash exists, has not passed an `expiresAt` (current tokens have none), has not been superseded beyond its grace, and was issued to that machine ID: another machine ID gets `403`. it re-sets the agent's claims and returns a new access token.
 
-**rotation.** an agent that sends `X-Owlette-Agent-Version` 2.12.0 or later gets a new refresh token on every refresh. the old one keeps working for 5 minutes, so a lost response can be retried, and the one before it is deleted once it can no longer be presented, which keeps about two records per machine. an older agent, or a missing header, keeps its token and only bumps `lastUsed`.
+**rotation.** an agent that sends `X-Owlette-Agent-Version` 2.12.0 or later gets a new refresh token on every refresh. the old one keeps working for 5 minutes, so a lost response can be retried, and a retry gets the same new token back. the one before it is deleted once it can no longer be presented, and so is any other token of the machine's that was never rotated and is over three hours old, so each machine keeps one current token. the new token records the version in the header, so [token management](/docs/dashboard/admin/token-management) shows the agent that last refreshed it. an older agent, or a missing header, keeps its token and only bumps `lastUsed`.
 
 **revocation.** site admins list a site's tokens with `GET /api/sites/{siteId}/agent-tokens` and revoke with `POST /api/sites/{siteId}/agent-tokens/revoke`, naming exactly one of `tokenId`, `machineId` (optionally with `latestOnly`), `all: true` or `prune: true`. both need `AGENT_TOKEN_REVOKE`. see [token management](/docs/dashboard/admin/token-management).
 
 **losing the token.** a `401` or `403` answer to a refresh makes the agent wipe its token store, and the machine has to pair again. a revocation therefore lands at the machine's next refresh: the access token it already holds keeps working until then, for up to an hour.
 
 **rate limits**, per IP, with the shared Redis limiter configured: device-code and authorize share 60 requests an hour (200 on dev), polling counts against the general 300 an hour, and refresh allows 120 an hour. without Redis every endpoint falls back to 15 a minute per process.
+
+### fleet sessions
+
+a Windows machine or Mac that a site owner or admin made a [sender](/docs/agent/hoot-mcp) acts on the site's other machines with a **fleet session**, never with its agent token. the service posts its own ID token to `POST /api/agent/fleet/session` every 10 minutes; the site and machine come from the token's claims, never from the body. the answer is an `owf_` token that lasts 15 minutes and works only on the `/api/agent/fleet/*` routes, and the server keeps only its SHA-256, in `fleet_sessions/{hash}`. a machine that is not a sender gets `403 fleet_not_granted`, and one with no live agent token or no machine document `401 pairing_revoked`. turning the machine off as a sender, removing it, re-pairing it or revoking its agent token deletes its sessions. the session file the MCP script reads is described in [how hoot mcp works](/docs/agent/hoot-mcp#how-it-works).
 
 ### custom token claims
 
@@ -371,7 +376,7 @@ what you can do on a site comes from your row in `sites/{siteId}/members/{uid}`:
 
 a [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) on that `members` row (`swoop`: `none`, `view` or `control`) overrides the role for `MACHINE_REMOTE_VIEW` and `MACHINE_REMOTE_CONTROL` only; the owner's row never carries one.
 
-the platform capabilities, `USER_ROLE_MANAGE`, `USER_DELETE`, `INSTALLER_MANAGE`, `ISSUE_MANAGE`, `SYSTEM_PRESET_MANAGE` and `GLOBAL_SETTINGS_WRITE`, belong to superadmins alone. an **agent** reaches only its own site and machine, from its token's claims. server jobs act as system actors with fixed grants: unattended hoot (`cortex_autonomous`) may run commands and write machine config, the talon runner may run commands, and scheduled cleanup may remove machines and manage deployments.
+the platform capabilities, `USER_ROLE_MANAGE`, `USER_DELETE`, `INSTALLER_MANAGE`, `ISSUE_MANAGE`, `SYSTEM_PRESET_MANAGE` and `GLOBAL_SETTINGS_WRITE`, belong to superadmins alone. an **agent** reaches only its own site and machine, from its token's claims; a sender reaches other machines of its site only through its [fleet session](#fleet-sessions), up to the tool tier and on the machines it was given. server jobs act as system actors with fixed grants: unattended hoot (`cortex_autonomous`) may run commands and write machine config, the talon runner may run commands, and scheduled cleanup may remove machines and manage deployments.
 
 superadmins set global roles at `/admin/users` ([user management](/docs/dashboard/admin/user-management#the-role-model)); whole-site owners and admins set site roles, swoop modes and machine scopes from a site's members section, or with `PATCH /api/sites/{siteId}/members/{uid}` ([member management](/docs/dashboard/admin/member-management#what-the-roles-mean)).
 

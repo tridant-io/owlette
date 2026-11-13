@@ -77,21 +77,21 @@ the encrypted token file is missing or unreadable. re-pair the agent: delete `.t
 
 check `service.log` for refresh errors. common causes:
 
-- **machine ID mismatch** — the machine was renamed since registration
-- **token revoked** — an admin revoked the token from the dashboard
+- **machine ID mismatch** — the machine ID the agent sends, kept in `config/machine_id`, is not the one its token was issued for, because that file was deleted or replaced after the machine was renamed. renaming a machine alone keeps its ID
+- **token revoked** — the token was revoked from the dashboard. the agent then leaves its site, and its footer in the desktop app reads `disabled`: pair it again with a new phrase
 - **network issue** — the agent can't reach the refresh endpoint
 
 ---
 
 ## deployment stuck
 
-**symptoms**: a deployment shows "downloading" or "installing" indefinitely.
+**symptoms**: a deployment target stays at "pending", "downloading" or "installing".
 
 1. check the agent's logs for download and install progress
 2. verify the installer URL is reachable from the agent machine (test it in a browser)
-3. check whether the installation timed out (default: 40 minutes)
+3. wait for the timeout. the server fails a target still pending after 15 minutes, or downloading or installing after 30, counted from the deployment or its last retry, and the agent gives an installer 40 minutes (`timeout_seconds`, 2400) to exit
 4. for large installers on slow connections, the download may simply be slow
-5. try cancelling and re-deploying
+5. cancel a target that has not started installing, then deploy again. an installer that is already running is left to finish, because one stopped part-way can leave the machine without the program; once the target has failed, retry it
 
 see [deployments](/docs/dashboard/deployments#troubleshooting).
 
@@ -117,9 +117,9 @@ otherwise use one of your **backup codes** at the 2FA prompt. each code can only
 
 ### no backup codes
 
-ask a superadmin to run **reset 2FA** on your account from the admin users page (`POST /api/users/{uid}/mfa-reset`). it removes every second factor — authenticator app, passkeys, and the backup codes — re-arms mandatory 2FA setup, and revokes the account's trusted devices, so the next sign-in starts enrollment from scratch.
+ask a superadmin to run **reset 2FA** on your account from the admin users page (`POST /api/users/{uid}/mfa-reset`). it removes every second factor — authenticator app, passkeys, and the backup codes — re-arms mandatory 2FA setup, and revokes the account's trusted devices, so the next sign-in starts enrollment from scratch. it also ends every dashboard session the account signed in before the reset, and owlette emails the account's address that it happened.
 
-two things it deliberately does **not** do: it does not revoke Firebase refresh tokens, so a session the user already holds elsewhere stays signed in until it expires on its own; and superadmins cannot reset themselves, so a locked-out superadmin needs a different superadmin to do it.
+superadmins cannot reset themselves, so a locked-out superadmin needs a different superadmin to do it.
 
 because a reset hands the account to whoever signs in next, confirm who you're talking to before running one.
 
@@ -127,11 +127,13 @@ because a reset hands the account to whoever signs in next, confirm who you're t
 
 - ensure your device's clock is synchronized (TOTP is time-based)
 - codes expire every 30 seconds — enter the current one
+- each code works once: signing in again inside the same 30 seconds waits for the next code
 - verify you're using the correct account in your authenticator app
+- each account gets 10 code attempts, authenticator or backup, in any 15 minutes, wherever they are entered. past that, every code is refused with `429 mfa_attempts_exceeded` until the window moves on. passkeys are not counted
 
 ### "verify a factor you already have" when adding one
 
-adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. verify with your existing passkey, or take the **use a code instead** link to `/verify-2fa`, then add the new factor.
+adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. verify with your existing passkey, or take the **use a code instead** link to `/verify-2fa`, then add the new factor. renaming or removing a passkey asks the same.
 
 ### can't regenerate backup codes
 

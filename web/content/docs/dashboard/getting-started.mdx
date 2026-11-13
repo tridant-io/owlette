@@ -1,7 +1,7 @@
 ---
 title: "dashboard getting started"
 description: "your first time in the owlette dashboard — from signing up to seeing your first machine, plus the site settings every site starts with."
-keywords: ["manage sites", "site settings", "keep screens awake", "screen goes to sleep", "monitor turns off", "screensaver", "lock screen", "display sleep", "sign up", "register", "add machine"]
+keywords: ["manage sites", "site settings", "keep screens awake", "screen goes to sleep", "monitor turns off", "screensaver", "lock screen", "display sleep", "sign up", "register", "add machine", "reinstall a machine", "backup codes"]
 ---
 
 ---
@@ -50,7 +50,7 @@ authenticator apps are **not phone-only**. 1Password, Bitwarden, and Authy all h
 
 either route finishes on your **backup codes**, shown once. **copy all codes** puts them on the clipboard; **download codes** saves them as `owlette-backup-codes.txt`. keep them somewhere safe. they work for any factor, including a passkey-only account, and they're what gets you back in if you lose the device.
 
-you can regenerate them later from account settings, but you'll have to prove a factor in the same step — a current 6-digit code, an unused backup code, or your passkey. a sheet of recovery codes is powerful enough to turn 2FA off outright, so a signed-in browser alone isn't enough to mint a new one.
+account settings has no button for a new sheet: setting up the authenticator app issues one, and replaces the old. minting a sheet any other way takes proof of a factor in the same step — a current 6-digit code, an unused backup code, or your passkey. a sheet of recovery codes is powerful enough to turn 2FA off outright, so a signed-in browser alone isn't enough to mint a new one.
 
 <Callout type="idea" title={"you can change your mind later"}>
 
@@ -110,7 +110,7 @@ over the API, `PATCH /api/sites/{siteId}/display-settings` with `{ "keepAwake": 
 3. enter the 3-word **pairing phrase** shown on that machine. Windows shows it when the installer finishes; on macOS and Linux, open the owlette app from the menu bar or top bar and choose **join site**.
 4. click **continue**. the dialog shows the name of the machine the phrase belongs to; check it is the one in front of you, then click **authorize machine**. a machine already on the site asks you to **replace machine** instead, which is what reinstalling one looks like. the success state reads **machine authorized**, and the machine appears on the dashboard shortly.
 
-for a machine nobody is standing in front of, use the **generate code** tab instead. click **generate code**, then copy the **windows silent install command**, which passes the phrase to the installer as `/ADD=`, or the **macos / linux pairing preseed**, which you save as `config/pairing.json` before installing; both are in [installation](/docs/agent/installation#method-2-silent-install-with-add). a generated phrase pairs one machine and expires in 10 minutes, so generate one per machine.
+for a machine nobody is standing in front of, use the **generate code** tab instead. click **generate code**, then copy the **windows silent install command**, which passes the phrase to the installer as `/ADD=`, or the **macos / linux pairing preseed**, which you save as `config/pairing.json` before installing; both are in [installation](/docs/agent/installation#method-2-silent-install-with-add). a generated phrase pairs one machine and expires in 10 minutes, so generate one per machine. it adds only a machine new to the site: to reinstall one already on it, name that machine under **reinstalling a machine already on this site?** before you generate, or tick **let this code reinstall any machine already on this site**.
 
 within 30 seconds, the machine appears in your dashboard:
 
@@ -147,7 +147,7 @@ see [machine monitoring](/docs/dashboard/machine-monitoring).
 - **roost** — content-addressed file sync, version publishing, and rollback at `/roosts`
 - **deploy** — software deployment and agent updates
 - **logs** — the activity event viewer
-- **admin panel** — site admins manage sites (members, machines, keep screens awake), agent tokens, live swoop sessions and swoop settings, schedule presets, alert rules and webhooks for the sites they belong to
+- **admin panel** — site admins manage sites (members, machines, keep screens awake), agent tokens, live swoop sessions and swoop settings, hoot's approval setting and hoot mcp, schedule presets, alert rules and webhooks for the sites they belong to
 
 the site switcher in the header, or in the menu on a phone, moves between your sites, and with more than ten sites it has a filter that finds one by its name or ID.
 

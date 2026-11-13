@@ -85,6 +85,8 @@ in Railway → the service → **variables**, add the values from [environment v
 - **swoop**, when you run it: `SWOOP_SIGNAL_URL`, `SWOOP_SIGNAL_RING_SECRET`, `SWOOP_JWT_KID`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_JWT_PUBLIC_KEY`, `SWOOP_SESSION_MASTER_KEY`, and `CLOUDFLARE_TURN_KEY_ID` with `CLOUDFLARE_TURN_KEY_API_TOKEN` for the relay
 - **error reporting**, optional: `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT`, and `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` for source maps at build time
 - **public status page**, optional: `INSTATUS_API_KEY`, `INSTATUS_PAGE_ID` and the `INSTATUS_COMPONENT_*_ID` values, when `/api/cron/status-ping` should publish to Instatus
+- **Cloudflare edge**, when Cloudflare fronts the origin: `EDGE_SHARED_SECRET`, the value the edge's transform rule sends; see [failover](#failover-behind-a-cloudflare-load-balancer)
+- **plans**, optional: `PLAN_ENFORCEMENT`, `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY`, and `TRIDANT_OIDC_ISSUER`, `TRIDANT_OIDC_CLIENT_ID`, `TRIDANT_OIDC_CLIENT_SECRET` for linking a tridant account
 
 set `ROOST_ENV` explicitly on every deployment. without it the app picks the prod buckets only when Railway reports its `production` environment or the public domain is `owlette.app`, and the dev buckets otherwise, so a production deployment anywhere else writes roost content to the dev buckets with no error.
 
@@ -115,7 +117,7 @@ without this, nobody can sign in: Firebase rejects auth requests from domains it
 3. add the domain to Firebase's authorized domains.
 4. set `NEXT_PUBLIC_BASE_URL` to the new HTTPS origin and redeploy.
 5. add the hostname to `TURNSTILE_HOSTNAMES` and to the Turnstile widget.
-6. add the origin to `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs` and re-run it, or browser uploads to roost fail CORS.
+6. add the origin to `HOSTED_ORIGINS` in `scripts/provision-r2.mjs` and re-run it, or browser uploads to roost fail CORS.
 
 passkeys stay tied to `owlette.app` in production whatever the domain; see [what is tied to owlette.app](/docs/setup).
 
@@ -154,7 +156,7 @@ add the Vercel domain, and any custom domain, to Firebase **Authentication** →
 
 ### step 5: scheduled endpoints
 
-Vercel Cron sends no custom headers, and eight of the nine scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
+Vercel Cron sends no custom headers, and nine of the ten scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
 
 ---
 
@@ -167,6 +169,7 @@ Vercel Cron sends no custom headers, and eight of the nine scheduled routes chec
 - **one health monitor** calls `GET /api/health` on each origin every 60 seconds and expects `200`.
 - **two pools**, one origin each: `owlette-railway-primary` and `owlette-vercel-standby`. the load balancer's `steering_policy = "off"` sends every request to the first healthy pool in order, so Vercel takes traffic only while Railway's check fails. adaptive routing retries a request against the standby at once when the primary drops it mid-flight, rather than waiting for the next check.
 - **host headers.** the Railway pool sends `Host: owlette.app`. the Vercel pool sends the standby's own hostname, `vercel-origin.owlette.app`: a DNS-only record that Vercel holds a certificate for, because Vercel renews certificates over HTTP-01 and challenges for `owlette.app` itself would land on Railway. the app builds every outbound link from `NEXT_PUBLIC_BASE_URL`, never from the `Host` header, so users never see the alias.
+- **edge headers.** a transform rule in the same Terraform adds `X-Owlette-Asn` (the client's network) and `X-Owlette-Edge` (the `EDGE_SHARED_SECRET` value) to every request for `owlette.app` and `dev.owlette.app`. an origin believes `CF-Connecting-IP` and `X-Owlette-Asn` only on a request that carries that secret, since anyone can reach an origin around Cloudflare and set them.
 
 ### the health probe
 
@@ -186,12 +189,13 @@ prerequisites: Terraform 1.5 or later, the Load Balancing add-on enabled on the 
 cd infra/cloudflare
 cp terraform.tfvars.example terraform.tfvars   # fill in; the file is gitignored
 export CLOUDFLARE_API_TOKEN=...                # never in a file
+export TF_VAR_edge_shared_secret=...           # EDGE_SHARED_SECRET, never in a file
 terraform init
 terraform plan
 terraform apply
 ```
 
-the token needs **Account › Load Balancing: Monitors and Pools › Edit** and **Zone › Load Balancers › Edit** on your zone. in `terraform.tfvars`, `railway_origin` is the hostname Railway issued for your service (the one your domain's DNS points at), never the public domain itself, or the load balancer loops back on itself.
+the token needs **Account › Load Balancing: Monitors and Pools › Edit**, and **Zone › Load Balancers › Edit** and **Zone › Transform Rules › Edit** on your zone. in `terraform.tfvars`, `railway_origin` is the hostname Railway issued for your service (the one your domain's DNS points at), never the public domain itself, or the load balancer loops back on itself.
 
 `terraform apply` moves the domain behind the load balancer immediately. to rehearse, set `lb_host` to a throwaway hostname first, and delete that load balancer afterwards.
 
@@ -203,7 +207,7 @@ every pool sets `check_regions = ["ENAM"]`. left unset, every Cloudflare data ce
 
 ### keep the two origins identical
 
-both origins serve the same users, so their environment variables must hold the same values. seven of them fail silently, and only on failover, when they differ: `SESSION_SECRET` logs everyone out, `MFA_ENCRYPTION_KEY` locks out every second-factor user, `LLM_ENCRYPTION_KEY` breaks stored hoot keys, `TURNSTILE_SECRET` breaks sign-up and password reset, and the three swoop secrets (`SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY`, `SWOOP_SIGNAL_RING_SECRET`) break every swoop session.
+both origins serve the same users, so their environment variables must hold the same values. fourteen of them fail silently, and only on failover, when they differ: `SESSION_SECRET` logs everyone out, `MFA_ENCRYPTION_KEY` locks out every second-factor user, `LLM_ENCRYPTION_KEY` breaks stored hoot keys, `TURNSTILE_SECRET` breaks sign-up and password reset, the three swoop secrets (`SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY`, `SWOOP_SIGNAL_RING_SECRET`) break every swoop session, `EDGE_SHARED_SECRET` makes every request read as one from an unknown network, `PLAN_ENFORCEMENT`, `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY` drop plan enforcement, and `TRIDANT_OIDC_ISSUER`, `TRIDANT_OIDC_CLIENT_ID` and `TRIDANT_OIDC_CLIENT_SECRET` break linking a tridant account.
 
 owlette checks and copies them with `node scripts/sync-env.mjs` (`check`, `diff`, and `sync <target> --apply`), driven by the targets in `scripts/env-manifest.json`. Vercel stores sensitive values write-only, so a green `check` proves a key exists, not that its value matches: re-run the sync after rotating any production secret.
 
@@ -276,6 +280,8 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
 | `/api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer` | the autonomous hoot escalation backstop |
+
+`/api/cron/plan-trials` takes `X-Cron-Secret` too but is never scheduled: it starts the trial for existing accounts, run by hand once per environment before plans are switched on. it is a dry run unless called with `?apply=1`, and each call covers 100 accounts; repeat it with the `nextPageToken` it returns, as `?pageToken=`, until that is null.
 
 <Callout type="warning" title={"almost every failure here is silent"}>
 
@@ -462,7 +468,7 @@ requirements:
 - [ ] install command `npm ci --legacy-peer-deps`, build command `npm run build`, start command `npm start` where the host asks for one
 - [ ] `CRON_SECRET` configured
 - [ ] every route in [scheduled endpoints](#scheduled-endpoints) registered, in **each** environment
-- [ ] the `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>`; the other eight take `X-Cron-Secret`
+- [ ] the `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>`; the other nine take `X-Cron-Secret`
 
 ### after deploying
 
@@ -509,7 +515,7 @@ requirements:
 
 - confirm the R2 key has object read and write on the owlette buckets.
 - confirm `R2_S3_ENDPOINT` is `https://<account-id>.r2.cloudflarestorage.com`.
-- a CORS error in the browser means your origin is missing from `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs`; add it and re-run the script.
+- a CORS error in the browser means your origin is missing from `HOSTED_ORIGINS` in `scripts/provision-r2.mjs`; add it and re-run the script.
 - if content lands in the wrong environment's buckets, check `ROOST_ENV`.
 
 ### the load balancer sends traffic to the standby

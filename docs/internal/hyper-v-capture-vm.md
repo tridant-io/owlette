@@ -21,6 +21,12 @@ idempotent: re-running after a failure resumes rather than colliding.
 | `07-oobe-local-account.ps1` | get past the forced-Microsoft-account OOBE screen |
 | `08-fix-guest-account.ps1` | create the `e2e` account, remove a wrongly-named one |
 | `09-finalize-image.ps1` | shutdown, pin the display mode, reboot, verify, sweep |
+| `13-autologon.ps1` | configure autologon in the guest, so a revert boots to a desktop instead of a lock screen |
+| `14-reseal-golden.ps1` | re-take `golden-empty` after changing the image (autologon) |
+
+The rest of `scripts/vm/` uses the finished image: staging and driving the
+installer (`10`-`12`, `16`, `17`), recording (`15`), verifying installs,
+upgrades and swoop (`18`-`18d`), pairing (`19`), and the episode shoots.
 
 ---
 
@@ -352,8 +358,8 @@ $cred | Export-Clixml "$env:LOCALAPPDATA\owlette-vm\guest-e2e.cred"
 ### The guest's name and account are baked in forever
 
 Windows generates a random hostname during OOBE (`DESKTOP-EQGJN15`), and
-**Owlette's `machine_id` IS the hostname** (`agent/src/shared_utils.py:151` ->
-`socket.gethostname()`). Whatever the golden image carries becomes that
+**Owlette's `machine_id` IS the hostname** (`agent/src/shared_utils.py:247`,
+`get_hostname()` -> `socket.gethostname()` on Windows). Whatever the golden image carries becomes that
 machine's identity on the dashboard. Rename it deliberately
 (`05-prep-guest.ps1 -RenameGuest owlette-e2e-01`; takes effect on reboot).
 
@@ -407,7 +413,7 @@ running the bootstrap.
 | Secure Boot | On, `MicrosoftWindows` template | Win11 requirement. The `MicrosoftUEFICertificateAuthority` template is for Linux guests |
 | vTPM | Enabled, sealed once | Win11 requirement |
 | Memory | 4 GB startup, dynamic 4-8 GB | |
-| CPU | half the host's logical processors | |
+| CPU | half the host's logical processors, at least 4 | |
 | Disk | 80 GB dynamic VHDX | |
 | Network | `Default Switch` | NAT to the internet, isolated from the LAN. Pass `-SwitchName` for something stricter |
 | Checkpoints | Standard, automatic checkpoints **off** | Automatic checkpoints would fork the golden snapshot lineage |

@@ -12,15 +12,15 @@ migrations live in `migrations/`; the Hyper-V capture/e2e VM pipeline lives in
 | `sync-versions.js` | Bump every version surface at once (`node scripts/sync-versions.js X.Y.Z`). The only version-sync script — see `docs/internal/version-management.md`. |
 | `upload-installer.mjs` | Publish a release's installers (one file per platform) through the 3-step API upload, `--set-latest` to promote, `--notes-only` to correct notes. See `docs/runbooks/agent-installer-release.md`. |
 | `check-security-alerts.mjs` | Grade every open GitHub alert against this branch's lockfiles; the release gate (`.github/workflows/security-gate.yml`, `security-preflight.yml`). |
-| `refresh-docs-screens.mjs` | Release-time recapture of the agent docs screenshots from the build being shipped (`--check` compares the record against `VERSION`). |
+| `refresh-docs-screens.mjs` | Release-time recapture of the agent docs screenshots from the build being shipped (`--check` compares the record against `VERSION`; `--manifest` only rewrites `light-variants.json`, which `npm run screenshots` runs). |
 | `sign.ps1` | Sign Windows files with Azure Artifact Signing; run by `agent/build_installer_full.bat` and the `package-windows` CI job. |
 | `setup-ci-signing.sh` | One-time setup of the Entra app CI signs with (git bash, repo admin). Safe to re-run. |
 | `sync-env.mjs` | Reconcile Railway/Vercel env vars against `env-manifest.json` (`status` / `check` / `diff` / `sync <target>`). See `.claude/skills/env-management/SKILL.md`. |
 | `env-manifest.json` | Canonical env-key registry (keys + metadata, never values). Data file — must stay beside `sync-env.mjs`. |
-| `sync-repo-refs.mjs` | Propagate the GitHub owner/repo from root `package.json` into Cargo.toml, the installer, and docs. |
+| `sync-repo-refs.mjs` | Propagate the GitHub owner/repo from root `package.json` into Cargo.toml, the installer, and docs. `.github/workflows/repo-refs.yml` runs it with `--check`. |
 | `provision-r2.mjs` | Create the roost R2 buckets + CORS (idempotent). Sole source of truth for R2 CORS; bucket policy lives at `infra/r2/r2-bucket-policy.json`. |
 | `upload-cortex-cli.mjs` | Publish the pinned Claude CLI blobs + one `installer_metadata/cortex_cli_<osFamily>_<arch>` per platform (and the legacy `cortex_cli` that pre-3.4 agents read). One run per environment takes every platform. Re-run on every claude-agent-sdk bump. |
-| `bootstrap-windows.ps1` | Validate the Windows dev toolchain on a new machine. |
+| `bootstrap-windows.ps1` | Validate the Windows dev toolchain on a new machine. `-InstallWebDeps` and `-InstallAgentDeps` set up `web/node_modules` and the agent venv (`agent/.venv`); `-DevGrant` / `-RemoveDevGrant`, from an elevated prompt, give or take back the deploy hook's write access to the installed agent. |
 | `bootstrap-gui-automation.ps1` | Validate/apply GUI-automation rig config (capture rig + e2e runner). Also executed inside guests by `vm/05-prep-guest.ps1`. |
 
 ## CI / hook-wired gates (do not move or rename)
@@ -29,6 +29,7 @@ migrations live in `migrations/`; the Hyper-V capture/e2e VM pipeline lives in
 |---|---|
 | `check-no-token-logs.mjs` | `.github/workflows/no-token-logs.yml` |
 | `check-claude-hooks.mjs` | `.github/workflows/claude-hooks.yml`: every `.claude/hooks` file parses, writes stdout only through `lib/hook-output.mjs`, and emits valid hook JSON; every skill, agent and command has frontmatter Claude Code will load |
+| `__tests__/` | `.github/workflows/claude-hooks.yml` (`npm run test:scripts` from the repo root): the hooks' libraries, `sync-env.mjs`, `sync-versions.js` and `migrations/require-mfa-setup.mjs` |
 | `check-firebase-admin-namespace.mjs` | `.github/workflows/admin-sdk-guard.yml`: fail on the `firebase-admin` root namespace under `scripts/` (removed in v14). Self-tests with `--test`. |
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes`, run by hand; no workflow runs it. The standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | run by hand; no workflow runs it. CI enforces the same allowlist through the lint rule in `web/eslint.config.mjs` and its jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
@@ -60,6 +61,8 @@ only rollback input) sit alongside them.
   (read-only), `backfill-site-owner-membership`, `backfill-per-site-membership`,
   `migrate-global-role-values`, `strip-legacy-membership`
 - `move-webhook-secrets`, `backfill-mfa-factors`
+- `require-mfa-setup`: sets `requiresMfaSetup: true` on every active account that holds no
+  second factor (dry run unless `--apply`; prod also needs `--confirm-project=<id>`)
 - not yet run on prod: `backfill-issue-numbers` (numbers unnumbered issues from
   `counters/bug_reports`; dry run unless `--write --confirm-project=<id>`, safe
   to re-run; prod needs it when 4.x web is promoted)

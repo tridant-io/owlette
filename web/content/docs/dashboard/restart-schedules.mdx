@@ -55,7 +55,7 @@ clicking a preset loads its entries — and its on/off state, so applying one ca
 
 with a custom preset selected, **rename** and **delete** appear under it; delete asks for **yes, delete**. once you change the entries, **update preset** writes the change to the preset alone. pressing **save** with a modified custom preset selected writes the change back to the preset as well as to the machine — the editor assumes a modified preset is a preset you meant to change. built-in presets are never rewritten; editing one just leaves the machine on a schedule that no longer matches any preset.
 
-presets are also managed on [schedule presets](/docs/dashboard/admin/schedule-presets).
+restart presets are managed only here. the [schedule presets](/docs/dashboard/admin/schedule-presets) page holds process launch windows, not restarts.
 
 ---
 
@@ -129,6 +129,6 @@ PUT /api/sites/{siteId}/machines/{machineId}/reboot-schedule
 }
 ```
 
-it needs the `MACHINE_CONFIG_WRITE` capability, or an API key scoped `machine=<id>:write`. `enabled` must be a boolean; every entry needs a non-empty `id`, at least one day, and a `time` matching `HH:MM`. the whole schedule is replaced on every write — there is no partial update.
+it needs the `MACHINE_CONFIG_WRITE` capability, or an API key scoped `machine=<id>:write`. `enabled` must be a boolean; every entry needs a non-empty `id`, at least one day, each one of `mon`, `tue`, `wed`, `thu`, `fri`, `sat` or `sun`, and a 24-hour `time` from `00:00` to `23:59`. anything else, such as `Monday` or `24:00`, is refused with `400 invalid_schedule_entry`, naming the field. the whole schedule is replaced on every write — there is no partial update.
 
 the stored field is `rebootSchedule` on `config/{siteId}/machines/{machineId}`. the `reboot` spelling is a wire contract with deployed agents; only the interface says "restart".

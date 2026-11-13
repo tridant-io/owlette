@@ -1,7 +1,7 @@
 ---
 title: "remote commands"
 description: "the agent listens for commands from the web dashboard via Firestore. commands are written as entries in a pending command map, executed by the agent, and mirrored into a completed command map as progress, completion, failure, or cancellation records."
-keywords: ["command queue", "pending commands", "reboot", "shutdown", "restart process", "kill process", "screenshot", "install software", "active hours", "reboot refused", "restart after hours"]
+keywords: ["command queue", "pending commands", "reboot", "shutdown", "restart process", "kill process", "screenshot", "install software", "active hours", "reboot refused", "restart after hours", "cancel install", "check path", "unpair", "revoke token"]
 ---
 
 ---
@@ -11,9 +11,11 @@ keywords: ["command queue", "pending commands", "reboot", "shutdown", "restart p
 ```mermaid
 sequenceDiagram
     participant D as Dashboard
+    participant W as owlette server
     participant F as Firestore
     participant A as Agent
-    D->>F: merge command id into commands/pending
+    D->>W: queue a command
+    W->>F: merge command id into commands/pending
     F->>A: listener detects
     A->>A: execute
     A->>F: merge result/progress into commands/completed
@@ -25,7 +27,7 @@ each machine has two command documents:
 - `sites/{siteId}/machines/{machineId}/commands/pending`
 - `sites/{siteId}/machines/{machineId}/commands/completed`
 
-both documents store command IDs as top-level map fields. a successful terminal write removes the matching field from `pending`.
+both documents store command IDs as top-level map fields. a successful terminal write removes the matching field from `pending`. only the server adds a command: the dashboard, the API, hoot and talons all queue through it, and the agent's own token can only take entries out of `pending`.
 
 the same commands reach a machine on every platform; where one behaves differently, or not at all, on macOS or Linux, the tables below say so. the full per-platform picture is in [platform support](/docs/reference/platform-support).
 
@@ -65,13 +67,14 @@ for `restart_process`, `timeout_seconds` is the graceful-terminate window before
 | command | description | data payload |
 |---------|-------------|--------------|
 | `update_config` | update process configuration from the cloud | `{config}` |
+| `check_path` | read-only: whether a launch target, `path / args`, working directory or folder exists and would launch, and for a folder its contents. the process editor sends it after a save changes a path; agent 4.1.25 or later | `{field, value}` |
 
 ### software deployment
 
 | command | description | data payload |
 |---------|-------------|--------------|
 | `install_software` | download, checksum, and install software. refused inside active hours on Windows, see [active hours](#active-hours) | `{installer_url, sha256_checksum, installer_name?, silent_flags?, verify_path?, timeout_seconds?, deployment_id?, parallel_install?, close_processes?, suppress_projects?, activeHoursOverride?}` |
-| `cancel_installation` | stop an install the agent holds, before its installer runs. from agent 4.2.0 `deployment_id` alone is enough; an older agent refuses a cancel without `installer_name`, and acts on one only after the install has ended | `{installer_name, deployment_id?}` |
+| `cancel_installation` | stop an install the agent holds, before its installer runs. from agent 4.2.0 `deployment_id` alone is enough; an older agent refuses a cancel without `installer_name`, and acts on one only after the install has ended | `{installer_name?, deployment_id?}`, one of them |
 | `uninstall_software` | run a software uninstaller | `{software_name, uninstall_command, silent_flags?, installer_type?, verify_paths?, timeout_seconds?, deployment_id?}` |
 | `cancel_uninstall` | cancel an in-progress uninstall process | `{software_name}` |
 | `refresh_software_inventory` | force an immediate installed-software inventory sync | `{}` |
@@ -99,6 +102,7 @@ the legacy v1 ZIP commands (`distribute_project`, `cancel_distribution`) were re
 | `cancel_reboot` | abort a pending reboot or shutdown countdown, or a reboot held until active hours end | `{}` |
 | `dismiss_reboot_pending` | clear the dashboard's reboot-pending state, and a reboot a crash loop held until active hours end | `{process_name?}` |
 | `update_owlette` | self-update the agent with the installer for its platform | `{installer_url, checksum_sha256, target_version?, deployment_id?}` |
+| `unpair` | queued when the machine's agent token is revoked from the dashboard. the agent asks the server to refresh its token first, and leaves its site unless the server still accepts it | `{}` |
 
 the agent does not provide a remote self-uninstall command. remote software removal uses `uninstall_software` for third-party applications.
 
@@ -211,22 +215,32 @@ poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` for the
 the `install_software` command triggers a multi-step process:
 
 ```
-1. download the installer to the agent's temp installer directory.
-   progress: downloading 0% to 100%
+1. refuse a command without sha256_checksum, or one inside active hours on
+   Windows, before anything is downloaded or closed.
 
-2. verify sha256_checksum.
-   missing or mismatched checksums fail the command before execution.
+2. download the installer to the agent's temp installer directory.
+   progress: downloading
 
-3. optionally stop conflicting processes and suppress managed projects.
-   controlled by close_processes and suppress_projects.
+3. verify sha256_checksum. a mismatch fails the command before anything is closed.
 
-4. run the installer with its silent flags in the interactive user's session.
+4. check that a user is signed in to install into. without one the command
+   fails, with nothing closed.
+
+5. optionally stop managed processes and suppress managed projects, held
+   down until the install ends. controlled by close_processes and
+   suppress_projects.
+   progress: closing_processes
+
+6. run the installer with its silent flags, elevated, in the interactive
+   user's session.
    progress: installing, then waiting for the exit code.
 
-5. verify the installation if verify_path is provided or derived from /DIR.
+7. verify the installation if verify_path is provided or derived from /DIR.
 
-6. clean up the temp file, release install locks, and sync the software inventory.
+8. clean up the temp file, release install locks, and sync the software inventory.
 ```
+
+a `cancel_installation` stops the install at any step before 6: the download stops, nothing more is closed, and processes already closed start again. an installer that has started is left to finish. an agent older than 4.2.0 closes processes before it downloads.
 
 ### install_software payload
 
@@ -240,7 +254,7 @@ the `install_software` command triggers a multi-step process:
 | `timeout_seconds` | no | `2400` | installer timeout in seconds. |
 | `deployment_id` | no | none | included in progress records. |
 | `parallel_install` | no | `false` | temporarily hides matching registry keys during install. |
-| `close_processes` | no | `[]` | process names to terminate before install. |
+| `close_processes` | no | `[]` | executable names of managed processes to close before the install. a name no configured process runs is skipped: the agent closes only processes it manages. |
 | `suppress_projects` | no | `[]` | managed project IDs to lock during install. |
 
 ### supported installer types

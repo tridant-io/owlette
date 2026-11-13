@@ -20,6 +20,7 @@ Every installer also ships the desktop app (`../desktop/`), the local window and
 - **Software deployment**: silent installs with checksum verification (Windows), and self-update on all three platforms
 - **Machine care**: scheduled restarts, display layout capture and restore (Windows), keep screens awake
 - **hoot tools**: the tool surface hoot calls on the machine (`mcp_tools.py`, with `tools_windows.py` and `tools_posix.py`), and the local hoot process (`owlette_cortex.py`)
+- **hoot mcp**: the MCP server an AI agent on this machine launches to use hoot's tools on other machines of its site (`fleet_mcp.py`), on the short-lived fleet session the service keeps for it (`fleet_session.py`), once a site owner or admin allows the machine; Windows and macOS
 - **Resilience**: works offline from the cached config, reconnects through one connection manager with backoff and a circuit breaker, and restarts itself when a connection stays stuck
 - **Device-code pairing**: joins a site with a 3-word phrase; tokens are stored encrypted and bound to the machine
 
@@ -135,7 +136,7 @@ build_installer_full.bat     :: everything: Python, dependencies, desktop app, o
 build_installer_quick.bat    :: after a full build: re-copies the agent source and recompiles the installer (~30 s)
 ```
 
-Both write `build\installer_output\Owlette-Installer-v<version>.exe`. The scripts end with `pause`, so from a non-interactive shell redirect stdin: `cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"`. [BUILD.md](BUILD.md) has the full step list, testing and common issues.
+Both write `build\installer_output\Owlette-Installer-v<version>.exe`. Every release is signed (Tridant, Inc., since 4.1.25): set `OWLETTE_SIGN=1` before the full build on a machine with the signing setup in the release runbook; the quick build never signs. The scripts end with `pause`, so from a non-interactive shell redirect stdin: `cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"`. [BUILD.md](BUILD.md) has the full step list, testing and common issues.
 
 ### macOS (.pkg)
 
@@ -159,7 +160,7 @@ It bundles the runtime under `/opt/owlette`, builds the desktop app (`tauri buil
 
 ### CI and release
 
-Pushing a `vX.Y.Z` tag runs [`.github/workflows/build-installer.yml`](../.github/workflows/build-installer.yml): it builds all three installers on GitHub-hosted runners, signs and notarizes the pkg, and attaches the files with one SLSA Build Level 3 provenance attestation to the GitHub release. That rolls nothing out: agents see a version only once it is uploaded and finalized with `scripts/upload-installer.mjs`. The whole procedure is in [docs/runbooks/agent-installer-release.md](../docs/runbooks/agent-installer-release.md).
+Pushing a `vX.Y.Z` tag runs [`.github/workflows/build-installer.yml`](../.github/workflows/build-installer.yml): it builds all three installers on GitHub-hosted runners, signs the Windows installer and its executables, signs and notarizes the pkg, and attaches the files with one SLSA Build Level 3 provenance attestation to the GitHub release. That rolls nothing out: agents see a version only once it is uploaded and finalized with `scripts/upload-installer.mjs`. The whole procedure is in [docs/runbooks/agent-installer-release.md](../docs/runbooks/agent-installer-release.md).
 
 ---
 
@@ -247,7 +248,7 @@ Inside `src/`, by area:
 - **commands**: `command_router.py`, `process_commands.py`, `machine_commands.py`, `site_commands.py`, `installer_utils.py` (deployments and self-update), `screenshot_capture.py`
 - **roost**: `sync_commands.py`, `sync_version.py`, `sync_downloader.py`, `sync_assembler.py`, `sync_state.py`, `sync_scrub.py`, `destination_allowlist.py`, `roost_kill_switch.py`
 - **swoop**: `swoop_manager.py`, `swoop_commands.py`, `swoop_doorbell.py`, `swoop_capability.py`, `swoop_spawn.py`, `swoop_spawn_posix.py`
-- **hoot**: `mcp_tools.py`, `tools_windows.py`, `tools_posix.py`, `owlette_cortex.py`, `cortex_firestore.py`, `cortex_tools.py`, `cortex_cli_fetch.py`
+- **hoot**: `mcp_tools.py`, `tools_windows.py`, `tools_posix.py`, `owlette_cortex.py`, `cortex_firestore.py`, `cortex_tools.py`, `cortex_cli_fetch.py`, `fleet_mcp.py` and `fleet_session.py` (hoot mcp)
 - **machine**: `hardware_profile.py`, `temp_sensors.py`, `owlette_scout.py`, `display_manager.py`, `nvapi_display.py`, `keep_awake.py`, `reboot_state.py`, `active_hours.py` (whether now is inside Windows active hours and when they end, for the reboot, shutdown and deployment guard), `session_state.py`, `watchdog_state.py`, `health_probe.py`, `acl_hardening.py`, `registry_utils.py`
 
 ## More documentation

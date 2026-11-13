@@ -47,6 +47,7 @@ legend:
 | `owlette site remove-member <siteId> <uid>` | ready | [site](/docs/cli/reference/site#remove-member) | `DELETE /api/sites/{siteId}/members/{uid}` |
 | `owlette site transfer-ownership <siteId> <successorUid>` | ready | [site](/docs/cli/reference/site#transfer-ownership) | `POST /api/sites/{siteId}/transfer-ownership` |
 | site create, update, delete | not registered | [site](/docs/cli/reference/site) | `POST /api/sites`, `PATCH /api/sites/{siteId}` and `DELETE /api/sites/{siteId}` exist; the CLI has no verbs for them |
+| a member's swoop mode or machine scope | not registered | [site](/docs/cli/reference/site) | `swoop` and `machineIds` on `POST /api/sites/{siteId}/members` and `PATCH /api/sites/{siteId}/members/{uid}`; `add-member` and `set-role` send neither |
 | `owlette quota show` | ready | [quota](/docs/cli/reference/quota#show) | `GET /api/sites/{siteId}/quota` |
 | `owlette quota history` | ready | [quota](/docs/cli/reference/quota#history) | `GET /api/sites/{siteId}/quota/history?period=<period>` |
 | `owlette audit-log list` | ready | [audit-log](/docs/cli/reference/audit-log#list) | `GET /api/sites/{siteId}/audit-log` |
@@ -122,6 +123,7 @@ legend:
 | `owlette installer upload <file>` | ready | [installer](/docs/cli/reference/installer#upload) | `POST /api/installer/upload`, signed `PUT`, then `PUT /api/installer/upload` |
 | `owlette installer set-latest <version>` | ready | [installer](/docs/cli/reference/installer#set-latest) | `POST /api/installer/{version}/set-latest` |
 | `owlette installer delete <version>` | ready | [installer](/docs/cli/reference/installer#delete) | `DELETE /api/installer/{version}` |
+| installer release notes | not registered | [installer](/docs/cli/reference/installer#upload) | `PATCH /api/installer/{version}` corrects a published version's release notes |
 
 ## webhook noun
 

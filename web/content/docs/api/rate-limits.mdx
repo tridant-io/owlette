@@ -4,7 +4,7 @@ description: "owlette limits API callers in two ways: request rate limits that a
 keywords: ["429", "throttling", "too many requests", "Retry-After", "quota", "storage limit", "over_quota"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-12
 
 - **rate limits** are request ceilings measured in minutes or hours. they protect the API and the fleet control plane, and answer `429 rate_limited`.
 - **quotas** are per-site limits that do not reset on a clock: a site's roost storage, and how many machines one installer deployment may target.
@@ -125,10 +125,11 @@ every route behind the capability check also counts the action against a 60-seco
 | `USER_ROLE_MANAGE` | 10 | promoting, demoting, and assigning users |
 | `USER_DELETE` | 5 | deleting users |
 | `SYSTEM_PRESET_MANAGE` | 30 | platform system presets |
+| `ISSUE_MANAGE` | 60 | setting an issue's triage status |
 | `GLOBAL_SETTINGS_WRITE` | 10 | platform settings |
 | `USER_SELF_DELETE` | 1 | deleting your own account |
 
-site, machine, and command-status reads, the roost, chunk, webhook, and installer routes, and the hoot conversation routes have no per-minute bucket — and no hourly one either, so they send no rate-limit headers. key management uses only the hourly `api` bucket. when a route sits behind both layers, the counters on a successful response describe the hourly bucket; a `429` describes whichever bucket refused it.
+site, machine, and command-status reads, the roost, chunk, webhook, and installer routes, and the hoot conversation routes have no per-minute bucket — and no hourly one either, so they send no rate-limit headers. the exception is the [webhook probe](/docs/api/webhooks#probe): 60 probes an hour per person, with the headers only on its `429`. key management uses only the hourly `api` bucket. when a route sits behind both layers, the counters on a successful response describe the hourly bucket; a `429` describes whichever bucket refused it.
 
 a machine acting through [hoot mcp](/docs/agent/hoot-mcp) has a bucket of its own, per machine: 300 requests a minute for reads, the tool list and checks on a running call, and 60 a minute for calls at tier 2 or 3. asking for a session is limited to 30 an hour per machine, and a machine may hand hoot six tasks an hour.
 

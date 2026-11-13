@@ -104,7 +104,7 @@ backing: `GET /api/sites/{siteId}/audit-log/{recordHash}`.
 
 ## notes
 
-- **scope**: site-scoped, read-only; the key needs `site=<id>:read`
+- **scope**: site-scoped, read-only; the key needs `site=<id>:read`, and only the site's owner, a site admin with the whole site, or a superadmin may read the log — anyone else gets `403 forbidden`
 - **verification is server-side**: the CLI does not re-hash records. to verify offline, fetch records with `--json` and recompute the hashes yourself
 - **cheapest queries**: a single `--kind` plus `--since` keeps the filtering on the server; client-side filters still download every record in range
 - **JSON**: raw objects with no `{ ok, data }` wrapper

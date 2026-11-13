@@ -27,7 +27,7 @@ you can watch and control from any computer with a current browser, or from [owl
 
 a machine whose agent cannot stream never offers swoop: its menu keeps the live-view entry instead. on Linux that entry, and **screenshot** beside it, still fail for now — a Linux machine cannot capture its screen yet (see [platform support](/docs/reference/platform-support#screens)).
 
-the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one: it gives the best picture, in h264 or HEVC, at full size. without it, the streamer encodes through Media Foundation, which is part of Windows: on the GPU's own hardware encoder (Intel or AMD), in h264; or, with no hardware encoder at all — a virtual machine, say — on the CPU, in h264 at up to 1280x720 and 30 frames a second, on two threads, so the machine's own work keeps the rest. a bigger screen is scaled down to fit. a Windows N edition without the Media Feature Pack has no Media Foundation, so there a session needs an NVIDIA GPU; without one the streamer finds no encoder and exits, and the viewer reports that the machine did not answer. agents before the release after 4.1.8 encode on NVENC only.
+the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one: it gives the best picture, in h264 or HEVC, at full size. without it, the streamer encodes through Media Foundation, which is part of Windows: on the GPU's own hardware encoder (Intel or AMD), in h264; or, with no hardware encoder at all — a virtual machine, say — on the CPU, in h264 at up to 1280x720 and 30 frames a second, on two threads, so the machine's own work keeps the rest. a bigger screen is scaled down to fit. a Windows N edition without the Media Feature Pack has no Media Foundation, so there a session needs an NVIDIA GPU; without one the streamer finds no encoder and exits, and the viewer reports that the machine did not answer. agents before 4.1.9 encode on NVENC only.
 
 ---
 
@@ -121,7 +121,7 @@ every button in the bar says what it does when you hover it, a greyed-out one in
 
 over the dark bars around the picture your own pointer shows and nothing reaches the machine, so a click there never lands on the edge of its screen. a drag that runs off the picture keeps going, held at its edge.
 
-the machine's pointer is drawn at the size it is on the machine, which is the size of your own, however big the picture is: a Mac's arrow is as big as a Mac shows it. your own pointer stays until the machine has said where its pointer is, connecting included, and it comes back whenever a program on the machine hides its pointer, a kiosk or a player, so you never click blind. it moves with your mouse the moment you move it, not when the machine says where it went, so a slow connection lags the picture and never the pointer. dragging a window by its title bar keeps the pointer at its size too: Windows paints its own into the picture for the drag, smaller, where it can trail a moment behind. on an agent before the release after 4.1.22 the pointer shrinks to that painted one until you let go. one case follows the machine instead: fullscreen with the mouse captured, where a program that hides its pointer, such as a game, means it. watching without control, your pointer is always your own, and the machine's is drawn where it is.
+the machine's pointer is drawn at the size it is on the machine, which is the size of your own, however big the picture is: a Mac's arrow is as big as a Mac shows it. your own pointer stays until the machine has said where its pointer is, connecting included, and it comes back whenever a program on the machine hides its pointer, a kiosk or a player, so you never click blind. it moves with your mouse the moment you move it, not when the machine says where it went, so a slow connection lags the picture and never the pointer. dragging a window by its title bar keeps the pointer at its size too: Windows paints its own into the picture for the drag, smaller, where it can trail a moment behind. on an agent before 4.1.23 the pointer shrinks to that painted one until you let go. one case follows the machine instead: fullscreen with the mouse captured, where a program that hides its pointer, such as a game, means it. watching without control, your pointer is always your own, and the machine's is drawn where it is.
 
 ### on a phone
 
@@ -351,8 +351,8 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 | answer UAC prompts; ctrl + alt + del | 4.1.4 |
 | win + l locks the machine | 4.1.5 |
 | "you're on this machine" instead of a picture of your own screen | 4.1.6 |
-| host a session on Windows without an NVIDIA GPU | the release after 4.1.8 |
-| keeps its resolution on a slow connection; sharper text on an NVIDIA GPU, where a picture that stops moving also sharpens in about half a second; a cleaner picture when a Windows machine with no GPU, such as a virtual machine, scales its screen down | 4.2.0 |
+| host a session on Windows without an NVIDIA GPU | 4.1.9 |
+| keeps its resolution on a slow connection; sharper text on an NVIDIA GPU, where a picture that stops moving also sharpens in about half a second; a cleaner picture when a Windows machine with no GPU, such as a virtual machine, scales its screen down; a Windows display turned to portrait arrives upright | 4.2.0 |
 
 ---
 

@@ -134,10 +134,10 @@ persistent users' Firebase refresh tokens.
 
 **After a failure, `.output/` holds a live dev session.** A failed test keeps its trace in
 `results/`, copied into `report/data/`, and the trace's network log carries that role's
-`__session` cookie. The cookie stays valid for up to 7 days: the app's session has no revocation
-check, so neither teardown nor the next run's password rotation ends it. For the hoot, share and
-roles checks it is a site admin of `smoke-live`, able to run hoot turns billed to the stored LLM
-key. Treat `.output/` like `.auth/`: never attach a report, trace or screenshot from it to a PR,
+`__session` cookie. It works until global teardown revokes the persistent users' refresh tokens,
+after which the API refuses it within a minute; a run whose teardown did not finish (a forced
+exit, a crash) leaves it valid for up to 7 days. For the hoot, share and roles checks it is a site
+admin of `smoke-live`, able to run hoot turns billed to the stored LLM key. Treat `.output/` like `.auth/`: never attach a report, trace or screenshot from it to a PR,
 issue or chat. The next run empties `results/` and replaces `report/`.
 
 Ctrl-C once: Playwright runs its global teardown, the stub removes its machine, and the runner
@@ -323,7 +323,8 @@ Enforced in code, not configuration:
   reaches Playwright's environment only. Text echoed from the browser is redacted of API keys, a
   failed login saves a screenshot rather than page HTML, and no message quotes a share link's
   token. Files are another matter: a failed test's trace in `.output/` carries that role's session
-  cookie, valid for up to 7 days (see [reading the result](#reading-the-result)). `.auth/` and
+  cookie, valid until teardown revokes the role's refresh tokens, or up to 7 days when teardown
+  did not finish (see [reading the result](#reading-the-result)). `.auth/` and
   `.output/` are gitignored; teardown deletes `.auth/` and revokes the persistent users' refresh
   tokens.
 - **The whole gate or nothing.** `forbidOnly` fails a run that contains a stray `test.only`.

@@ -44,7 +44,7 @@ project-content/{siteId}/{hash[0:2]}/{hash}
 | segment | source | purpose |
 |---|---|---|
 | `project-content` | fixed key prefix | separates chunks from version bodies |
-| `{siteId}` | the site that owns the chunk | tenant isolation |
+| `{siteId}` | the site that owns the chunk | keeps each site's chunks apart |
 | `{hash[0:2]}` | first two hex characters of the hash | spreads keys across prefixes |
 | `{hash}` | full 64-character SHA-256 | the content address |
 

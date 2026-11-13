@@ -81,7 +81,7 @@ then the panel shows **keep this layout? auto-revert in Ns** with **keep**. pres
 
 - **an agent restart mid-countdown** reverts at startup. with nobody signed in at the machine, the revert waits for a sign-in and logs `display_revert_deferred`
 - **with auto-restore on**, the panel shows an **auto** status in place of **restore**
-- **NVIDIA Mosaic**: while Mosaic is active the panel disables **edit** and **auto-restore**, but not **restore**. the agent is meant to refuse an apply under Mosaic, but its check does not detect an active Mosaic today, so a restore goes ahead. do not restore a machine running Mosaic
+- **NVIDIA Mosaic**: while Mosaic is active the panel disables **edit** and **auto-restore**, but not **restore**. from agent 4.2.0 the agent refuses the apply, since changing one display can break up the Mosaic grid, says why, and logs `display_apply_refused_mosaic`. an older agent applies it anyway, so do not restore a machine on an older agent running Mosaic
 
 ---
 
@@ -123,7 +123,7 @@ the events tab and [activity logs](/docs/dashboard/activity-logs) carry the same
 | `display_sync_lost` | warning | a sync device that was locked no longer is |
 | `display_apply_succeeded` | info | a restore applied; the 30-second countdown is running |
 | `display_apply_failed` | warning | an apply failed; the error is kept and shown in details |
-| `display_apply_refused_mosaic` | warning | meant for an apply refused under Mosaic. the current agent does not log it; see [restoring a layout](#restoring-a-layout) |
+| `display_apply_refused_mosaic` | warning | an apply was refused because NVIDIA Mosaic is active (agent 4.2.0 or later); see [restoring a layout](#restoring-a-layout) |
 | `display_apply_acked` | info | someone pressed **keep** |
 | `display_auto_revert_fired` | error | nobody pressed **keep** in time; the previous arrangement was put back, or the revert failed |
 | `display_revert_deferred` | warning | an unconfirmed restore survived an agent restart with nobody signed in to revert it for; it retries at the next sign-in |

@@ -4,7 +4,7 @@ description: "a version is an immutable JSON body that lists the files in a roos
 keywords: ["projects", "manifest", "release"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-12
 
 a roost is a deploy unit: a named set of files that owlette keeps in sync on a list of target machines. each publish adds an immutable version to the roost's history and moves its current pointer; agents on the target machines then pull the files they are missing. the bytes themselves are [chunks](/docs/api/chunks), uploaded before the version is published.
 
@@ -41,7 +41,7 @@ every route also accepts the optional `Roost-Version: 2026-04-22` header. leave 
 
 - `name` is required on create (`400 roost_name_required` when missing or blank); it is trimmed and cut to 200 characters.
 - `targets` is the list of machine IDs that receive the roost. entries must be non-empty strings; duplicates are dropped and only the first 500 are kept.
-- `extractPath` is where agents write the files. it is trimmed and cut to 500 characters; when unset, agents use `~/Documents/Owlette`. on update, an empty string clears it.
+- `extractPath` is where agents write the files. it is trimmed and cut to 500 characters; when unset, agents use `~/Documents/Owlette`, which a Mac maps to `/Users/Shared/Owlette` and Linux to `/var/lib/owlette/projects`. on update, an empty string clears it.
 - `roostId` is optional on create: 8 to 64 letters, digits, `_` or `-`. without it the server generates `rst_` plus 18 hex characters. creating an ID that already exists is `409 conflict`, unless that roost is soft-deleted, in which case create restores it with its version history.
 - delete is a soft delete: it stamps `deletedAt` and a `tombstoneExpiresAt` 30 days out, and keeps the versions. update and deploy answer `409 conflict` on a soft-deleted roost, and rollback answers `404 not_found`.
 - update needs at least one of `name`, `targets` or `extractPath`; it cannot move the version pointer.
@@ -550,7 +550,7 @@ how a rollout runs:
 - when every canary machine has reported and at least 90% succeeded, the fleet wave is told to sync and the rollout moves to `stage: "fleet"`. when every fleet machine has reported, it moves to `complete`.
 - if more than 25% of the current wave has failed, the rollout moves to `aborted` with an `abortReason`.
 - a canary that settles with more than 10% but no more than 25% failures, or machines that never report, leave the rollout at `canary`. a rollout that is not finished blocks new deploys of the same version (see `alreadyRunning` below); [resync](#resync) clears it.
-- files land under the roost's `extractPath`, or `~/Documents/Owlette` when it is unset.
+- files land under the roost's `extractPath`, or `~/Documents/Owlette` when it is unset (mapped on macOS and Linux, as under [roosts](#roosts)).
 
 normal response (`202 Accepted`):
 

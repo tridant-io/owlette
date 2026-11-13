@@ -1,7 +1,7 @@
 ---
 title: "trigger"
 description: "trigger sends one synthetic webhook event to a URL, for testing a receiver and its signature check. it posts from the CLI itself, or with --via-api asks the server to sign and send the event."
-keywords: ["test webhook", "fake event", "mock event"]
+keywords: ["test webhook", "fake event", "mock event", "probe rate limit"]
 ---
 
 two modes:
@@ -172,6 +172,6 @@ a `--payload` or `--payload-file` that is not valid JSON, or a file that cannot 
 
 ## notes
 
-- **scope**: direct mode makes no owlette API call. probe mode needs `site=<id>:write`, so probe firings land in the audit log
+- **scope**: direct mode makes no owlette API call. probe mode needs `site=<id>:write` from the site's owner, a site admin with the whole site, or a superadmin, so probe firings land in the audit log; each person can probe 60 times an hour
 - **headers**: direct mode always sends `Roost-Event` and `Roost-Delivery`
 - **related**: [webhooks](/docs/api/webhooks) for the signature format and verification code, [`listen`](/docs/cli/reference/listen) to forward the event stream, [webhook](/docs/cli/reference/webhook) for subscription routes

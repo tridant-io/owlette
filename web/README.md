@@ -6,7 +6,7 @@ The Next.js 16 application behind [owlette.app](https://owlette.app): the dashbo
 
 - **Dashboard**: machines and live metrics, processes and their launch modes and schedules, restart schedules, displays, keep screens awake, deployments (`/deployments`), roost (`/roosts`), swoop (`/swoop/{siteId}/{machineId}`), hoot (`/hoot`), talons (`/talons`), activity logs (`/logs`), account settings, and the admin panel (`/admin`)
 - **Public API**: scoped API keys, webhooks, idempotency and pagination, described by [`openapi.yaml`](openapi.yaml) and served at `/api/openapi`, with the interactive reference at `/docs/api`
-- **Agent endpoints**: device-code pairing, token exchange and refresh (`app/api/agent/auth/`), screenshot uploads, alerts and swoop under `app/api/agent/`
+- **Agent endpoints**: device-code pairing, token exchange and refresh (`app/api/agent/auth/`), screenshot uploads, alerts, swoop, the hoot key fetch and hoot mcp's fleet routes (`fleet/`) under `app/api/agent/`
 - **Scheduled endpoints**: `app/api/cron/*` and `/api/hoot/escalation`, called by an external scheduler
 - **Docs**: the MDX under [`content/docs`](content/docs), rendered by Fumadocs and shipped with every build
 - **Auth**: Firebase Auth (email/password, Google, passkeys), a required second factor (passkey or TOTP), encrypted session cookies, and Cloudflare Turnstile on sign-up and password reset
@@ -71,7 +71,7 @@ To reach the dev server from another device on your network, list its origin in 
 - **Rules**: `npm run test:rules` boots the Firestore emulator and runs `__tests__/rules/`.
 - **End to end**: `npm run e2e` runs Playwright against a production build on **:3100** (so it coexists with `npm run dev`) and the Firebase emulators (Auth :9099, Firestore :8080, Storage :9199). It needs JDK 21 on PATH, `npm i -g firebase-tools@15`, and Chromium once: `npx playwright install chromium --with-deps`. The HTML report lands in `e2e/.output/report/`. [`e2e/README.md`](e2e/README.md) covers fixtures, debugging and the other suites.
 
-The `playwright e2e` workflow runs the suite on every pull request and on pushes to `dev` and `main` that touch `web/`, `functions/`, the Firestore or Storage rules, the indexes or `firebase.json`. Every new user-facing behaviour ships with an e2e test.
+The `playwright e2e` workflow runs the suite on pull requests and on pushes to `dev` and `main` that touch `web/`, `functions/`, the Firestore or Storage rules, the indexes, `firebase.json`, or the few files outside `web/` its tests read (`infra/cron-jobs.json`, `scripts/env-manifest.json`, swoop's protocol vectors and keymap). Every new user-facing behaviour ships with an e2e test.
 
 ## Layout
 
@@ -80,7 +80,7 @@ web/
 ├── app/                  # routes: pages, app/api/* route handlers, app/docs (Fumadocs + the API reference)
 ├── components/           # app components; components/ui/ holds the shadcn primitives, which we own and customize
 ├── hooks/                # every Firestore read and listener a component uses
-├── contexts/             # AuthContext and the demo's DemoContext
+├── contexts/             # AuthContext, the demo's DemoContext, and ViewerAppContext for owlette swoop
 ├── lib/                  # shared logic; *.server.ts files are server-only
 ├── content/docs/         # the published documentation (MDX)
 ├── public/               # static assets, including the docs screenshots

@@ -12,7 +12,7 @@ verbs:
 - [`deploy list`](#list) — list deployments on a site, one page per run
 - [`deploy get`](#get) — print one deployment with each target's status
 - [`deploy retry`](#retry) — re-queue the targets that failed
-- [`deploy cancel`](#cancel) — cancel targets that have not started
+- [`deploy cancel`](#cancel) — cancel targets that have not started installing
 - [`deploy uninstall`](#uninstall) — uninstall a program from the targets that list it
 - [`deploy delete`](#delete) — delete a finished deployment's record
 
@@ -37,7 +37,7 @@ owlette deploy create --site <siteId> --name <name> --installer-url <url> --inst
 | `--silent-flags <flags>` | string | yes | flags passed to the installer (for example `/S`) |
 | `--machines <csv>` | string | yes | target machine IDs, comma-separated, at least one |
 | `--verify-path <path>` | string | no | path that must exist after install for it to count as a success |
-| `--sha256 <hex>` | string | no | 64-character SHA-256 of the installer; agents refuse a file that does not match |
+| `--sha256 <hex>` | string | no | 64-character SHA-256 of the installer; agents refuse a file that does not match, and refuse to install without one, so every target fails when it is left out |
 | `--close-processes <csv>` | string | no | process exe names agents close before installing |
 | `--suppress-projects <csv>` | string | no | project names or paths agents suppress before installing |
 | `--parallel` | boolean | no | install on all targets at once (default: one at a time) |
@@ -127,7 +127,7 @@ backing: `GET /api/sites/{siteId}/deployments/{deploymentId}`.
 
 ## retry
 
-re-queues every target whose status is `failed`. other targets are left alone.
+re-queues every target whose status is `failed`, except one whose failure was an uninstall, since a retry installs. other targets are left alone. with nothing to retry the server answers `409 no_failed_targets`.
 
 ```bash
 owlette deploy retry <deploymentId> --site <siteId> [--override-active-hours --reason <text>] [--idempotency-key <key>] [--json]
@@ -158,7 +158,7 @@ backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/retry`.
 
 ## cancel
 
-cancels the targets that have not started. installers already running are not interrupted.
+cancels every target that has not started installing: `pending`, `downloading` or `closing_processes`. an installer that is already running is left to finish.
 
 ```bash
 owlette deploy cancel <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>] [--json]

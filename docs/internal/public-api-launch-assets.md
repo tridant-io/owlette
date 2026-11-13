@@ -12,8 +12,10 @@ documentation.
 > docs URL, and every `docs/api/*.md` example source, which now lives in fumadocs under
 > `web/content/docs/api/`. Verified still true: the SDK example directories, the reusable
 > GitHub Action, the copyable workflow template, and the landing/signup/download routes.
-> Verified changed and flagged inline: billing was removed end to end (`adbfd06f`), so the
-> "truthful pricing/signup path" the page opens with now means beta copy, not a checkout. Not
+> Verified changed and flagged inline: billing was removed end to end (`adbfd06f`); plans and
+> checkout have since returned through tridant id (ADR 0018), dormant unless `PLAN_ENFORCEMENT`
+> is on, so the "truthful pricing/signup path" means copy that matches what the environment
+> enforces and bills. Not
 > verifiable from the repo: the marketplace listing copy below has never been submitted
 > anywhere, so treat it as a draft.
 
@@ -39,9 +41,10 @@ Use the [public API launch runbook](public-api-launch-runbook.md) to move from p
 - no public page claims npm, PyPI, Homebrew, Scoop, winget, custom-domain status, or paid billing is live before the corresponding Wave 5 gate is closed
   > **status 2026-09-05:** every one of those is still open. `@owlette/cli` and `@owlette/sdk`
   > return 404 from npm and `owlette-sdk` is unpublished; `status.owlette.app` does not resolve;
-  > and paid billing does not exist at all — `adbfd06f` removed the billing system end to end,
-  > so `web/lib/billing` and the Stripe integration are gone and the landing tiers read "free
-  > during beta" with post-beta rates quoted from `web/lib/product-facts.ts`.
+  > and the landing tiers read "free during beta" with post-beta rates quoted from
+  > `web/lib/product-facts.ts`. Paid billing now runs per site through tridant id
+  > (`web/lib/siteBilling.server.ts`, `/api/billing/checkout`), enforced only while
+  > `PLAN_ENFORCEMENT` is `on` (`web/lib/plan.server.ts`).
 
 ---
 
@@ -121,4 +124,4 @@ External example repositories remain optional for the first launch if the in-rep
 
 ## current status
 
-The launch asset foundation is in-repo. External completion remains blocked until the public site is deployed with final pricing/signup decisions, package distribution is live, and at least one clean consumer workflow runs against a dev or staging roost fixture.
+The launch asset foundation is in-repo. External completion remains blocked until the public site is deployed with final pricing/signup decisions, package distribution is live, and at least one clean consumer workflow runs against a dev roost fixture.

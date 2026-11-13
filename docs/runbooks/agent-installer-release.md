@@ -296,7 +296,7 @@ If omitted, the server computes the checksum.
 ### common errors
 
 - `400` missing idempotency key: add `Idempotency-Key` to step 1 or step 3.
-- `403` wrong scope: confirm `installer=*:write`, `installer=*:admin` when `setAsLatest` is true, and a superadmin-minted key.
+- `403` wrong scope: confirm `installer=*:write`, `installer=*:admin` when `setAsLatest` is true or left out (the upload defaults it to true), and a superadmin-minted key.
 - `412 checksum_mismatch`: recompute sha256 for the exact uploaded file and retry with a new key.
 - `409 installer_published` (step 1 or 3): the version's file for this platform is already on the download host, which caches it as immutable. Bump the version.
 - A `500` from step 3 on R2 can leave the record pointing at a file that never reached the download host (the copy failed). Finalize the same `uploadId` again (an R2 upload does not expire at finalize), or re-run the script with the same files and a new `--key-tag`.

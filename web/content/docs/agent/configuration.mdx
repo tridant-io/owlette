@@ -1,7 +1,7 @@
 ---
 title: "configuration"
 description: "configure the agent locally in the desktop app, remotely from the web dashboard, or by editing config.json directly. the file lives in the data root: C:\\ProgramData\\Owlette\\config\\config.json on Windows, /Library/Application Support/Owlette/config/config.json on macOS, /var/lib/owlette/config/config.json on Linux."
-keywords: ["settings", "config.json", "preferences", "app menu", "appearance", "dark mode", "light mode", "theme", "launch mode", "schedule", "leave site", "join site"]
+keywords: ["settings", "config.json", "preferences", "app menu", "appearance", "dark mode", "light mode", "theme", "launch mode", "schedule", "leave site", "join site", "connect an ai agent", "removed from site"]
 ---
 
 desktop app and dashboard writes apply immediately; the agent picks up config changes on a polling listener with a 2-10 second interval.
@@ -43,6 +43,7 @@ on macOS the window keeps the system's own window buttons at top left and shows 
 | **config** | open `config.json` |
 | **logs** | open the service's logs folder in the data root |
 | **docs** | open these docs |
+| **connect an ai agent** | Windows and macOS: show the command that connects an AI agent on this machine to [hoot mcp](/docs/agent/hoot-mcp), ready to copy. whether this machine may act on others is set in the dashboard |
 | **submit issue** | send an issue, feature request or feedback, with the machine's metrics and the tail of `service.log` attached, and the machine's logs when you tick **attach logs** (see [sending logs to support](/docs/agent/troubleshooting#sending-logs-to-support)) |
 | **appearance** | `system`, `dark` or `light`. `system`, the default, follows the computer's own appearance; the other two pin the window's theme. it is this app's own setting, apart from the dashboard's |
 | **start on login** | whether the app starts with this account's session — the same setting as the tray's, described in [start on login](/docs/agent/system-tray#start-on-login) |
@@ -57,7 +58,7 @@ the footer resolves to one of seven words, in this order — the first one that 
 |------|---------------|------------|
 | `checking` | the app has not heard back from the service yet. | nothing — it resolves within a second or two. |
 | `service not running` | the service is stopped, not installed, or running but has not written its status file for over two minutes. either way, nothing is being supervised right now. | `start service` beside the sentence, or `restart service` from the menu. on macOS launchd starts the service again on its own; if it stays down, reinstall. |
-| `disabled` | cloud sync is off in `config.json`. a machine that was installed but never paired has no `firebase` section at all, so this is the word it shows — it is not a fault. | `join site` beside the sentence. |
+| `disabled` | cloud sync is off in `config.json`. a machine that was installed but never paired has no `firebase` section at all, so this is the word it shows — it is not a fault. so does a machine that left its site: from this app, or on its own when its agent token was revoked, it was removed from the dashboard, or its site was deleted. | `join site` beside the sentence. |
 | `removed from site` | cloud sync is on, but the machine is no longer assigned to a site. | `join site` beside the sentence. |
 | `connected` | the service is running and reaching owlette. | nothing. |
 | `authentication required` | the service could not authenticate with owlette — its stored tokens are missing or rejected. | re-pair the machine; see [agent troubleshooting](/docs/agent/troubleshooting#agent-not-authenticated-error). |

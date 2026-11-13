@@ -82,6 +82,7 @@ build_installer_quick.bat
 - Requires a previous full build (Method 1) to exist in `build/`
 - Does not update Python dependencies or the Python runtime
 - Does not compile the desktop app, owlette swoop or the swoop streamer — build the one that changed first (the script prints the command), and it refuses to package when any of the three is missing
+- Never signs: with `OWLETTE_SIGN=1` set it stops and points you at the full build
 - If you get errors, do a full rebuild with Method 1
 
 ## Build Output Structure
@@ -210,7 +211,7 @@ The ordering rules are in the release runbook, [docs/runbooks/agent-installer-re
 
 ## CI/CD Integration
 
-`.github/workflows/build-installer.yml` runs the full build on a Windows runner for tag pushes matching `vX.Y.Z` and on manual dispatch. It uploads the installer as an artifact, generates SLSA provenance, and on tags attaches both to the GitHub Release. It does not upload the installer to Owlette — rolling it out still uses the 3-step API upload in the release runbook.
+`.github/workflows/build-installer.yml` runs the full build for tag pushes matching `vX.Y.Z` and on manual dispatch, in two Windows jobs: `build-windows` builds the payload (`build_installer_full.bat payload`) with no credential, and `package-windows` signs it and compiles the installer (`build_installer_full.bat compile`), signed on a `v*` tag and unsigned on a branch dispatch. The same run builds the macOS pkg and the Linux deb. It uploads the installers as artifacts, generates SLSA provenance, and on tags attaches both to the GitHub Release. It does not upload the installer to Owlette — rolling it out still uses the 3-step API upload in the release runbook.
 
 ## Cleaning Build Artifacts
 

@@ -4,7 +4,7 @@ description: "API errors use application/problem+json with a stable code, a docs
 keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId", "troubleshooting", "402", "payment required"]
 ---
 
-**last updated**: 2026-10-07
+**last updated**: 2026-11-12
 
 ---
 
@@ -150,7 +150,7 @@ the API key is valid but has no scope entry matching the operation. `required` n
 
 ### api_key_not_permitted
 
-the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, and display settings. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
+the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, and a site's billing. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
 
 ### mfa_challenge_required
 
@@ -275,6 +275,7 @@ hoot could not start a reply: `503` when the pinned machine is offline or no mac
 | code | status | meaning |
 |---|---:|---|
 | <span id="unsupported_command_type" />`unsupported_command_type` | 400 | the command `type` is not in the public allowlist; `detail` lists the allowed types |
+| <span id="held_restart_unsupported" />`held_restart_unsupported` | 409 | a `reboot_machine` with `when: "after_active_hours"` to a machine that can't hold a restart: an older agent, macOS or Linux, or one below 4.1.21. nothing was queued; see [active hours](/docs/reference/agent-commands#active-hours) |
 | <span id="machine_not_found" />`machine_not_found` | 404 | the machine does not exist in this site |
 | <span id="process_not_found" />`process_not_found` | 404 | no process with that ID on the machine |
 | <span id="duplicate_process_name" />`duplicate_process_name` | 409 | another process on the machine already has that name |
@@ -339,6 +340,7 @@ see [swoop](/docs/dashboard/swoop).
 | <span id="site_has_no_owner" />`site_has_no_owner` | 409 | the site records no owner to transfer from |
 | <span id="successor_already_owner" />`successor_already_owner` | 409 | the successor already owns the site |
 | <span id="target_is_owner" />`target_is_owner` | 409 | adding the site's owner as a member |
+| `email_unverified` | 409 | adding someone by email who signed up with a password and has not verified that address yet; ask them to verify it, then add them again |
 | <span id="cannot_remove_owner" />`cannot_remove_owner` | 409 | removing the site's owner; transfer ownership first |
 | <span id="cannot_change_owner_role" />`cannot_change_owner_role` | 409 | changing the owner's role, swoop mode or machine scope: they come with ownership, so transfer it instead |
 | <span id="cannot_modify_own_membership" />`cannot_modify_own_membership` | 403 | changing or removing your own membership; ask another admin |
@@ -398,10 +400,14 @@ a site's billing is changed from the dashboard, in site settings → billing, by
 | <span id="checksum_mismatch" />`checksum_mismatch` | 412 | the uploaded installer's SHA-256 does not match `checksum_sha256` |
 | <span id="upload_expired" />`upload_expired` | 410 | the 15-minute upload window closed |
 | <span id="upload_not_pending" />`upload_not_pending` | 409 | the upload was already finalized or expired |
+| <span id="installer_published" />`installer_published` | 409 | the installer's file name is already published with other bytes, and a published name never changes; bump the version |
+| <span id="installer_differs" />`installer_differs` | 409 | the version is already published with a different file for that platform; upload the same bytes, or bump the version |
 | <span id="latest_installer_not_found" />`latest_installer_not_found` | 404 | no active latest installer |
 | <span id="latest_version_protected" />`latest_version_protected` | 409 | deleting the version that is currently latest |
 | <span id="min_versions_violated" />`min_versions_violated` | 409 | deleting would leave fewer than 2 active installer versions |
 | <span id="version_deleted" />`version_deleted` | 409 | promoting a soft-deleted installer version |
+| <span id="issue_logs_expired" />`issue_logs_expired` | 410 | the logs attached to an issue are gone; they are kept for 30 days |
+| <span id="issue_attachment_expired" />`issue_attachment_expired` | 410 | the screenshots and videos attached to an issue are gone; they are kept for 30 days |
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "account settings"
 description: "your own preferences, not the site's: appearance, how timestamps render, which alert emails you get, which machines you have muted, your hoot key and model, password and second factors, and your API keys."
-keywords: ["preferences", "my settings", "profile", "change password", "celsius fahrenheit", "24 hour clock", "unsubscribe", "stop emails", "delete my account", "dark mode", "light mode", "theme", "change model", "llm key", "api key for hoot"]
+keywords: ["preferences", "my settings", "profile", "change password", "celsius fahrenheit", "24 hour clock", "unsubscribe", "stop emails", "delete my account", "dark mode", "light mode", "theme", "change model", "llm key", "api key for hoot", "signed out", "other sessions"]
 ---
 
 account settings is per **user**, not per site. changing it affects what you see and what lands in your inbox — nobody else's dashboard moves.
@@ -104,6 +104,8 @@ for developers: an AI agent such as Claude Code, running on one of your machines
 
 - **two-factor authentication** lists every second factor on the account in one place: the **authenticator app** (six-digit codes from an app like 1Password or Authy — **set up**, or **remove**, which asks for a current code or a backup code) and your **passkeys**, which you add, rename and remove here. when a factor already exists, adding another, or renaming or removing a passkey, first asks you to verify one you have, so someone at your signed-in browser cannot quietly swap in their own. every factor added to or removed from the account is emailed to your address. see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication).
 - **change password** — **update password** opens the fields: current password, then the new one twice. **save changes** applies it.
+
+a new password ends every dashboard session started before it within a minute, and adding or removing a factor ends the sessions in your other browsers at once. a browser signed out that way signs in again and is asked for its second factor.
 
 backup codes are issued during [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication), not here.
 

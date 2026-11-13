@@ -787,7 +787,7 @@ run a command on the machine, without a shell.
 the command is split into arguments and run directly, so shell operators (`&&`, `|`, `;`) are passed as plain arguments rather than interpreted. **allowed commands** — the first word must be one of the platform's list:
 
 - **Windows**: `ipconfig`, `systeminfo`, `hostname`, `whoami`, `tasklist`, `netstat`, `ping`, `tracert`, `nslookup`, `dir`, `type`, `echo`, `set`, `ver`, `wmic`, `sc`, `net`, `reg`, `nvidia-smi`, `dxdiag`
-- **macOS and Linux**: `hostname`, `whoami`, `id`, `uname`, `uptime`, `date`, `sw_vers`, `ls`, `cat`, `echo`, `env`, `df`, `du`, `free`, `ps`, `lsof`, `ip`, `ifconfig`, `netstat`, `ss`, `ping`, `traceroute`, `dig`, `nslookup`, `host`, `systemctl`, `journalctl`, `launchctl`, `system_profiler`, `lsb_release`, `lspci`, `lscpu`, `lsblk`, `dmesg`, `nvidia-smi`
+- **macOS and Linux**: `hostname`, `whoami`, `id`, `uname`, `uptime`, `date`, `sw_vers`, `ls`, `cat`, `echo`, `df`, `du`, `free`, `ps`, `lsof`, `ip`, `ifconfig`, `netstat`, `ss`, `ping`, `traceroute`, `dig`, `nslookup`, `host`, `systemctl`, `journalctl`, `launchctl`, `system_profiler`, `lsb_release`, `lspci`, `lscpu`, `lsblk`, `dmesg`, `nvidia-smi`
 
 `config.mcp.allowed_commands` on the machine replaces the platform's list. a running command can be **cancelled** from its tool card, which kills the process tree on the machine.
 
@@ -820,9 +820,9 @@ no command restrictions: every call is audit-logged to the site events feed and 
 
 - **restricted `__builtins__`**: `eval`, `exec`, `compile`, `globals`, `locals`, `breakpoint`, `input`, `exit` and `quit` are removed. `open`, `print`, `getattr`/`setattr`, and common types and exceptions remain.
 - **gated imports**: only a curated subset of the standard library can be imported: `math`, `json`, `re`, `datetime`, `time`, `random`, `collections`, `itertools`, `functools`, `operator`, `string`, `textwrap`, `decimal`, `fractions`, `statistics`, `copy`, `pprint`, `base64`, `hashlib`, `hmac`, `struct`, `io`, `csv`, `pathlib`, `typing`, `dataclasses`, `enum`, `abc`. dangerous modules — `os`, `subprocess`, `shutil`, `ctypes`, `socket`, and third-party packages like `psutil` or `mss` — raise `ImportError` with guidance to use `execute_script` or `run_command` instead.
-- **no filesystem access beyond `output_dir`**: the code can `open()` files it writes into the provided `output_dir` variable, but cannot reach the rest of the filesystem without a gated import.
+- **files in `output_dir`**: files the code writes into the provided `output_dir` variable come back with the result.
 
-the model **cannot** escape this sandbox. internal first-party callers (e.g. the agent's own screenshot capture in `agent/src/session_exec.py`) pass `trusted=True`, which restores full builtins and unrestricted imports; that flag is not reachable from the tool schema the model sees.
+the sandbox narrows what a script can import and call; it is not a security boundary. `run_python` is tier 3, like `run_powershell`: it can read and write any file the agent can reach, and every call asks a person first. internal first-party callers (e.g. the agent's own screenshot capture in `agent/src/session_exec.py`) pass `trusted=True`, which restores full builtins and unrestricted imports; that flag is not reachable from the tool schema the model sees.
 
 **returns**: stdout from `print()`, plus any files written to `output_dir`.
 
@@ -881,7 +881,7 @@ timeouts are capped at **3300 seconds (55 minutes)** so a result stays retrievab
 
 deploy and install software on the machine through the full deployment pipeline: download the installer, run a silent install, verify it, and track progress. creates a tracked deployment on the [deployments](/docs/dashboard/deployments) page. **server-side**: orchestrated by the server, not the agent directly.
 
-**Windows only in practice.** the deployment is created for any machine, but a macOS or Linux agent cannot run an installer: it first closes any processes the deployment names, then downloads and checks the file, and fails the install with *no interactive user session available for installation*. see [platform support](/docs/reference/platform-support#software).
+**Windows only in practice.** the deployment is created for any machine, but a macOS or Linux agent cannot run an installer: it downloads and checks the file, then fails the install with *no interactive user session available for installation*, before it closes any of the processes the deployment names. see [platform support](/docs/reference/platform-support#software).
 
 **requires confirmation before it runs.** hoot summarizes the deployment plan (software, version, install path, parallel install, processes to close) and waits for explicit approval.
 
@@ -1004,7 +1004,7 @@ tier-2 tools carry per-tool blocklists so hoot cannot cause its own outage:
 
 - `manage_process`: critical processes cannot be killed. on Windows that is lsass, winlogon, csrss, services, dwm, svchost and the other session processes, plus owlette's own service, host and Python processes. on macOS and Linux it is `init`, `systemd`, `systemd-logind`, `systemd-journald`, `dbus-daemon`, `sshd`, `launchd`, `loginwindow`, `WindowServer`, `SystemUIServer`, and owlette's own `owlette-desktop`, `owlette-host`, `python` and `python3`
 - `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted, the active hours values can't be written or deleted, and Winlogon and service keys are narrowed to what can't change what runs
-- `manage_windows_feature`: core Windows features owlette depends on (NetFx4, WMI-\*, PowerShell\*) cannot be removed
+- `manage_windows_feature`: a fixed list of core Windows features (`NetFx4`, `NetFx4-AdvSrvs`, `NetFx3`, `Windows-Management-Framework`, `Windows-Defender-Default-Definitions`, `Microsoft-Windows-Subsystem-Linux`) and the Store, .NET Native, VCLibs, UI.Xaml and App Installer packages cannot be removed
 - `create_talon`: `command` outputs are site-admin only, and webhook URLs that resolve to private, loopback or link-local addresses are rejected
 
 agent-run tier-2 tools write a structured `[MCP-AUDIT]` log entry for each call. every command a chat tool queues also writes one `machine_command_dispatched` row on the web side once it is queued, with the tool, its parameter names and a hash of the call, never the values; autonomous hoot's allow row carries the same two fields. an approved launch change first writes an allow row to the site's audit log with `launchChanges`, its old and new values, and doesn't run if that row can't be written. only names and settings as single values, and bare paths, are written as they are; free-form values such as arguments and scripts are a keyed hash and a length. both hashes need `CORTEX_INTERNAL_SECRET`: with it unset, a row carries no hash, only the length. server-side process config tools use the process mutation audit path with actor `cortex:user_<userId>`. talon tools write `talon_mutated` rows with the same actor, `via: "cortex"`, and the originating chat ID. the follow-up tools write no mutation row of their own — the follow-up document is the record, and the `DELETE /api/hoot/followups/{followupId}` route behind the composer chip audits its own cancels as `chat_mutated` / verb `cancel_followup`.
