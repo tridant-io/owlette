@@ -13,10 +13,10 @@
  */
 
 import { use, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Fingerprint } from 'lucide-react';
+import { CheckCircle2, Fingerprint } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { AuthShell, AuthDivider, AuthSignedInAs } from '@/components/auth/AuthShell';
+import { AuthShell, AuthSignedInAs } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { StepUpCodeFields, useStepUpCeremony } from '@/components/swoop/SwoopStepUpDialog';
 import { submitStepUpProof } from '@/lib/swoop/stepUp';
@@ -30,6 +30,7 @@ export default function SwoopVerifyPage({
   const { user, signOut } = useAuth();
   const router = useRouter();
   const [done, setDone] = useState(false);
+  const [codeOpen, setCodeOpen] = useState(false);
   const ceremony = useStepUpCeremony(async (proof) => {
     await submitStepUpProof(siteId, machineId, proof);
     setDone(true);
@@ -38,8 +39,7 @@ export default function SwoopVerifyPage({
 
   const title = (
     <>
-      allow control of <span className="break-all">{machineId}</span> from owlette swoop on this
-      computer?
+      allow control of <span className="break-all">{machineId}</span>?
     </>
   );
   // the wrong account at this screen is a real case (a shared desk, a browser left
@@ -55,7 +55,12 @@ export default function SwoopVerifyPage({
 
   return (
     <div className="h-full overflow-y-auto">
-      <AuthShell brandTitle={title} footer={footer}>
+      <AuthShell
+        compact
+        brandTitle={title}
+        brandDescription="for owlette swoop on this computer. continue only if you just clicked verify."
+        footer={footer}
+      >
         {done ? (
           <div className="space-y-3 text-center" role="status">
             <CheckCircle2 className="mx-auto h-8 w-8 text-success" />
@@ -63,13 +68,6 @@ export default function SwoopVerifyPage({
           </div>
         ) : (
           <>
-            <div className="flex items-start gap-2 rounded border border-warning-border bg-warning-surface p-3 text-xs text-warning">
-              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-              <span className="min-w-0">
-                continue only if you just clicked verify in your browser in owlette swoop
-              </span>
-            </div>
-
             <div className="space-y-3">
               <Button
                 type="button"
@@ -80,22 +78,35 @@ export default function SwoopVerifyPage({
                 <Fingerprint />
                 {pending === 'passkey' ? 'waiting for your passkey...' : 'use a passkey'}
               </Button>
-              <AuthDivider label="or enter a code" />
-              <StepUpCodeFields ceremony={ceremony} disabled={pending !== null} />
+              {codeOpen ? (
+                <>
+                  <StepUpCodeFields ceremony={ceremony} disabled={pending !== null} />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => submit('code')}
+                    disabled={pending !== null}
+                  >
+                    {pending === 'code' ? 'checking...' : 'confirm'}
+                  </Button>
+                </>
+              ) : (
+                <p className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => setCodeOpen(true)}
+                    className="hl-link cursor-pointer text-xs text-accent-cyan"
+                  >
+                    enter a code instead
+                  </button>
+                </p>
+              )}
               {error && (
                 <p role="alert" className="text-xs text-destructive">
                   {error}
                 </p>
               )}
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => submit('code')}
-                disabled={pending !== null}
-              >
-                {pending === 'code' ? 'checking...' : 'confirm'}
-              </Button>
             </div>
           </>
         )}

@@ -92,6 +92,8 @@ const CARD_COLUMNS: Record<AuthShellWidth, string> = {
  * the line fills naturally and the compound word survives.
  */
 const BRAND_TITLE_CLASS = 'text-2xl leading-tight font-bold text-pretty text-foreground';
+const COMPACT_TITLE_CLASS = 'text-lg leading-tight font-semibold text-pretty text-foreground';
+const DEFAULT_DESCRIPTION = 'keep your installation running';
 
 /** The shared treatment for links in the footer band. */
 export const authFooterLinkClass =
@@ -121,6 +123,12 @@ export interface AuthShellProps {
    * not show (Footer.tsx). overrides `width`.
    */
   minimal?: boolean;
+  /**
+   * a one-question confirmation: the minimal single column with no mark and a
+   * smaller title, so the card is the question, the context line and the action.
+   * the brand tagline is dropped unless `brandDescription` is passed.
+   */
+  compact?: boolean;
   /** Full-bleed band pinned to the bottom of the form column. Omit for no band. */
   footer?: ReactNode;
   /** Extra classes on the form column (e.g. a min-height to damp a resolve-time jump). */
@@ -134,23 +142,27 @@ export function AuthShell({
   brandMark,
   brandTitle = 'owlette',
   brandTitleAs = 'h1',
-  brandDescription = 'keep your installation running',
+  brandDescription,
   brandMeta,
   width = 'default',
   loading = false,
   minimal = false,
+  compact = false,
   footer,
   contentClassName,
   className,
   children,
 }: AuthShellProps) {
   const BrandTitleTag = brandTitleAs;
+  const single = minimal || compact;
+  const titleClass = compact ? COMPACT_TITLE_CLASS : BRAND_TITLE_CLASS;
+  const description = brandDescription === undefined && !compact ? DEFAULT_DESCRIPTION : brandDescription;
 
   return (
     /* pb-32 clears the app-wide fixed Footer, whose inner container is
        pointer-events-auto and otherwise swallows taps on the card's bottom
        controls at short viewport heights. */
-    <main className={cn('relative flex min-h-screen items-center justify-center p-4', !minimal && 'pb-32')}>
+    <main className={cn('relative flex min-h-screen items-center justify-center p-4', !single && 'pb-32')}>
       <div className="absolute inset-0 dot-grid opacity-30" aria-hidden="true" />
       <div className="absolute inset-0 blueprint-grid opacity-15" aria-hidden="true" />
 
@@ -160,20 +172,20 @@ export function AuthShell({
       <Card
         className={cn(
           'relative z-10 w-full overflow-hidden border-border bg-card p-0',
-          minimal ? 'max-w-sm' : CARD_WIDTH[width],
+          single ? 'max-w-sm' : CARD_WIDTH[width],
           className,
         )}
       >
-        <div className={cn('grid', !minimal && CARD_COLUMNS[width])}>
+        <div className={cn('grid', !single && CARD_COLUMNS[width])}>
           <CardHeader
             className={cn(
               'relative flex min-w-0 flex-col items-center justify-center space-y-4 p-8 text-center',
-              minimal ? 'pb-0' : 'md:h-full md:border-r md:border-border',
+              single ? 'pb-0' : 'md:h-full md:border-r md:border-border',
             )}
           >
             {/* minimal has no panel to set apart, and the texture's edge would
                 cut under the title */}
-            {minimal ? null : (
+            {single ? null : (
               <>
                 <div className="dot-grid absolute inset-0 -z-10 opacity-25" aria-hidden="true" />
                 <div
@@ -182,18 +194,18 @@ export function AuthShell({
                 />
               </>
             )}
-            {brandMark ?? <OwletteEyeIcon size={minimal ? 56 : 80} />}
+            {compact ? null : (brandMark ?? <OwletteEyeIcon size={minimal ? 56 : 80} />)}
             <div className="min-w-0 space-y-1">
               {brandTitleAs === 'div' ? (
-                <CardTitle className={BRAND_TITLE_CLASS}>{brandTitle}</CardTitle>
+                <CardTitle className={titleClass}>{brandTitle}</CardTitle>
               ) : (
-                <BrandTitleTag data-slot="card-title" className={BRAND_TITLE_CLASS}>
+                <BrandTitleTag data-slot="card-title" className={titleClass}>
                   {brandTitle}
                 </BrandTitleTag>
               )}
-              {brandDescription ? (
+              {description ? (
                 <CardDescription className="text-pretty text-muted-foreground">
-                  {brandDescription}
+                  {description}
                 </CardDescription>
               ) : null}
               {brandMeta ? (

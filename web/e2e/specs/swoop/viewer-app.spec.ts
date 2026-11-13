@@ -561,9 +561,9 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       // the browser passes the step-up on the page the app opened
       await page.goto(verifyUrl);
       await expect(
-        page.getByRole('heading', { name: `allow control of ${STEP_MACHINE} from owlette swoop on this computer?` }),
+        page.getByRole('heading', { name: `allow control of ${STEP_MACHINE}?` }),
       ).toBeVisible();
-      await expect(page.getByText('or enter a code')).toBeVisible();
+      await page.getByRole('button', { name: 'enter a code instead' }).click();
       await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
       await expect(page.getByTestId('signed-in-email')).toHaveText(user.email);
       await expectSignedInFooterOnOneLine(page);

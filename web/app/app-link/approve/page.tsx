@@ -2,13 +2,14 @@
 
 import { Suspense, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { AuthShell, AuthSignedInAs } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { AppLinkError, approveAppLink } from '@/lib/appLink';
 
-const TITLE = 'sign in owlette swoop on this computer?';
+const TITLE = 'sign in to owlette swoop?';
+const DESCRIPTION = 'on this computer. approve only if you just clicked sign in with your browser in the app.';
 
 type ApproveState = 'ask' | 'approving' | 'done' | 'cancelled' | 'gone' | 'used' | 'failed';
 
@@ -56,7 +57,7 @@ function ApproveInner() {
   const outcome = OUTCOME_COPY[state];
   if (outcome) {
     return (
-      <AuthShell brandTitle={TITLE} footer={footer}>
+      <AuthShell compact brandTitle={TITLE} brandDescription={DESCRIPTION} footer={footer}>
         <div className="space-y-3 text-center" role="status">
           {state === 'done' ? <CheckCircle2 className="mx-auto h-8 w-8 text-success" /> : null}
           <p className="text-sm text-foreground">{outcome}</p>
@@ -67,13 +68,7 @@ function ApproveInner() {
 
   const busy = state === 'approving';
   return (
-    <AuthShell brandTitle={TITLE} footer={footer}>
-      <div className="flex items-start gap-2 rounded border border-warning-border bg-warning-surface p-3 text-xs text-warning">
-        <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-        <span className="min-w-0">
-          approve only if you just clicked sign in with your browser in the app
-        </span>
-      </div>
+    <AuthShell compact brandTitle={TITLE} brandDescription={DESCRIPTION} footer={footer}>
       {state === 'failed' ? (
         <p role="alert" className="text-sm text-destructive">
           that didn&apos;t work. try again.
@@ -93,7 +88,7 @@ function ApproveInner() {
 
 export default function AppLinkApprovePage() {
   return (
-    <Suspense fallback={<AuthShell brandTitle={TITLE} loading />}>
+    <Suspense fallback={<AuthShell compact brandTitle={TITLE} loading />}>
       <ApproveInner />
     </Suspense>
   );
