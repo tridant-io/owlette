@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-14
+
 ### changed — the swoop step-up and app sign-in pages are one small card
 
 The browser pages that ask "allow control of this machine?" and "sign in to owlette swoop?" are a single compact card: a short question, one line of context, the signed-in account and the one action. The code entry on the step-up page opens from "enter a code instead".
