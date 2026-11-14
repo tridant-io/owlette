@@ -19,9 +19,10 @@ import { FIRESTORE_IN_LIMIT } from '@/lib/logFilters';
 /** at most this many machines per scoped member: the dashboard lists them with one documentId() `in` query */
 export const MAX_MACHINE_SCOPE = FIRESTORE_IN_LIMIT;
 
-// the api's machine id rule, as requireMachineAuthAndScope checks it. hoot's
-// MACHINE_ID_RE is looser: it admits dots.
-const MACHINE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+// the api's machine id rule, for requireMachineAuthAndScope and machine scope
+// alike. dots are in because a mac paired before its id dropped `.local` keeps
+// a dotted hostname (`Mac.localdomain`); `.` and `..` can't be document ids.
+export const MACHINE_ID_RE = /^(?!\.\.?$)[A-Za-z0-9_.-]{1,128}$/;
 
 function uniqueSorted(ids: readonly string[]): string[] {
   return [...new Set(ids)].sort();

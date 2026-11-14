@@ -35,7 +35,7 @@ import {
   siteStanding,
   type UserActor,
 } from '@/lib/capabilities';
-import { scopeCovers } from '@/lib/machineAccess';
+import { MACHINE_ID_RE, scopeCovers } from '@/lib/machineAccess';
 import { checkRoostVersion } from '@/lib/versionHeader';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import {
@@ -630,8 +630,9 @@ export async function requireSiteMachineAuthAndScope(
  *   that is not there. the check runs after the agent short-circuit, which it
  *   leaves alone.
  *
- * machineId validation matches siteId (1-128 of [A-Za-z0-9_-]) because machine
- * ids have several historical shapes (`mach_*`, hostnames, uuids).
+ * machineId is checked against MACHINE_ID_RE (1-128 of [A-Za-z0-9_.-]) because
+ * machine ids have several historical shapes (`mach_*`, hostnames, uuids, a
+ * mac's dotted hostname).
  *
  * No `checkRoostVersion()` — machine endpoints aren't part of the roost surface
  * and take no deprecation header.
@@ -650,11 +651,11 @@ export async function requireMachineAuthAndScope(
       }),
     };
   }
-  if (!SITE_ID_RE.test(machineId)) {
+  if (!MACHINE_ID_RE.test(machineId)) {
     return {
       ok: false,
       response: problemValidation('invalid machineId format', {
-        machineId: ['must be 1-128 chars: letters, digits, underscore, hyphen'],
+        machineId: ['must be 1-128 chars: letters, digits, underscore, hyphen, dot; not . or ..'],
       }),
     };
   }

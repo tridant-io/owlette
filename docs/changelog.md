@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — a mac with a dot in its machine name can send logs and screenshots
+
+A Mac paired under a name with a dot in it, such as `Mac.localdomain`, was turned away by the server when it attached logs to submit issue or uploaded a screenshot, the API would not read back its commands or processes, and a site admin could not limit a member to it. The server now accepts a dot in a machine name.
+
 ## [4.2.1] - 2026-11-14
 
 ### changed — the swoop step-up and app sign-in pages are one small card

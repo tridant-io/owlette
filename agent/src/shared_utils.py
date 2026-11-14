@@ -507,8 +507,8 @@ def _seed_machine_id_file(path, machine_id):
 
 
 def _identity_hostname():
-    """The hostname an identity is taken from. macOS appends `.local`, and the
-    api's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
+    """The hostname an identity is taken from. macOS appends `.local`, and
+    swoop's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
     seeded with it pairs but can never open a swoop session."""
     name = get_hostname()
     if sys.platform == 'darwin' and name.lower().endswith('.local'):

@@ -415,6 +415,36 @@ describe('_shared.ts (v2 route helpers)', () => {
         expect(result.ok && result.machineIds).toBeNull();
         expect(mockedAssertSite).not.toHaveBeenCalled();
       });
+
+      // a mac paired before its id dropped `.local` keeps the dotted hostname
+      it("lets a mac's dotted hostname id through, for its agent and for a member", async () => {
+        mockVerifyIdToken.mockResolvedValueOnce({
+          uid: 'agent-mac',
+          role: 'agent',
+          site_id: SITE,
+          machine_id: 'Mac.localdomain',
+        });
+        const agent = await requireMachineAuthAndScope(
+          makeRequest({ headers: { authorization: 'Bearer agent-id-token' } }),
+          SITE,
+          'Mac.localdomain',
+          'write',
+        );
+        expect(agent.ok).toBe(true);
+
+        asCaller(['Mac.localdomain']);
+        const member = await requireMachineAuthAndScope(makeRequest(), SITE, 'Mac.localdomain', 'read');
+        expect(member.ok && member.machineIds).toEqual(['Mac.localdomain']);
+      });
+
+      it.each(['.', '..', 'a/b', '', 'm'.repeat(129)])('refuses %j as a machine id with 400', async (machineId) => {
+        asCaller(null);
+        const { status, body } = await refusal(
+          await requireMachineAuthAndScope(makeRequest(), SITE, machineId, 'read'),
+        );
+        expect(status).toBe(400);
+        expect(body.detail).toBe('invalid machineId format');
+      });
     });
 
     it('requireRoostAuthAndScope refuses a scoped member a read with 403', async () => {

@@ -105,10 +105,18 @@ describe('normalizeMachineIdsInput', () => {
     });
   });
 
-  it.each(['a/b', 'a.b'])('refuses the machine id %p', (bad) => {
+  it.each(['a/b', '.', '..'])('refuses the machine id %p', (bad) => {
     expect(normalizeMachineIdsInput(['m1', bad], { allowNull: true })).toEqual({
       ok: false,
       error: `machine id "${bad}" is not a valid machine id`,
+    });
+  });
+
+  // a mac paired before its id dropped `.local` keeps the dotted hostname
+  it("accepts a mac's dotted hostname id", () => {
+    expect(normalizeMachineIdsInput(['Mac.localdomain'], { allowNull: false })).toEqual({
+      ok: true,
+      value: ['Mac.localdomain'],
     });
   });
 
