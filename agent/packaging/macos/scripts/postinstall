@@ -51,15 +51,26 @@ chown "root:${GROUP}" "${DATA_ROOT}/tmp/json.lock" && chmod 660 "${DATA_ROOT}/tm
 chown -R root:wheel "${RUNTIME}" && chmod -R go-w "${RUNTIME}"
 
 # --- the daemon and the app ------------------------------------------------
+# a failure is logged through log(): the issue bundle keeps only the install
+# log lines that mention owlette, and launchctl's own message does not.
 if launchctl print system/app.owlette.agent >/dev/null 2>&1; then
-  launchctl kickstart -k system/app.owlette.agent && log "restarted the daemon"
+  if out=$(launchctl kickstart -k system/app.owlette.agent 2>&1); then
+    log "restarted the daemon"
+  else
+    log "could not restart the daemon (exit $?): ${out}"
+  fi
+elif out=$(launchctl bootstrap system "${DAEMON_PLIST}" 2>&1); then
+  log "loaded the daemon"
 else
-  launchctl bootstrap system "${DAEMON_PLIST}" && log "loaded the daemon"
+  log "could not load the daemon (exit $?): ${out}"
 fi
 if [ -n "${console_user}" ] && [ "${console_user}" != "root" ]; then
   console_uid=$(id -u "${console_user}")
-  launchctl bootstrap "gui/${console_uid}" "${AGENT_PLIST}" 2>/dev/null \
-    && log "loaded the app for ${console_user}"
+  if out=$(launchctl bootstrap "gui/${console_uid}" "${AGENT_PLIST}" 2>&1); then
+    log "loaded the app for ${console_user}"
+  else
+    log "could not load the app for ${console_user} (exit $?): ${out}"
+  fi
 fi
 
 # --- the pairing preseed ------------------------------------------------------

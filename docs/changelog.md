@@ -15,6 +15,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 The browser pages that ask "allow control of this machine?" and "sign in to owlette swoop?" are a single compact card: a short question, one line of context, the signed-in account and the one action. The code entry on the step-up page opens from "enter a code instead".
 
+### fixed — a mac comes back online after an update
+
+On a fast Mac, an upgrade could leave the agent stopped until someone ran the installer again by hand: the desktop app showed the new version while the machine stayed offline on the dashboard and could not take another fleet update. The macOS installer now waits for the old agent to stop completely before it starts the new one, and a failure to start it is written to the installer log that submit issue attaches.
+
 ### fixed — links read as links without an underline
 
 Every link in the dashboard, the docs and the emails is accent-coloured with the highlight sweep on hover and focus, instead of an underline. This includes the "not you? sign in as someone else" link and the docs article links.
