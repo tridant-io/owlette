@@ -4,7 +4,7 @@ import { source } from "@/lib/source";
 import { RootProvider } from "fumadocs-ui/provider/next";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import type { Metadata } from "next";
-import Image from "next/image";
+import { OwletteEyeIcon } from "@/components/landing/OwletteEye";
 import type { ReactNode } from "react";
 
 export const metadata: Metadata = {
@@ -39,14 +39,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         nav={{
           title: (
             <span className="docs-nav-title">
-              <Image
-                src="/owlette-eye.svg"
-                alt=""
-                width={20}
-                height={20}
-                aria-hidden="true"
-                priority
-              />
+              <OwletteEyeIcon size={20} />
               <span>owlette docs</span>
             </span>
           ),

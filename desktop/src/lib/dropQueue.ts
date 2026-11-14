@@ -18,6 +18,7 @@ import type {
   ProcessEntryDraft,
   UnsupportedDrop,
 } from '@/lib/dropClassifier'
+import { launchCopy } from '@/lib/launchCopy'
 
 /**
  * One proposed process awaiting confirmation. `path` is the identity — nothing
@@ -135,9 +136,10 @@ export function cardBlockedReason(
   if (!name) return 'a name is required'
 
   if (!card.entry.exe_path.trim()) {
+    const copy = launchCopy()
     return card.kind === 'touchdesigner'
-      ? 'touchdesigner was not found on this machine — point this at TouchDesigner.exe'
-      : 'no program was found to run this — point this at the executable'
+      ? `touchdesigner was not found on this machine — point this at ${copy.missingTouchDesigner}`
+      : `no program was found to run this — point this at ${copy.missingTarget}`
   }
 
   const taken = existingNames.some((existing) => existing.trim().toLowerCase() === name.toLowerCase())

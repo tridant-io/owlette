@@ -220,9 +220,9 @@
     {
       "id": "b08",
       "title": "the footer, the menu, and the cloud",
-      "screen_note": "the footer sentence with its tone dot (\"<HOSTNAME> is connected to <site>\") and the service version on the right; cut to a machine with the service stopped to show the \"start service\" button, and an unpaired one to show \"join site\". Open the hamburger: join or leave site, config, logs, docs, submit bug report, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later.",
+      "screen_note": "the footer sentence with its tone dot (\"<HOSTNAME> is connected to <site>\") and the service version on the right; cut to a machine with the service stopped to show the \"start service\" button, and an unpaired one to show \"join site\". Open the hamburger: join or leave site, config, logs, docs, submit issue, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later.",
       "direction": {
-        "SCREEN": "the footer sentence with its tone dot (\"<HOSTNAME> is connected to <site>\") and the service version on the right; cut to a machine with the service stopped to show the \"start service\" button, and an unpaired one to show \"join site\". Open the hamburger: join or leave site, config, logs, docs, submit bug report, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later."
+        "SCREEN": "the footer sentence with its tone dot (\"<HOSTNAME> is connected to <site>\") and the service version on the right; cut to a machine with the service stopped to show the \"start service\" button, and an unpaired one to show \"join site\". Open the hamburger: join or leave site, config, logs, docs, submit issue, start on login, restart service, reload window. Split screen: edit a launch mode in the app, and the dashboard's machine card updating about a second later."
       },
       "start_s": 197.683,
       "start_frame": 11861,

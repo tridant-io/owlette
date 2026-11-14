@@ -26,7 +26,8 @@
         }
       ],
       "streamerEpoch": 1789689600000000,
-      "protocolVersion": 1
+      "protocolVersion": 1,
+      "clipboardReads": true
     },
     {
       "dir": "viewer-to-host",

@@ -8,14 +8,18 @@
  * POST requires `chat=<siteId>:write`, idempotent via `Idempotency-Key`.
  * Body: { siteId, machineId?, title?, initial_message?: { role, content } }.
  * Omitting machineId makes the conversation site-wide (tools fan out across
- * every online machine); supplying it pins every turn to that machine.
+ * every online machine); supplying it pins every turn to that machine. A
+ * machineId outside the caller's machine scope answers 404 'machine not found
+ * or no access'.
  */
 
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import {
   problemFromError,
+  problemNotFound,
   problemUnauthorized,
+  mfaChallengeProblem,
   problemValidation,
 } from '@/lib/apiErrors';
 import { ApiAuthError, resolveAuth } from '@/lib/apiAuth.server';
@@ -38,6 +42,7 @@ import {
 } from '@/lib/chatStorage.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { SITE_ID_RE } from '@/lib/sitePolicy.server';
+import { scopeCovers } from '@/lib/machineAccess';
 
 const VALID_ROLES: ChatRole[] = ['user'];
 
@@ -47,7 +52,7 @@ export async function GET(request: NextRequest) {
     try {
       auth = await resolveAuth(request);
     } catch (err) {
-      if (err instanceof ApiAuthError) return problemUnauthorized();
+      if (err instanceof ApiAuthError) return mfaChallengeProblem(err) ?? problemUnauthorized();
       throw err;
     }
 
@@ -229,6 +234,11 @@ export async function POST(request: NextRequest) {
 
     const auth = await requireChatAuthAndScope(request, siteId, 'write');
     if (!auth.ok) return auth.response;
+    // a site-wide conversation stays open to a scoped member: runHootStream narrows it
+    // to their machines
+    if (machineId && !scopeCovers(auth.machineIds, machineId)) {
+      return problemNotFound('machine not found or no access');
+    }
 
     return withIdempotency(
       request,

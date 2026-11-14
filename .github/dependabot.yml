@@ -9,7 +9,9 @@ updates:
   # weekly PR. Dependabot bumps version tags today; once actions are pinned to
   # SHAs it bumps the SHA and its trailing "# vX" comment together.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/owlette-roost-deploy
     target-branch: dev
     schedule:
       interval: weekly
@@ -62,13 +64,20 @@ updates:
       # or raises its engines floor to >=22.12, then delete this rule and take the PR.
       - dependency-name: "commander"
         update-types: ["version-update:semver-major"]
+      # eslint-config-next 16.4 brings eslint-plugin-react-hooks 7.1.1, whose react
+      # compiler rules (set-state-in-effect, refs, immutability, purity) fail web lint 79
+      # times, so it stays on 16.3.8 while next moves on. Exit: those findings are fixed or
+      # the rules configured; then delete this rule and match next's version.
+      - dependency-name: "eslint-config-next"
+        versions: [">=16.4.0"]
 
-  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
-  # the swoop remote-desktop host crate.
+  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, the
+  # swoop viewer app, and the swoop remote-desktop host crate.
   - package-ecosystem: cargo
     directories:
       - /agent/host
       - /desktop/src-tauri
+      - /desktop/viewer
       - /agent/swoop
     target-branch: dev
     schedule:
@@ -84,12 +93,11 @@ updates:
       prefix: deps
 
   # Python dependencies: the agent, the published Python SDK, and the
-  # integration / agent-runner test harnesses.
+  # agent-runner test harness.
   - package-ecosystem: pip
     directories:
       - /agent
       - /sdks/python
-      - /test/integration
       - /test/infra/agent-runner
     target-branch: dev
     schedule:

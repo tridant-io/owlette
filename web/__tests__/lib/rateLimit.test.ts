@@ -15,6 +15,51 @@ describe('getClientIp', () => {
     expect(getClientIp(req)).toBe('203.0.113.7');
   });
 
+  describe('with an edge secret configured', () => {
+    const before = process.env.EDGE_SHARED_SECRET;
+    beforeEach(() => {
+      process.env.EDGE_SHARED_SECRET = 'edge-secret-for-this-test';
+    });
+    afterEach(() => {
+      if (before === undefined) delete process.env.EDGE_SHARED_SECRET;
+      else process.env.EDGE_SHARED_SECRET = before;
+    });
+
+    it('believes CF-Connecting-IP when the request carries the edge secret', () => {
+      const req = new NextRequest(new URL('http://localhost/test'), {
+        headers: {
+          'cf-connecting-ip': '203.0.113.7',
+          'x-owlette-edge': 'edge-secret-for-this-test',
+          'x-forwarded-for': '1.2.3.4, 5.6.7.8',
+        },
+      });
+      expect(getClientIp(req)).toBe('203.0.113.7');
+    });
+
+    it('ignores a CF-Connecting-IP that arrived around the edge and takes the proxy-appended hop', () => {
+      // direct to the origin: the client set CF-Connecting-IP itself and the
+      // platform proxy appended the real address to X-Forwarded-For
+      const req = new NextRequest(new URL('http://localhost/test'), {
+        headers: {
+          'cf-connecting-ip': '203.0.113.9',
+          'x-forwarded-for': '203.0.113.9, 198.51.100.5',
+        },
+      });
+      expect(getClientIp(req)).toBe('198.51.100.5');
+    });
+
+    it('ignores CF-Connecting-IP beside a wrong edge secret', () => {
+      const req = new NextRequest(new URL('http://localhost/test'), {
+        headers: {
+          'cf-connecting-ip': '203.0.113.9',
+          'x-owlette-edge': 'not-the-secret',
+          'x-forwarded-for': '198.51.100.5',
+        },
+      });
+      expect(getClientIp(req)).toBe('198.51.100.5');
+    });
+  });
+
   it('takes the RIGHT-most x-forwarded-for hop (proxy-appended), not the client-seeded left', () => {
     const req = new NextRequest(new URL('http://localhost/test'), {
       headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' },

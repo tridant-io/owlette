@@ -1,0 +1,57 @@
+name: claude hooks
+
+# What lives in .claude/ fails silently: a hook that does not parse or writes
+# a field Claude Code ignores still exits 0, and a skill or agent with invalid
+# frontmatter is simply never loaded. scripts/check-claude-hooks.mjs catches both.
+#
+# The script tests (scripts/__tests__) cover the hooks' libraries and the two
+# sync scripts. They need no install, so a change to any of them runs here in
+# seconds; the e2e workflow's checks job runs them too, on a web change.
+
+on:
+  pull_request:
+    paths:
+      - '.claude/**'
+      - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/**'
+      - 'scripts/sync-env.mjs'
+      - 'scripts/sync-versions.js'
+      - 'scripts/env-manifest.json'
+      - '.github/workflows/claude-hooks.yml'
+  push:
+    branches: [main, dev]
+    paths:
+      - '.claude/**'
+      - 'scripts/check-claude-hooks.mjs'
+      - 'scripts/__tests__/**'
+      - 'scripts/sync-env.mjs'
+      - 'scripts/sync-versions.js'
+      - 'scripts/env-manifest.json'
+      - '.github/workflows/claude-hooks.yml'
+
+concurrency:
+  group: claude-hooks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: claude hooks, skills and agents load
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+
+      - name: check every hook, skill and agent
+        run: node scripts/check-claude-hooks.mjs
+
+      - name: script tests
+        run: npm run test:scripts

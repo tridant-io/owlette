@@ -2,12 +2,15 @@
  * GET /api/sites/{siteId}/machines — every machine in the site with online status
  * and a `currentRoosts` summary: the roosts targeting it plus their
  * currentVersionId, so "what is this machine running" reads at a glance.
+ * a scoped member gets only the machines in their machine scope, each with its
+ * `currentRoosts`: a roost that targets their machine is about their machine.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { Timestamp } from 'firebase-admin/firestore';
 import { problemFromError } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { scopeCovers } from '@/lib/machineAccess';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
@@ -27,7 +30,7 @@ interface RoostSummary {
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();
@@ -58,7 +61,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    const machines = machinesSnap.docs.map((d) => {
+    const inMachineScope = machinesSnap.docs.filter((d) => scopeCovers(auth.machineIds, d.id));
+    const machines = inMachineScope.map((d) => {
       const data = d.data();
       const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
       return {
@@ -73,6 +77,23 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         agentVersion:
           data.agent_version ?? data.presence?.agent_version ?? null,
         os: data.os ?? data.presence?.os ?? null,
+        // what the agent writes on every heartbeat (firebase_client._os_identity):
+        // 'windows' | 'macos' | 'linux', 'x64' | 'arm64', and the version string.
+        // an absent osFamily is a pre-3.4 windows agent.
+        osFamily: data.osFamily ?? null,
+        arch: data.arch ?? null,
+        osVersion: data.osVersion ?? null,
+        // what the agent holds for the site's keep screens awake switch
+        // ({ wanted, held, session, how, reason }), mirrored on each change;
+        // absent on an agent that predates it.
+        displayAwake: data.displayAwake ?? null,
+        // what the dashboard needs to tell whether the agent would refuse a
+        // restart now: the heartbeat's capability map (activeHoursGuard), its
+        // windows active hours ({ start, end, source }) and the machine's own
+        // zone, which the window is read on.
+        capabilities: data.capabilities ?? null,
+        activeHours: data.activeHours ?? null,
+        machineTimezone: data.machine_timezone_iana ?? null,
         currentRoosts: roostsByMachine.get(d.id) ?? [],
       };
     });

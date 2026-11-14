@@ -20,6 +20,29 @@ test.describe('landing faq + footer', () => {
     await expect(page.getByText(/is mayonnaise an instrument/i)).toHaveCount(0);
   });
 
+  test('pricing answer keeps beta free and states the after-beta model', async ({ page }) => {
+    await page.goto('/');
+
+    const question = page.getByRole('button', { name: /is it actually free/i });
+    await question.click();
+    // the answer panel is the button's next sibling.
+    const answer = question.locator('xpath=following-sibling::div[1]//p');
+
+    await expect(answer).toContainText('during beta, yes');
+    await expect(answer).toContainText('14-day pro trial, no card, once its email is verified');
+    await expect(answer).toContainText('a site falls back to owlette free');
+    await expect(answer).toContainText('each site has its own plan and is billed on its own');
+    await expect(answer).not.toContainText('on a single site');
+    await expect(answer).not.toContainText('unlimited sites');
+    await expect(answer).toContainText('owlette free covers 1 machine and 1 site');
+    await expect(answer).toContainText('a machine counts if it was online at any point in the billing period');
+    await expect(answer).toContainText(
+      'the first month you are billed is charged by the day, and a site added later is charged for the whole month it is added in',
+    );
+    await expect(answer).toContainText('$20/machine/month');
+    await expect(answer).toContainText('$60/machine/month');
+  });
+
   test('self-host answer cites FSL-1.1-Apache-2.0, not agpl-3.0', async ({ page }) => {
     await page.goto('/');
 

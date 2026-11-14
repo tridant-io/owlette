@@ -53,8 +53,8 @@ rules.
 | web dev | push to `dev` | Railway auto-deploys dev service to `https://dev.owlette.app` | push release candidate to `dev`, then verify |
 | web prod | push or merge to `main` | Railway auto-deploys prod service to `https://owlette.app` | merge `dev` to `main`, then verify |
 | Cloud Functions | none | no CI workflow | run `FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod` if functions changed (firebase-tools 15.x) |
-| Firestore rules and indexes | none | no CI workflow | run `firebase deploy --only firestore` if rules or indexes changed |
-| storage rules | none | no CI workflow | run `firebase deploy --only storage` if storage rules changed |
+| Firestore rules and indexes | none | no CI workflow | run `firebase deploy --only firestore --project prod` if rules or indexes changed |
+| storage rules | none | no CI workflow | run `firebase deploy --only storage --project prod` if storage rules changed |
 | published docs (/docs) | push or merge to `main` | ships with the web prod deploy — fumadocs MDX under `web/content/docs/` is compiled by `npm run build` | none beyond the web deploy; verify `https://owlette.app/docs` in smoke |
 | CLI npm package | tag push matching `cli-v[0-9]+.[0-9]+.[0-9]+` | `.github/workflows/cli-publish.yml` publishes to npm with provenance | out of scope here |
 | agent installer | separate release process | separate runbook | use [agent-installer-release.md](agent-installer-release.md) |
@@ -79,17 +79,15 @@ rules.
    node scripts/sync-versions.js X.Y.Z
    ```
 
-   The script updates these files together:
-
-   - `/VERSION`
-   - `/agent/VERSION`
-   - `/web/package.json`
+   The script updates every version surface together; the list is in
+   [version-management.md](../internal/version-management.md).
 
    It does not update `firestore.rules`. Firestore rules carry their own
    `security-schema` version and are versioned independently.
 
-   If no version argument is supplied, the script defaults to a patch bump. Do
-   not assume that every new feature is a minor release.
+   With no version argument the script only prints the current versions; it
+   never picks the next one. Do not assume that every new feature is a minor
+   release.
 
    If this production release is coordinated with a later agent installer
    release, the version bump and BOTH changelog updates must happen before
@@ -216,7 +214,7 @@ rules.
    Cloud Functions have no CI deployment workflow. Deploy them manually:
 
     ```sh
-    FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase use prod &&       FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions
+    FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod
     ```
 
     **`FUNCTIONS_DISCOVERY_TIMEOUT` is not optional.** Before deploying anything,
@@ -238,9 +236,9 @@ rules.
     `initializeApp()` 104ms, `getFirestore()` 478ms, full `lib/index.js` load
     530ms — about a second all in. The 10s default is blown by process spawn
     and scheduling on a loaded machine, which is why it is intermittent: the
-    same code passes and fails run to run. Four files do initialise Firestore at
-    module scope (`deploymentStatus`, `deploymentSweeper`, `distributionFanout`,
-    `metricsHistory`), and making that lazy is still tidier, but the numbers say
+    same code passes and fails run to run. Two files do initialise Firestore at
+    module scope (`distributionFanout`, `metricsHistory`), and making that lazy
+    is still tidier, but the numbers say
     it would not fix this — do not reach for that refactor expecting it to.
 
     **firebase-tools must be 15.x.** 13.x cannot deploy or emulate a
@@ -264,7 +262,7 @@ rules.
    Use the production Firebase project and deploy Firestore:
 
     ```sh
-    firebase deploy --only firestore
+    firebase deploy --only firestore --project prod
     ```
 
    This deploy covers both Firestore rules and indexes. If the rule change
@@ -276,7 +274,7 @@ rules.
    Storage rules have no CI deployment workflow. Deploy them manually:
 
    ```sh
-   firebase deploy --only storage
+   firebase deploy --only storage --project prod
    ```
 
 10. Run production post-deploy smoke checks.
@@ -298,10 +296,9 @@ rules.
 
 11. Tag the release and record completion.
 
-    Tag discipline has lapsed. Only `v2.0.43`, `v2.0.46`, and `v2.0.47` exist,
-    while releases `2.6.0` through `2.11.0` are not tagged. Resume tagging for
-    production releases so rollback, audit, and release comparison work are
-    easier later.
+    Every release from `v4.1.5` on is tagged (4.1.12 never shipped); earlier
+    ones mostly are not, prod's 3.3.6 among them. Tag each production release
+    so rollback, audit, and release comparison work are easier later.
 
     Do not use the CLI package tag pattern unless releasing the CLI package.
     Tags matching `cli-v[0-9]+.[0-9]+.[0-9]+` trigger the npm publish workflow.
@@ -327,10 +324,10 @@ rules.
   completed successfully (firebase-tools 15.x; the timeout override is required — see above).
 - [ ] `firebase functions:list --project prod` shows the expected runtime for every function.
 - [ ] `firebase functions:log --project prod` is clean — no load errors on the new build.
-- [ ] If Firestore rules or indexes changed, `firebase deploy --only firestore`
+- [ ] If Firestore rules or indexes changed, `firebase deploy --only firestore --project prod`
   completed successfully after any required migration — and, where the web code
   depends on them, before the production web deploy rather than after it.
-- [ ] If storage rules changed, `firebase deploy --only storage` completed
+- [ ] If storage rules changed, `firebase deploy --only storage --project prod` completed
   successfully.
 - [ ] If `web/content/docs/**` changed, the affected pages render at
   `https://owlette.app/docs`.
@@ -394,7 +391,7 @@ Redeploying previous source is the rollback.
 
 ```sh
 git checkout <prev-sha> functions/
-firebase use prod && firebase deploy --only functions
+FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod
 ```
 
 After rollback, restore the working tree intentionally so the previous source
@@ -412,7 +409,7 @@ Command-line rollback for rules:
 
 ```sh
 git checkout HEAD~1 firestore.rules
-firebase deploy --only firestore:rules
+firebase deploy --only firestore:rules --project prod
 ```
 
 If the rollback reverses a rule change that depended on a data migration, review
@@ -423,7 +420,7 @@ For indexes, use the same Firestore deploy surface only when the checked-out
 source reflects the intended index state:
 
 ```sh
-firebase deploy --only firestore
+firebase deploy --only firestore --project prod
 ```
 
 ### storage rules
@@ -433,7 +430,7 @@ source.
 
 ```sh
 git checkout HEAD~1 storage.rules
-firebase deploy --only storage
+firebase deploy --only storage --project prod
 ```
 
 Console history is also available for storage rules. Use it when it is the
@@ -480,7 +477,12 @@ Required production reminders:
   buckets.
 - `INSTATUS_*` variables are optional, but the status-page readiness check needs
   the relevant values when status integration is expected to work.
-- `CORTEX_INTERNAL_SECRET` is optional.
+- `CORTEX_INTERNAL_SECRET` is required: every server-to-server call into
+  `/api/talons/internal/match`, `/api/alerts/trigger`, `/api/hoot/autonomous`
+  and `/api/hoot/escalation` presents it, and the Functions runtime holds the
+  same value (`web/lib/hootInternalSecret.ts`). Without it talons and
+  threshold alerts stop firing, silently
+  ([manual-infrastructure.md](manual-infrastructure.md)).
 - Keep dev and prod Railway service variables separate; do not copy blindly
   between services.
 
@@ -499,15 +501,18 @@ Required production reminders:
 - Storage rules deploys are 100% manual.
 - There is no automated post-deploy smoke job. The maintainer running the
   release must run smoke scripts manually.
-- Tag discipline has lapsed. Resume production release tags to make future
-  rollback and audit work easier.
+- Release tags are complete only from `v4.1.5`; prod's 3.3.6 has none. Tag
+  each production release to make future rollback and audit work easier.
 - The mapping from Railway production service environment variables to
   `owlette-prod-90a12` is not pinned in the repo. Verify it directly in Railway,
   especially before your first production deploy.
 - A dev-service-points-at-prod-Firebase footgun has not been ruled out by repo
   configuration alone.
-- `npm ci` must use `--legacy-peer-deps` because `@ai-sdk/react@3.0.136` has a
-  peer range that excludes the pinned `react@19.2.0`.
+- Web installs pass `--legacy-peer-deps` (`web/.npmrc`, `web/nixpacks.toml`
+  and the e2e and openapi workflows). The reason they record, `@ai-sdk/react`
+  3.x excluding `react@19.2.0`, no longer holds (`react` 19.3.1,
+  `@ai-sdk/react` ^4.0.110); prove a clean `npm ci` without it before dropping
+  the flag.
 - Do not add `turbopack.root` to `next.config.ts` to silence the root lockfile
   warning. That previously caused a 59 GB node fork-bomb on 2026-04-29.
 - Firestore rules are versioned independently from `/VERSION`, `/agent/VERSION`,

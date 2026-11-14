@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "note": "real H.264 SPS units as Media Foundation's encoders emitted them on the spike 6.7 box (Windows 11 23H2, RTX 2080 Ti, driver 591.86), in the shipping configuration, printed by the ignored hardware tests in src/encode/mf (`the encoder's own sps`). both already declare max_num_reorder_frames = 0, so they must go out byte for byte. the third is an encoder that does not: nvenc with its vui flag off, copied from nvenc-h264-sps.json (spike 0.9), which must go out rewritten. numbers: dev/active/swoop/spikes/6.7-encoder-breadth.md.",
+  "vectors": [
+    {
+      "name": "mf-hw-nvidia-1080p60-high",
+      "sps": "6764002aac2b403c0113f2e02d4040405000003e80001d4c00f1c2aa",
+      "restrictionDeclared": true
+    },
+    {
+      "name": "mf-sw-microsoft-720p30-main",
+      "sps": "674d401f95a014016ec044000003000400000300f03682211a80",
+      "restrictionDeclared": true
+    },
+    {
+      "name": "nvenc-vui-off-level-4.2",
+      "sps": "6764002aac2b280f0044fcb808800001f40000ea6042",
+      "restrictionDeclared": false
+    }
+  ]
+}

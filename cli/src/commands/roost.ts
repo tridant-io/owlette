@@ -99,20 +99,6 @@ export function registerRoostInspectCommands(program: Command): void {
     (program.commands.find((c) => c.name() === 'roost') as Command | undefined) ??
     program.command('roost').description('manage roosts + versions');
 
-  // Overwrite earlier stub descriptions so help text stays canonical whatever
-  // the registration order.
-  roost.description('manage roosts + versions');
-
-  // Remove any stubs left by earlier file-load ordering.
-  for (const verb of ['list', 'get', 'diff', 'versions'] as const) {
-    const existing = roost.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = roost.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
-
   // list
 
   roost

@@ -40,31 +40,36 @@ export interface UseCurrentSiteResult {
    * Distinct from `!currentSiteId`, which is also true mid-load.
    */
   hasNoSites: boolean;
+  /**
+   * True when `wholeSiteOnly` left no site of a non-empty list: the caller has
+   * sites, but is limited to some machines on every one of them.
+   */
+  limitedOnly: boolean;
   /** Select a site and persist it as the caller's last site. */
   selectSite: (siteId: string) => void;
-  /**
-   * Select without persisting — used right after creation, where the site is
-   * the natural focus but not yet the user's chosen default.
-   */
-  pickSite: (siteId: string) => void;
-  createSite: ReturnType<typeof useSites>['createSite'];
-  updateSite: ReturnType<typeof useSites>['updateSite'];
-  deleteSite: ReturnType<typeof useSites>['deleteSite'];
-  checkSiteIdAvailability: ReturnType<typeof useSites>['checkSiteIdAvailability'];
   sitesError: string | null;
 }
 
-export function useCurrentSite(): UseCurrentSiteResult {
-  const { user, userSites, isSuperadmin, lastSiteId, updateLastSite } = useAuth();
+/**
+ * `wholeSiteOnly` keeps only the sites where the caller is not limited to some
+ * machines, for pages that span the site (talons, roost, deploy).
+ */
+export function useCurrentSite(
+  options: { wholeSiteOnly?: boolean } = {},
+): UseCurrentSiteResult {
+  const { wholeSiteOnly = false } = options;
+  const { user, userSites, isSuperadmin, lastSiteId, updateLastSite, machineScope } = useAuth();
   const {
-    sites,
+    sites: visibleSites,
     loading: sitesLoading,
     error: sitesError,
-    createSite,
-    updateSite,
-    deleteSite,
-    checkSiteIdAvailability,
   } = useSites(user?.uid, userSites, isSuperadmin);
+
+  const sites = useMemo(
+    () => (wholeSiteOnly ? visibleSites.filter((site) => machineScope(site.id) === null) : visibleSites),
+    [wholeSiteOnly, visibleSites, machineScope],
+  );
+  const hasNoSites = !sitesLoading && sites.length === 0;
 
   // '' means "no explicit pick yet": fall back to lastSiteId, then
   // localStorage, then the first accessible site.
@@ -99,10 +104,6 @@ export function useCurrentSite(): UseCurrentSiteResult {
     [updateLastSite],
   );
 
-  const pickSite = useCallback((siteId: string) => {
-    setUserPickedSiteId(siteId);
-  }, []);
-
   return {
     sites,
     currentSiteId,
@@ -110,13 +111,9 @@ export function useCurrentSite(): UseCurrentSiteResult {
     siteTimezone: currentSite?.timezone,
     schedulesFollowSiteTime: currentSite?.schedulesFollowSiteTime,
     sitesLoading,
-    hasNoSites: !sitesLoading && sites.length === 0,
+    hasNoSites,
+    limitedOnly: hasNoSites && visibleSites.length > 0,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
-    checkSiteIdAvailability,
     sitesError,
   };
 }

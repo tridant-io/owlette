@@ -8,17 +8,20 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => listen
 
 const {
   OWLETTE_FILES,
-  SERVICE_STATUS_STALE_SECONDS,
+  appearanceTheme,
   isServiceDown,
   onOwletteFileChanged,
   onOwletteFileChangedFor,
   onSecondInstance,
-  owletteDataRoot,
   readOwletteJson,
   serverFromArgs,
+  serviceRestart,
   serviceStart,
   serviceStatus,
   serviceStop,
+  onResolvedAppearance,
+  resolvedAppearance,
+  setAppearanceTheme,
   setSidebarWidth,
   sidebarWidth,
   terminatePid,
@@ -51,10 +54,6 @@ describe('seam constants', () => {
       serviceStatus: 'tmp/service_status.json',
     })
   })
-
-  it('keeps the 120 s staleness rule the tray uses', () => {
-    expect(SERVICE_STATUS_STALE_SECONDS).toBe(120)
-  })
 })
 
 describe('json commands', () => {
@@ -86,13 +85,6 @@ describe('json commands', () => {
 
     await expect(readOwletteJson(OWLETTE_FILES.config)).rejects.toContain('invalid JSON')
   })
-
-  it('resolves the data root', async () => {
-    invoke.mockResolvedValue('C:\\ProgramData\\Owlette')
-
-    await expect(owletteDataRoot()).resolves.toBe('C:\\ProgramData\\Owlette')
-    expect(invoke).toHaveBeenCalledWith('owlette_data_root')
-  })
 })
 
 describe('service commands', () => {
@@ -102,16 +94,19 @@ describe('service commands', () => {
     await serviceStatus()
     await serviceStart(false)
     await serviceStop()
+    await serviceRestart()
 
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'service_status',
       'service_start',
       'service_stop',
+      'service_restart',
     ])
     // Start carries the elevation gate; the others take no arguments.
     expect(invoke.mock.calls[0][1]).toBeUndefined()
     expect(invoke.mock.calls[1][1]).toEqual({ allowElevation: false })
     expect(invoke.mock.calls[2][1]).toBeUndefined()
+    expect(invoke.mock.calls[3][1]).toBeUndefined()
   })
 
   it('treats a stale status file as the service being down', () => {
@@ -131,6 +126,25 @@ describe('service commands', () => {
     expect(isServiceDown({ ...healthy, running: false, state: 'stopped' })).toBe(true)
     expect(isServiceDown({ ...healthy, installed: false })).toBe(true)
   })
+
+  it('takes the words the host uses off windows', async () => {
+    // service_ctl.rs passes systemd's ActiveState and UnitFileState through on linux,
+    // names the start type `launchd` on macos, and restarts macos through the seam
+    const linux: ServiceStatus = {
+      installed: true,
+      running: false,
+      state: 'activating',
+      startType: 'enabled',
+      statusFile: { exists: true, ageSecs: 12, stale: false },
+    }
+    const macos: ServiceStatus = { ...linux, running: true, state: 'running', startType: 'launchd' }
+    const restart: Awaited<ReturnType<typeof serviceRestart>> = { method: 'seam', stateBefore: 'running' }
+    invoke.mockResolvedValue(restart)
+
+    expect(isServiceDown(linux)).toBe(true)
+    expect(isServiceDown(macos)).toBe(false)
+    await expect(serviceRestart()).resolves.toEqual(restart)
+  })
 })
 
 describe('terminate_pid', () => {
@@ -142,23 +156,38 @@ describe('terminate_pid', () => {
       imagePath: 'C:\\apps\\player.exe',
     })
 
-    await terminatePid(4242, 'C:\\apps\\player.exe', 2000)
+    await terminatePid(4242, 'C:\\apps\\player.exe', null, 2000)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'C:\\apps\\player.exe',
+      recorded: null,
       gracefulTimeoutMs: 2000,
+    })
+  })
+
+  it('forwards what the service recorded about the pid', async () => {
+    invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
+
+    await terminatePid(4242, 'player.exe', { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' })
+
+    expect(invoke).toHaveBeenCalledWith('terminate_pid', {
+      pid: 4242,
+      expectedExe: 'player.exe',
+      recorded: { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' },
+      gracefulTimeoutMs: null,
     })
   })
 
   it('lets the host apply its own grace period when none is given', async () => {
     invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
 
-    await terminatePid(4242, 'player.exe')
+    await terminatePid(4242, 'player.exe', null)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'player.exe',
+      recorded: null,
       gracefulTimeoutMs: null,
     })
   })
@@ -179,6 +208,22 @@ describe('layout memory', () => {
     await expect(setSidebarWidth(9000)).resolves.toBe(400)
     expect(invoke).toHaveBeenCalledWith('set_sidebar_width', { width: 9000 })
   })
+
+  it('reads and writes the appearance through the host', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(appearanceTheme()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('appearance_theme')
+
+    invoke.mockResolvedValue('dark')
+    await expect(setAppearanceTheme('dark')).resolves.toBe('dark')
+    expect(invoke).toHaveBeenCalledWith('set_appearance_theme', { theme: 'dark' })
+  })
+
+  it('asks the host which theme to draw', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(resolvedAppearance()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('resolved_appearance')
+  })
 })
 
 describe('event subscriptions', () => {
@@ -187,6 +232,15 @@ describe('event subscriptions', () => {
     path: 'C:\\ProgramData\\Owlette\\config\\config.json',
     at: 1_700_000_000_000,
   }
+
+  it('hands over the theme the host resolved', async () => {
+    const handler = vi.fn()
+    await onResolvedAppearance(handler)
+
+    expect(listen).toHaveBeenCalledWith('appearance-resolved', expect.any(Function))
+    emit('light')
+    expect(handler).toHaveBeenCalledWith('light')
+  })
 
   it('unwraps the payload of a file-changed event', async () => {
     const handler = vi.fn()

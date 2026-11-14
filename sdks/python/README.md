@@ -1,17 +1,23 @@
 # owlette-sdk — python SDK
 
-Async Python SDK for the [roost](https://owlette.app) public API. Built on
+Async Python SDK for the [owlette](https://owlette.app) public API. Built on
 `httpx.AsyncClient`, typed end-to-end, mypy-strict clean.
 
 Requires Python ≥ 3.10.
 
 ## install
 
+`owlette-sdk` is not on PyPI yet. Until the pre-release is published, install it from a checkout of this repository:
+
+```bash
+pip install -e <path-to-checkout>/sdks/python
+```
+
+Once it is published:
+
 ```bash
 pip install --pre owlette-sdk
 ```
-
-`owlette-sdk` pre-release install is the public launch target. Until the Wave 5.3 distribution gate is complete and the PyPI pre-release is visible, install from the monorepo source checkout.
 
 ## quickstart
 
@@ -49,31 +55,22 @@ Roost(
     retry=RetryPolicy(max_attempts=3),  # optional
     transport=my_httpx_transport,     # for proxy / mTLS / recording
     timeout=30.0,
-    on_billing_warning=logger.warning,  # optional — free-trial advisory
+    on_billing_warning=logger.warning,  # accepted for compatibility; never fires
 )
 ```
 
-### billing warnings
+### plan refusals
 
-While the account is on its free trial, the api attaches an advisory
-`X-Owlette-Billing-Warning` header to responses. The SDK never prints it — a
-library has no business writing to your stderr — so pass
-`on_billing_warning` to surface it however your app already does:
+Plans are not enforced during the beta. Once they apply, a request that the
+site's plan does not cover raises `RoostApiError` with
+`code == "plan_required"` and `status == 402`, and is not retried.
+`error.problem["entitlement"]` names what the plan lacks — `owlette.api_keys`
+for every request made with a key on a site whose plan lacks API keys. See
+[plans](https://owlette.app/docs/plans).
 
-```python
-async with Roost(
-    token=os.environ["OWLETTE_TOKEN"],
-    on_billing_warning=logger.warning,
-    # → "trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access"
-) as client:
-    ...
-```
-
-It fires once per response carrying the header, retried attempts included, so
-deduplicate on your side if you want at-most-once. Exceptions raised by the
-callback are swallowed and can never fail a request. Once the trial ends,
-requests raise `RoostApiError` with `code == "trial_expired"` and
-`status == 402`.
+`on_billing_warning` is still accepted for compatibility but never fires: the
+api stopped sending the `X-Owlette-Billing-Warning` header when billing was
+removed.
 
 ## resources
 
@@ -84,11 +81,21 @@ requests raise `RoostApiError` with `code == "trial_expired"` and
 | `roost.chunks`    | `check`, `upload_urls`, `download_urls`, `mount`, `referrers`           |
 | `roost.versions`  | `list`, `list_page`, `get`, `patch`, `files`, `diff`                    |
 | `roost.deployments` | `list`, `list_page`, `get`                                            |
-| `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
-| `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe` |
+| `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke` |
+| `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe`, `deliveries`, `delivery`, `retry_delivery` |
 | `roost.sites`     | `list`, `get`                                                           |
-| `roost.machines`  | `list`, `get`, `deployments`, `dispatch_command`, `get_command`, `capture_screenshot` |
+| `roost.machines`  | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatch_command`, `get_command`, `capture_screenshot` |
+| `roost.installer_deployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete` |
+| `roost.installer` | `list`, `latest`, `upload`, `set_latest`, `delete`                     |
+| `roost.processes(site_id, machine_id)` | `list`, `get`, `create`, `update`, `start`, `stop`, `kill`, `schedule`, `delete` |
+| `roost.chat`      | `new`, `list`, `send`, `rename`, `delete`                               |
+| `roost.users`     | `list`, `get`, `promote`, `demote`, `assign_sites`, `remove_sites`, `delete` |
+| `roost.members(site_id)` | `list`, `add`, `set_role`, `remove`, `transfer_ownership`        |
 | `roost.quotas`    | `current`, `history`                                                    |
+
+`roost.keys` takes a dashboard session or a Firebase ID token, never an API
+key, and the API refuses an ID token for an account with a second factor
+(`403 mfa_challenge_required`); manage those keys in the dashboard.
 
 Roost, version, deployment, and chunk-referrer paginated lists expose
 **async generators** that auto-walk the `nextPageToken` cursor:
@@ -112,8 +119,8 @@ print(identity.email or identity.user_id, identity.key.key_prefix if identity.ke
 version = await client.account.version()
 print(version.current, version.supported)
 
-# API-key-compatible key management. New keys inherit the caller's allowed
-# scopes, so an API-key caller cannot widen its own privileges.
+# API-key-compatible key management, superadmin only. New keys inherit the
+# caller's allowed scopes, so an API-key caller cannot widen its own privileges.
 created = await client.account.api_keys.create(name="preview publisher")
 keys = await client.account.api_keys.list()
 await client.account.api_keys.revoke(created["keyId"])
@@ -121,6 +128,31 @@ await client.account.api_keys.revoke(created["keyId"])
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
+
+## active hours
+
+```python
+await client.machines.reboot("site-1", "m-1", after_active_hours=True)
+await client.machines.shutdown(
+    "site-1", "m-1", active_hours_override={"reason": "replacing the projector"}
+)
+await client.installer_deployments.retry(
+    "site-1", "deploy-1", active_hours_override={"reason": "venue closed today"}
+)
+```
+
+A Windows agent of 4.1.21 or later, which reports
+`capabilities.activeHoursGuard`, refuses a reboot, shutdown or install inside
+the machine's active hours. The command is still queued; `get_command()` then
+reports `failed` (a deployment target ends `failed`) with an `error` that
+starts `Error: active_hours:`. `after_active_hours` restarts once they end;
+`active_hours_override` acts now and logs the reason.
+`installer_deployments.create()` and `retry()` take the same override, and a
+retry needs its own. Older agents ignore both and act at once, as macOS and
+Linux do for a reboot or shutdown. That includes a machine rolled back below
+4.1.21: it keeps the capability, so the API also needs an `agentVersion` of
+4.1.21 or later. The API refuses `after_active_hours` on all of them with
+`409 held_restart_unsupported`, since none can hold the restart.
 
 ## push progress
 

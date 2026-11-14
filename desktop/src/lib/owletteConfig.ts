@@ -12,6 +12,8 @@
  * file format, not a place to invent a nicer one.
  */
 
+import { launchCopy } from '@/lib/launchCopy'
+
 /** `off` is unmanaged, `always` is 24/7 with crash recovery, `scheduled` runs windows. */
 export type LaunchMode = 'off' | 'always' | 'scheduled'
 
@@ -89,7 +91,7 @@ export const TEXT_FIELDS = [
 export type TextField = (typeof TEXT_FIELDS)[number]
 export type ProcessForm = Record<TextField, string>
 
-/** Defaults the legacy GUI writes for a brand new entry (`owlette_gui.new_process`). */
+/** Defaults the python GUI wrote for a brand new entry, before 3.0.0 removed it. */
 export const NEW_PROCESS_DEFAULTS = {
   name: 'untitled process',
   time_delay: '0',
@@ -150,7 +152,7 @@ export function formsEqual(a: ProcessForm, b: ProcessForm): boolean {
 }
 
 /**
- * "Soft save" (`owlette_gui.py:886-945`): blur fires on every focus change, so a
+ * "Soft save", as the python GUI did it: blur fires on every focus change, so a
  * nonsense number is replaced by the default rather than thrown back mid-edit.
  * delay >= 0, time-to-init >= 10, relaunch attempts an integer >= 0 (0 =
  * unlimited). Trimming is ours — a trailing space in an exe path is an
@@ -253,7 +255,7 @@ export function setSchedules(process: ProcessEntry, schedules: ScheduleBlock[]):
  */
 export function launchModeBlockedReason(process: ProcessEntry): string | null {
   if (!text(process.name).trim()) return 'name is required before a launch mode can be set'
-  if (!text(process.exe_path).trim()) return 'an exe path is required before a launch mode can be set'
+  if (!text(process.exe_path).trim()) return launchCopy().pathRequired
   return null
 }
 
@@ -356,7 +358,7 @@ export function reorderProcess(config: OwletteConfig, id: string, toIndex: numbe
 }
 
 /**
- * One-line window summary, wording from `owlette_gui.py:784-800`. Empty is not
+ * One-line window summary, wording from the python GUI. Empty is not
  * "nothing runs" — `shared_utils.is_within_schedule` returns True for an empty
  * schedule, so the copy says so.
  */
@@ -382,10 +384,10 @@ export function scheduleSummary(process: ProcessEntry): string {
  * Image names for `terminate_pid`'s identity check, most specific first.
  * `.bat`/`.cmd` run as `cmd.exe` so the configured path can never match.
  * Otherwise full path then bare file name — configured vs actually-running
- * paths legitimately differ for adopted processes. This name-based check is
- * the desktop's own; the service's destructive ops instead prove identity
- * against a recorded pid/create_time/exe snapshot
- * (`shared_utils.identity_matches`).
+ * paths legitimately differ for adopted processes. A name cannot tell two
+ * instances of one exe apart, so where the pid's row records the service's
+ * create_time/exe snapshot `terminate_pid` proves that as well
+ * (`recordedIdentity`, as `shared_utils.identity_matches` does).
  */
 export function expectedImagesFor(process: ProcessEntry): string[] {
   const exe = text(process.exe_path).trim()

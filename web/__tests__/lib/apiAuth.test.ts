@@ -14,9 +14,11 @@ const mockDocUpdate = jest.fn().mockResolvedValue(undefined);
 
 const mockDoc = jest.fn();
 const mockInnerDoc = jest.fn();
+const mockSubcollectionGet = jest.fn();
 
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminAuth: () => ({ verifyIdToken: mockVerifyIdToken }),
+  // no token revocation on record; session-revocation.test.ts covers one
+  getAdminAuth: () => ({ verifyIdToken: mockVerifyIdToken, getUser: async () => ({}) }),
   getAdminDb: () => ({
     // Batched read used by lib/sitePolicy.server.ts. Real getAll preserves
     // argument order and yields a non-existent snapshot for a missing doc,
@@ -29,6 +31,7 @@ jest.mock('@/lib/firebase-admin', () => ({
         return {
           get: () => mockDocGet(colName, docId),
           collection: (innerCol: string) => ({
+            get: () => mockSubcollectionGet(innerCol),
             doc: (innerDocId: string) => {
               mockInnerDoc(innerCol, innerDocId);
               return {
@@ -56,6 +59,8 @@ import {
   ApiAuthError,
   applyAuthDeprecations,
   auditApiKeyUse,
+  requirePreMfaSession,
+  requirePreMfaSessionUser,
   requireSession,
   requireSessionOrIdToken,
   requireAdmin,
@@ -65,9 +70,11 @@ import {
   resolveAuth,
   assertActiveUser,
   assertUserHasSiteAccess,
+  assertUserHasSiteCapability,
   type ApiKeyContext,
   type ResolvedAuth,
 } from '@/lib/apiAuth.server';
+import { Capability } from '@/lib/capabilities';
 
 function makeRequest(url = 'http://localhost/test', init?: RequestInit) {
   return new NextRequest(new URL(url), init as unknown as ConstructorParameters<typeof NextRequest>[1]);
@@ -77,6 +84,8 @@ function validSession(overrides = {}) {
   return {
     userId: 'user-123',
     expiresAt: Date.now() + 60_000,
+    mfaRequired: false,
+    mfaVerified: true,
     destroy: jest.fn(),
     ...overrides,
   };
@@ -105,6 +114,12 @@ function keyContext(overrides: Partial<ApiKeyContext> = {}): ApiKeyContext {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockDocGet.mockReset();
+  mockDocGet.mockResolvedValue({ exists: false });
+  mockVerifyIdToken.mockReset();
+  mockGetSession.mockReset();
+  mockSubcollectionGet.mockReset();
+  mockSubcollectionGet.mockResolvedValue({ size: 0 });
   delete process.env.LEGACY_API_KEY_BYPASS_ENABLED;
   delete process.env.LEGACY_API_KEY_ALLOW_HASH_LIST;
 });
@@ -148,6 +163,275 @@ describe('requireSession', () => {
 });
 
 // requireSessionOrIdToken
+
+describe('the second factor', () => {
+  const CODE = 'mfa_challenge_required';
+  const pendingSession = () => validSession({ mfaRequired: true, mfaVerified: false });
+  const withBearer = (token: string) =>
+    makeRequest('http://localhost/test', { headers: { authorization: `Bearer ${token}` } });
+  const userDoc = (data: Record<string, unknown>) => (col: string) =>
+    Promise.resolve(col === 'users' ? { exists: true, data: () => data } : { exists: false });
+  const ENROLLED = { mfaEnrolled: true, mfaFactors: { totp: true, passkeys: 0 } };
+  const NO_FACTOR = { mfaEnrolled: false, mfaFactors: { totp: false, passkeys: 0 } };
+
+  async function codeOf(p: Promise<unknown>): Promise<{ status?: number; code?: string }> {
+    return p.then(
+      () => ({}),
+      (e: ApiAuthError) => ({ status: e.status, code: e.code }),
+    );
+  }
+
+  describe('requireSession', () => {
+    it('refuses a session that still owes its challenge', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('passes a session that cleared its challenge, on one read of the account', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: true, mfaVerified: true }));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+      expect(mockDocGet).toHaveBeenCalledTimes(1);
+      expect(mockDocGet).toHaveBeenCalledWith('users', 'user-123');
+    });
+
+    it('refuses a session minted before the account cutoff, and passes one minted after', async () => {
+      const cutoff = Date.now() - 60_000;
+      mockDocGet.mockImplementation(userDoc({ ...ENROLLED, sessionsValidAfter: cutoff }));
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: true, mfaVerified: true, issuedAt: cutoff - 1 }));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 401, code: 'session_revoked' });
+      expect(await codeOf(requirePreMfaSession(makeRequest()))).toEqual({ status: 401, code: 'session_revoked' });
+
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: true, mfaVerified: true, issuedAt: cutoff }));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('passes the session /api/mfa/disable leaves behind, which took live proof', async () => {
+      mockGetSession.mockResolvedValue(
+        validSession({ mfaRequired: false, mfaVerified: true, mfaCompletedAt: Date.now() }),
+      );
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('passes an account with no factor', async () => {
+      mockGetSession.mockResolvedValue(validSession());
+      mockDocGet.mockImplementation(userDoc(NO_FACTOR));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('refuses a cookie minted at zero factors once the account has gained one', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: false, mfaVerified: true }));
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('passes a pending cookie once the account has no factor left', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockDocGet.mockImplementation(userDoc(NO_FACTOR));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('refuses a pre-field cookie of an enrolled account', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: undefined, mfaVerified: undefined }));
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('refuses a pre-field cookie that claims verified on an enrolled account', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: undefined, mfaVerified: true }));
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('passes a pre-field cookie of an account with no factor, or no document', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: undefined, mfaVerified: undefined }));
+      mockDocGet.mockImplementation(userDoc(NO_FACTOR));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+      mockDocGet.mockResolvedValue({ exists: false });
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('refuses a cookie when the account lookup fails', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: undefined, mfaVerified: undefined }));
+      mockDocGet.mockRejectedValue(new Error('firestore down'));
+      await expect(requireSession(makeRequest())).rejects.toThrow('firestore down');
+    });
+  });
+
+  describe('the pre-mfa variants', () => {
+    it('requirePreMfaSession answers a session that still owes its challenge', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      await expect(requirePreMfaSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('requirePreMfaSession still needs a live session', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockGetSession.mockResolvedValueOnce({ destroy: jest.fn() });
+      expect((await codeOf(requirePreMfaSession(makeRequest()))).status).toBe(401);
+      mockGetSession.mockResolvedValueOnce(validSession({ expiresAt: Date.now() - 1 }));
+      expect((await codeOf(requirePreMfaSession(makeRequest()))).status).toBe(401);
+    });
+
+    it('requirePreMfaSessionUser matches the uid, requireSessionUser wants the challenge too', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      await expect(requirePreMfaSessionUser(makeRequest(), 'user-123')).resolves.toBe('user-123');
+      expect((await codeOf(requirePreMfaSessionUser(makeRequest(), 'someone-else'))).status).toBe(403);
+      expect(await codeOf(requireSessionUser(makeRequest(), 'user-123'))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('allowPreMfa answers a pending cookie and an enrolled account\'s id token', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      await expect(requireSessionOrIdToken(makeRequest(), { allowPreMfa: true })).resolves.toBe('user-123');
+
+      mockDocGet.mockClear();
+      mockGetSession.mockResolvedValue({ destroy: jest.fn() });
+      mockVerifyIdToken.mockResolvedValue({ uid: 'enrolled-uid' });
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      await expect(requireSessionOrIdToken(withBearer('tok'), { allowPreMfa: true })).resolves.toBe('enrolled-uid');
+      expect(mockDocGet).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requireSessionOrIdToken', () => {
+    beforeEach(() => {
+      mockGetSession.mockResolvedValue({ destroy: jest.fn() });
+    });
+
+    it('refuses a pending cookie with no bearer', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSessionOrIdToken(makeRequest()))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('refuses a user id token when the account holds a factor', async () => {
+      mockVerifyIdToken.mockResolvedValue({ uid: 'enrolled-uid' });
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSessionOrIdToken(withBearer('tok')))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('counts the passkeys of a document older than the factor tally', async () => {
+      mockVerifyIdToken.mockResolvedValue({ uid: 'legacy-uid' });
+      mockDocGet.mockImplementation(userDoc({ mfaEnrolled: false }));
+      mockSubcollectionGet.mockResolvedValueOnce({ size: 1 });
+      expect(await codeOf(requireSessionOrIdToken(withBearer('tok')))).toEqual({ status: 403, code: CODE });
+      mockSubcollectionGet.mockResolvedValueOnce({ size: 0 });
+      await expect(requireSessionOrIdToken(withBearer('tok'))).resolves.toBe('legacy-uid');
+    });
+
+    it('refuses a pending cookie carrying an enrolled account\'s id token', async () => {
+      mockGetSession.mockResolvedValue(pendingSession());
+      mockVerifyIdToken.mockResolvedValue({ uid: 'user-123' });
+      mockDocGet.mockImplementation(userDoc(ENROLLED));
+      expect(await codeOf(requireSessionOrIdToken(withBearer('tok')))).toEqual({ status: 403, code: CODE });
+    });
+
+    it('passes a user id token for an account with no factor, or no document yet', async () => {
+      mockVerifyIdToken.mockResolvedValue({ uid: 'plain-uid' });
+      mockDocGet.mockImplementation(userDoc(NO_FACTOR));
+      await expect(requireSessionOrIdToken(withBearer('tok'))).resolves.toBe('plain-uid');
+      mockDocGet.mockResolvedValue({ exists: false });
+      await expect(requireSessionOrIdToken(withBearer('tok'))).resolves.toBe('plain-uid');
+    });
+
+    it('refuses a user id token when the lookup fails', async () => {
+      const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockVerifyIdToken.mockResolvedValue({ uid: 'plain-uid' });
+      mockDocGet.mockRejectedValue(new Error('firestore down'));
+      expect(await codeOf(requireSessionOrIdToken(withBearer('tok')))).toEqual({ status: 403, code: CODE });
+      quiet.mockRestore();
+    });
+
+    it('passes an agent token without reading a user document', async () => {
+      mockVerifyIdToken.mockResolvedValue({ uid: 'agent-1', role: 'agent', site_id: 's', machine_id: 'm' });
+      await expect(requireSessionOrIdToken(withBearer('tok'))).resolves.toBe('agent-1');
+      expect(mockDocGet).not.toHaveBeenCalled();
+    });
+
+    it('still answers 401 for a bad token', async () => {
+      mockVerifyIdToken.mockRejectedValue(new Error('bad'));
+      expect((await codeOf(requireSessionOrIdToken(withBearer('tok')))).status).toBe(401);
+    });
+  });
+
+  it('resolveAuth refuses a pending session and leaves api keys alone', async () => {
+    mockGetSession.mockResolvedValue(pendingSession());
+    mockDocGet.mockImplementation(userDoc(ENROLLED));
+    expect(await codeOf(resolveAuth(makeRequest()))).toEqual({ status: 403, code: CODE });
+
+    mockDocGet.mockImplementation(apiKeyLookup({
+      userId: 'enrolled-uid',
+      keyId: 'k1',
+      scopes: [{ resource: 'site', id: '*', permissions: ['read'] }],
+      environment: 'live',
+    }));
+    const auth = await resolveAuth(makeRequest('http://localhost/test', { headers: { 'x-api-key': 'owk_live_abc' } }));
+    expect(auth.userId).toBe('enrolled-uid');
+  });
+
+  it('requireAdminOrIdToken refuses a superadmin who still owes the challenge', async () => {
+    mockGetSession.mockResolvedValue(pendingSession());
+    mockDocGet.mockImplementation(userDoc({ role: 'superadmin', ...ENROLLED }));
+    expect(await codeOf(requireAdminOrIdToken(makeRequest()))).toEqual({ status: 403, code: CODE });
+  });
+
+  describe('an account that has to set up a second factor', () => {
+    const SETUP = 'mfa_setup_required';
+    const MUST_ENROL = { mfaEnrolled: false, requiresMfaSetup: true, mfaFactors: { totp: false, passkeys: 0 } };
+
+    it('is refused on a session until it enrols', async () => {
+      mockGetSession.mockResolvedValue(validSession());
+      mockDocGet.mockImplementation(userDoc(MUST_ENROL));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: SETUP });
+      expect(await codeOf(resolveAuth(makeRequest()))).toEqual({ status: 403, code: SETUP });
+      expect(await codeOf(requireAdminOrIdToken(makeRequest()))).toEqual({ status: 403, code: SETUP });
+    });
+
+    it('is refused on the session /api/mfa/disable leaves after removing the last factor', async () => {
+      mockGetSession.mockResolvedValue(
+        validSession({ mfaRequired: false, mfaVerified: true, mfaCompletedAt: Date.now() }),
+      );
+      mockDocGet.mockImplementation(userDoc(MUST_ENROL));
+      expect(await codeOf(requireSession(makeRequest()))).toEqual({ status: 403, code: SETUP });
+    });
+
+    it('is refused on an id token, and answered where it enrols', async () => {
+      mockGetSession.mockResolvedValue({ destroy: jest.fn() });
+      mockVerifyIdToken.mockResolvedValue({ uid: 'setup-uid' });
+      mockDocGet.mockImplementation(userDoc(MUST_ENROL));
+      expect(await codeOf(requireSessionOrIdToken(withBearer('tok')))).toEqual({ status: 403, code: SETUP });
+      await expect(requireSessionOrIdToken(withBearer('tok'), { allowPreMfa: true })).resolves.toBe('setup-uid');
+
+      mockGetSession.mockResolvedValue(validSession());
+      await expect(requirePreMfaSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('is not refused when the document also says enrolled', async () => {
+      mockGetSession.mockResolvedValue(validSession({ mfaRequired: true, mfaVerified: true }));
+      mockDocGet.mockImplementation(userDoc({ ...MUST_ENROL, mfaEnrolled: true, mfaFactors: { totp: true, passkeys: 0 } }));
+      await expect(requireSession(makeRequest())).resolves.toBe('user-123');
+    });
+
+    it('keeps its api keys, which are a credential of their own', async () => {
+      mockDocGet.mockImplementation((col: string) =>
+        col === 'api_keys'
+          ? Promise.resolve({
+              exists: true,
+              data: () => ({
+                userId: 'setup-uid',
+                keyId: 'k1',
+                scopes: [{ resource: 'site', id: '*', permissions: ['read'] }],
+                environment: 'live',
+              }),
+            })
+          : userDoc(MUST_ENROL)(col),
+      );
+      const auth = await resolveAuth(makeRequest('http://localhost/test', { headers: { 'x-api-key': 'owk_live_abc' } }));
+      expect(auth.userId).toBe('setup-uid');
+    });
+  });
+});
 
 describe('requireSessionOrIdToken', () => {
   it('returns userId from valid session', async () => {
@@ -278,7 +562,8 @@ describe('requireAdminOrIdToken', () => {
     expect(mockDoc).toHaveBeenCalledWith('api_keys', apiKeyHash);
   });
 
-  it('returns userId for superadmin via api_key query param', async () => {
+  it('refuses a superadmin key sent as the api_key query param, without looking it up', async () => {
+    mockGetSession.mockResolvedValue({});
     mockDocGet.mockImplementation((col: string) => {
       if (col === 'api_keys')
         return Promise.resolve({
@@ -296,8 +581,10 @@ describe('requireAdminOrIdToken', () => {
     });
 
     const req = makeRequest('http://localhost/test?api_key=owk_test456');
-    const result = await requireAdminOrIdToken(req);
-    expect(result).toBe('super-2');
+    await expect(requireAdminOrIdToken(req)).rejects.toThrow(
+      expect.objectContaining({ status: 401 }),
+    );
+    expect(mockDoc).not.toHaveBeenCalledWith('api_keys', expect.anything());
   });
 
   it('returns userId for superadmin via Authorization Bearer owk_', async () => {
@@ -619,6 +906,57 @@ describe('assertUserHasSiteAccess', () => {
   });
 });
 
+/** a site, an active user with no global privilege, and their member row on it */
+function mockMemberOn(memberRow: Record<string, unknown>) {
+  mockDocGet.mockImplementation((col: string) => {
+    if (col === 'sites') return Promise.resolve({ exists: true, data: () => ({ name: 'Site S' }) });
+    if (col === 'users') return Promise.resolve({ exists: true, data: () => ({ role: 'member' }) });
+    if (col === 'members') return Promise.resolve({ exists: true, data: () => memberRow });
+    return Promise.resolve({ exists: false });
+  });
+}
+
+describe('assertUserHasSiteAccess machine scope', () => {
+  it("returns a scoped member's machines", async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active', machineIds: ['m1'] });
+    const result = await assertUserHasSiteAccess('user-s', 'site-s');
+    expect(result.machineIds).toEqual(['m1']);
+  });
+
+  it('returns null for a whole-site member', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active' });
+    const result = await assertUserHasSiteAccess('user-s', 'site-s');
+    expect(result.machineIds).toBeNull();
+  });
+});
+
+describe('assertUserHasSiteCapability', () => {
+  it('refuses MACHINE_ENROLL to a scoped admin', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'admin', status: 'active', machineIds: ['m1'] });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).rejects.toThrow(
+      expect.objectContaining({ status: 403, message: 'Forbidden: capability not granted' }),
+    );
+  });
+
+  it('refuses MACHINE_ENROLL to a member set to swoop control', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active', swoop: 'control' });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).rejects.toThrow(
+      expect.objectContaining({ status: 403, message: 'Forbidden: capability not granted' }),
+    );
+  });
+
+  it('allows MACHINE_ENROLL to a whole-site admin', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'admin', status: 'active' });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).resolves.toMatchObject({ siteId: 'site-s', siteData: { name: 'Site S' } });
+  });
+});
+
 // resolveAuth
 
 describe('resolveAuth', () => {
@@ -665,7 +1003,8 @@ describe('resolveAuth', () => {
     expect(auth.keyContext?.keyId).toBe('k1');
   });
 
-  it('resolves via api_key query parameter', async () => {
+  it('never authenticates a key in the api_key query parameter', async () => {
+    mockGetSession.mockResolvedValue({});
     mockDocGet.mockImplementation(
       apiKeyLookup({
         userId: 'u-q',
@@ -676,9 +1015,49 @@ describe('resolveAuth', () => {
       }),
     );
 
+    await expect(resolveAuth(apiKeyReq('owk_q', 'query'))).rejects.toThrow(
+      expect.objectContaining({ status: 401 }),
+    );
+    expect(mockDoc).not.toHaveBeenCalledWith('api_keys', expect.anything());
+  });
+
+  it('answers as the session beside a key in the api_key query parameter, ignoring the key', async () => {
+    mockGetSession.mockResolvedValue(validSession({ userId: 'u-session' }));
+    mockDocGet.mockImplementation(
+      apiKeyLookup({
+        userId: 'u-q',
+        keyId: 'k-q',
+        environment: 'live',
+        scopes: [{ resource: 'site', id: '*', permissions: ['read'] }],
+        expiresAt: Date.now() + 60_000,
+      }),
+    );
+
     const auth = await resolveAuth(apiKeyReq('owk_q', 'query'));
-    expect(auth.userId).toBe('u-q');
-    expect(auth.keyContext?.environment).toBe('test');
+    expect(auth.userId).toBe('u-session');
+    expect(auth.keyContext).toBeNull();
+  });
+
+  it('reads the x-api-key header even when the query carries a key', async () => {
+    mockDocGet.mockImplementation(
+      apiKeyLookup({
+        userId: 'u-h',
+        keyId: 'k-h',
+        environment: 'live',
+        scopes: [{ resource: 'site', id: '*', permissions: ['read'] }],
+        expiresAt: Date.now() + 60_000,
+      }),
+    );
+
+    const req = makeRequest('http://localhost/test?api_key=owk_other', {
+      headers: { 'x-api-key': 'owk_header' },
+    });
+    const auth = await resolveAuth(req);
+    expect(auth.keyContext?.keyId).toBe('k-h');
+    expect(mockDoc).toHaveBeenCalledWith(
+      'api_keys',
+      createHash('sha256').update('owk_header').digest('hex'),
+    );
   });
 
   it('resolves via Authorization: Bearer owk_*', async () => {

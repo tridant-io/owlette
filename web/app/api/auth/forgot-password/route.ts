@@ -15,23 +15,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { getAdminAuth } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
-import { getResend, FROM_EMAIL, isProduction } from '@/lib/resendClient.server';
+import { getResend, FROM_EMAIL, isProduction, trustedBaseUrl } from '@/lib/resendClient.server';
 import { buildPasswordResetEmail } from '@/lib/emailTemplates.server';
 import { TURNSTILE_TOKEN_FIELD, verifyTurnstileToken } from '@/lib/turnstile.server';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-/**
- * Trusted base URL for the reset link. Deliberately NOT from the Host header:
- * host injection there would carry a valid oobCode to an attacker's domain
- * (account takeover). Server env only.
- */
-function trustedBaseUrl(): string {
-  return (
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    (isProduction ? 'https://owlette.app' : 'https://dev.owlette.app')
-  );
-}
 
 export const POST = withRateLimit(
   async (request: NextRequest) => {

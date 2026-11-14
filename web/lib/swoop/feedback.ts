@@ -55,8 +55,30 @@ const OFFSET_LATCH_US = 2_000;
 /** clock samples kept; the lowest-rtt one of these is the estimate. */
 const CLOCK_SAMPLES = 8;
 
+/**
+ * frames the decoder may run ahead of the paint. the drop count pairs frames
+ * painted with frames decoded at one moment, and a frame decoded but not yet
+ * painted reads as missing; this many are never counted, which costs nothing
+ * against real loss — a lost frame stops the decoder until the next keyframe,
+ * many frames at once.
+ */
+const DECODE_LEAD_FRAMES = 3;
+
 /** unanswered pings held before the oldest is abandoned and counted. */
 const PENDING_PINGS = 4;
+
+/**
+ * how long the host may go without answering a ping once it has answered one.
+ * pings ride `swoop-feedback` every second, unordered and lossy, so eight in
+ * a row lost on a live path is not a thing that happens — but a transport
+ * that closed the channel under the browser answers nothing ever again, and
+ * the browser is never told (the host cannot re-open a channel it does not
+ * own). that is what this notices; the session then reconnects with fresh
+ * channels. B4A, 2026-09-24: the picture froze and the cursor vanished for
+ * good behind exactly that. it is a dead channel on a live path, so silence
+ * counts only while the path is up (`linkUp`).
+ */
+export const PONG_SILENCE_MS = 8_000;
 
 export interface FeedbackViewport {
   widthCss: number;
@@ -72,6 +94,28 @@ export interface SwoopFeedbackOptions {
   now?: () => number;
   reportIntervalMs?: number;
   referenceWindowMs?: number;
+  /**
+   * the host answered pings and then stopped for `silenceMs`. fires once per
+   * silence; never before the first pong, because a channel that has not
+   * opened yet is the peer's business, not this loop's.
+   */
+  onSilence?: () => void;
+  silenceMs?: number;
+  /**
+   * whether the path under the channel is up. with it down the peer's restart
+   * ladder owns recovery and no silence is judged; the silence clock starts
+   * again when it comes back. absent means always up.
+   */
+  linkUp?: () => boolean;
+  /**
+   * the video receiver's cumulative decoded-frame count
+   * (`RTCInboundRtpStreamStats.framesDecoded`), or null while there is none.
+   * with it a frame counts as dropped only if it was never decoded, and a read
+   * that answers null is no gap signal at all, leaving the host its delay rule;
+   * without it, every frame id that was never painted counts, which includes
+   * frames the compositor skipped because two landed in one refresh.
+   */
+  framesDecoded?: () => Promise<number | null>;
 }
 
 export interface SwoopFeedbackDiagnostics {
@@ -83,8 +127,10 @@ export interface SwoopFeedbackDiagnostics {
   /** a `pong` for an id we never sent, or already answered. */
   pongsUnmatched: number;
   pingsAbandoned: number;
+  /** times the host's pongs stopped for `PONG_SILENCE_MS` after having come. */
+  silences: number;
   framesObserved: number;
-  /** cumulative frames the host sent that never reached presentation. */
+  /** cumulative frames the host sent that were never decoded (never painted, without `framesDecoded`). */
   framesDropped: number;
   /** frames whose arrival time the ua did not report — see `arrivalUs`. */
   arrivalFallbacks: number;
@@ -146,6 +192,7 @@ export class SwoopFeedback {
   private readonly now: () => number;
   private readonly reportIntervalMs: number;
   private readonly reference: MinWindow;
+  private readonly silenceMs: number;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticks = 0;
@@ -154,12 +201,28 @@ export class SwoopFeedback {
   private readonly clock: ClockSample[] = [];
   private offsetUs: number | null = null;
   private rttUs: number | null = null;
+  private lastPongMs: number | null = null;
+  /** the path was down at the last look, so the next look that finds it up restarts the clock. */
+  private linkWasDown = false;
 
   private latest: FrameObservation | null = null;
   private lastFrameId: number | null = null;
   private lastSentFrameId: number | null = null;
   private windowRiseUs: number | null = null;
   private delayRiseUs: number | null = null;
+  /** frames the host sent, as the painted ids say: the sum of their steps forward. */
+  private framesSent = 0;
+  /** frames sent and decoded when the drop count was last based. */
+  private decodeBase: { sent: number; decoded: number } | null = null;
+  /**
+   * an id went back — a new encoder, whose ids start again — so how many frames
+   * the old run sent after the last one painted is unknown: the next read bases
+   * anew rather than guess.
+   */
+  private decodeBaseStale = false;
+  /** drops counted against earlier bases, so a new receiver does not hide new ones. */
+  private droppedBefore = 0;
+  private decodeRead = false;
 
   private readonly stats = {
     reports: 0,
@@ -169,6 +232,7 @@ export class SwoopFeedback {
     pongsMatched: 0,
     pongsUnmatched: 0,
     pingsAbandoned: 0,
+    silences: 0,
     framesObserved: 0,
     framesDropped: 0,
     arrivalFallbacks: 0,
@@ -180,6 +244,7 @@ export class SwoopFeedback {
     this.now = options.now ?? (() => performance.now());
     this.reportIntervalMs = options.reportIntervalMs ?? REPORT_INTERVAL_MS;
     this.reference = new MinWindow(options.referenceWindowMs ?? REFERENCE_WINDOW_MS);
+    this.silenceMs = options.silenceMs ?? PONG_SILENCE_MS;
   }
 
   /** start reporting. the first ping goes immediately, so the first `stats` a
@@ -199,8 +264,15 @@ export class SwoopFeedback {
   /** one presented frame, straight from `SwoopReceiver`'s `onFrame`. */
   observeFrame(frame: FrameObservation): void {
     this.stats.framesObserved += 1;
-    if (this.lastFrameId !== null && frame.frameId > this.lastFrameId) {
-      this.stats.framesDropped += frame.frameId - this.lastFrameId - 1;
+    if (this.lastFrameId === null) {
+      this.framesSent += 1;
+    } else if (frame.frameId > this.lastFrameId) {
+      this.framesSent += frame.frameId - this.lastFrameId;
+      if (this.options.framesDecoded === undefined) {
+        this.stats.framesDropped += frame.frameId - this.lastFrameId - 1;
+      }
+    } else if (frame.frameId < this.lastFrameId) {
+      this.decodeBaseStale = true;
     }
     // a frame id that went backwards is the counter wrapping at 2³² or a new
     // track; neither is a drop, so the sequence just restarts here.
@@ -236,6 +308,7 @@ export class SwoopFeedback {
     this.pending.delete(id);
     const rttUs = Math.max(0, usFromMs(this.now() - sentMs));
     this.stats.pongsMatched += 1;
+    this.lastPongMs = this.now();
     this.record({ rttUs, offsetUs: hostUs - (usFromMs(sentMs) + Math.round(rttUs / 2)) });
   }
 
@@ -263,11 +336,13 @@ export class SwoopFeedback {
   private tick(): void {
     this.ticks += 1;
     this.stats.reports += 1;
+    this.watchSilence();
     this.sendFb();
     // §5 puts `stats` on a one-second cadence, so it rides every other tick.
     if (this.ticks % 2 === 0) {
       this.sendPing();
       this.sendStats();
+      this.readDecoded();
     }
   }
 
@@ -312,8 +387,8 @@ export class SwoopFeedback {
         decodeQueue: 0,
         framesDropped: this.stats.framesDropped,
         // variation in one-way delay, which is what jitter is — not
-        // `RTCInboundRtpStreamStats.jitter`, which needs a `getStats` handle
-        // this module does not have. the field is integer milliseconds, so a
+        // `RTCInboundRtpStreamStats.jitter`, which is the packets' inter-arrival
+        // jitter rather than the frames'. the field is integer milliseconds, so a
         // sub-millisecond lan figure rounds to zero here and survives in full
         // in `diagnostics()`.
         jitterMs: Math.round(rise / 1000),
@@ -322,6 +397,74 @@ export class SwoopFeedback {
         heightCss: Math.round(viewport.heightCss),
       }),
     );
+  }
+
+  /**
+   * frames dropped = frames sent since the base, less frames decoded since it,
+   * less the decoder's lead. painted frames alone cannot tell a frame the
+   * compositor skipped from one the path lost, and this count cuts the host's
+   * bitrate, so it is worth a scoped `getStats()` once a second, on the
+   * `stats` cadence. the count only ever rises, and what was counted is kept
+   * whenever the base starts over: after an id went back, after the decoded
+   * counter did (a new receiver), and when more frames were decoded than sent
+   * — a new encoder whose first painted id happened to land above the last
+   * one, behind a paint that had stalled — so a wrong base never hides loss.
+   */
+  private readDecoded(): void {
+    const read = this.options.framesDecoded;
+    if (read === undefined || this.lastFrameId === null || this.decodeRead) return;
+    const sent = this.framesSent;
+    this.decodeRead = true;
+    Promise.resolve()
+      .then(read)
+      .then((decoded) => {
+        if (decoded === null) return;
+        const base = this.decodeBase;
+        const dropped =
+          base === null ? 0 : sent - base.sent - (decoded - base.decoded) - DECODE_LEAD_FRAMES;
+        if (
+          base === null ||
+          this.decodeBaseStale ||
+          decoded < base.decoded ||
+          dropped < -2 * DECODE_LEAD_FRAMES
+        ) {
+          this.droppedBefore = this.stats.framesDropped;
+          this.decodeBase = { sent, decoded };
+          this.decodeBaseStale = false;
+          return;
+        }
+        this.stats.framesDropped = Math.max(
+          this.stats.framesDropped,
+          this.droppedBefore + Math.max(0, dropped),
+        );
+      })
+      // a read that fails is a sample missed, never a drop.
+      .catch(() => {})
+      .finally(() => {
+        this.decodeRead = false;
+      });
+  }
+
+  private watchSilence(): void {
+    if (this.lastPongMs === null || this.options.onSilence === undefined) return;
+    // pongs lost to a path that is down are the restart ladder's to recover,
+    // and the silence that counts starts when the path is back.
+    if (this.options.linkUp?.() === false) {
+      this.linkWasDown = true;
+      return;
+    }
+    if (this.linkWasDown) {
+      this.linkWasDown = false;
+      this.lastPongMs = this.now();
+      return;
+    }
+    const silentMs = this.now() - this.lastPongMs;
+    if (silentMs < this.silenceMs) return;
+    this.stats.silences += 1;
+    // re-armed from now, so one silence is reported once and a session the
+    // caller chose to keep is watched again from here.
+    this.lastPongMs = this.now();
+    this.options.onSilence();
   }
 
   private sendPing(): void {

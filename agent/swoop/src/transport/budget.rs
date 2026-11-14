@@ -302,8 +302,8 @@ mod tests {
     fn each_profile_and_mtu_maps_to_its_budget() {
         // profile, mtu, bitrate, fps, fragment, fec
         let table: [(PathProfile, u16, u32, u32, usize, bool); 6] = [
-            (PathProfile::Direct, 1500, 50_000_000, 60, 1472, true),
-            (PathProfile::Direct, 1280, 50_000_000, 60, 1252, true),
+            (PathProfile::Direct, 1500, 100_000_000, 60, 1472, true),
+            (PathProfile::Direct, 1280, 100_000_000, 60, 1252, true),
             (PathProfile::RelayUdp, 1500, 25_000_000, 60, 1468, true),
             (PathProfile::RelayUdp, 1280, 25_000_000, 60, 1248, true),
             (PathProfile::RelayTls, 1500, 6_000_000, 30, 1468, false),

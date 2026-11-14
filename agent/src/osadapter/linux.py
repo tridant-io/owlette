@@ -19,12 +19,14 @@ from .posix import (
     console_user,
     data_root,
     desktop_process_name,
+    exit_code,
     json_lock,
     launch_managed_process,
     notify,
     run_job,
     session_env,
     spawn_as_user,
+    watch_exit,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +164,11 @@ def pending_reboot() -> dict:
     import mcp_tools
 
     return mcp_tools.check_pending_reboot({}, None)
+
+
+def active_hours() -> dict | None:
+    """None: active hours are Windows' own, and Linux keeps no such window."""
+    return None
 
 
 def reboot(delay: int, message: str | None = None) -> None:

@@ -3,15 +3,17 @@
  * exactly: a looser PATCH is a privilege-escalation path, letting a caller edit into scopes
  * they could never be issued. One implementation makes that drift impossible.
  */
-import type { NextResponse } from 'next/server';
+import type { NextRequest, NextResponse } from 'next/server';
 import { assertUserHasSiteAccess } from '@/lib/apiAuth.server';
-import { problemForbidden, problemValidation } from '@/lib/apiErrors';
+import { problem, problemForbidden, problemValidation, ProblemType } from '@/lib/apiErrors';
+import { getSessionFromRequest } from '@/lib/sessionManager.server';
 import {
   ALL_RESOURCES,
   type ApiKeyPermission,
   type ApiKeyResource,
   type ApiKeyScope,
   SUPERADMIN_ONLY_RESOURCES,
+  SUPERADMIN_ONLY_RESOURCES_LABEL,
 } from '@/lib/apiKeyTypes';
 
 export const VALID_RESOURCES: readonly ApiKeyResource[] = ALL_RESOURCES;
@@ -29,6 +31,36 @@ export const SITE_SCOPED_RESOURCES = new Set<ApiKeyResource>([
   'chat',
   'deploy',
 ]);
+
+export const INVALID_MAX_TOOL_TIER = 'maxToolTier must be 1, 2 or 3';
+
+/**
+ * A key above tool tier 1 takes a login session that passed a second factor, to mint, raise or
+ * rotate; a rotation hands out the key's secret, so it counts the same. A session on an account
+ * with no factor reads `mfaVerified: true` with nothing behind it, hence `mfaRequired` too, and
+ * an ID token has no session to ask, so neither can do this. Returns a problem response or null.
+ */
+export async function requireVerifiedSessionForToolTier(
+  request: NextRequest,
+  userId: string,
+): Promise<NextResponse | null> {
+  const session = await getSessionFromRequest(request);
+  const verified =
+    session.userId === userId &&
+    typeof session.expiresAt === 'number' &&
+    session.expiresAt > Date.now() &&
+    session.mfaRequired === true &&
+    session.mfaVerified === true;
+  if (verified) return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    detail:
+      'a tool tier above 1 needs a dashboard session that passed your second factor. enroll a passkey or an authenticator app if you have neither, sign in, and try again.',
+    code: 'verified_session_required',
+  });
+}
 
 /** Shape-check: returns normalised scopes, or a string describing the first problem (→ 400). */
 export function validateScopes(raw: unknown): ApiKeyScope[] | string {
@@ -96,7 +128,7 @@ export async function assertScopesGrantable(
   );
   if (needsSuperadminGrant && (activeUserData.role ?? null) !== 'superadmin') {
     return problemForbidden(
-      'superadmin access required to grant user or installer scopes',
+      `superadmin access required to grant ${SUPERADMIN_ONLY_RESOURCES_LABEL} scopes`,
     );
   }
 

@@ -10,6 +10,7 @@
  */
 
 import { getAdminDb } from '@/lib/firebase-admin';
+import { isProduction } from '@/lib/resendClient.server';
 import type { AuthenticatorTransportFuture } from '@simplewebauthn/server';
 
 const RP_NAME = 'Owlette';
@@ -53,7 +54,8 @@ export function getExpectedOrigins(): string[] {
     return e2eOrigins;
   }
   if (process.env.NODE_ENV === 'production') {
-    return ['https://owlette.app', 'https://dev.owlette.app'];
+    // each deployment accepts its own origin only
+    return [isProduction ? 'https://owlette.app' : 'https://dev.owlette.app'];
   }
   return ['http://localhost:3000'];
 }

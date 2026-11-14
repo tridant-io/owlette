@@ -41,9 +41,15 @@ import {
   type SwoopSession,
 } from '@/lib/swoop/features';
 import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
-import { SwoopLeaseRefused } from '@/lib/swoop/lease';
-import { createSwoopIdentity, createSwoopPeer, type SwoopPeer } from '@/lib/swoop/peer';
+import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
+import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer } from '@/lib/swoop/peer';
+import { backoffDelayMs, isPlanRefusal, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
+import { machineFailureCopy, machineFailureStops } from '@/lib/swoop/machineFailure';
+import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
+import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
+import { readContinuity, writeContinuity } from '@/lib/swoop/continuityStore';
+import { readCodecChoice, writeCodecChoice } from '@/lib/swoop/codecStore';
 import {
   base64UrlDecode,
   encodeControlMessage,
@@ -52,7 +58,6 @@ import {
 } from '@/lib/swoop/protocol';
 import {
   createSwoopSignaling,
-  type SwoopSignalFatal,
   type SwoopSignaling,
   type SwoopSignalStatus,
 } from '@/lib/swoop/signaling';
@@ -66,9 +71,64 @@ import {
   type FrameObservation,
   type SwoopReceiverDiagnostics,
 } from '@/lib/swoop/video/receiver';
-import type { SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import {
+  classifyStall,
+  createStallDetector,
+  type InboundVideoStats,
+  type StallAction,
+  type StallKind,
+  type StallTick,
+  type SwoopStallReport,
+} from '@/lib/swoop/video/stall';
+import type { SwoopStepUpAnswer, SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import { isViewerApp } from '@/lib/swoop/viewerApp';
+import { smoothActive } from '@/hooks/useSwoopView';
 
-/** how far the page has got. `ended` and `error` are both terminal. */
+/**
+ * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
+ * held for `RETRY_RESET_MS`. five minutes, not thirty seconds: every attempt
+ * spawns a streamer on the machine, whose own ceiling is five spawns in ten
+ * minutes, and a host that comes up for a minute and drops used to reset the
+ * ladder to 2 s each time and burn that ceiling on its own (b4a, 2026-09-25).
+ */
+const RETRY_LADDER = { baseMs: 2000, capMs: 30000 };
+const RETRY_RESET_MS = 5 * 60 * 1000;
+
+/**
+ * how long a machine may leave every offer unanswered, with no picture, before
+ * the tab stops asking. a machine whose streamer fails before it answers is
+ * otherwise asked again every 45 s for as long as the tab is open (bryant
+ * place's m5 max, two hours, 2026-10-12); a slow path off the lan still gets a
+ * picture within a few tries (davor, amber-opal), so this is time, not tries.
+ */
+const HOST_SILENT_LIMIT_MS = 10 * 60 * 1000;
+const HOST_SILENT_FINAL =
+  'this machine has not answered for ten minutes, so swoop stopped trying. check that it is on the network; on a Mac, the owlette app must be running and macOS may be asking someone to allow screen recording.';
+
+/** what someone a revocation was for is told when the api refuses their way back in. */
+const ACCESS_REMOVED = 'your access to this machine was removed.';
+
+/** told to the one a kick was for, who may rejoin. */
+const KICKED = 'a site admin took you out of this session.';
+
+/** a machine removed from the site, or one that left it from its own tray: there is nothing to reconnect to. */
+const LEFT_SITE = 'this machine has left the site.';
+
+/**
+ * a frozen picture is replaced with a new session on its own at most this
+ * often. past it a new session has not held, so the session stays up and the
+ * operator decides: a loop of new sessions would only spend the machine's
+ * streamer spawns. a reattach is cheap and never counts.
+ */
+const STALL_RECOVERY_CAP = 2;
+const STALL_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
+/** how long a reattached element has to show a frame before the session is replaced. */
+const REATTACH_GRACE_MS = 2000;
+
+/**
+ * how far the page has got. `ended` and `error` count down to the next session
+ * while `retryIn` is set, and otherwise wait for the operator.
+ */
 export type SwoopSessionState =
   | 'idle'
   | 'authorizing'
@@ -76,6 +136,22 @@ export type SwoopSessionState =
   | 'connected'
   | 'ended'
   | 'error';
+
+/**
+ * what the page is doing about a frozen picture: nothing, reattaching the
+ * element, waiting on the reconnect that replaces the session, or nothing
+ * more, because `STALL_RECOVERY_CAP` was reached: the session stays up and the
+ * operator decides.
+ */
+export type SwoopStallRecovery = 'none' | 'reattaching' | 'reconnecting' | 'frozen';
+
+export interface SwoopStallStats {
+  recovery: SwoopStallRecovery;
+  /** stalls declared in this tab. */
+  episodes: number;
+  /** where the last one died. */
+  kind: StallKind | null;
+}
 
 export interface SwoopStats {
   signal: SwoopSignalStatus;
@@ -91,19 +167,24 @@ export interface SwoopStats {
   feedback: SwoopFeedbackDiagnostics | null;
   /** when the lease currently held lapses; 0 before one exists. */
   leaseExpiresAt: number;
+  /** whether the path under the session is up. the feedback above is its last word when it is not. */
+  linkUp: boolean;
+  stall: SwoopStallStats;
 }
 
 export interface SwoopStepUpControls {
   required: boolean;
   /** false when the account holds no second factor — it cannot take control. */
   enrolled: boolean;
-  submitProof: (proof: SwoopStepUpProof) => Promise<void>;
+  submitProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   cancel: () => void;
 }
 
 export interface UseSwoopSession {
   state: SwoopSessionState;
   error: string | null;
+  /** the api's code when it refused the session for good, such as `swoop_disabled`; the stage explains it. */
+  refusal: string | null;
   stats: SwoopStats;
   /**
    * the live session, once the peer is up. this is what every toolbar, menu and
@@ -116,12 +197,67 @@ export interface UseSwoopSession {
    * track, so this is a `<video>` — not the canvas arm A would have drawn into.
    */
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** smooth scaling's canvas, over the video; the presenter draws on it. */
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   /** the surface input capture binds to; it wraps the video. */
   stageRef: RefObject<HTMLDivElement | null>;
   stepUp: SwoopStepUpControls;
   /** end the session and stop the streamer. */
   end: () => void;
+  /** a fresh session to the same machine, from the ended or failed state. */
+  reconnect: () => void;
+  /**
+   * seconds until the next automatic reconnect, or null when none is due: a
+   * session that ended for a reason that was not a decision is started
+   * again on a ladder, and the operator can reconnect now instead.
+   */
+  retryIn: number | null;
+  /** set while connecting finds no media path between this browser and the machine; see `NO_PATH_MS`. */
+  noPath: SwoopNoPath | null;
+  /** the machine said it is restarting or updating, and the reconnects are waiting for it. */
+  restarting: boolean;
 }
+
+/** how a session's record says it ended: why, and whom a revocation was for. */
+interface RecordedEnd {
+  reason: string;
+  endedFor: string | null;
+}
+
+/**
+ * what the api answers someone whose own access went, to a record read or to
+ * the ask that would bring them back: removed from the site (the site
+ * wrapper's 404), an account deleted, or a demotion where plain members may
+ * not watch.
+ */
+const REVOKED_REFUSALS: ReadonlySet<string> = new Set(['not_found', 'user_inactive', 'members_may_not_watch']);
+
+/**
+ * whom a kill was for, read off its record. one streamer serves everyone on the
+ * machine and cannot drop one viewer, so a revocation or a kick ends the
+ * session for all of them, and the record names whom it was for. a record this
+ * user may no longer read is a revocation of them. a record that names nobody
+ * is the decision a kill always was.
+ */
+function killedFor(ended: RecordedEnd | 'refused' | null, uid: string | null): 'me' | 'another' | 'nobody' {
+  if (ended === 'refused') return 'me';
+  if (ended === null || (ended.reason !== 'revoked' && ended.reason !== 'kicked') || ended.endedFor === null) {
+    return 'nobody';
+  }
+  return ended.endedFor === uid ? 'me' : 'another';
+}
+
+/** whether the record says this user was kicked from it: their access is intact, so only the record stops them. */
+const kickedMe = (ended: RecordedEnd | 'refused' | null, uid: string | null): boolean =>
+  uid !== null && ended !== null && ended !== 'refused' && ended.reason === 'kicked' && ended.endedFor === uid;
+
+/**
+ * whether the record says the machine left the site: its removal ends its
+ * sessions as `machine_removed`, and its agent byes its viewers as it unpairs,
+ * the way a service stopping to come back does.
+ */
+const leftTheSite = (ended: RecordedEnd | 'refused' | null): boolean =>
+  ended !== null && ended !== 'refused' && ended.reason === 'machine_removed';
 
 interface SessionGrant {
   sid: string;
@@ -133,6 +269,12 @@ interface SessionGrant {
   signalUrl: string;
   /** the LEASE expiry, not the 60 s life of the jwt beside it. */
   expiresAt: number;
+  /**
+   * a control session's continuity token: presented on this tab's next mint
+   * in place of a passkey. kept for the tab's life (`continuityStore.ts`), so
+   * a reload keeps it and a new tab does not have it.
+   */
+  continuity?: string;
 }
 
 const EMPTY_STATS: SwoopStats = {
@@ -144,6 +286,8 @@ const EMPTY_STATS: SwoopStats = {
     gaps: 0,
     duplicates: 0,
     displayPhaseMs: null,
+    scaling: 'standard',
+    smoothEstimateMs: null,
   },
   receiver: {
     framesObserved: 0,
@@ -156,48 +300,24 @@ const EMPTY_STATS: SwoopStats = {
     unmatchedClientFramesDropped: 0,
     jitterBufferTargetApplied: null,
     requestVideoFrameCallback: false,
+    rvfcCallbacks: 0,
+    codec: null,
   },
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  linkUp: true,
+  stall: { recovery: 'none', episodes: 0, kind: null },
 };
+
+/**
+ * how long a session record read may take. a bye is settled off it before the
+ * run ends, so a read that hangs must not leave the page on a frozen picture.
+ */
+const RECORD_READ_MS = 5_000;
 
 /** how often the overlay's numbers are resampled. */
 const STATS_INTERVAL_MS = 1000;
-
-/**
- * the letterboxed picture inside the element, in client coordinates.
- *
- * `object-contain` scales the frame to fit and centres what is left over, so
- * the content box is the element box shrunk by the smaller of the two axis
- * ratios. the css in `SwoopStage` and this function are one decision: change
- * the fit or the position there and this is wrong.
- *
- * the size comes from the presenter, which already tracks `videoWidth` /
- * `videoHeight` off the element's own `resize` event — a third listener on the
- * same element would only be a second copy of the same number. before metadata
- * lands both are 0 and the element box is genuinely all anyone knows; it
- * self-corrects on the first frame.
- */
-function contentRect(video: HTMLVideoElement, width: number, height: number): DOMRect {
-  const box = video.getBoundingClientRect();
-  if (width <= 0 || height <= 0) return box;
-  const scale = Math.min(box.width / width, box.height / height);
-  const w = width * scale;
-  const h = height * scale;
-  return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
-}
-
-/** the server's own sentence, when it sent one. */
-async function problemDetail(res: Response, fallback: string): Promise<string> {
-  const body = (await res.json().catch(() => ({}))) as { detail?: string; error?: string };
-  return body.detail || body.error || fallback;
-}
-
-async function problemCode(res: Response): Promise<string | null> {
-  const body = (await res.clone().json().catch(() => ({}))) as { code?: string };
-  return typeof body.code === 'string' ? body.code : null;
-}
 
 export function useSwoopSession(
   siteId: string,
@@ -205,28 +325,69 @@ export function useSwoopSession(
   options?: { control?: boolean },
 ): UseSwoopSession {
   const control = options?.control ?? true;
-  const { mfaFactors } = useAuth();
+  const { mfaFactors, user } = useAuth();
   const enrolled = mfaFactors.totp || mfaFactors.passkeys > 0;
+  // a run's callbacks outlive the render they were made in, so they read whose page this is here
+  const uid = user?.uid ?? null;
+  const uidRef = useRef(uid);
+  useEffect(() => {
+    uidRef.current = uid;
+  }, [uid]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   const [state, setState] = useState<SwoopSessionState>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [stats, setStats] = useState<SwoopStats>(EMPTY_STATS);
   const [stepUpRequired, setStepUpRequired] = useState(false);
   const [session, setSession] = useState<SwoopSession | null>(null);
+  const [noPath, setNoPath] = useState<SwoopNoPath | null>(null);
   // bumping this is what re-runs the sequence after a step-up ceremony.
   const [attempt, setAttempt] = useState(0);
+  // the automatic reconnect: when it is due, and which rung of the ladder it
+  // is on. the rung resets once a session has held for `RETRY_RESET_MS`.
+  const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const retryIn = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const retryAttemptRef = useRef(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // the session the ladder is retrying from: its record says whether the
+  // machine ended it for a reason a retry cannot fix.
+  const lastSidRef = useRef<string | null>(null);
+  // the last session was ended by a revocation of this user, so the api
+  // refusing the ask that would bring them back is that, said plainly.
+  const revokedRef = useRef(false);
+  // bumped whenever the ladder is cleared, so a record read still in flight
+  // when the operator reconnects or ends cannot act on a run it no longer owns.
+  const retryGenRef = useRef(0);
+  // how the session before this one ended at the machine's hand, for the
+  // reasons that stop the ladder only on the second in a row.
+  const lastMachineFailureRef = useRef<string | null>(null);
+  // when this tab last replaced a frozen picture's session on its own; see `STALL_RECOVERY_CAP`.
+  const stallReconnectsRef = useRef<number[]>([]);
+  // when the machine first left an offer unanswered since its last picture; see `HOST_SILENT_LIMIT_MS`.
+  const silentSinceRef = useRef<number | null>(null);
+  // the machine said it was going away to come back, and no picture has shown since.
+  const [restarting, setRestarting] = useState(false);
+
+  const setStall = useCallback((patch: Partial<SwoopStallStats>) => {
+    setStats((prev) => ({ ...prev, stall: { ...prev.stall, ...patch } }));
+  }, []);
 
   // the proof is held in a ref, never in state: state lands in a devtools
   // snapshot and a live second-factor proof has no business being there.
   const proofRef = useRef<SwoopStepUpProof | null>(null);
-  const endRef = useRef<(reason: string) => void>(() => {});
+  const endRef = useRef<(reason: string, message?: string) => void>(() => {});
+  // the live run, let go of without a DELETE; a no-op once it has ended.
+  const abandonRef = useRef<() => void>(() => {});
   const stoppedRef = useRef(false);
 
-  const submitProof = useCallback(async (proof: SwoopStepUpProof) => {
-    proofRef.current = proof;
+  const submitProof = useCallback(async (answer: SwoopStepUpAnswer) => {
+    // a window opened in the browser is the server's to find: that retry sends no proof
+    proofRef.current = 'kind' in answer ? null : answer;
     setStepUpRequired(false);
     // exactly one retry, never a loop: a second `step_up_required` re-opens the
     // dialog through the same path and the operator decides again.
@@ -235,13 +396,175 @@ export function useSwoopSession(
 
   const cancel = useCallback(() => {
     stoppedRef.current = true;
+    setRestarting(false);
     setStepUpRequired(false);
     setState('ended');
   }, []);
 
-  const end = useCallback(() => {
-    endRef.current('closed');
+  /**
+   * a fresh session to the same machine from the ended or failed state. the
+   * effect below keys on `attempt`, so bumping it tears the old run down and
+   * starts a new one; the step-up proof is not reused (a new session is a new
+   * ceremony if the window has closed).
+   */
+  const clearRetry = useCallback(() => {
+    if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = null;
+    retryGenRef.current += 1;
+    setRetryAt(null);
   }, []);
+
+  const startNext = useCallback(() => {
+    clearRetry();
+    stoppedRef.current = false;
+    proofRef.current = null;
+    setError(null);
+    setStepUpRequired(false);
+    // a stall recovery ends here: from now on the page is simply connecting.
+    setStall({ recovery: 'none' });
+    setState('connecting');
+    setAttempt((n) => n + 1);
+  }, [clearRetry, setStall]);
+
+  /**
+   * the operator's reconnect. it may come from a live session whose picture
+   * kept freezing, which is let go of first without a DELETE: that would spend
+   * this tab's continuity, and the new session would ask for the second factor
+   * again. it is a fresh start, so the stall cap is too.
+   */
+  const reconnect = useCallback(() => {
+    stallReconnectsRef.current = [];
+    silentSinceRef.current = null;
+    abandonRef.current();
+    startNext();
+  }, [startNext]);
+
+  /**
+   * why the machine ended `sid`, when its record says it did: the agent posts
+   * a refusal to start or the streamer's exit reason as `session_ended`, and
+   * this is the page's only view of it — a host that never dialled in, or
+   * died before it answered, said nothing on the wire. null when the record
+   * is live, gone or unreadable: all of those are the ladder's to retry.
+   * `refused` when the api will not show it to this user for a reason their own
+   * access going causes (`REVOKED_REFUSALS`).
+   */
+  const recordedEnd = useCallback(
+    async (sid: string | null): Promise<RecordedEnd | 'refused' | null> => {
+      if (sid === null) return null;
+      const reading = new AbortController();
+      const timer = setTimeout(() => reading.abort(), RECORD_READ_MS);
+      try {
+        const res = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(sid)}`,
+          { signal: reading.signal },
+        );
+        if (res.status === 403 || res.status === 404) {
+          const problem = (await res.json().catch(() => ({}))) as { code?: unknown };
+          return typeof problem.code === 'string' && REVOKED_REFUSALS.has(problem.code) ? 'refused' : null;
+        }
+        if (!res.ok) return null;
+        const body = (await res.json()) as { data?: { state?: unknown; endReason?: unknown; endedFor?: unknown } };
+        const data = body.data;
+        return data?.state === 'ended' && typeof data.endReason === 'string'
+          ? { reason: data.endReason, endedFor: typeof data.endedFor === 'string' ? data.endedFor : null }
+          : null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    [siteId, machineId],
+  );
+
+  /**
+   * the end of a session that was not a decision — a lost path, a host that
+   * went away, a room that closed — is the start of the next one, after a
+   * delay that grows with each attempt. an operator who ended it, an admin
+   * who killed it, an api that refused it, and a machine that said why it
+   * cannot show a picture are decisions, and stop here. the machine's word
+   * is read when the retry is due, not at the end: its agent posts it after
+   * the streamer is gone, and the delay is what lets it land.
+   */
+  const scheduleReconnect = useCallback(() => {
+    if (stoppedRef.current || retryTimerRef.current !== null) return;
+    retryAttemptRef.current += 1;
+    const delay = backoffDelayMs(retryAttemptRef.current, RETRY_LADDER);
+    setNow(Date.now());
+    setRetryAt(Date.now() + delay);
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      setRetryAt(null);
+      const gen = retryGenRef.current;
+      void recordedEnd(lastSidRef.current).then((ended) => {
+        // the operator reconnected or ended while the record was being read
+        if (gen !== retryGenRef.current || stoppedRef.current) return;
+        const reason = ended === null || ended === 'refused' ? null : ended.reason;
+        const previous = lastMachineFailureRef.current;
+        lastMachineFailureRef.current = reason;
+        // a kick of this user stops a page that missed its bye, already between sessions
+        const kicked = kickedMe(ended, uidRef.current);
+        const why = leftTheSite(ended)
+          ? LEFT_SITE
+          : kicked
+            ? KICKED
+            : reason !== null && machineFailureStops(reason, previous)
+              ? machineFailureCopy(reason)
+              : null;
+        if (reason === null || why === null) {
+          startNext();
+          return;
+        }
+        if (kicked) lastSidRef.current = null;
+        stoppedRef.current = true;
+        setRestarting(false);
+        setStall({ recovery: 'none' });
+        setRefusal(reason);
+        setError(why);
+        setState('error');
+      });
+    }, delay);
+  }, [recordedEnd, startNext, setStall]);
+
+  const end = useCallback(() => {
+    clearRetry();
+    // a deliberate end: the next session from this tab asks again.
+    writeContinuity(siteId, machineId, null);
+    endRef.current('closed');
+  }, [clearRetry, siteId, machineId]);
+
+  // owlette swoop fires this before it closes a swoop window, so the session ends with its DELETE.
+  useEffect(() => {
+    if (!isViewerApp()) return;
+    window.addEventListener('owlette:close', end);
+    return () => window.removeEventListener('owlette:close', end);
+  }, [end]);
+
+  // a machine still gone after this long is not restarting, and an offline one
+  // is retried forever without ever reaching the silent limit that would say so.
+  useEffect(() => {
+    if (!restarting) return;
+    const timer = setTimeout(() => setRestarting(false), HOST_SILENT_LIMIT_MS);
+    return () => clearTimeout(timer);
+  }, [restarting]);
+
+  // the countdown the page shows, once a second.
+  useEffect(() => {
+    if (retryAt === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [retryAt]);
+
+  // a session that held for a while starts the next ladder from the bottom.
+  useEffect(() => {
+    if (state !== 'connected') return;
+    const timer = setTimeout(() => {
+      retryAttemptRef.current = 0;
+    }, RETRY_RESET_MS);
+    return () => clearTimeout(timer);
+  }, [state]);
+
+  useEffect(() => clearRetry, [clearRetry]);
 
   useEffect(() => {
     if (!siteId || !machineId) return;
@@ -253,11 +576,19 @@ export function useSwoopSession(
     let receiver: SwoopReceiver | null = null;
     let presenter: SwoopPresenter | null = null;
     let statsTimer: ReturnType<typeof setInterval> | null = null;
+    let reattachTimer: ReturnType<typeof setTimeout> | null = null;
     let grant: SessionGrant | null = null;
     let leaseExpiresAt = 0;
     // the create route already minted one, good for 60 s. spend it on the first
     // dial rather than asking the lease route for a second.
     let pendingJwt: string | null = null;
+    // this run ends on an unanswered offer; any other end starts `HOST_SILENT_LIMIT_MS` again.
+    let silentEnd = false;
+    // a kill's bye, or a restart's, is read off the record before the run ends
+    // on it, and until then only the operator's own end may end it: a run that
+    // left first would say how it ended, fullscreen and owlette swoop's window
+    // with it, before it knew.
+    let settling = false;
 
     const detachers: SwoopDetach[] = [];
     // the overlay's per-stage numbers come off one frame, resampled on the
@@ -265,12 +596,6 @@ export function useSwoopSession(
     let latestFrame: FrameObservation | null = null;
     const frameHandlers = new Set<(observation: FrameObservation) => void>();
     const channelHandlers = new Map<SwoopChannel, Set<(data: unknown) => void>>();
-
-    const fail = (message: string) => {
-      if (disposed) return;
-      setError(message);
-      setState('error');
-    };
 
     const sendOnChannel = (label: SwoopChannel, data: string): boolean => {
       const channel = peer?.channel(label);
@@ -283,6 +608,7 @@ export function useSwoopSession(
       if (disposed) return;
       disposed = true;
       if (statsTimer !== null) clearInterval(statsTimer);
+      if (reattachTimer !== null) clearTimeout(reattachTimer);
       setSession(null);
       for (const detach of detachers.reverse()) {
         try {
@@ -295,26 +621,79 @@ export function useSwoopSession(
       receiver?.stop();
       peer?.close();
       signaling?.close(1000, reason);
-      if (grant) {
-        // best effort: the record ends server-side and the streamer is stopped
-        // over two independent paths, so a lost beacon costs the user nothing.
+      // only a deliberate end tells the server. a DELETE fans out into kills
+      // that can land on the next session, and spends this tab's continuity,
+      // so a path that may come back sends none, and nor does a run settling
+      // a bye: the machine ended it.
+      if (grant && !settling && (reason === 'closed' || reason === 'unmounted')) {
+        // best effort: this viewer's seat goes server-side, and the last one out
+        // ends the record and stops the streamer over two independent paths, so
+        // a lost beacon costs the user nothing. `viewerReason` is why this page
+        // ended it — a caller cannot claim a host-recorded `endReason`, but the
+        // audit trail needs the page's own.
         void fetch(
           `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(grant.sid)}`,
           {
             method: 'DELETE',
             keepalive: true,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ endReason: 'closed' }),
+            body: JSON.stringify({ endReason: 'closed', viewerReason: reason, viewerId: grant.viewerId }),
           },
         ).catch(() => undefined);
       }
     };
 
-    endRef.current = (reason: string) => {
-      stoppedRef.current = true;
+    // the one way out of a run. it is torn down first, so none of its timers
+    // or sockets outlive the end; then a path that may come back walks the
+    // ladder, and a decision stops it along with any retry already due.
+    const leave = (reason: string, next: 'ended' | 'error', message?: string) => {
+      if (disposed || (settling && reason !== 'closed')) return;
       teardown(reason);
-      setState('ended');
+      if (!silentEnd) silentSinceRef.current = null;
+      if (message !== undefined) setError(message);
+      setState(next);
+      // only the stall's own end leaves its notice up, for the reconnect it waits on.
+      if (reason !== 'picture_stalled') setStall({ recovery: 'none' });
+      if (isTransientEnd(reason)) {
+        scheduleReconnect();
+      } else {
+        stoppedRef.current = true;
+        setRestarting(false);
+        clearRetry();
+      }
     };
+
+    // `transient` is the difference between a path that may come back and a
+    // decision: the first schedules the next session, the second waits for
+    // the operator.
+    const fail = (message: string, transient: boolean) =>
+      leave(transient ? 'start_failed' : 'refused', 'error', message);
+
+    // the machine is no longer in the site: nothing will come back to reconnect to.
+    const stopForMachineLeft = () => {
+      if (!disposed) setRefusal('machine_removed');
+      fail(LEFT_SITE, false);
+    };
+
+    /**
+     * a bye that needs the record to say what it was: the run waits on the read
+     * (`settling`) and goes on unless it ended meanwhile, and a record that says
+     * the machine left the site stops it whatever the bye said.
+     */
+    const settleBye = (sid: string, then: (ended: RecordedEnd | 'refused' | null) => void) => {
+      settling = true;
+      void recordedEnd(sid).then((ended) => {
+        // the operator ended, reconnected or left while it was read
+        if (disposed) return;
+        settling = false;
+        if (leftTheSite(ended)) stopForMachineLeft();
+        else then(ended);
+      });
+    };
+
+    const finish = (reason: string, message?: string) => leave(reason, 'ended', message);
+    endRef.current = finish;
+    abandonRef.current = () => teardown('restart');
 
     const renewLease = async (fp: string): Promise<SwoopLease> => {
       if (!grant) throw new Error('swoop: no session to renew');
@@ -327,13 +706,13 @@ export function useSwoopSession(
         },
       );
       if (!res.ok) {
-        const detail = await problemDetail(res, 'the session lease could not be renewed.');
-        // 401/403 is the authorisation going away — what the lease exists to
-        // catch. everything else is a failure the renewer may retry.
-        if (res.status === 401 || res.status === 403) {
-          throw new SwoopLeaseRefused(res.status, detail);
+        const problem = (await res.json().catch(() => ({}))) as { code?: unknown };
+        // the stage names a plan refusal and the way to upgrade; every other
+        // withdrawal ends on the api's own sentence.
+        if (isPlanRefusal(res.status, typeof problem.code === 'string' ? problem.code : null) && !disposed) {
+          setRefusal('plan_required');
         }
-        throw new Error(detail);
+        throw leaseFailure(res.status, problem);
       }
       const body = (await res.json()) as { data: SwoopLease };
       leaseExpiresAt = body.data.expiresAt;
@@ -351,15 +730,25 @@ export function useSwoopSession(
         pendingJwt = null;
         return spent;
       }
-      return (await renewLease(fp)).viewerJwt;
+      try {
+        return (await renewLease(fp)).viewerJwt;
+      } catch (err) {
+        // a withdrawal ends the session here rather than a lease later; any
+        // other failure is the signalling ladder's to wait out.
+        if (err instanceof SwoopLeaseRefused) finish('lease_refused', err.message);
+        throw err;
+      }
     };
 
-    const createSession = async (fp: string): Promise<SessionGrant | null> => {
+    const createSession = async (fp: string, wantControl = control): Promise<SessionGrant | null> => {
       const clientCaps = await probeClientCaps();
       // a proof only ever belongs to the run the ceremony asked for; the first
       // attempt cannot have one.
       const proof = attempt > 0 ? proofRef.current : null;
       proofRef.current = null;
+      // no proof in hand: the last control session's continuity stands in,
+      // and the server decides whether it still counts.
+      const continuity = proof || !wantControl ? null : readContinuity(siteId, machineId);
 
       const res = await fetch(
         `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions`,
@@ -368,65 +757,137 @@ export function useSwoopSession(
           headers: { 'Content-Type': 'application/json' },
           // the proof crosses exactly as the ceremony produced it.
           body: JSON.stringify({
-            control,
+            control: wantControl,
             fp,
             clientCaps,
             ...(proof ? { mfaProof: proof } : {}),
+            ...(continuity ? { continuity } : {}),
           }),
         },
       );
       if (!res.ok) {
-        if (res.status === 401 && (await problemCode(res)) === 'step_up_required') {
+        // one read of the body: every branch below wants both the code and the
+        // sentence.
+        const problem = (await res.json().catch(() => ({}))) as {
+          code?: string;
+          detail?: string;
+          error?: string;
+          errors?: Record<string, unknown>;
+        };
+        const code = typeof problem.code === 'string' ? problem.code : null;
+        // a machine id the api refuses outright (a hostname with a dot, seeded
+        // before the agent trimmed them) is fixed by pairing again, not by
+        // the api's sentence about its format.
+        const badMachineId = res.status === 400 && problem.errors !== undefined && 'machineId' in problem.errors;
+        const detail = badMachineId
+          ? "this machine's id is not one swoop can use. leave the site from its tray, then pair it again."
+          : problem.detail || problem.error || 'this swoop session could not be started.';
+        // the control ask is refused with `capability_missing` when the
+        // person's site role or swoop mode does not include control, and the
+        // viewer then asks to watch. once, and only for that refusal.
+        if (wantControl && controlRefusedForCapability(res.status, code, detail)) {
+          return createSession(fp, false);
+        }
+        if (revokedRef.current && code !== null && REVOKED_REFUSALS.has(code)) {
+          if (!disposed) setRefusal('revoked');
+          fail(ACCESS_REMOVED, false);
+          return null;
+        }
+        // a machine that left the site from its own tray, or a stale link, is
+        // answered for here; one removed from the dashboard says so on its record.
+        if (res.status === 404 && code === 'machine_not_found') {
+          stopForMachineLeft();
+          return null;
+        }
+        if (res.status === 401 && code === 'step_up_required') {
           if (!disposed) {
             setStepUpRequired(true);
             setState('authorizing');
           }
           return null;
         }
-        fail(await problemDetail(res, 'this swoop session could not be started.'));
+        // only the api's own answer is final: a policy or plan refusal, a
+        // request it could not read, a site or machine that is not there. a
+        // lapsed login, a machine briefly offline, an edge in front of the app
+        // or a bad moment may all come back, and the ladder waits them out.
+        const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
+        if (final && !disposed) setRefusal(code);
+        // the operator has something to do, which a restart notice would hide.
+        if (res.status === 401 && !disposed) setRestarting(false);
+        fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
+      revokedRef.current = false;
+      // a fresh token per session; a watch grant carries none and clears it.
+      writeContinuity(siteId, machineId, body.data.continuity ?? null);
       return body.data;
     };
 
     const run = async () => {
       const video = videoRef.current;
+      const canvas = canvasRef.current;
       const stage = stageRef.current;
-      if (!video || !stage) return;
+      if (!video || !canvas || !stage) return;
 
       setState('authorizing');
       setError(null);
+      setRefusal(null);
 
       const identity = await createSwoopIdentity();
       if (disposed) return;
 
       grant = await createSession(identity.fingerprint);
       if (!grant || disposed) return;
+      lastSidRef.current = grant.sid;
 
       pendingJwt = grant.viewerJwt;
       leaseExpiresAt = grant.expiresAt;
 
       const viewerKey = base64UrlDecode(grant.k);
       if (!viewerKey) {
-        fail('the session key the server sent could not be read.');
+        fail('the session key the server sent could not be read.', false);
         return;
       }
 
       setState('connecting');
+      setNoPath(null);
+
+      const { sid, viewerId } = grant;
+      // the picture's own watchdog: the transport can be alive while it is dead.
+      const detector = createStallDetector();
+      // the picture's first play, not the peer's: until then nothing should move.
+      let connected = false;
+      // the receiver's counters where suspicion began; the declaration reads them again.
+      let suspectStats: Promise<InboundVideoStats | null> | null = null;
+      let stallEpisode = false;
+      // past the cap: the session is up, the picture is not, and the operator decides.
+      let frozen = false;
+      // the element has counted a frame of this stream at least once.
+      let counted = false;
+      let rvfcWarned = false;
 
       receiver = new SwoopReceiver({
         video,
         onFrame: (observation) => {
           latestFrame = observation;
           presenter?.observe(observation);
-          for (const handler of frameHandlers) handler(observation);
+          for (const handler of frameHandlers) {
+            try {
+              handler(observation);
+            } catch (err) {
+              // one subscriber failing must not starve the rest of the frame,
+              // and must not fail unseen either.
+              console.error('[swoop] a frame subscriber threw', err);
+            }
+          }
         },
+        onPresent: (metadata) => presenter?.present(metadata),
         onIdrRequest: () => {
           sendOnChannel('swoop-control', encodeControlMessage({ t: 'idr' }));
         },
       });
-      presenter = createPresenter(video);
+      presenter = createPresenter(video, { canvas, smooth: smoothActive });
 
       const signalingOptions = {
         roomUrl: grant.signalUrl,
@@ -435,17 +896,14 @@ export function useSwoopSession(
           void peer?.handleSignal(message);
         },
         onStatus: (signal: SwoopSignalStatus) => {
-          if (!disposed) setStats((prev) => ({ ...prev, signal }));
+          if (disposed) return;
+          setStats((prev) => ({ ...prev, signal }));
+          // an answer can only come back over an open socket, so the peer's
+          // wait for one runs only while it is.
+          peer?.signalOpen(signal === 'open');
         },
-        onFatal: (code: SwoopSignalFatal) => {
-          if (code === 'version_mismatch') {
-            fail('this machine runs a swoop version this page cannot talk to.');
-          } else if (code === 'mint_failed') {
-            fail('this session is no longer authorised.');
-          } else {
-            // close 1006 carries no reason, so neither does this sentence.
-            fail('the signalling connection closed without a reason. try again.');
-          }
+        onFatal: () => {
+          fail('this machine runs a swoop version this page cannot talk to.', false);
         },
       };
 
@@ -456,7 +914,7 @@ export function useSwoopSession(
         // operator typed, so a url the constructor refuses is a server fault
         // they cannot retry their way out of — say so, and never echo the url
         // or the protocol back at them.
-        fail('swoop is misconfigured on this deployment: the signalling address is not a secure websocket address. an administrator has to fix it.');
+        fail('swoop is misconfigured on this deployment: the signalling address is not a secure websocket address. an administrator has to fix it.', false);
         return;
       }
 
@@ -466,15 +924,20 @@ export function useSwoopSession(
         viewerId: grant.viewerId,
         viewerKey,
         iceServers: grant.iceServers,
+        codec: readCodecChoice(siteId, machineId),
         send: (message) => signaling?.send(message),
         refreshToken: () => signaling?.refresh() ?? Promise.resolve(),
         leaseToken: () => mintViewerToken(identity.fingerprint),
+        onNoPath: (value) => {
+          if (!disposed) setNoPath(value);
+        },
         onTrack: (stream, rtpReceiver) => {
           // two tracks arrive now, and only one of them is a picture: audio is
           // its own m-line and `lib/swoop/audio.ts` takes it off the connection
           // itself. handed to the receiver it would point the `<video>` at a
           // stream with no frames in it.
           if (rtpReceiver.track.kind !== 'video') return;
+          detector.reset();
           // `attachTrack` reads exactly these two fields off the track event,
           // and the peer has already split them apart for us.
           receiver?.attachTrack({
@@ -482,7 +945,16 @@ export function useSwoopSession(
             receiver: rtpReceiver,
           } as unknown as RTCTrackEvent);
           void receiver?.start().then(() => {
-            if (!disposed) setState('connected');
+            if (disposed) return;
+            connected = true;
+            silentSinceRef.current = null;
+            setRestarting(false);
+            setState('connected');
+            // a picture clears the machine's record: the next failure is a first one
+            lastMachineFailureRef.current = null;
+            // a picture from it is a session the machine let in, so a record
+            // naming it as this browser's own is stale
+            clearThisMachine(siteId, machineId);
           });
         },
         onChannelOpen: (label, channel) => {
@@ -495,21 +967,83 @@ export function useSwoopSession(
         },
         onError: (code) => {
           if (code === 'host_mac_mismatch' || code === 'host_fingerprint_missing') {
-            fail('this machine could not prove it is the one you asked for; the session was refused.');
+            fail('this machine could not prove it is the one you asked for; the session was refused.', false);
           } else if (code === 'playout_delay_not_negotiated') {
-            fail('this machine did not agree the low-latency terms swoop requires.');
+            fail('this machine did not agree the low-latency terms swoop requires.', false);
+          } else if (code === 'host_silent') {
+            silentEnd = true;
+            silentSinceRef.current ??= Date.now();
+            if (Date.now() - silentSinceRef.current >= HOST_SILENT_LIMIT_MS) {
+              fail(HOST_SILENT_FINAL, false);
+            } else {
+              fail('this machine did not answer.', true);
+            }
           } else {
-            fail('the connection to this machine failed.');
+            fail('the connection to this machine failed.', true);
           }
         },
         onClosed: (reason) => {
           if (disposed) return;
           if (reason === 'kill') {
-            setError('this session was ended from elsewhere.');
-            setState('ended');
-          } else if (reason !== 'closed') {
-            setState('ended');
+            // an admin's kill or a stop from the machine itself: decisions,
+            // which a retry would undo. a revocation is not one of them for
+            // anybody, nor is a kick of someone else (`killedFor`): either
+            // ends the session for everyone in it, and they come back on the
+            // ladder, where the api decides what each may do now. a removed
+            // member is refused, which says so, and someone whose control was
+            // taken comes back watching. a kick of this user is final, on the
+            // record's word: their access is intact, so the api would let
+            // them straight back in, and only their own reconnect does.
+            // another tab or device opening the machine joins this session
+            // rather than replacing it. a 4.0.x service stop or update byes
+            // its viewers this way too; later agents say `restart`, below.
+            settleBye(sid, (ended) => {
+              if (kickedMe(ended, uidRef.current)) {
+                // their rejoin starts from no session, so one that fails on the way
+                // goes on the ladder rather than reading this kick again
+                lastSidRef.current = null;
+                writeContinuity(siteId, machineId, null);
+                if (!disposed) setRefusal('kicked');
+                fail(KICKED, false);
+                return;
+              }
+              const whom = killedFor(ended, uidRef.current);
+              if (whom === 'nobody') {
+                // a decision: the next session from this tab asks again.
+                writeContinuity(siteId, machineId, null);
+                finish('kill', 'this session was ended from elsewhere.');
+                return;
+              }
+              // the one it was for has nothing left to carry over, and the
+              // api's word on the way back is theirs to read as the revocation.
+              if (whom === 'me') {
+                revokedRef.current = true;
+                writeContinuity(siteId, machineId, null);
+              }
+              finish('host_gone');
+            });
+            return;
           }
+          if (reason === 'same_machine') {
+            // the machine saw this browser reach it at one of its own
+            // addresses. a decision, and the dashboard greys it out from now on.
+            markThisMachine(siteId, machineId);
+            finish('same_machine', "you're on this machine. swoop opens other computers, not the one you're using.");
+            return;
+          }
+          if (reason === 'restart') {
+            // a service stopping to come back, and one stopping as its machine
+            // leaves the site, both bye this way: the record says which, before
+            // the page says the machine is restarting.
+            settleBye(sid, () => {
+              setRestarting(true);
+              finish('host_gone');
+            });
+            return;
+          }
+          // a host that let this viewer go, or a streamer that exited on its
+          // own: no decision, so the next session finds it back.
+          finish('host_gone');
         },
       });
 
@@ -527,12 +1061,13 @@ export function useSwoopSession(
         fingerprint: identity.fingerprint,
         video,
         stage,
-        contentRect: () => {
-          const size = presenter?.stats();
-          return contentRect(video, size?.width ?? 0, size?.height ?? 0);
-        },
+        // the element's own rect: useSwoopView lays the video out as the picture's box,
+        // and the rect includes the local zoom's transform. before the first frame
+        // that box is the whole area, which is all anyone knows then.
+        contentRect: () => video.getBoundingClientRect(),
         peer,
         presenter,
+        inboundStats: async () => (await receiver?.inboundStats()) ?? null,
         send: sendOnChannel,
         onChannelMessage: (label, handler) => {
           const handlers = channelHandlers.get(label) ?? new Set<(data: unknown) => void>();
@@ -550,36 +1085,239 @@ export function useSwoopSession(
         },
         renewLease: () => renewLease(identity.fingerprint),
         leaseExpiresAt: () => leaseExpiresAt,
-        end: (reason) => endRef.current(reason),
+        end: finish,
+        restart: () => {
+          // torn down on a reason that sends no DELETE first: a DELETE spends
+          // this tab's continuity, and the next session would ask for the
+          // second factor again.
+          teardown('restart');
+          startNext();
+        },
       };
 
       for (const feature of SWOOP_FEATURES) detachers.push(feature.attach(live));
       setSession(live);
 
+      // whether anything could be seen at all: a picture up, its link up, the tab in front.
+      const watchable = (): boolean =>
+        connected && peer?.linkUp() === true && document.visibilityState === 'visible';
+
+      // what the element can show: playing a frame in a box on screen. 2 is
+      // HAVE_CURRENT_DATA, a frame in hand.
+      const elementPlaying = (): boolean => !video.paused && video.readyState >= 2;
+
+      // the watchdog judges only a picture that should be moving and can be seen.
+      const pictureGate = (): boolean => {
+        if (!watchable() || !elementPlaying()) return false;
+        const box = video.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      };
+
+      const playbackQuality = (): VideoPlaybackQuality | null =>
+        typeof video.getVideoPlaybackQuality === 'function' ? video.getVideoPlaybackQuality() : null;
+
+      const elementShown = (quality = playbackQuality()): number =>
+        quality ? quality.totalVideoFrames - quality.droppedVideoFrames : 0;
+      // under smooth scaling's canvas the video sits at opacity 0, where chromium
+      // counts its every frame dropped, so the canvas's draws count as shown (stall.ts)
+      const drawnFrames = (): number => presenter?.drawnFrames ?? 0;
+
+      // anything that changes what the watchdog compares against starts its judgement again.
+      const rebaseline = () => detector.reset();
+      document.addEventListener('visibilitychange', rebaseline);
+      document.addEventListener('fullscreenchange', rebaseline);
+      video.addEventListener('resize', rebaseline);
+      peer.connection.addEventListener('iceconnectionstatechange', rebaseline);
+      detachers.push(() => {
+        document.removeEventListener('visibilitychange', rebaseline);
+        document.removeEventListener('fullscreenchange', rebaseline);
+        video.removeEventListener('resize', rebaseline);
+        peer?.connection.removeEventListener('iceconnectionstatechange', rebaseline);
+      });
+
+      const reportStall = (report: SwoopStallReport) => {
+        // best effort: a lost report costs a log line, never the recovery.
+        void fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(sid)}/stall`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report),
+          },
+        ).catch(() => undefined);
+      };
+
+      // the automatic reconnects inside the window, oldest first.
+      const recentReconnects = (at: number): number[] =>
+        stallReconnectsRef.current.filter((when) => at - when < STALL_RECOVERY_WINDOW_MS);
+
+      // a new session, and so a new decoder: the transient end the reconnect
+      // ladder answers. past the cap the session stays up instead, frozen,
+      // and the operator's reconnect is the way on.
+      const replacePicture = () => {
+        const at = Date.now();
+        const recent = recentReconnects(at);
+        if (recent.length >= STALL_RECOVERY_CAP) {
+          stallReconnectsRef.current = recent;
+          frozen = true;
+          setStall({ recovery: 'frozen' });
+          return;
+        }
+        stallReconnectsRef.current = [...recent, at];
+        setStall({ recovery: 'reconnecting' });
+        finish('picture_stalled');
+      };
+
+      // what has been shown so far, to tell later frames by.
+      const presentedMark = () => ({
+        element: elementShown(),
+        drawn: drawnFrames(),
+        rvfc: receiver?.diagnostics().rvfcCallbacks ?? 0,
+      });
+
+      // whether the reloaded element has shown a frame since `mark`, itself or
+      // through the canvas. the element's counters restart with the reload, so
+      // a lower count is all new; the canvas's carry on.
+      const recoveredSince = (mark: ReturnType<typeof presentedMark>): boolean => {
+        if (!elementPlaying()) return false;
+        const element = elementShown();
+        const fresh = (element < mark.element ? element : element - mark.element) + drawnFrames() - mark.drawn;
+        return fresh > 0 || (receiver?.diagnostics().rvfcCallbacks ?? 0) > mark.rvfc;
+      };
+
+      // one look, a grace after the reload. nothing could have shown with the
+      // tab hidden or the link down, so that waits a whole grace more; a paused
+      // element or one with no frame is a reload that failed, and escalates.
+      const checkReattach = (mark: ReturnType<typeof presentedMark>) => {
+        reattachTimer = setTimeout(() => {
+          reattachTimer = null;
+          if (disposed) return;
+          if (!watchable()) {
+            checkReattach(presentedMark());
+            return;
+          }
+          if (!recoveredSince(mark)) {
+            replacePicture();
+            return;
+          }
+          stallEpisode = false;
+          setStall({ recovery: 'none' });
+        }, REATTACH_GRACE_MS);
+      };
+
+      // a renderer that stopped painting decoded frames may only need the
+      // element reloaded; a new session if that shows nothing either.
+      const reattachPicture = () => {
+        setStall({ recovery: 'reattaching' });
+        const mark = presentedMark();
+        detector.reset();
+        void receiver?.reattach().catch(() => undefined);
+        checkReattach(mark);
+      };
+
+      const declareStall = async (
+        evidence: NonNullable<StallTick['evidence']>,
+        diagnostics: SwoopReceiverDiagnostics,
+      ) => {
+        if (stallEpisode) return;
+        stallEpisode = true;
+        const [before, after] = await Promise.all([suspectStats, receiver?.inboundStats() ?? null]);
+        suspectStats = null;
+        if (disposed) return;
+
+        const kind = classifyStall(before, after);
+        // chrome has no software fallback for h.265, so a dead hevc decoder
+        // stays dead in this tab: whichever session comes next, automatic or
+        // the operator's, offers h.264 alone.
+        const hevc = after?.codecMimeType?.toLowerCase() === 'video/h265' || diagnostics.codec === 'hevc';
+        if (kind === 'decode' && hevc) writeCodecChoice(siteId, machineId, 'h264');
+
+        const action: StallAction =
+          kind === 'render'
+            ? 'reattach'
+            : recentReconnects(Date.now()).length < STALL_RECOVERY_CAP
+              ? 'reconnect'
+              : 'none';
+        reportStall({
+          viewerId,
+          kind,
+          action,
+          codec: diagnostics.codec,
+          stalledMs: Math.round(evidence.windowMs),
+          hostFrames: evidence.hostFrames,
+          before,
+          after,
+        });
+        setStats((prev) => ({ ...prev, stall: { ...prev.stall, episodes: prev.stall.episodes + 1, kind } }));
+
+        if (action === 'reattach') reattachPicture();
+        else replacePicture();
+      };
+
+      const watchPicture = (diagnostics: SwoopReceiverDiagnostics) => {
+        const quality = playbackQuality();
+        // a reload restarts the element's counters, so this is sticky.
+        if (quality && quality.totalVideoFrames > 0) counted = true;
+        const tick = detector.tick({
+          hostFrames: diagnostics.metaRecords,
+          totalFrames: quality?.totalVideoFrames ?? 0,
+          shownFrames: elementShown(quality) + drawnFrames(),
+          rvfcCallbacks: diagnostics.requestVideoFrameCallback ? diagnostics.rvfcCallbacks : null,
+          // nothing to judge by without the element's own counters, and a
+          // browser that has never counted a frame of this stream may not count
+          // them at all: armed on that, it would call every session frozen.
+          gated: quality !== null && counted && pictureGate(),
+        });
+        if (tick.rvfcSilent) {
+          if (!rvfcWarned) console.warn('[swoop] rvfc chain silent; re-armed');
+          rvfcWarned = true;
+          receiver?.rearmFrameCallback();
+        }
+        // `getStats()` is read only around a stall, never on every tick.
+        if (tick.change === 'suspect') {
+          suspectStats = receiver?.inboundStats() ?? null;
+        } else if (tick.change === 'cleared') {
+          suspectStats = null;
+          // a frozen picture that came back on its own: the alert goes, and
+          // the next freeze is judged afresh.
+          if (frozen) {
+            frozen = false;
+            stallEpisode = false;
+            setStall({ recovery: 'none' });
+          }
+        } else if (tick.change === 'stalled' && tick.evidence) {
+          void declareStall(tick.evidence, diagnostics);
+        }
+      };
+
       statsTimer = setInterval(() => {
         if (disposed) return;
+        const diagnostics = receiver?.diagnostics() ?? null;
+        if (diagnostics) watchPicture(diagnostics);
         setStats((prev) => ({
-          signal: prev.signal,
+          ...prev,
           presenter: presenter?.stats() ?? prev.presenter,
-          receiver: receiver?.diagnostics() ?? prev.receiver,
+          receiver: diagnostics ?? prev.receiver,
           frame: latestFrame,
           feedback: swoopFeedback(live)?.diagnostics() ?? null,
           leaseExpiresAt,
+          // only a session with a picture has a link to lose.
+          linkUp: !connected || (peer?.linkUp() ?? true),
         }));
       }, STATS_INTERVAL_MS);
     };
 
     void run().catch((err: unknown) => {
-      fail(err instanceof Error ? err.message : 'this swoop session could not be started.');
+      fail(err instanceof Error ? err.message : 'this swoop session could not be started.', true);
     });
 
     return () => teardown('unmounted');
-  }, [siteId, machineId, control, attempt]);
+  }, [siteId, machineId, control, attempt, recordedEnd, scheduleReconnect, clearRetry, startNext, setStall]);
 
   const stepUp = useMemo<SwoopStepUpControls>(
     () => ({ required: stepUpRequired, enrolled, submitProof, cancel }),
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, stats, session, videoRef, stageRef, stepUp, end };
+  return { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting };
 }

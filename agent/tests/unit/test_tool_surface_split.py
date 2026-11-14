@@ -168,6 +168,7 @@ def test_check_pending_reboot_shim_reaches_the_posix_arm(linux, monkeypatch):
     assert mcp_tools.check_pending_reboot({}, None) == {
         'pending': True,
         'reasons': ['package_update'],
+        'file_renames': False,
         'last_update_installed': None,
         'next_scheduled_update': None,
     }
@@ -300,6 +301,15 @@ def test_run_command_uses_the_posix_allow_list(linux, tracked):
 
 def test_run_command_refuses_a_windows_only_command_off_windows(linux, tracked):
     result = mcp_tools.execute_tool('run_command', {'command': 'ipconfig /all'})
+
+    assert 'not in the allow-list' in result['error']
+    assert tracked == []
+
+
+@pytest.mark.parametrize('command', ['env', 'env sh -c id'])
+def test_run_command_refuses_env_off_windows(linux, tracked, command):
+    # env runs the command after it, so it is not an allow-listed command itself
+    result = mcp_tools.execute_tool('run_command', {'command': command})
 
     assert 'not in the allow-list' in result['error']
     assert tracked == []
@@ -613,10 +623,10 @@ def test_pending_reboot_reads_the_debian_marker(linux, monkeypatch):
 
     assert result['pending'] is False
     assert result['reasons'] == []
-    # The same four keys the Windows arm returns: osadapter.pending_reboot() is
+    # The same five keys the Windows arm returns: osadapter.pending_reboot() is
     # one shape on all three platforms.
     assert set(result) == {
-        'pending', 'reasons', 'last_update_installed', 'next_scheduled_update',
+        'pending', 'reasons', 'file_renames', 'last_update_installed', 'next_scheduled_update',
     }
 
 
@@ -690,6 +700,7 @@ def test_pending_reboot_on_macos_is_an_update_prepared_for_a_restart(mac_updates
     assert result == {
         'pending': True,
         'reasons': ['os_update_prepared'],
+        'file_renames': False,
         'last_update_installed': '2026-07-28T12:24:20Z',
         'next_scheduled_update': None,
     }
@@ -760,7 +771,7 @@ def test_a_mac_with_no_update_state_is_not_pending(macos, ran, tmp_path, monkeyp
         monkeypatch.setattr(tools_posix, name, str(tmp_path / 'absent' / '{}'))
 
     assert mcp_tools.execute_tool('check_pending_reboot', {}) == {
-        'pending': False, 'reasons': [],
+        'pending': False, 'reasons': [], 'file_renames': False,
         'last_update_installed': None, 'next_scheduled_update': None,
     }
 

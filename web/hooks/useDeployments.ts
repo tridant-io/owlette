@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { firestoreTsToMs, type FirestoreTs } from './useFirestore';
+import { ApiRequestError, firestoreTsToMs, type FirestoreTs } from './useFirestore';
 
 export interface DeploymentTemplate {
   id: string;
@@ -26,6 +26,8 @@ export interface DeploymentTarget {
   completedAt?: FirestoreTs;
   cancelledAt?: FirestoreTs;
   uninstalledAt?: FirestoreTs;
+  /** on a `failed` target, the command that failed (`install_software` or `uninstall_software`). */
+  failedCommandType?: string;
 }
 
 export interface Deployment {
@@ -43,6 +45,11 @@ export interface Deployment {
   createdAt: FirestoreTs;
   completedAt?: FirestoreTs;
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'partial' | 'cancelled' | 'uninstalled';
+}
+
+export interface DeploymentRequestOptions {
+  /** a person's reason to install inside active hours, sent as `active_hours_override`. */
+  override?: { reason: string };
 }
 
 export function useDeploymentTemplates(siteId: string) {
@@ -109,7 +116,7 @@ export function useDeploymentTemplates(siteId: string) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(template),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to create deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to create deployment template'));
 
     const result = await response.json();
     return result.templateId as string;
@@ -123,7 +130,7 @@ export function useDeploymentTemplates(siteId: string) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(template),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to update deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to update deployment template'));
   };
 
   const deleteTemplate = async (templateId: string) => {
@@ -132,7 +139,7 @@ export function useDeploymentTemplates(siteId: string) {
     const response = await fetch(`${deploymentTemplateUrl(siteId)}/${encodeURIComponent(templateId)}`, {
       method: 'DELETE',
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to delete deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to delete deployment template'));
   };
 
   return { templates, loading, error, createTemplate, updateTemplate, deleteTemplate };
@@ -206,7 +213,8 @@ export function useDeployments(siteId: string) {
 
   const createDeployment = async (
     deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>,
-    machineIds: string[]
+    machineIds: string[],
+    options: DeploymentRequestOptions = {},
   ) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
 
@@ -221,6 +229,7 @@ export function useDeployments(siteId: string) {
       ...(deployment.suppress_projects?.length ? { suppress_projects: deployment.suppress_projects } : {}),
       ...(deployment.parallel_install ? { parallel_install: true } : {}),
       ...(deployment.sha256_checksum ? { sha256_checksum: deployment.sha256_checksum } : {}),
+      ...overrideBody(options),
     };
 
     const response = await fetch(deploymentsUrl(siteId), {
@@ -231,7 +240,7 @@ export function useDeployments(siteId: string) {
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to create deployment'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to create deployment'));
 
     const result = await response.json();
     return result.deploymentId as string;
@@ -242,8 +251,13 @@ export function useDeployments(siteId: string) {
    * specific machines; omitted → all failed targets. The server self-heals a
    * missing sha256_checksum from the installer URL, so legacy deployments retry
    * cleanly (slow for large installers — the server streams and hashes).
+   * The original request's override does not carry over: a retry sends its own.
    */
-  const retryDeployment = async (deploymentId: string, machineIds?: string[]) => {
+  const retryDeployment = async (
+    deploymentId: string,
+    machineIds?: string[],
+    options: DeploymentRequestOptions = {},
+  ) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
 
     const response = await fetch(`${deploymentsUrl(siteId)}/${encodeURIComponent(deploymentId)}/retry`, {
@@ -252,18 +266,20 @@ export function useDeployments(siteId: string) {
         'content-type': 'application/json',
         'Idempotency-Key': makeIdempotencyKey(`deployment-retry-${deploymentId}`),
       },
-      body: JSON.stringify(machineIds?.length ? { machines: machineIds } : {}),
+      body: JSON.stringify({
+        ...(machineIds?.length ? { machines: machineIds } : {}),
+        ...overrideBody(options),
+      }),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to retry deployment'));
+    if (!response.ok) throw await readApiRequestError(response, 'failed to retry deployment');
 
     const result = await response.json();
     return result.retried as number;
   };
 
-  const cancelDeployment = async (deploymentId: string, machineId: string, installer_name: string) => {
+  /** cancels one machine's target; the rest of the deployment carries on. */
+  const cancelDeployment = async (deploymentId: string, machineId: string) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
-    void machineId;
-    void installer_name;
 
     const response = await fetch(`${deploymentsUrl(siteId)}/${encodeURIComponent(deploymentId)}/cancel`, {
       method: 'POST',
@@ -271,11 +287,9 @@ export function useDeployments(siteId: string) {
         'content-type': 'application/json',
         'Idempotency-Key': makeIdempotencyKey(`deployment-cancel-${deploymentId}`),
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ machines: [machineId] }),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to cancel deployment'));
-
-    return `cancel-deployment-${deploymentId}`;
+    if (!response.ok) throw await readApiRequestError(response, 'failed to cancel deployment');
   };
 
   const deleteDeployment = async (deploymentId: string) => {
@@ -289,7 +303,7 @@ export function useDeployments(siteId: string) {
       },
       body: JSON.stringify({}),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to delete deployment'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to delete deployment'));
   };
 
   const checkMachineHasActiveDeployment = (machineId: string): boolean => {
@@ -353,15 +367,29 @@ function deploymentTemplateUrl(siteId: string): string {
   return `/api/sites/${encodeURIComponent(siteId)}/presets/deployment-template`;
 }
 
+function overrideBody(options: DeploymentRequestOptions): { active_hours_override?: { reason: string } } {
+  return options.override ? { active_hours_override: { reason: options.override.reason } } : {};
+}
+
 function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
+  return (await readApiRequestError(response, fallback)).message;
+}
+
+/** the refusal with its problem `code`, for a caller that words its own message. */
+async function readApiRequestError(response: Response, fallback: string): Promise<ApiRequestError> {
+  let body: { detail?: string; title?: string; code?: string } | null = null;
   try {
-    const body = await response.json();
-    return body.detail ?? body.title ?? `${fallback} (${response.status})`;
+    body = await response.json();
   } catch {
-    return `${fallback} (${response.status})`;
+    // no problem body: the message names the status instead
   }
+  return new ApiRequestError(
+    response.status,
+    body?.detail ?? body?.title ?? `${fallback} (${response.status})`,
+    body?.code,
+  );
 }

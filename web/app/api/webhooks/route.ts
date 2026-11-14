@@ -11,7 +11,8 @@
  * GET /api/webhooks?siteId=...&limit=&cursor= — cursor-paginated list,
  * soft-deleted filtered out, never includes signingSecret.
  *
- * Scope: site:<id>:write for POST, site:<id>:read for GET.
+ * Scope: site:<id>:write for POST, site:<id>:read for GET; both need
+ * WEBHOOK_MANAGE.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -79,7 +80,9 @@ export async function POST(request: NextRequest) {
 
     // Membership + scope are not enough: creating a subscription is a site-admin
     // action (WEBHOOK_MANAGE), so a plain member on the site is refused here.
-    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId, {
+      create: true,
+    });
     if (capabilityError) return capabilityError;
 
     const parsed = await readAndParseJsonBody(request);
@@ -229,6 +232,9 @@ export async function GET(request: NextRequest) {
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'read');
     if (!auth.ok) return auth.response;
 
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
+
     const parsedPagination = parsePagination(request.nextUrl.searchParams, {
       defaultPageSize: DEFAULT_LIST_LIMIT,
       maxPageSize: MAX_LIST_LIMIT,
@@ -309,10 +315,15 @@ export function serializeSubscription(
     ...(description ? { description } : {}),
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
-    paused: Boolean(data.paused),
+    // the sender's auto-off (`enabled: false`) and counter (`failCount`) are what
+    // decide delivery; the public names alone would report a dead webhook as healthy.
+    paused: data.paused === true || data.enabled === false,
     lastDeliveryAt: timestampToIso(data.lastDeliveryAt),
     lastDeliveryStatus:
       typeof data.lastDeliveryStatus === 'string' ? data.lastDeliveryStatus : null,
-    failureCount: typeof data.failureCount === 'number' ? data.failureCount : 0,
+    failureCount:
+      typeof data.failCount === 'number' ? data.failCount
+        : typeof data.failureCount === 'number' ? data.failureCount
+          : 0,
   };
 }

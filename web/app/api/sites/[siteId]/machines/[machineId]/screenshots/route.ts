@@ -3,6 +3,7 @@ import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
 import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
+import { screenshotRecordPath } from '@/lib/screenshotStorage.server';
 
 type RouteParams = {
   siteId: string;
@@ -49,11 +50,10 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
         return NextResponse.json({ error: 'Screenshot not found' }, { status: 404 });
       }
 
-      const data = docSnap.data();
-      if (bucket && data?.url) {
+      const storagePath = bucket ? screenshotRecordPath(docSnap.data(), bucket.name) : null;
+      if (bucket && storagePath) {
         try {
-          const storagePath = data.url.split(`${bucket.name}/`)?.[1]?.split('?')[0];
-          if (storagePath) await bucket.file(storagePath).delete();
+          await bucket.file(storagePath).delete();
         } catch {
           // Storage file may already be deleted.
         }
@@ -71,11 +71,10 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
 
     let deleted = 0;
     for (const docSnap of allDocs.docs) {
-      const data = docSnap.data();
-      if (bucket && data?.url) {
+      const storagePath = bucket ? screenshotRecordPath(docSnap.data(), bucket.name) : null;
+      if (bucket && storagePath) {
         try {
-          const storagePath = data.url.split(`${bucket.name}/`)?.[1]?.split('?')[0];
-          if (storagePath) await bucket.file(storagePath).delete();
+          await bucket.file(storagePath).delete();
         } catch {
           // Storage file may already be deleted.
         }

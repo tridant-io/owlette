@@ -14,66 +14,22 @@
     "This file lives in git precisely so a waiver is reviewable in a PR and",
     "attributable in `git log`, rather than evaporating with a shell argument.",
     "`verify:*` keys can never be waived: a check that could not RUN must be",
-    "fixed, not accepted.",
-    "",
-    "The alert:code-scanning:* entries below are a TIME-BOXED BATCH, not individual assessments. They were added 2026-09-12 so the gate could land; they expire 2026-10-12 and must be triaged before then. Start with the auth-path ones (apiAuth.server.ts, _shared.ts)."
+    "fixed, not accepted."
   ],
   "acks": {
     "alert:dependabot:230": {
-      "reason": "glib 0.18.5 arrives only via Tauri 2.11's GTK backend, which is cfg(target_os = \"linux\")-gated. The desktop app is built on windows-latest only, always via `tauri build --no-bundle`, and `cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print' \u2014 the crate is never compiled into anything shipped. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
+      "reason": "glib 0.18.5 arrives only via Tauri 2.x's GTK backend, which is cfg(target_os = \"linux\")-gated: it is compiled into the Linux desktop app and the Linux swoop viewer alone, which the .deb ships; the Windows exe and the macOS app never link it (`cargo tree --locked --target x86_64-pc-windows-msvc -i glib` prints 'nothing to print'). The finding, GHSA-wrw7-89jp-8q8g, is an unsound Iterator impl on glib::VariantStrIter, an API owlette's own code never calls. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack. Reason reworded 2026-10-02 at the owner's instruction, after the Linux package shipped the app; the acceptance below stands.",
       "accepted_by": "rosco@theexperiential.com",
       "accepted_on": "2026-09-12",
       "expires": "2026-12-12",
       "revisit": "When Tauri moves the gtk-rs stack to glib 0.20, drop this entry and let the bump land normally."
     },
-    "alert:code-scanning:315": {
-      "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/turnRunner.server.ts:518, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:313": {
-      "reason": "UNTRIAGED. js/remote-property-injection at web/lib/apiAuth.server.ts:470, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:312": {
-      "reason": "UNTRIAGED. js/remote-property-injection at web/lib/hoot-utils.server.ts:185, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:311": {
-      "reason": "UNTRIAGED. js/remote-property-injection at web/app/api/_shared.ts:370, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:310": {
-      "reason": "UNTRIAGED. js/insufficient-password-hash at web/lib/auditLogClient.ts:56, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:307": {
-      "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/approvalLedger.server.ts:74, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
-    },
-    "alert:code-scanning:303": {
-      "reason": "UNTRIAGED. js/file-system-race at scripts/migrations/backfill-mfa-factors.mjs:617, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    "alert:dependabot:376": {
+      "reason": "ASSESSED. katex 0.16.47 (GHSA-238p-pmpm-9mq7) arrives only through mermaid 11.17.2, which pins ^0.16.47; the fix, 0.18.2, needs mermaid 12.2.0, the first release on katex ^0.18.The advisory needs an already-polluted Object.prototype plus attacker-controlled math. Mermaid renders only the ```mermaid fences in owlette's own committed docs (web/components/mdx/mermaid.tsx via remarkMdxMermaid in source.config.ts); hoot replies go through react-markdown, not mermaid, so no user or model text reaches katex.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-10-25",
+      "expires": "2027-01-25",
+      "revisit": "When mermaid moves to 12.2.0 or later (katex ^0.18), drop this entry and let the bump land."
     },
     "alert:code-scanning:299": {
       "reason": "UNTRIAGED. js/clear-text-logging at scripts/checks/smoke-r2-roundtrip.mjs:110, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
@@ -82,75 +38,40 @@
       "expires": "2026-10-12",
       "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
     },
-    "alert:code-scanning:298": {
-      "reason": "UNTRIAGED. js/user-controlled-bypass at web/app/api/webhooks/test/route.ts:33, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    "alert:dependabot:409": {
+      "reason": "ASSESSED. deepmerge 4.3.1 (GHSA-gcqx-w48m-w2h4, prototype poisoning of merged objects) is a dev-only dependency that jest-config brings in, in the root and web lockfiles. It runs only under the test runner and is in no web bundle or installer. No patched release exists: 4.3.1 is the latest, and the advisory covers >=4.2.0 <=4.3.1.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-01",
+      "expires": "2027-01-30",
+      "revisit": "When deepmerge publishes a fix or jest-config drops it, drop this entry and let the bump land."
     },
-    "alert:code-scanning:297": {
-      "reason": "UNTRIAGED. js/user-controlled-bypass at web/app/api/webhooks/test/route.ts:33, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-12",
-      "expires": "2026-10-12",
-      "revisit": "Triage before expiry: confirm or refute a real path, then fix it or replace this entry with a reasoned dismissal on GitHub. On 2026-10-12 this stops applying and the gate blocks again."
+    "alert:dependabot:416": {
+      "reason": "ASSESSED. deepmerge 4.3.1 (GHSA-gcqx-w48m-w2h4, prototype poisoning of merged objects) is a dev-only dependency that jest-config brings in, in the root and web lockfiles. It runs only under the test runner and is in no web bundle or installer. No patched release exists: 4.3.1 is the latest, and the advisory covers >=4.2.0 <=4.3.1.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-01",
+      "expires": "2027-01-30",
+      "revisit": "When deepmerge publishes a fix or jest-config drops it, drop this entry and let the bump land."
     },
-    "alert:code-scanning:356": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/shared_utils.py:224: config/machine_id is seeded 0o640. The file holds the machine's Firestore document id (today its hostname) \u2014 not a secret \u2014 and the desktop app runs as the kiosk user, a member of the daemon's group, and must read it (plan decision 4's mode table: the data root is 0750 root:<group>, so 'other' never reaches the file). Owner-only (0o600) would break the app; the rule flags any group bit, so this cannot be satisfied and stay correct.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 3.1 (osadapter/posix.py) lands the POSIX data-root mode table, confirm the group on these paths is the dedicated `_owlette`/`owlette` group and not a general one; then either keep this entry or tighten the mode."
+    "alert:dependabot:393": {
+      "reason": "ASSESSED, not on dev. pylint (GHSA-22qq-2fwx-7p67) is in no agent/requirements*.txt on dev. The alert is filed against main, where agent/requirements-dev.txt still lists it as a dev tool. The gate reports a package a manifest no longer lists as UNPROVEN by design. The alert closes itself when the prod merge carries the removal; the expiry makes a slipped merge block again.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-01",
+      "expires": "2026-12-31",
+      "revisit": "Once the prod merge lands and Dependabot closes alert 393, drop this entry."
     },
-    "alert:code-scanning:355": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/sync_assembler.py:576: the roost .partial sidecar is opened 0o644 and renamed into the synced file. Synced files are the kiosk's media/project payload, consumed by the kiosk user's applications; the plan (Task 3.2) sets 0644/0755 on them explicitly and the extract root's parents gate access. Nothing sensitive is written through this path (tokens and config never go through the assembler).",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 3.1 (osadapter/posix.py) lands the POSIX data-root mode table, confirm the group on these paths is the dedicated `_owlette`/`owlette` group and not a general one; then either keep this entry or tighten the mode."
+    "alert:dependabot:410": {
+      "reason": "ASSESSED, not on dev. postcss-selector-parser (GHSA-rj75-hqrm-r3gf) came only from @tailwindcss/typography, which nothing loaded; both were removed from web/package.json, so the web lockfile on dev pins none. This replaces the entry for alert 374, which Dependabot withdrew and re-filed as 410 under the same advisory. The gate reports a package a lockfile no longer pins as UNPROVEN by design. The alert is filed against main and closes itself when the prod merge carries the removal; the expiry makes a slipped merge block again.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-01",
+      "expires": "2026-12-31",
+      "revisit": "Once the prod merge lands and Dependabot closes alert 410, drop this entry."
     },
-    "alert:code-scanning:354": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/cortex_cli_fetch.py:120: the fetched Claude CLI binary is chmod 0o750 (owner rwx, group rx, no 'other'). The root daemon fetches it into the data-root cache (0750 root:<group>) and the kiosk user's hoot process, a group member, executes it \u2014 the group exec bit is the whole point, and the rule flags any group bit. It was 0o755 before this PR; this is already the tightest mode that works.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 3.1 (osadapter/posix.py) lands the POSIX data-root mode table, confirm the group on these paths is the dedicated `_owlette`/`owlette` group and not a general one; then either keep this entry or tighten the mode."
-    },
-    "alert:code-scanning:364": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/shared_utils.py:131: tmp/json.lock is created 0o660. It is the cross-process JSON lock (flock) that BOTH the root daemon and the kiosk user's desktop app take around config.json writes (plan decision 4: 0660 root:<group>, inside a 0770 root:<group> tmp/ with no 'other' access). Owner-only would lock the app out of the config it must write; the rule flags any group bit.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
-    },
-    "alert:code-scanning:363": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/osadapter/posix.py:879: an ipc/jobs/<id>.json job file is written 0o640 by the root daemon for the kiosk user's job runner to read (the file seam that replaces the Windows user-session executor on POSIX). Group read is the whole point; ipc/ is 0770 root:<group>, so 'other' never reaches it. Verified on the kiosk VM: the kiosk user reads the job and root reads the result back.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
-    },
-    "alert:code-scanning:359": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1418: ipc/request_nonce is written 0o640 root:<group>. It is the one-shot nonce the daemon issues and the desktop app must QUOTE in a privileged request (pair/restart/reboot); the app must read it and cannot write it (verified live: a kiosk-user overwrite is refused, a planted symlink is replaced). Owner-only would make every request refusable; the rule flags any group bit.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
-    },
-    "alert:code-scanning:360": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1526: ipc/requests/<id>.result is the daemon's answer to the app's privileged request, opened 0o640 root:<group> (O_NOFOLLOW|O_NONBLOCK, owner and link count checked) so the app that wrote the request can read the answer. The directory is 0770 root:<group>; 'other' never reaches it.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
-    },
-    "alert:code-scanning:361": {
-      "reason": "ASSESSED, by design. py/overly-permissive-file at agent/src/configure_site.py:1531: the O_EXCL fallback open of the same ipc/requests/<id>.result file (taken when a pre-created entry is not the daemon's own regular file), 0o640 root:<group> for the same reason as alert 360.",
-      "accepted_by": "rosco@theexperiential.com",
-      "accepted_on": "2026-09-16",
-      "expires": "2027-03-16",
-      "revisit": "When Task 5.2 (the .deb) and 5.1 (the .pkg) create the dedicated owlette/_owlette group, confirm every one of these paths is owned root:<that group> on an installed box (the VM report vm-verify-2026-09-16-rerun2.md shows it for the lab tree); then keep this entry or tighten the mode."
+    "alert:dependabot:422": {
+      "reason": "TIME-BOXED DEFERRAL, reachability not settled. glob in the web lockfile arrives through @sentry/nextjs and @sentry/bundler-plugins at build time (glob 13.0.6; the plugin still asks for glob ^13.0.6 in its latest release) and through firebase-admin, @google-cloud/firestore-api, google-gax 5.0.8 and rimraf 5 (glob 10.5.0); the glob 7.2.3 jest brings is below the advisory range. It gets no untrusted input from anything found in that tooling, though whether google-gax ever runs its rimraf path in production is unverified. An override to the fixed majors was tried on 2026-11-01 and broke `npm run test:coverage`: test-exclude 6 promisifies require('glob'), and glob 14 exports an object. The minimatch those globs load moved to 11 on 2026-11-12 through a range-keyed override (alert 428), which leaves jest's and eslint's minimatch 3.x alone. functions and root carry the glob override, so this entry covers web only.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-01",
+      "expires": "2027-01-30",
+      "revisit": "Retry the top-level overrides after jest 30 lands on web, and check the eslint plugins that call minimatch as a function. Drop this entry when they hold."
     }
   }
 }

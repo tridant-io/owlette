@@ -2,6 +2,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   canonicalJson,
   classifyResponse,
@@ -21,6 +23,7 @@ import {
   attemptDelivery,
   buildDelivery,
   emit,
+  getDefaultHttpClient,
   pumpRetryQueue,
   type AttemptDeps,
   type DeliveryRecord,
@@ -45,7 +48,8 @@ function sub(overrides: Partial<Subscription> = {}): Subscription {
   return {
     id: 'sub-1',
     siteId: 'site-a',
-    url: 'https://example.com/hook',
+    // a literal public address, so the send-time check makes no dns lookup
+    url: 'https://203.0.113.10/hook',
     secret: 'shhh',
     ...overrides,
   };
@@ -418,6 +422,71 @@ describe('attemptDelivery', () => {
     const result = await attemptDelivery(rec, deps);
     assert.equal(result.outcome.kind, 'retry');
     assert.equal(result.record.state, 'pending');
+  });
+
+  it('a private address at send time → state=failed, nothing posted', async () => {
+    // the url was public when the subscription was saved; the record is what is sent
+    const rec = buildDelivery(samplePayload(), sub({ url: 'https://10.0.0.5/hook' }), NOW);
+    const http = fixedHttp([200]);
+    const deps: AttemptDeps = {
+      http,
+      store: makeStore([rec]),
+      subscriptions: makeSubs([]),
+      now: () => NOW,
+    };
+    const result = await attemptDelivery(rec, deps);
+    assert.equal(http.calls, 0);
+    assert.equal(result.outcome.kind, 'permanent_failure');
+    assert.equal(result.record.state, 'failed');
+    assert.match(result.record.lastError ?? '', /^url_refused_private_ip$/);
+  });
+});
+
+describe('the default http client', () => {
+  /** a host that redirects to a second, internal one; `hits` counts what reached it. */
+  async function startRedirectTrap() {
+    let hits = 0;
+    const listen = (server: http.Server) =>
+      new Promise<number>((resolve) => {
+        server.listen(0, '127.0.0.1', () => resolve((server.address() as AddressInfo).port));
+      });
+    const internal = http.createServer((req, res) => {
+      hits += 1;
+      req.resume();
+      res.end('internal');
+    });
+    const internalPort = await listen(internal);
+    const redirector = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(302, { location: `http://127.0.0.1:${internalPort}/` });
+      res.end();
+    });
+    const port = await listen(redirector);
+    return {
+      url: `http://127.0.0.1:${port}/hook`,
+      hits: () => hits,
+      close: () =>
+        Promise.all(
+          [internal, redirector].map(
+            (server) =>
+              new Promise<void>((resolve) => {
+                server.closeAllConnections();
+                server.close(() => resolve());
+              }),
+          ),
+        ),
+    };
+  }
+
+  it('does not follow a redirect', async () => {
+    const trap = await startRedirectTrap();
+    try {
+      const resp = await getDefaultHttpClient().post(trap.url, {}, '{}');
+      assert.equal(resp.status, 302);
+      assert.equal(trap.hits(), 0);
+    } finally {
+      await trap.close();
+    }
   });
 });
 

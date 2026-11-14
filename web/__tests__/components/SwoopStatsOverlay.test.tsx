@@ -18,11 +18,13 @@ import type { SwoopStats } from '@/hooks/useSwoopSession';
 
 const EMPTY_STATS = {
   signal: 'connected',
-  presenter: { width: 0, height: 0, gaps: 0, duplicates: 0 },
+  presenter: { width: 0, height: 0, gaps: 0, duplicates: 0, scaling: 'standard', smoothEstimateMs: null },
   receiver: {},
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  linkUp: true,
+  stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 
 /** a `getStats()` report: a map with the `get`/`forEach` the classifier uses. */
@@ -37,8 +39,16 @@ const selectedPair = (localCandidateId: string) => ({
   localCandidateId,
 });
 
-function sessionWith(getStats: () => Promise<RTCStatsReport>): SwoopSession {
-  return { peer: { connection: { getStats } } } as unknown as SwoopSession;
+/** `width` is the picture's css width on screen; a `videoWidth` of 0 is before a frame. */
+function sessionWith(
+  getStats: () => Promise<RTCStatsReport>,
+  picture = { width: 0, videoWidth: 0 },
+): SwoopSession {
+  return {
+    peer: { connection: { getStats } },
+    video: { videoWidth: picture.videoWidth },
+    contentRect: () => ({ width: picture.width }) as DOMRect,
+  } as unknown as SwoopSession;
 }
 
 describe('classifyPath', () => {
@@ -119,6 +129,51 @@ describe('SwoopStatsOverlay path indicator', () => {
     });
   };
 
+  it('names the codec the picture arrives in, and the stages by what they measure', async () => {
+    const stats = {
+      ...EMPTY_STATS,
+      frame: {
+        frameId: 9,
+        irap: false,
+        codec: 'hevc',
+        width: 1920,
+        height: 1080,
+        tCaptureUs: 0,
+        tEncodeUs: 5_000,
+        tSendUs: 9_000,
+        arrivalMs: 100,
+        decodeMs: 0.4,
+        presentedMs: 112,
+        expectedDisplayMs: 128.6,
+        presentedFrames: 9,
+      },
+    } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('HEVC')).toBeInTheDocument();
+    // a decoded frame waiting for the next paint is not decode time.
+    expect(screen.getByText('decode')).toBeInTheDocument();
+    expect(screen.getByText('wait for paint')).toBeInTheDocument();
+    expect(screen.getByText('paint → display')).toBeInTheDocument();
+    expect(screen.queryByText('decode → present')).toBeNull();
+  });
+
+  it('counts the pictures that froze in this tab, and where the last one died', async () => {
+    const stats = { ...EMPTY_STATS, stall: { recovery: 'none', episodes: 2, kind: 'decode' } } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('frozen pictures')).toBeInTheDocument();
+    expect(screen.getByText('2 (last: decode)')).toBeInTheDocument();
+  });
+
   it('names the path, the cap in force and why', async () => {
     const session = sessionWith(async () =>
       report({
@@ -187,5 +242,145 @@ describe('SwoopStatsOverlay path indicator', () => {
     await mount(sessionWith(getStats), false);
 
     expect(getStats).not.toHaveBeenCalled();
+  });
+});
+
+describe('SwoopStatsOverlay shown at', () => {
+  const jsdomDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+  afterEach(() => {
+    cleanup();
+    if (jsdomDpr) Object.defineProperty(window, 'devicePixelRatio', jsdomDpr);
+  });
+
+  const shownAt = async (session: SwoopSession | null, dpr = 1) => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: dpr });
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={EMPTY_STATS} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return screen.getByText('shown at').nextSibling;
+  };
+  const noPair = async () => report({});
+
+  it('reads half size when a 1280 wide picture takes 640 css pixels at dpr 1', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 1280 }))).toHaveTextContent(/^50%$/);
+  });
+
+  it('reads 100% when those 640 css pixels are 1280 device pixels at dpr 2', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 1280 }), 2)).toHaveTextContent(/^100%$/);
+  });
+
+  it('says nothing before a frame, or without a session', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 0 }))).toHaveTextContent(/^—$/);
+    cleanup();
+    expect(await shownAt(null)).toHaveTextContent(/^—$/);
+  });
+});
+
+describe('SwoopStatsOverlay scaling', () => {
+  afterEach(cleanup);
+
+  const FRAME = {
+    frameId: 9,
+    irap: false,
+    codec: 'h264',
+    width: 1920,
+    height: 1080,
+    tCaptureUs: 0,
+    tEncodeUs: 5_000,
+    tSendUs: 9_000,
+    arrivalMs: 100,
+    decodeMs: 0.4,
+    presentedMs: 112,
+    expectedDisplayMs: 128.6,
+    presentedFrames: 9,
+  };
+
+  /** a 1920x1080 frame shown in 1400 css pixels, with a clock offset so capture → display reads. */
+  const mountWith = async (presenter: Partial<SwoopStats['presenter']>) => {
+    const stats = {
+      ...EMPTY_STATS,
+      frame: FRAME,
+      feedback: { clockOffsetUs: 0 },
+      presenter: { ...EMPTY_STATS.presenter, width: 1920, height: 1080, ...presenter },
+    } as unknown as SwoopStats;
+    await act(async () => {
+      render(
+        <SwoopStatsOverlay
+          session={sessionWith(async () => report({}), { width: 1400, videoWidth: 1920 })}
+          stats={stats}
+          open
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
+  const row = (label: string) => screen.queryByText(label)?.nextSibling ?? null;
+
+  it.each(['exact', 'smooth', 'standard'] as const)('says the picture is drawn %s', async (scaling) => {
+    await mountWith({ scaling });
+    expect(row('scaling')).toHaveTextContent(new RegExp(`^${scaling}$`));
+  });
+
+  it('says nothing about scaling before a frame', async () => {
+    await act(async () => {
+      render(<SwoopStatsOverlay session={sessionWith(async () => report({}))} stats={EMPTY_STATS} open />);
+      await Promise.resolve();
+    });
+    expect(row('scaling')).toHaveTextContent(/^—$/);
+  });
+
+  it('shows the canvas’s cost on its own row, as an estimate, only while it draws', async () => {
+    await mountWith({ scaling: 'smooth', smoothEstimateMs: 7.25 });
+    expect(row('smooth scaling')).toHaveTextContent(/^\+7\.3 ms \(estimate\)$/);
+    cleanup();
+
+    await mountWith({ scaling: 'exact', smoothEstimateMs: null });
+    expect(row('smooth scaling')).toBeNull();
+  });
+
+  it('leaves capture → display the video’s own figure, whatever the canvas adds', async () => {
+    await mountWith({ scaling: 'standard', smoothEstimateMs: null });
+    const without = row('capture → display')?.textContent;
+    cleanup();
+
+    await mountWith({ scaling: 'smooth', smoothEstimateMs: 9 });
+    expect(without).toBe('128.6 ms');
+    expect(row('capture → display')).toHaveTextContent(/^128\.6 ms$/);
+  });
+});
+
+describe('SwoopStatsOverlay on a phone', () => {
+  afterEach(cleanup);
+
+  const mountGlance = async (onClose?: () => void) => {
+    await act(async () => {
+      render(
+        <div>
+          <button type="button">elsewhere</button>
+          <SwoopStatsOverlay session={sessionWith(async () => report({}))} stats={EMPTY_STATS} open onClose={onClose} />
+        </div>,
+      );
+      await Promise.resolve();
+    });
+  };
+
+  it('closes at the next tap anywhere else, and keeps a tap on itself', async () => {
+    const onClose = jest.fn();
+    await mountGlance(onClose);
+    const overlay = screen.getByRole('complementary', { name: 'latency breakdown' });
+    expect(overlay).toHaveClass('pointer-events-auto');
+
+    overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'elsewhere' }).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays up, and lets the picture take its taps, without a way to close it', async () => {
+    await mountGlance();
+    expect(screen.getByRole('complementary', { name: 'latency breakdown' })).toHaveClass('pointer-events-none');
   });
 });

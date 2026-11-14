@@ -1,0 +1,24 @@
+# the owlette service on linux (tri-platform 5.2): a system unit running the
+# bundled runtime under /opt/owlette. KillMode=process so a stop ends the
+# daemon and not the kiosk applications it started (they are the console
+# user's, as on windows and macos). WantedBy=graphical.target and no
+# After=graphical.target: the lab's pairing of the two was a silent ordering
+# cycle (task log, 2026-09-16). the service log proper is
+# /var/lib/owlette/logs/service.log; this is launchd-style stdio only.
+[Unit]
+Description=owlette agent
+Documentation=https://owlette.app/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/owlette/python/bin/python3 /opt/owlette/agent/src/owlette_runner.py
+WorkingDirectory=/opt/owlette/agent/src
+Restart=always
+RestartSec=5
+KillMode=process
+TimeoutStopSec=45
+
+[Install]
+WantedBy=graphical.target

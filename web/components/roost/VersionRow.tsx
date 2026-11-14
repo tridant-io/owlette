@@ -195,7 +195,7 @@ export function VersionRow({
           <span
             aria-label="current version"
             title="current version"
-            className="inline-block h-2 w-2 rounded-full bg-emerald-500"
+            className="inline-block h-2 w-2 rounded-full bg-success"
           />
         )}
         <span className="text-foreground font-mono text-xs select-text leading-none">

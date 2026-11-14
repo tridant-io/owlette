@@ -50,7 +50,8 @@ def _fake_win32security(aces, protected=True):
 
 @pytest.fixture
 def on_windows(monkeypatch):
-    """install_dir_is_protected is a no-op off Windows; pin it on for the test."""
+    """The Windows arm: install_dir_is_protected is a no-op off Windows, and
+    verify_install hands over to swoop_spawn_posix there; pin it on for the test."""
     monkeypatch.setattr(swoop_spawn.os, 'name', 'nt')
 
 
@@ -102,7 +103,7 @@ class TestVerifyInstall:
                 swoop_spawn.verify_install()
         assert exc.value.reason == swoop_spawn.REFUSAL_NOT_INSTALLED
 
-    def test_unverified_install_refuses_before_running_the_exe(self):
+    def test_unverified_install_refuses_before_running_the_exe(self, on_windows):
         with patch.object(swoop_spawn, 'install_dir_is_protected', return_value=False), \
              patch.object(swoop_spawn, 'read_streamer_version') as version_probe:
             with pytest.raises(swoop_spawn.SwoopSpawnError) as exc:
@@ -110,7 +111,7 @@ class TestVerifyInstall:
         assert exc.value.reason == swoop_spawn.REFUSAL_INSTALL_UNVERIFIED
         version_probe.assert_not_called()
 
-    def test_version_mismatch_refuses(self):
+    def test_version_mismatch_refuses(self, on_windows):
         with patch.object(swoop_spawn, 'install_dir_is_protected', return_value=True), \
              patch.object(swoop_spawn, 'read_streamer_version', return_value='9.9.9'), \
              patch.object(swoop_spawn.shared_utils, 'APP_VERSION', '3.3.5'):
@@ -118,14 +119,14 @@ class TestVerifyInstall:
                 swoop_spawn.verify_install(r'C:\x\swoop\owlette-swoop.exe')
         assert exc.value.reason == swoop_spawn.REFUSAL_VERSION_MISMATCH
 
-    def test_unreadable_version_refuses(self):
+    def test_unreadable_version_refuses(self, on_windows):
         with patch.object(swoop_spawn, 'install_dir_is_protected', return_value=True), \
              patch.object(swoop_spawn, 'read_streamer_version', return_value=None):
             with pytest.raises(swoop_spawn.SwoopSpawnError) as exc:
                 swoop_spawn.verify_install(r'C:\x\swoop\owlette-swoop.exe')
         assert exc.value.reason == swoop_spawn.REFUSAL_VERSION_MISMATCH
 
-    def test_matching_version_returns_the_path(self):
+    def test_matching_version_returns_the_path(self, on_windows):
         exe = r'C:\x\swoop\owlette-swoop.exe'
         with patch.object(swoop_spawn, 'install_dir_is_protected', return_value=True), \
              patch.object(swoop_spawn, 'read_streamer_version', return_value='3.3.5'), \

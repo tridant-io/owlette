@@ -15,7 +15,37 @@ jest.mock('@/lib/llm-encryption.server', () => ({
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
-  FieldValue: { delete: jest.fn(() => '__FIELD_DELETE__') },
+  FieldValue: {
+    delete: jest.fn(() => '__FIELD_DELETE__'),
+    serverTimestamp: jest.fn(() => '__SERVER_TIMESTAMP__'),
+  },
+}));
+
+// the real download is never run here: deploy_software's checksum comes from this.
+const COMPUTED_CHECKSUM = 'c'.repeat(64);
+const mockComputeInstallerChecksum = jest.fn(async (..._args: unknown[]) => ({
+  sha256_checksum: COMPUTED_CHECKSUM,
+  size_bytes: 1024,
+}));
+
+jest.mock('@/lib/actions/computeInstallerChecksum.server', () => ({
+  ...jest.requireActual('@/lib/actions/computeInstallerChecksum.server'),
+  computeInstallerChecksum: (...args: unknown[]) => mockComputeInstallerChecksum(...args),
+}));
+
+jest.mock('@/lib/auditLog.server', () => ({
+  generateCorrelationId: () => 'corr-1',
+  writeAuditEntryBlocking: async () => undefined,
+}));
+
+// a stored screenshot url signs to a fresh read url for the machine it came from; a forged one signs to nothing.
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  screenshotUrlForModel: async (url: string, siteId: string, machineId: string) =>
+    url.includes('forged')
+      ? null
+      : url.startsWith('/api/')
+        ? `https://signed.example/${siteId}/${machineId}${url}`
+        : url,
 }));
 
 const mockCreateProcess = jest.fn();
@@ -144,7 +174,13 @@ function createProcessConfigDb(processes: unknown[]) {
 }
 
 /** One machine document under `sites/{siteId}/machines`, as stored. */
-type MachineFixture = { id: string; online?: unknown; cortexEnabled?: unknown };
+type MachineFixture = {
+  id: string;
+  online?: unknown;
+  cortexEnabled?: unknown;
+  machine_timezone_iana?: unknown;
+  capabilities?: unknown;
+};
 
 /**
  * A db whose only readable path is `sites/{siteId}/machines`, counting the
@@ -175,7 +211,9 @@ function createSiteMachinesDb(machines: MachineFixture[]) {
 import {
   executeToolOnAgent,
   executeExistingCommand,
+  executeServerSideTool,
   buildExecutableTools,
+  getMachineSummary,
   listSiteMachines,
   resolveHootTargets,
   assertLlmKeyAvailable,
@@ -189,12 +227,19 @@ import {
   MAX_TOOL_TIMEOUT_SECONDS,
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_NOTE_LENGTH,
+  SERVER_SIDE_TOOLS,
+  SITE_WIDE_SERVER_TOOLS,
+  PERSON_ONLY_TOOLS,
   type BuildExecutableToolsOptions,
 } from '@/lib/hoot-utils.server';
 
 import { allTools } from '@/lib/mcp-tools';
+import { changesWhatMachineLaunches } from '@/lib/hoot/launchChange';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { MAX_TARGET_MACHINES } from '@/lib/hoot/target';
+import { InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
+import { Capability, hasCapability, type MachineActor, type UserActor } from '@/lib/capabilities';
 
 beforeEach(() => {
   mockCreateProcess.mockReset();
@@ -202,6 +247,16 @@ beforeEach(() => {
   mockDeleteProcess.mockReset();
   mockScheduleFollowup.mockReset();
   mockCancelFollowup.mockReset();
+});
+
+// only the server grants an active-hours override, from a typed option; model
+// input can never carry one onto a command.
+const OVERRIDE_NAMES = ['activeHoursOverride', 'active_hours_override', 'override_active_hours', 'override_reason'];
+const overrideBag = () => ({
+  activeHoursOverride: { reason: 'show is over', approvedBy: 'user:attacker' },
+  active_hours_override: { reason: 'show is over' },
+  override_active_hours: true,
+  override_reason: 'show is over',
 });
 
 // executeToolOnAgent
@@ -289,6 +344,25 @@ describe('executeToolOnAgent', () => {
     const cmdId = Object.keys(written)[0];
     expect(written[cmdId].tool_params).toEqual({ name_filter: 'chrome', limit: 10 });
   });
+
+  it('strips every active-hours override name from tool_params', async () => {
+    const { db, pendingDoc, completedDoc } = createMockDb();
+
+    completedDoc.get.mockImplementation(async () => {
+      const cmdId = getCommandId(pendingDoc);
+      return { exists: true, data: () => ({ [cmdId]: { status: 'success', result: {} } }) };
+    });
+
+    await executeToolOnAgent(
+      db, 's1', 'm1', 'manage_windows_update',
+      { ...overrideBag(), action: 'set_active_hours', start_hour: 9 }, 'c1',
+    );
+
+    const written = pendingDoc.set.mock.calls[0][0] as Record<string, Record<string, unknown>>;
+    const entry = written[Object.keys(written)[0]];
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    expect(entry.tool_params).toEqual({ action: 'set_active_hours', start_hour: 9 });
+  }, 15000);
 
   it('fires onCommandQueued synchronously after the pending write with the written commandId', async () => {
     const { db, pendingDoc, completedDoc } = createMockDb();
@@ -471,6 +545,375 @@ describe('executeExistingCommand', () => {
     expect(onPollTick).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ status: 'success' });
   }, 15000);
+
+  it('strips every active-hours override name from the spread params', async () => {
+    const { db, pendingDoc, completedDoc } = createMockDb();
+
+    completedDoc.get.mockImplementation(async () => {
+      const cmdId = getCommandId(pendingDoc);
+      return { exists: true, data: () => ({ [cmdId]: { status: 'success', result: 'rebooting' } }) };
+    });
+
+    await executeExistingCommand(
+      db, 's1', 'm1', 'reboot_machine', '',
+      { ...overrideBag(), when: 'after_active_hours' },
+    );
+
+    const written = pendingDoc.set.mock.calls[0][0] as Record<string, Record<string, unknown>>;
+    const entry = written[Object.keys(written)[0]];
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    // deferral is not privileged, so it is not reserved.
+    expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
+  }, 15000);
+});
+
+describe('deploy_software', () => {
+  /**
+   * Records every doc write by path, in order; `presets` is the system_presets collection.
+   * A chat's approval records are kept apart and read back, so a turn can be approved.
+   */
+  function createDeployDb(presets: Record<string, Record<string, unknown>> = {}) {
+    const writes: { path: string; data: Record<string, unknown>; options?: unknown }[] = [];
+    const chatDocs = new Map<string, Record<string, unknown>>();
+    const doc = (path: string): unknown => ({
+      get: jest.fn(async () => {
+        if (path.startsWith('chats/')) return { exists: chatDocs.has(path), data: () => chatDocs.get(path) };
+        const preset = presets[path.replace(/^system_presets\//, '')];
+        return { exists: path.startsWith('system_presets/') && !!preset, data: () => preset };
+      }),
+      set: jest.fn(async (data: Record<string, unknown>, options?: unknown) => {
+        if (path.startsWith('chats/')) chatDocs.set(path, data);
+        else writes.push({ path, data, options });
+      }),
+      collection: (name: string) => col(`${path}/${name}`),
+    });
+    const col = (path: string): unknown => ({
+      doc: (id: string) => doc(`${path}/${id}`),
+      get: jest.fn(async () => ({
+        docs: path === 'system_presets'
+          ? Object.entries(presets).map(([id, data]) => ({ id, data: () => data }))
+          : [],
+      })),
+    });
+    return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, writes };
+  }
+
+  const PLAYER = {
+    software_name: 'Player',
+    installer_url: 'https://example.com/player.exe',
+    silent_flags: '/S',
+  };
+  const PRESET_CHECKSUM = 'a'.repeat(64);
+  const TD_PRESET = {
+    name: 'TouchDesigner',
+    software_name: 'TouchDesigner',
+    installer_name: 'TouchDesigner.2023.11880.exe',
+    installer_url: 'https://download.derivative.ca/TouchDesigner.2023.11880.exe',
+    silent_flags: '/VERYSILENT /DIR="C:\\Program Files\\Derivative\\TouchDesigner.2023.11880"',
+    close_processes: ['TouchDesigner.exe'],
+    sha256_checksum: PRESET_CHECKSUM,
+  };
+
+  function deploymentWrite(writes: { path: string; data: Record<string, unknown> }[]) {
+    return writes.find((w) => /^sites\/s1\/deployments\/[^/]+$/.test(w.path) && 'targets' in w.data)!;
+  }
+
+  function queuedCommand(writes: { path: string; data: Record<string, unknown> }[]) {
+    const pending = writes.find((w) => w.path === 'sites/s1/machines/m1/commands/pending')!;
+    return Object.values(pending.data)[0] as Record<string, unknown>;
+  }
+
+  it('pins the checksum it computes from the installer URL on the command and the deployment', async () => {
+    const { db, writes } = createDeployDb();
+
+    const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    expect(mockComputeInstallerChecksum).toHaveBeenCalledTimes(1);
+    expect(mockComputeInstallerChecksum.mock.calls[0][0]).toBe('https://example.com/player.exe');
+    expect(queuedCommand(writes).sha256_checksum).toBe(COMPUTED_CHECKSUM);
+    expect(deploymentWrite(writes).data.sha256_checksum).toBe(COMPUTED_CHECKSUM);
+  });
+
+  it("uses a preset's own checksum for the preset's installer, without downloading it", async () => {
+    const { db, writes } = createDeployDb({ td: TD_PRESET });
+
+    const result = await executeServerSideTool(
+      db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', preset_id: 'td' }, {},
+    );
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+    expect(queuedCommand(writes).sha256_checksum).toBe(PRESET_CHECKSUM);
+    expect(deploymentWrite(writes).data.sha256_checksum).toBe(PRESET_CHECKSUM);
+  });
+
+  it("computes the checksum when the installer is not the preset's, so another TouchDesigner build gets its own", async () => {
+    const { db, writes } = createDeployDb({ td: TD_PRESET });
+
+    await executeServerSideTool(
+      db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', version: '2025.32280' }, {},
+    );
+
+    expect(mockComputeInstallerChecksum.mock.calls[0][0]).toBe(
+      'https://download.derivative.ca/TouchDesigner.2025.32280.exe',
+    );
+    expect(queuedCommand(writes)).toMatchObject({
+      installer_url: 'https://download.derivative.ca/TouchDesigner.2025.32280.exe',
+      sha256_checksum: COMPUTED_CHECKSUM,
+    });
+  });
+
+  it.each([
+    ['the download fails', new InstallerChecksumError('fetch_failed', 'download failed with http 404')],
+    ['the installer is too large', new InstallerChecksumError('too_large', 'installer exceeds the limit')],
+    ['the download runs out of time', new InstallerChecksumError('timeout', 'checksum computation exceeded 270s')],
+    ['the address is refused', new InstallerChecksumError('invalid_url', 'private address')],
+  ])('writes and queues nothing when %s', async (_label, error) => {
+    const { db, writes } = createDeployDb();
+    mockComputeInstallerChecksum.mockRejectedValueOnce(error);
+
+    const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(result).toEqual({ error: expect.stringContaining(error.message) });
+    expect((result as { error: string }).error).toContain('Nothing was deployed and no process was closed');
+    expect(writes).toEqual([]);
+  });
+
+  it('answers an unexpected checksum failure as a tool error, logs it without the url, and writes nothing', async () => {
+    const { db, writes } = createDeployDb();
+    mockComputeInstallerChecksum.mockRejectedValueOnce(new TypeError('Invalid URL'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+      expect(result).toEqual({
+        error: expect.stringContaining(
+          'Could not pin a SHA-256 checksum for https://example.com/player.exe: an unexpected error stopped the download.',
+        ),
+      });
+      expect((result as { error: string }).error).toContain('Nothing was deployed and no process was closed');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(String(errorSpy.mock.calls[0][0])).not.toContain('example.com');
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(writes).toEqual([]);
+  });
+
+  it('logs a software name that holds a format directive as text, with the error after it', async () => {
+    const { db } = createDeployDb();
+    const failure = new TypeError('Invalid URL');
+    mockComputeInstallerChecksum.mockRejectedValueOnce(failure);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { ...PLAYER, software_name: 'Player 100%s' }, {},
+      );
+
+      const args = errorSpy.mock.calls[0];
+      expect(String(args[0])).not.toContain('Player');
+      expect(args).toContain('Player 100%s');
+      expect(args[args.length - 1]).toBe(failure);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('stamps the site for the stale-deployment sweeper before it writes the deployment', async () => {
+    const { db, writes } = createDeployDb();
+
+    await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    const stampAt = writes.findIndex((w) => w.path === 'sites/s1');
+    expect(stampAt).toBeGreaterThanOrEqual(0);
+    expect(writes[stampAt]).toEqual({
+      path: 'sites/s1',
+      data: { lastDeploymentActivityAt: '__SERVER_TIMESTAMP__' },
+      options: { merge: true },
+    });
+    expect(stampAt).toBeLessThan(writes.indexOf(deploymentWrite(writes)));
+  });
+
+  it("dates the deployment by the server's clock, as every other deployment is, so the API list sorts it with them", async () => {
+    const { db, writes } = createDeployDb();
+
+    await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(deploymentWrite(writes).data.createdAt).toBe('__SERVER_TIMESTAMP__');
+  });
+
+  describe('when the turn is stopped', () => {
+    const STOPPED = {
+      error:
+        'This turn was stopped or taken over before the deployment was queued. Nothing was deployed and no process was closed.',
+    };
+
+    /** The person presses stop while the server is still downloading the installer. */
+    function stopDuringDownload(stop: AbortController, finishes: boolean) {
+      mockComputeInstallerChecksum.mockImplementationOnce(async (...args: unknown[]) => {
+        stop.abort();
+        if (!finishes && (args[1] as { signal?: AbortSignal } | undefined)?.signal?.aborted) {
+          throw new InstallerChecksumError('cancelled', 'checksum computation cancelled by client');
+        }
+        return { sha256_checksum: COMPUTED_CHECKSUM, size_bytes: 1024 };
+      });
+    }
+
+    it("cancels the download through the turn's signal and queues nothing", async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+      stopDuringDownload(stop, false);
+      const def = allTools.find((t) => t.name === 'deploy_software')!;
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [def], false, [], {
+        userId: 'u1',
+        machineScope: null,
+        launchChangeApprovable: true,
+        turnId: 'turn-1',
+        toolCallbacks: { abortSignal: stop.signal },
+      });
+      // a deployment always asks a person: the card is recorded, then the turn claims the answer
+      expect(await tools.deploy_software.needsApproval(PLAYER, { toolCallId: 'call_1' })).toBe(true);
+      await db.collection('chats').doc('c1').collection('approvals').doc('call_1').set({ turnId: 'turn-1' });
+
+      const result = await tools.deploy_software.execute(PLAYER, { toolCallId: 'call_1' });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('queues nothing when the stop lands as the download finishes', async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+      stopDuringDownload(stop, true);
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { abortSignal: stop.signal },
+      });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it("queues nothing for a turn already stopped, even on a preset's checksum with no download", async () => {
+      const { db, writes } = createDeployDb({ td: TD_PRESET });
+      const stop = new AbortController();
+      stop.abort();
+
+      const result = await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', preset_id: 'td' },
+        { toolCallbacks: { abortSignal: stop.signal } },
+      );
+
+      expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('does not start a download for a turn already stopped', async () => {
+      const { db, writes } = createDeployDb({ td: TD_PRESET });
+      const stop = new AbortController();
+      stop.abort();
+
+      const result = await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', version: '2025.32280' },
+        { toolCallbacks: { abortSignal: stop.signal } },
+      );
+
+      expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('queues nothing when the stop is recorded before the heartbeat has fired the signal', async () => {
+      const { db, writes } = createDeployDb();
+      const stillOwnsChat = jest.fn(async () => 'lost' as const);
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { abortSignal: new AbortController().signal, stillOwnsChat },
+      });
+
+      expect(stillOwnsChat).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('asks after the download and before the first write, and deploys as before while the turn owns the chat', async () => {
+      const { db, writes } = createDeployDb();
+      let writesWhenAsked = -1;
+      const stillOwnsChat = jest.fn(async () => {
+        writesWhenAsked = writes.length;
+        return 'owned' as const;
+      });
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { stillOwnsChat },
+      });
+
+      expect(result).toMatchObject({ status: 'deployment_started' });
+      expect(stillOwnsChat).toHaveBeenCalledTimes(1);
+      expect(mockComputeInstallerChecksum.mock.invocationCallOrder[0]).toBeLessThan(
+        stillOwnsChat.mock.invocationCallOrder[0],
+      );
+      expect(writesWhenAsked).toBe(0);
+      expect(queuedCommand(writes).sha256_checksum).toBe(COMPUTED_CHECKSUM);
+    });
+
+    it('deploys nothing when the turn cannot confirm it still owns the chat', async () => {
+      const { db, writes } = createDeployDb();
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { stillOwnsChat: async () => 'error' as const },
+      });
+
+      expect(result).toEqual({
+        error:
+          'This turn could not confirm it still owns the chat, so the deployment was not queued. Nothing was deployed and no process was closed. Ask for it again.',
+      });
+      expect(writes).toEqual([]);
+    });
+
+    it('queues nothing when a heartbeat stops the turn while the ownership check is pending', async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: {
+          abortSignal: stop.signal,
+          // the check committed while the turn was still running; a beat lands before it returns.
+          stillOwnsChat: async () => {
+            stop.abort();
+            return 'owned' as const;
+          },
+        },
+      });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+  });
+
+  it('builds install_software from explicit fields, so no override name reaches the command', async () => {
+    const { db, writes } = createDeployDb();
+
+    const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', {
+      ...overrideBag(),
+      software_name: 'Player',
+      installer_url: 'https://example.com/player.exe',
+      silent_flags: '/S',
+    }, {});
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    const pending = writes.find((w) => w.path === 'sites/s1/machines/m1/commands/pending')!;
+    const command = Object.values(pending.data)[0] as Record<string, unknown>;
+    expect(command.type).toBe('install_software');
+    for (const write of writes) {
+      for (const name of OVERRIDE_NAMES) expect(write.data).not.toHaveProperty(name);
+    }
+    for (const name of OVERRIDE_NAMES) expect(command).not.toHaveProperty(name);
+  });
 });
 
 // buildExecutableTools
@@ -490,18 +933,126 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-04' },
     ]);
 
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([
-      { id: 'kiosk-01', online: true, hootEnabled: true },
-      { id: 'kiosk-02', online: false, hootEnabled: false },
-      { id: 'kiosk-03', online: true, hootEnabled: true },
-      { id: 'kiosk-04', online: false, hootEnabled: true },
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([
+      { id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false },
+      { id: 'kiosk-02', online: false, hootEnabled: false, activeHoursGuard: false },
+      { id: 'kiosk-03', online: true, hootEnabled: true, activeHoursGuard: false },
+      { id: 'kiosk-04', online: false, hootEnabled: true, activeHoursGuard: false },
     ]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
   });
 
   it('reports an empty site as no machines', async () => {
     const { db } = createSiteMachinesDb([]);
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([]);
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([]);
+  });
+
+  it("carries each machine's reported timezone, so a turn's prompt costs no extra read", async () => {
+    const { db } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true, machine_timezone_iana: 'America/New_York' },
+      // agents before 2.6.1 never wrote it; a non-string is not a zone.
+      { id: 'kiosk-02', online: true },
+      { id: 'kiosk-03', online: true, machine_timezone_iana: 5 },
+    ]);
+
+    const [withZone, withoutZone, badZone] = await listSiteMachines(db, 's1', null);
+    expect(withZone.timezone).toBe('America/New_York');
+    expect(withoutZone.timezone).toBeUndefined();
+    expect(badZone.timezone).toBeUndefined();
+  });
+
+  it('carries whether each agent holds a restart for active hours, off the same read', async () => {
+    const { db, machinesGet } = createSiteMachinesDb([
+      // a windows agent of 4.1.21 or later
+      { id: 'kiosk-01', online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1, swoop: 1 } },
+      // older agents, and macOS and Linux, never write it
+      { id: 'kiosk-02', online: true, capabilities: { swoop: 1 } },
+      { id: 'kiosk-03', online: true },
+      { id: 'kiosk-04', online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: true } },
+      // rolled back below 4.1.21: the old agent never clears the 1
+      { id: 'kiosk-05', online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } },
+      { id: 'kiosk-06', online: true, capabilities: { activeHoursGuard: 1 } },
+    ]);
+
+    const machines = await listSiteMachines(db, 's1', null);
+    expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false, false, false]);
+    expect(machinesGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists only the machines a scope names, off the same one read', async () => {
+    const { db, machinesGet } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true },
+      { id: 'kiosk-02', online: true },
+      { id: 'kiosk-03', online: true },
+    ]);
+
+    const scoped = await listSiteMachines(db, 's1', ['kiosk-03', 'kiosk-01', 'gone-01']);
+    expect(scoped.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-03']);
+    expect(machinesGet).toHaveBeenCalledTimes(1);
+    // no machines is nothing, never the whole site
+    await expect(listSiteMachines(db, 's1', [])).resolves.toEqual([]);
+    const whole = await listSiteMachines(db, 's1', null);
+    expect(whole.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-02', 'kiosk-03']);
+  });
+
+  it('refuses a missing scope rather than reading it as the whole site', async () => {
+    const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }]);
+
+    await expect(
+      listSiteMachines(db, 's1', undefined as unknown as readonly string[] | null),
+    ).rejects.toThrow(TypeError);
+  });
+});
+
+describe('getMachineSummary', () => {
+  function createMachineDb(data: Record<string, unknown> | null) {
+    const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
+    const paths: string[] = [];
+    const db = {
+      collection: (root: string) => ({
+        doc: (siteId: string) => ({
+          collection: (child: string) => ({
+            doc: (machineId: string) => {
+              paths.push(`${root}/${siteId}/${child}/${machineId}`);
+              return { get };
+            },
+          }),
+        }),
+      }),
+    } as unknown as FirebaseFirestore.Firestore;
+    return { db, get, paths };
+  }
+
+  it('reads one machine doc into the same summary the listing gives', async () => {
+    const { db, get, paths } = createMachineDb({
+      online: true,
+      machine_timezone_iana: 'Europe/Berlin',
+      agent_version: '4.1.22',
+      capabilities: { activeHoursGuard: 1 },
+    });
+
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toEqual({
+      id: 'kiosk-01',
+      online: true,
+      hootEnabled: true,
+      timezone: 'Europe/Berlin',
+      activeHoursGuard: true,
+    });
+    expect(paths).toEqual(['sites/s1/machines/kiosk-01']);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['rolled back to 3.3.7', { agent_version: '3.3.7' }],
+    ['with no version', {}],
+  ])('holds nothing on a machine %s that still carries the capability', async (_label, version) => {
+    const { db } = createMachineDb({ online: true, capabilities: { activeHoursGuard: 1 }, ...version });
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toMatchObject({ activeHoursGuard: false });
+  });
+
+  it('answers null for a machine with no doc', async () => {
+    const { db } = createMachineDb(null);
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toBeNull();
   });
 });
 
@@ -523,7 +1074,7 @@ describe('resolveHootTargets', () => {
   it('resolves "all machines" to every online, hoot-enabled machine', async () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -540,7 +1091,7 @@ describe('resolveHootTargets', () => {
   it('resolves an explicit subset, in the order it was asked for', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
   });
@@ -548,7 +1099,7 @@ describe('resolveHootTargets', () => {
   it('keeps a single explicit machine off the fan-out path', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
   });
@@ -558,7 +1109,7 @@ describe('resolveHootTargets', () => {
     // the exact offline copy e2e pins all hang off fanOut.
     const { db } = createSiteMachinesDb([{ id: 'only-01', online: true }]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['only-01'], fanOut: false } });
   });
@@ -568,6 +1119,7 @@ describe('resolveHootTargets', () => {
 
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01', 'kiosk-01', 'kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01', 'kiosk-02'] } });
@@ -580,7 +1132,7 @@ describe('resolveHootTargets', () => {
   ])('refuses %s with 400 and never widens to the site', async (_label, requested, offenders) => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    await expect(resolveHootTargets(db, 's1', { requested })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 400,
       reason: 'unknown_machine',
@@ -599,7 +1151,7 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: requested as string[] }),
+      resolveHootTargets(db, 's1', { requested: requested as string[], machineScope: null }),
     ).resolves.toEqual({ ok: false, status: 400, reason: 'invalid_target', machineIds: [] });
     // A malformed id would be a path traversal against sites/{id}/machines.
     expect(machinesGet).not.toHaveBeenCalled();
@@ -612,7 +1164,7 @@ describe('resolveHootTargets', () => {
     }));
     const { db } = createSiteMachinesDb(fleet);
 
-    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id) });
+    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id), machineScope: null });
 
     expect(result).toMatchObject({ ok: true });
     expect((result as { resolved: { ids: string[] } }).resolved.ids).toHaveLength(
@@ -626,7 +1178,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'], machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -647,7 +1199,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: true, cortexEnabled: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -665,7 +1217,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'machine_offline',
@@ -676,7 +1228,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 423 when the kill switch is the whole reason', async () => {
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toEqual({
       ok: false,
       status: 423,
       reason: 'hoot_disabled',
@@ -689,7 +1241,7 @@ describe('resolveHootTargets', () => {
     // single-machine status code must not move.
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: false, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toMatchObject({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toMatchObject({
       status: 503,
       reason: 'machine_offline',
     });
@@ -698,7 +1250,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 503 when the site has no machines at all', async () => {
     const { db } = createSiteMachinesDb([]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'no_machines',
@@ -712,6 +1264,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
@@ -725,6 +1278,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01'],
       mentions: ['kiosk-03'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
@@ -736,6 +1290,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-03', 'kiosk-01'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
@@ -744,7 +1299,7 @@ describe('resolveHootTargets', () => {
   it('ignores an empty mention list and keeps the selection', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'] } });
   });
@@ -760,7 +1315,7 @@ describe('resolveHootTargets', () => {
       const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }, machine]);
 
       await expect(
-        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'] }),
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: null }),
       ).resolves.toEqual({ ok: false, status, reason, machineIds: ['kiosk-02'] });
     },
   );
@@ -769,7 +1324,7 @@ describe('resolveHootTargets', () => {
     const { db } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'unknown_machine', machineIds: ['kiosk-99'] });
   });
 
@@ -777,15 +1332,131 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'invalid_target' });
     expect(machinesGet).not.toHaveBeenCalled();
   });
+
+  describe('for someone limited to some machines', () => {
+    const SCOPE = ['kiosk-01'];
+
+    it('resolves "all machines" to the machines in scope only', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: SCOPE })).resolves.toEqual({
+        ok: true,
+        // one machine in scope keeps the single path, as a one-machine site does
+        resolved: { ids: ['kiosk-01'], fanOut: false, skipped: { offline: [], disabled: [] } },
+      });
+    });
+
+    it.each([
+      ['a machine outside it', ['kiosk-02'], ['kiosk-02']],
+      ['a set that reaches past it', ['kiosk-01', 'kiosk-03'], ['kiosk-03']],
+    ])('refuses %s as unknown, saying no more than for a machine that is not there', async (_label, requested, offenders) => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested, machineScope: SCOPE })).resolves.toEqual({
+        ok: false,
+        status: 400,
+        reason: 'unknown_machine',
+        machineIds: offenders,
+      });
+    });
+
+    it('refuses a mention of a machine outside it as unknown', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: SCOPE }),
+      ).resolves.toEqual({ ok: false, status: 400, reason: 'unknown_machine', machineIds: ['kiosk-02'] });
+    });
+
+    it('resolves a machine in scope as it would for the whole site', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: SCOPE }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'], fanOut: false } });
+    });
+
+    it('reaches nothing with no machines in scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: [] })).resolves.toEqual({
+        ok: false,
+        status: 503,
+        reason: 'no_machines',
+        machineIds: [],
+      });
+    });
+
+    it('leaves the whole site unchanged with a null scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toMatchObject({
+        ok: true,
+        resolved: { ids: ['kiosk-01', 'kiosk-02', 'kiosk-03'], fanOut: true },
+      });
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-02'], mentions: ['kiosk-03'], machineScope: null }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
+    });
+  });
 });
 
+/** Path-keyed docs; every queued command completes on its first poll. */
+function createStoreDb() {
+  const docs = new Map<string, Record<string, unknown>>();
+  const doc = (path: string): unknown => ({
+    get: async () => {
+      if (path.endsWith('/commands/completed')) {
+        const pending = docs.get(path.replace(/completed$/, 'pending')) ?? {};
+        const done = Object.fromEntries(
+          Object.keys(pending).map((id) => [id, { status: 'completed', result: 'ok' }]),
+        );
+        return { exists: true, data: () => done };
+      }
+      return { exists: docs.has(path), data: () => docs.get(path) };
+    },
+    set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+      docs.set(path, opts?.merge ? { ...(docs.get(path) ?? {}), ...data } : data);
+    },
+    update: async () => {},
+    collection: (name: string) => col(`${path}/${name}`),
+  });
+  const col = (path: string): unknown => ({
+    doc: (id: string) => doc(`${path}/${id}`),
+    get: async () => ({ docs: [] }),
+  });
+  return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, docs };
+}
+
+/** What a dashboard turn passes: a person is there to answer a launch change's card. */
+const DASHBOARD_TURN = { launchChangeApprovable: true, turnId: 'turn-1' } as const;
+
+/** What the runner does for a turn that answers a card: its one claim on the call. */
+function claim(db: FirebaseFirestore.Firestore, toolCallId = 'call_1') {
+  return db.collection('chats').doc('c1').collection('approvals').doc(toolCallId).set({ turnId: 'turn-1' });
+}
+
+/** A dashboard turn's call: it raises a card, the person approves, and the turn that claims the answer runs it. */
+async function runApproved(
+  db: FirebaseFirestore.Firestore,
+  tool: ReturnType<typeof buildExecutableTools>[string],
+  input: Record<string, unknown>,
+  toolCallId = 'call_1',
+): Promise<unknown> {
+  expect(await tool.needsApproval(input, { toolCallId, messages: [] })).toBe(true);
+  await claim(db, toolCallId);
+  return tool.execute(input, { toolCallId });
+}
+
 describe('buildExecutableTools', () => {
+  const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null };
+
   it('creates an executable tool for each definition', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
 
     expect(Object.keys(tools)).toHaveLength(allTools.length);
     for (const def of allTools) {
@@ -795,30 +1466,79 @@ describe('buildExecutableTools', () => {
   });
 
   it('site mode creates tools for fan-out execution', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2']);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2'], WHOLE_SITE);
     expect(Object.keys(tools)).toHaveLength(allTools.length);
   });
 
-  it('marks tier-3 tools needsApproval and leaves tier-1/2 auto-running', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+  it.each([
+    ['a single machine', false],
+    ['a fan-out', true],
+  ])('offers someone limited to some machines no site-wide tool, on %s', (_label, siteMode) => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', siteMode ? '__site__' : 'm1', 'c1', allTools, siteMode, siteMode ? ['m1'] : [],
+      { machineScope: ['m1'] },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+    // everything else, the per-machine server-side tools included, stays on offer
+    expect(offered.sort()).toEqual(
+      allTools.map((def) => def.name).filter((name) => !SITE_WIDE_SERVER_TOOLS.has(name)).sort(),
+    );
+    expect(offered).toEqual(expect.arrayContaining(['update_process', 'get_system_presets', 'schedule_followup']));
+  });
+
+  it('offers no site-wide tool when the scope is missing, rather than reading it as the whole site', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      {} as BuildExecutableToolsOptions & { machineScope: readonly string[] | null },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+  });
+
+  it('names exactly the five site-wide tools, each a tool that exists', () => {
+    // a renamed tool would silently fall out of the set and be offered again
+    expect([...SITE_WIDE_SERVER_TOOLS].sort()).toEqual(
+      ['create_talon', 'deploy_software', 'get_site_logs', 'list_talons', 'set_talon_enabled'],
+    );
+    const names = allTools.map((def) => def.name);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(names).toContain(name);
+  });
+
+  it('asks for approval on tier-3 calls and lets tier-1/2 calls run', async () => {
+    const recordsCards = {
+      collection: () => ({
+        doc: () => ({ collection: () => ({ doc: () => ({ set: async () => undefined }) }) }),
+      }),
+    } as unknown as FirebaseFirestore.Firestore;
+    const tools = buildExecutableTools(recordsCards, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
+    // A call without an override: the tier alone decides, for a call that could run at all.
+    const asks = (name: string, tier: number) =>
+      tier >= 3 && !changesWhatMachineLaunches(name, {}) && toolParamRefusal(name, {}) === null;
     for (const def of allTools) {
-      expect(tools[def.name].needsApproval).toBe(def.tier >= 3);
+      expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(
+        asks(def.name, def.tier),
+      );
     }
     // Sanity: the fixture actually exercises both sides of the gate.
-    expect(allTools.some((t) => t.tier >= 3)).toBe(true);
+    expect(allTools.some((t) => asks(t.name, t.tier))).toBe(true);
     expect(allTools.some((t) => t.tier < 3)).toBe(true);
   });
 
-  it('disables tier-3 needsApproval when requireTier3Approval is false', () => {
+  it('disables tier-3 needsApproval when requireTier3Approval is false', async () => {
     // The per-site approval toggle, when off, must drop the gate on this path
     // too (not just local-Hoot routing) — otherwise the toggle lies.
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', 'm1', 'c1', allTools, false, [],
-      { requireTier3Approval: false },
+      { ...WHOLE_SITE, requireTier3Approval: false },
     );
     for (const def of allTools) {
-      expect(tools[def.name].needsApproval).toBe(false);
+      expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(false);
     }
   });
 
@@ -841,7 +1561,7 @@ describe('buildExecutableTools', () => {
 
     const result = await tools.update_process.execute({
       process_name: 'TouchDesigner',
-      launch_mode: 'always',
+      name: 'Renamed',
     });
 
     expect(result).toEqual({
@@ -857,9 +1577,63 @@ describe('buildExecutableTools', () => {
       {
         machineId: 'm1',
         processId: 'proc-1',
-        patch: { launch_mode: 'always' },
+        patch: { name: 'Renamed' },
       },
     );
+  });
+
+  it('adds a process to the machine the turn is on, whatever machine the tool input names', async () => {
+    // the input is the model's, and a person can ask a model to send anything
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const { db } = createStoreDb();
+    const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+    const tools = buildExecutableTools(
+      db,
+      's1',
+      'm1',
+      'c1',
+      [toolDef],
+      false,
+      [],
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'], ...DASHBOARD_TURN },
+    );
+    const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
+
+    // the tool has no machine parameter, so a call that names one is refused before anything runs
+    expect(await tools.add_process.execute({ ...notepad, machineId: 'm2' }, { toolCallId: 'call_m2' })).toMatchObject({
+      ok: false,
+      error: 'tool_params_invalid',
+    });
+    const result = await runApproved(db, tools.add_process, notepad);
+
+    expect(result).toEqual({ ok: true, processId: 'proc-2', name: 'Notepad' });
+    expect(mockCreateProcess).toHaveBeenCalledTimes(1);
+    expect(mockCreateProcess.mock.calls[0][1]).toMatchObject({ machineId: 'm1', name: 'Notepad' });
+  });
+
+  it('adds a process to each machine of a fan-out and to no other', async () => {
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const { db } = createStoreDb();
+    const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+    const tools = buildExecutableTools(
+      db,
+      's1',
+      '__site__',
+      'c1',
+      [toolDef],
+      true,
+      ['m1', 'm3'],
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'], ...DASHBOARD_TURN },
+    );
+    const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
+
+    // the tool has no machine parameter, so a call that names one is refused before anything runs
+    expect(
+      await tools.add_process.execute({ ...notepad, machineId: 'm2', machines: ['*'] }, { toolCallId: 'call_m2' }),
+    ).toMatchObject({ ok: false, error: 'tool_params_invalid' });
+    await runApproved(db, tools.add_process, { ...notepad, machines: ['*'] });
+
+    expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId).sort()).toEqual(['m1', 'm3']);
   });
 
   it('returns structured update_process error when process_name is not found', async () => {
@@ -867,7 +1641,7 @@ describe('buildExecutableTools', () => {
       { id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' },
     ]);
     const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
-    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef]);
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], WHOLE_SITE);
 
     const result = await tools.update_process.execute({
       process_name: 'Missing',
@@ -939,6 +1713,675 @@ describe('buildExecutableTools', () => {
       expect(queuedIds).toContain(call[1]);
     }
   }, 15000);
+});
+
+const PENDING_M1 = 'sites/s1/machines/m1/commands/pending';
+
+/** Path-keyed docs; every queued command completes on its first poll. */
+function createStoreDb() {
+  const docs = new Map<string, Record<string, unknown>>();
+  const doc = (path: string): unknown => ({
+    get: async () => {
+      if (path.endsWith('/commands/completed')) {
+        const pending = docs.get(path.replace(/completed$/, 'pending')) ?? {};
+        const done = Object.fromEntries(
+          Object.keys(pending).map((id) => [id, { status: 'completed', result: 'ok' }]),
+        );
+        return { exists: true, data: () => done };
+      }
+      return { exists: docs.has(path), data: () => docs.get(path) };
+    },
+    set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+      docs.set(path, opts?.merge ? { ...(docs.get(path) ?? {}), ...data } : data);
+    },
+    update: async () => {},
+    collection: (name: string) => col(`${path}/${name}`),
+  });
+  const col = (path: string): unknown => ({
+    doc: (id: string) => doc(`${path}/${id}`),
+    get: async () => ({ docs: [] }),
+  });
+  return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, docs };
+}
+
+/** Every command queued at `path`, in write order. */
+function queuedAt(docs: Map<string, Record<string, unknown>>, path = PENDING_M1): Record<string, unknown>[] {
+  return Object.values(docs.get(path) ?? {}) as Record<string, unknown>[];
+}
+
+// a call's own machines, in a turn on several
+
+/**
+ * A turn on several machines used to send every tool call to all of them, so
+ * "restart it on m1" restarted it on m2 and m3 as well. Each tool that runs on
+ * machines now takes `machines`: the call runs there and nowhere else, a tool
+ * above read-only is refused without it, and the list never reaches an agent.
+ */
+describe('a call names its machines in a turn on several', () => {
+  const TURN = ['m1', 'm2', 'm3'];
+  const RESTART = { process_name: 'TouchDesigner' };
+
+  function toolFor(
+    db: FirebaseFirestore.Firestore,
+    toolName: string,
+    machines: string[] = TURN,
+    options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null } = { machineScope: null },
+  ) {
+    const def = allTools.find((t) => t.name === toolName)!;
+    return buildExecutableTools(db, 's1', '__site__', 'c1', [def], true, machines, options)[toolName];
+  }
+
+  /** The machines a command was queued for. */
+  function queuedMachines(docs: Map<string, Record<string, unknown>>): string[] {
+    return TURN.filter((mid) => queuedAt(docs, `sites/s1/machines/${mid}/commands/pending`).length > 0);
+  }
+
+  it('offers the list on every tool that runs on machines, and requires it above read-only', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+    );
+
+    for (const def of allTools) {
+      const { properties, required = [] } = tools[def.name].inputSchema;
+      const perMachine = !SERVER_SIDE_TOOLS.has(def.name)
+        || ['deploy_software', 'update_process', 'add_process', 'delete_process'].includes(def.name);
+      expect([def.name, 'machines' in properties]).toEqual([def.name, perMachine]);
+      expect([def.name, required.includes('machines')]).toEqual([def.name, perMachine && def.tier >= 2]);
+    }
+    // the definitions themselves are untouched: only the offered copy gains it
+    for (const def of allTools) expect(def.parameters.properties).not.toHaveProperty('machines');
+  });
+
+  it('offers no list in a turn on one machine', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], { machineScope: null },
+    );
+
+    for (const def of allTools) expect(tools[def.name].inputSchema.properties).not.toHaveProperty('machines');
+  });
+
+  it('runs a change on the machine the call names and on no other', async () => {
+    const { db, docs } = createStoreDb();
+
+    const result = (await toolFor(db, 'restart_process').execute(
+      { ...RESTART, machines: ['m2'] }, { toolCallId: 'call_1' },
+    )) as { machines: Record<string, unknown>[] };
+
+    expect(queuedMachines(docs)).toEqual(['m2']);
+    expect(result.machines.map((entry) => entry.machine)).toEqual(['m2']);
+  }, 15000);
+
+  it('keeps the list out of what the agent is sent', async () => {
+    const { db, docs } = createStoreDb();
+
+    const tool = toolFor(db, 'run_command', TURN, { machineScope: null, ...DASHBOARD_TURN });
+    await runApproved(db, tool, { command: 'hostname', machines: ['m2'] });
+
+    const [command] = queuedAt(docs, 'sites/s1/machines/m2/commands/pending');
+    expect(command.tool_params).toEqual({ command: 'hostname' });
+  }, 15000);
+
+  it('refuses a change that names no machine, and sends nothing', async () => {
+    const { db, docs } = createStoreDb();
+
+    const result = await toolFor(db, 'restart_process').execute(RESTART, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'machines_not_named' });
+    expect(docs.size).toBe(0);
+  });
+
+  it.each([
+    ['a machine outside the turn', ['m2', 'm9'], 'machines_not_in_turn'],
+    ['an empty list', [], 'machines_invalid'],
+    ['something that is not a list', 'm2', 'machines_invalid'],
+    ['an entry that is not an id', ['m2', 7], 'machines_invalid'],
+    ['every machine mixed with one', ['*', 'm2'], 'machines_invalid'],
+  ])('refuses %s whole, and sends nothing', async (_label, machines, error) => {
+    const { db, docs } = createStoreDb();
+
+    const result = await toolFor(db, 'restart_process').execute({ ...RESTART, machines }, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error });
+    expect(docs.size).toBe(0);
+  });
+
+  it('names the machines outside the turn, and nothing about them', async () => {
+    const { db } = createStoreDb();
+
+    const result = (await toolFor(db, 'restart_process').execute(
+      { ...RESTART, machines: ['m9', 'm2'] }, { toolCallId: 'call_1' },
+    )) as { detail: string };
+
+    expect(result.detail).toContain('m9');
+    expect(result.detail).toContain('m1, m2, m3');
+  });
+
+  it('runs on every machine of the turn when the call says so', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process').execute({ ...RESTART, machines: ['*'] }, { toolCallId: 'call_1' });
+
+    expect(queuedMachines(docs)).toEqual(TURN);
+  }, 15000);
+
+  it('runs a named machine once, however often it is named', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process').execute({ ...RESTART, machines: ['m2', 'm2'] }, { toolCallId: 'call_1' });
+
+    expect(queuedAt(docs, 'sites/s1/machines/m2/commands/pending')).toHaveLength(1);
+  }, 15000);
+
+  it('runs a read with no list on every machine of the turn, and a read with one on those', async () => {
+    const all = createStoreDb();
+    await toolFor(all.db, 'get_system_info').execute({}, { toolCallId: 'call_1' });
+    expect(queuedMachines(all.docs)).toEqual(TURN);
+
+    const some = createStoreDb();
+    await toolFor(some.db, 'get_system_info').execute({ machines: ['m1', 'm3'] }, { toolCallId: 'call_2' });
+    expect(queuedMachines(some.docs)).toEqual(['m1', 'm3']);
+  }, 15000);
+
+  it('runs a change with no list where the turn has one machine', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process', ['m1']).execute(RESTART, { toolCallId: 'call_1' });
+
+    expect(queuedMachines(docs)).toEqual(['m1']);
+    expect(toolFor(db, 'restart_process', ['m1']).inputSchema.required ?? []).not.toContain('machines');
+  }, 15000);
+
+  it('asks for approval on the machines a privileged call names, and asks nobody for a call it will refuse', async () => {
+    const { db, docs } = createStoreDb();
+    const tool = toolFor(db, 'reboot_machine');
+
+    expect(await tool.needsApproval({ machines: ['m2'] }, { toolCallId: 'call_1', messages: [] })).toBe(true);
+    // no list: execute refuses at once, so there is no card to show
+    expect(await tool.needsApproval({}, { toolCallId: 'call_2', messages: [] })).toBe(false);
+    expect(await tool.execute({}, { toolCallId: 'call_2' })).toMatchObject({ ok: false, error: 'machines_not_named' });
+    expect(docs.get('chats/c1/approvalRequests/call_1')).toMatchObject({ machineIds: ['m2'] });
+    expect(docs.has('chats/c1/approvalRequests/call_2')).toBe(false);
+    expect(queuedMachines(docs)).toEqual([]);
+  });
+
+  describe('an approved call, resumed after a machine it named left the turn', () => {
+    const ASKED = { machineScope: null, ...DASHBOARD_TURN };
+    const RESUMED = { ...ASKED, incomingToolCallIds: ['call_1'] };
+    const input = { machines: ['m1', 'm2'] };
+
+    /** The card the turn that asked recorded, and the person's answer claimed by the turn that resumes it. */
+    async function asked(db: FirebaseFirestore.Firestore, call: Record<string, unknown>) {
+      expect(await toolFor(db, 'reboot_machine', TURN, ASKED).needsApproval(call, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
+    }
+
+    it('runs on the machines it named that are still there, and on no other', async () => {
+      const { db, docs } = createStoreDb();
+      await asked(db, input);
+      // m2 went offline while the card waited; m3 was never named
+      const tool = toolFor(db, 'reboot_machine', ['m1', 'm3'], RESUMED);
+
+      expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await tool.execute(input, { toolCallId: 'call_1' });
+
+      expect(queuedMachines(docs)).toEqual(['m1']);
+    }, 15000);
+
+    it('is refused when it names more machines than its card did, and sends nothing', async () => {
+      const { db, docs } = createStoreDb();
+      await asked(db, { machines: ['m1'] });
+      const tool = toolFor(db, 'reboot_machine', TURN, RESUMED);
+
+      expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+        ok: false, error: 'approval_does_not_match',
+      });
+      expect(queuedMachines(docs)).toEqual([]);
+    });
+
+    it('is refused when none of them is left', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', ['m3'], RESUMED);
+
+      expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+        ok: false, error: 'machines_not_in_turn',
+      });
+      expect(docs.size).toBe(0);
+    });
+  });
+
+  it('weighs a held restart against the machines the call names, not the whole turn', async () => {
+    const { db } = createStoreDb();
+    // only m1's agent can hold a restart until active hours end
+    const tool = toolFor(db, 'reboot_machine', TURN, { machineScope: null, activeHoursGuardIds: ['m1'] });
+    const held = { when: 'after_active_hours' };
+
+    expect(await tool.needsApproval({ ...held, machines: ['m1'] }, { toolCallId: 'call_1', messages: [] })).toBe(true);
+    expect(await tool.needsApproval({ ...held, machines: ['m2', 'm3'] }, { toolCallId: 'call_2', messages: [] })).toBe(false);
+  });
+
+  it('adds a process to the machines the call names and to no other', async () => {
+    mockCreateProcess.mockClear();
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+
+    const { db } = createStoreDb();
+    const tool = toolFor(db, 'add_process', TURN, {
+      userId: 'uid_alice', userRole: 'admin', machineScope: null, ...DASHBOARD_TURN,
+    });
+    await runApproved(db, tool, { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machines: ['m3'] });
+
+    expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId)).toEqual(['m3']);
+  });
+
+  it('leaves a tool that works on the site, not on machines, as it was', async () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+    );
+
+    expect(tools.list_talons.inputSchema).toEqual(allTools.find((t) => t.name === 'list_talons')!.parameters);
+  });
+});
+
+// active-hours override
+
+/**
+ * An override reaches a command one way only: a dashboard turn's call sets
+ * `override_active_hours` with a reason, `needsApproval` records that exact call
+ * and asks the person, and the turn that resumes it finds the record for the
+ * same toolCallId and the same input. Everything else is refused before
+ * anything is queued, so the agent refuses inside active hours.
+ */
+describe('active-hours override', () => {
+  const PERSON: BuildExecutableToolsOptions = {
+    userId: 'uid_alice',
+    userRole: 'admin',
+    userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+    machineScope: null,
+    allowActiveHoursOverride: true,
+    launchChangeApprovable: true,
+    turnId: 'turn-1',
+  };
+
+  const REBOOT_NOW = { override_active_hours: true, reason: 'the show ended early' };
+
+
+  function toolFor(
+    db: FirebaseFirestore.Firestore,
+    toolName: string,
+    options: BuildExecutableToolsOptions = PERSON,
+    siteMode = false,
+  ) {
+    const def = allTools.find((t) => t.name === toolName)!;
+    return buildExecutableTools(
+      db, 's1', siteMode ? '__site__' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [], options,
+    )[toolName];
+  }
+
+  /** The asking turn: the SDK evaluates needsApproval and, when true, shows the card. */
+  function ask(
+    db: FirebaseFirestore.Firestore,
+    toolName: string,
+    input: Record<string, unknown>,
+    toolCallId: string,
+    options: BuildExecutableToolsOptions = PERSON,
+  ): Promise<boolean> {
+    return Promise.resolve(toolFor(db, toolName, options).needsApproval(input, { toolCallId, messages: [] }));
+  }
+
+  /**
+   * The turn after the person approved, as ai 7 runs it: needsApproval again on
+   * the input the request carries back, then execute on that same input.
+   */
+  async function resume(
+    db: FirebaseFirestore.Firestore,
+    toolName: string,
+    input: Record<string, unknown>,
+    toolCallId: string,
+  ): Promise<unknown> {
+    const tool = toolFor(db, toolName, { ...PERSON, incomingToolCallIds: [toolCallId] });
+    await claim(db, toolCallId);
+    await tool.needsApproval(input, { toolCallId, messages: [] });
+    return tool.execute(input, { toolCallId });
+  }
+
+  it('asks a person for an override even with tier-3 approval off, tier-2 tools included', async () => {
+    const { db, docs } = createStoreDb();
+    const toggleOff = { ...PERSON, requireTier3Approval: false };
+
+    expect(await ask(db, 'reboot_machine', REBOOT_NOW, 'call_reboot', toggleOff)).toBe(true);
+    expect(
+      await ask(
+        db,
+        'manage_windows_update',
+        { action: 'set_active_hours', start_hour: 6, end_hour: 9, ...REBOOT_NOW },
+        'call_wu',
+        toggleOff,
+      ),
+    ).toBe(true);
+    // The same calls without the override run straight away.
+    expect(await ask(db, 'reboot_machine', {}, 'call_plain', toggleOff)).toBe(false);
+    expect(docs.get('chats/c1/approvalRequests/call_reboot')).toMatchObject({ toolName: 'reboot_machine' });
+    expect(docs.get('chats/c1/approvalRequests/call_wu')).toMatchObject({ toolName: 'manage_windows_update' });
+    expect(docs.has('chats/c1/approvalRequests/call_plain')).toBe(false);
+    expect(queuedAt(docs)).toEqual([]);
+  });
+
+  it('an approved single-machine reboot carries the override and who approved it', async () => {
+    const { db, docs } = createStoreDb();
+
+    expect(await ask(db, 'reboot_machine', REBOOT_NOW, 'call_1')).toBe(true);
+    const result = await resume(db, 'reboot_machine', REBOOT_NOW, 'call_1');
+
+    expect(result).toMatchObject({ status: 'completed' });
+    const [command] = queuedAt(docs);
+    expect(command).toMatchObject({
+      type: 'reboot_machine',
+      activeHoursOverride: { reason: 'the show ended early', approvedBy: 'user:uid_alice' },
+    });
+    // The pair is consumed, not forwarded as stray fields.
+    expect(command).not.toHaveProperty('override_active_hours');
+    expect(command).not.toHaveProperty('reason');
+  }, 15000);
+
+  it('a model-set override never reaches a command without that approval, toggle off included', async () => {
+    const { db, docs } = createStoreDb();
+    // Even if execute ran with no approval behind it, there is no record of one.
+    const tool = toolFor(db, 'reboot_machine', { ...PERSON, requireTier3Approval: false });
+
+    const result = await tool.execute(REBOOT_NOW, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_not_approved' });
+    expect(queuedAt(docs)).toEqual([]);
+  });
+
+  it('a resumed call whose input gained an override without a fresh approval does not carry it', async () => {
+    const { db, docs } = createStoreDb();
+
+    // The card the person answered showed a plain reboot (tier 3 asks anyway).
+    expect(await ask(db, 'reboot_machine', {}, 'call_1')).toBe(true);
+    const asked = docs.get('chats/c1/approvalRequests/call_1');
+    // The resume comes back carrying an override nobody was shown.
+    const result = await resume(db, 'reboot_machine', REBOOT_NOW, 'call_1');
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_not_approved' });
+    expect(docs.get('chats/c1/approvalRequests/call_1')).toEqual(asked);
+    expect(queuedAt(docs)).toEqual([]);
+  });
+
+  it('a resumed override whose input changed after the card was shown does not run', async () => {
+    const { db, docs } = createStoreDb();
+
+    expect(await ask(db, 'reboot_machine', REBOOT_NOW, 'call_1')).toBe(true);
+    const result = await resume(db, 'reboot_machine', { ...REBOOT_NOW, reason: 'something else' }, 'call_1');
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_not_approved' });
+    expect(queuedAt(docs)).toEqual([]);
+  });
+
+  const NO_PERSON_TURNS: Array<[string, BuildExecutableToolsOptions]> = [
+    [
+      'a follow-up or talon turn',
+      {
+        userId: 'uid_alice',
+        userRole: 'admin',
+        userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+        machineScope: null,
+      },
+    ],
+    ['the conversations API', { userId: 'uid_alice', userRole: 'admin', machineScope: null, requireTier3Approval: true }],
+    ['an unattended system actor', { systemActor: 'cortex_autonomous', machineScope: null, allowActiveHoursOverride: true }],
+    [
+      // the key owner's turn in every other way, and still nobody to ask
+      'a turn a granted machine started',
+      {
+        userId: 'uid_alice',
+        userRole: 'admin',
+        userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+        machineScope: null,
+        allowActiveHoursOverride: true,
+        machineActor: { type: 'machine', siteId: 's1', machineId: 'lobby-01', maxTier: 3, machineIds: null },
+      },
+    ],
+  ];
+  const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
+
+  it.each(NO_PERSON_TURNS)('%s is never offered the override params', (_label, options) => {
+    const { db } = createStoreDb();
+    for (const toolName of OVERRIDE_TOOLS) {
+      const { properties } = toolFor(db, toolName, options).inputSchema;
+      expect(properties).not.toHaveProperty('override_active_hours');
+      expect(properties).not.toHaveProperty('reason');
+    }
+    // a deferral is not an override, so it stays on offer.
+    expect(toolFor(db, 'reboot_machine', options).inputSchema.properties).toHaveProperty('when');
+  });
+
+  it('a dashboard turn is offered them on every tool that takes them', () => {
+    const { db } = createStoreDb();
+    for (const toolName of OVERRIDE_TOOLS) {
+      const { properties } = toolFor(db, toolName).inputSchema;
+      expect(properties).toHaveProperty('override_active_hours');
+      expect(properties).toHaveProperty('reason');
+    }
+  });
+
+  it.each(NO_PERSON_TURNS)('%s is refused before anything is asked or queued', async (_label, options) => {
+    const { db, docs } = createStoreDb();
+    const tool = toolFor(db, 'reboot_machine', options);
+
+    // The schema no longer offers it; a model that sends it anyway gets no card,
+    // and the refusal is immediate.
+    expect(await tool.needsApproval(REBOOT_NOW, { toolCallId: 'call_1', messages: [] })).toBe(false);
+    const result = await tool.execute(REBOOT_NOW, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_needs_person' });
+    expect(docs.size).toBe(0);
+  });
+
+  it('a fan-out turn is refused: overrides go one machine at a time', async () => {
+    const { db, docs } = createStoreDb();
+    const tool = toolFor(db, 'reboot_machine', PERSON, true);
+    // naming one machine of the fan-out does not make it a single-machine turn
+    const input = { ...REBOOT_NOW, machines: ['m1'] };
+
+    expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(false);
+    const result = await tool.execute(input, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_needs_single_machine' });
+    expect(docs.size).toBe(0);
+  });
+
+  it.each([
+    ['no reason', { override_active_hours: true }],
+    ['a blank reason', { override_active_hours: true, reason: '   ' }],
+    ['a reason over 500 characters', { override_active_hours: true, reason: 'x'.repeat(501) }],
+  ])('%s is refused with a request for one', async (_label, input) => {
+    const { db, docs } = createStoreDb();
+    const tool = toolFor(db, 'reboot_machine');
+
+    expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(false);
+    const result = await tool.execute(input, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_needs_reason' });
+    expect(docs.size).toBe(0);
+  });
+
+  it('asks nobody when the request cannot be recorded, and the call is refused', async () => {
+    const { db, docs } = createStoreDb();
+    const failing = {
+      collection: (name: string) =>
+        name === 'chats'
+          ? { doc: () => ({ collection: () => ({ doc: () => ({ set: async () => { throw new Error('unavailable'); } }) }) }) }
+          : db.collection(name),
+    } as unknown as FirebaseFirestore.Firestore;
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      expect(await ask(failing, 'reboot_machine', REBOOT_NOW, 'call_1')).toBe(false);
+      expect(errorSpy).toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+    // No card was shown, so the SDK runs execute at once, which finds no record.
+    const result = await toolFor(db, 'reboot_machine').execute(REBOOT_NOW, { toolCallId: 'call_1' });
+    expect(result).toMatchObject({ ok: false, error: 'active_hours_override_not_approved' });
+    expect(queuedAt(docs)).toEqual([]);
+  });
+
+  it('an approved set_active_hours override rides the mcp_tool_call envelope, not tool_params', async () => {
+    const { db, docs } = createStoreDb();
+    const input = { action: 'set_active_hours', start_hour: 6, end_hour: 9, ...REBOOT_NOW };
+
+    expect(await ask(db, 'manage_windows_update', input, 'call_wu')).toBe(true);
+    await resume(db, 'manage_windows_update', input, 'call_wu');
+
+    const [command] = queuedAt(docs);
+    expect(command).toMatchObject({
+      type: 'mcp_tool_call',
+      tool_name: 'manage_windows_update',
+      activeHoursOverride: { reason: 'the show ended early', approvedBy: 'user:uid_alice' },
+    });
+    expect(command.tool_params).toEqual({ action: 'set_active_hours', start_hour: 6, end_hour: 9 });
+  }, 15000);
+
+  it('an approved deployment writes the override onto its install_software command', async () => {
+    const { db, docs } = createStoreDb();
+    const input = {
+      software_name: 'Player',
+      installer_url: 'https://example.com/player.exe',
+      silent_flags: '/S',
+      ...REBOOT_NOW,
+    };
+
+    expect(await ask(db, 'deploy_software', input, 'call_deploy')).toBe(true);
+    const result = await resume(db, 'deploy_software', input, 'call_deploy');
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    const [command] = queuedAt(docs);
+    expect(command).toMatchObject({
+      type: 'install_software',
+      activeHoursOverride: { reason: 'the show ended early', approvedBy: 'user:uid_alice' },
+    });
+  });
+
+  it('without an override, deferral and a stray reason are handled as plain params', async () => {
+    const { db, docs } = createStoreDb();
+
+    // `when` is not privileged, so it needs no card beyond the tier's own.
+    await toolFor(db, 'reboot_machine', {
+      ...PERSON,
+      requireTier3Approval: false,
+      activeHoursGuardIds: ['m1'],
+    }).execute(
+      { when: 'after_active_hours', reason: 'not an override' },
+      { toolCallId: 'call_1' },
+    );
+
+    const [command] = queuedAt(docs);
+    expect(command).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
+    expect(command).not.toHaveProperty('activeHoursOverride');
+    expect(command).not.toHaveProperty('reason');
+  }, 15000);
+
+  /**
+   * An agent older than 4.1.21, or one off windows, ignores `when` and restarts
+   * within a minute, so a held restart only goes to a machine whose agent
+   * reports `capabilities.activeHoursGuard`.
+   */
+  describe('a restart held until active hours end', () => {
+    const HELD = { when: 'after_active_hours' };
+    const HELD_EVERYWHERE = { ...HELD, machines: ['*'] };
+    const PENDING_M2 = 'sites/s1/machines/m2/commands/pending';
+
+    it('is refused on a machine whose agent cannot hold it, before anything is asked or queued', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine');
+
+      // tier 3 would ask, but there is nothing to approve.
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(false);
+      const result = await tool.execute(HELD, { toolCallId: 'call_1' });
+
+      expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+      const { detail } = result as { detail: string };
+      expect(detail).toMatch(/older than owlette 4\.1\.21, or the machine isn't on Windows/);
+      // a person is there to ask, and a restart now is theirs to choose.
+      expect(detail).toMatch(/nothing was sent\. don't restart it now unless the operator explicitly asks for that; ask them\.$/);
+      expect(docs.size).toBe(0);
+    });
+
+    it('is refused even with tier-3 approval off, and with an override asked for', async () => {
+      const { db, docs } = createStoreDb();
+      const toggleOff = { ...PERSON, requireTier3Approval: false };
+
+      for (const input of [HELD, { ...HELD, ...REBOOT_NOW }]) {
+        const tool = toolFor(db, 'reboot_machine', toggleOff);
+        expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(false);
+        expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+          error: 'held_restart_unsupported',
+        });
+      }
+      expect(docs.size).toBe(0);
+    });
+
+    it('still goes to a machine whose agent holds it', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] });
+
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
+      await tool.execute(HELD, { toolCallId: 'call_1' });
+
+      expect(queuedAt(docs)).toEqual([
+        expect.objectContaining({ type: 'reboot_machine', when: 'after_active_hours' }),
+      ]);
+    }, 15000);
+
+    it('leaves a restart now, and a shutdown, to every machine as before', async () => {
+      const { db, docs } = createStoreDb();
+      const toggleOff = { ...PERSON, requireTier3Approval: false };
+
+      await toolFor(db, 'reboot_machine', toggleOff).execute({ when: 'now' }, { toolCallId: 'call_1' });
+      await toolFor(db, 'shutdown_machine', toggleOff).execute({}, { toolCallId: 'call_2' });
+
+      expect(queuedAt(docs).map((command) => command.type)).toEqual(['reboot_machine', 'shutdown_machine']);
+    }, 15000);
+
+    it('in a fan-out, is refused in the result of each machine that cannot hold it, and sent to the rest', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] }, true);
+
+      // m1 can hold it, so the card still asks.
+      expect(await tool.needsApproval(HELD_EVERYWHERE, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
+      const result = (await tool.execute(HELD_EVERYWHERE, { toolCallId: 'call_1' })) as {
+        machines: Record<string, unknown>[];
+      };
+
+      expect(result.machines).toEqual([
+        expect.objectContaining({ machine: 'm1', status: 'completed' }),
+        expect.objectContaining({ machine: 'm2', ok: false, error: 'held_restart_unsupported' }),
+      ]);
+      expect(queuedAt(docs)).toEqual([
+        expect.objectContaining({ type: 'reboot_machine', when: 'after_active_hours' }),
+      ]);
+      expect(docs.has(PENDING_M2)).toBe(false);
+    }, 15000);
+
+    it('in a fan-out where no machine can hold it, asks nobody and queues nothing', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', PERSON, true);
+
+      expect(await tool.needsApproval(HELD_EVERYWHERE, { toolCallId: 'call_1', messages: [] })).toBe(false);
+      const result = (await tool.execute(HELD_EVERYWHERE, { toolCallId: 'call_1' })) as {
+        machines: Record<string, unknown>[];
+      };
+
+      expect(result.machines.map((entry) => [entry.machine, entry.error])).toEqual([
+        ['m1', 'held_restart_unsupported'],
+        ['m2', 'held_restart_unsupported'],
+      ]);
+      expect(docs.size).toBe(0);
+    });
+  });
 });
 
 // schedule_followup / cancel_followup (server-side, never relayed)
@@ -1534,7 +2977,7 @@ describe('verifyUserSiteAccess', () => {
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSuperadmin).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
-    expect(access.siteRole).toBeNull();
+    expect(access.standing.role).toBeNull();
   });
 
   it('an owner membership grants ownership and site-admin', async () => {
@@ -1544,7 +2987,7 @@ describe('verifyUserSiteAccess', () => {
       member: member('owner'),
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
-    expect(access.siteRole).toBe('owner');
+    expect(access.standing.role).toBe('owner');
     expect(access.isSiteOwner).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
   });
@@ -1568,7 +3011,49 @@ describe('verifyUserSiteAccess', () => {
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSiteAdmin).toBe(false);
-    expect(access.siteRole).toBe('member');
+    expect(access.standing.role).toBe('member');
+  });
+
+  it('returns the swoop mode the member row carries, in the standing beside the site role', async () => {
+    const heldToView = makeAccessDb({
+      users: { role: 'member' },
+      sites: {},
+      member: { ...member('admin'), swoop: 'view' },
+    });
+    const held = await verifyUserSiteAccess(heldToView, 'u1', 's1');
+    expect(held.standing).toMatchObject({ role: 'admin', swoopMode: 'view' });
+    // the standing is the one place they live
+    expect(held).not.toHaveProperty('siteRole');
+    expect(held).not.toHaveProperty('swoopMode');
+
+    const byRole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('admin') });
+    await expect(verifyUserSiteAccess(byRole, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: 'admin', swoopMode: null },
+    });
+  });
+
+  it('returns the whole standing, machine scope included, while the role still decides the tier', async () => {
+    const scoped = makeAccessDb({
+      users: { role: 'member' },
+      sites: {},
+      member: { ...member('admin'), swoop: 'control', machineIds: ['m2', 'm1'] },
+    });
+    const access = await verifyUserSiteAccess(scoped, 'u1', 's1');
+    expect(access.standing).toEqual({ role: 'admin', swoopMode: 'control', machineIds: ['m1', 'm2'] });
+    // a scoped admin keeps tier 3; the scope narrows where it applies
+    expect(access.isSiteAdmin).toBe(true);
+    expect(resolveHootMaxTier(access)).toBe(3);
+
+    const whole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('member') });
+    await expect(verifyUserSiteAccess(whole, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: 'member', swoopMode: null, machineIds: null },
+    });
+
+    // a superadmin holds no row and reaches the whole site
+    const superadmin = makeAccessDb({ users: { role: 'superadmin' }, sites: {} });
+    await expect(verifyUserSiteAccess(superadmin, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: null, swoopMode: null, machineIds: null },
+    });
   });
 
   it('a GLOBAL admin with no membership is refused outright', async () => {
@@ -1619,6 +3104,250 @@ describe('verifyUserSiteAccess', () => {
     const error = await verifyUserSiteAccess(db, 'u1', 's1').catch((err: unknown) => err);
     expect(error).toBeInstanceOf(SiteAccessError);
     expect((error as SiteAccessError).code).toBe(code);
+  });
+});
+
+// the hoot actor
+
+/**
+ * the actor hoot's tools act as, built from the access check the way a turn
+ * builds it. an actor that dropped the swoop mode would hand an admin held to
+ * view their control back.
+ */
+describe('the hoot actor', () => {
+  /** the actor `update_process` hands its action, for a caller with this member row. */
+  async function hootActorFor(row: Record<string, unknown>): Promise<UserActor> {
+    const access = await verifyUserSiteAccess(
+      makeAccessDb({ users: { role: 'member' }, sites: {}, member: row }),
+      'u1',
+      's1',
+    );
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+    const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+      userId: 'u1',
+      userRole: access.role,
+      userStanding: access.standing,
+      machineScope: access.standing.machineIds,
+    });
+    // a field that leaves what runs alone, so the call needs no person's approval
+    await tools.update_process.execute({ process_name: 'TouchDesigner', priority: 'High' });
+    return mockUpdateProcess.mock.calls[0][0].actor;
+  }
+
+  it('carries an admin held to view, so it never controls', async () => {
+    const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active', swoop: 'view' });
+
+    expect(actor.swoopModes.s1).toBe('view');
+    expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
+    // the mode changes swoop and nothing else
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1')).toBe(true);
+  });
+
+  it('carries the machine scope beside the swoop mode, so it reaches only those machines', async () => {
+    const actor = await hootActorFor({
+      uid: 'u1',
+      role: 'admin',
+      status: 'active',
+      swoop: 'view',
+      machineIds: ['m1'],
+    });
+
+    expect(actor.machineScopes.s1).toEqual(['m1']);
+    expect(actor.swoopModes.s1).toBe('view');
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm2')).toBe(false);
+    // nothing site-wide, whatever the role
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 's1')).toBe(false);
+  });
+
+  it('builds an actor with no mode and the whole site from a row that carries neither', async () => {
+    const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active' });
+
+    expect(actor).toEqual({
+      type: 'user',
+      userId: 'u1',
+      role: 'member',
+      siteRoles: { s1: 'admin' },
+      swoopModes: {},
+      machineScopes: { s1: null },
+    });
+  });
+
+  it('denies every site-scoped capability with no standing', async () => {
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+    const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+      userId: 'u1',
+      userRole: 'admin',
+      machineScope: null,
+    });
+    await tools.update_process.execute({ process_name: 'TouchDesigner', priority: 'High' });
+    const actor: UserActor = mockUpdateProcess.mock.calls[0][0].actor;
+
+    expect(actor.siteRoles).toEqual({});
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(false);
+  });
+
+  // a granted machine's own call, or a turn it started on the key owner's key:
+  // the action runs as the machine, and its rows say which machine asked
+  describe('when a granted machine asks', () => {
+    const KEY_OWNER: BuildExecutableToolsOptions = {
+      userId: 'u1',
+      userRole: 'member',
+      userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+      machineScope: null,
+    };
+    const LOBBY: MachineActor = {
+      type: 'machine',
+      siteId: 's1',
+      machineId: 'lobby-01',
+      maxTier: 2,
+      machineIds: ['m1'],
+    };
+
+    const PROCESSES = [{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }];
+    const PROCESS_TOOLS = allTools.filter((tool) =>
+      ['update_process', 'add_process', 'delete_process'].includes(tool.name),
+    );
+    /** one call to each process tool, each a launch change. */
+    const PROCESS_CALLS: [string, Record<string, unknown>][] = [
+      ['update_process', { process_name: 'TouchDesigner', launch_mode: 'always' }],
+      ['add_process', { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' }],
+      ['delete_process', { process_name: 'TouchDesigner' }],
+    ];
+
+    function mockProcessActions() {
+      mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      mockDeleteProcess.mockResolvedValue({ processId: 'proc-1', alreadyDeleted: false });
+    }
+
+    /** the context each process tool handed its action. */
+    function processContexts() {
+      return [mockUpdateProcess, mockCreateProcess, mockDeleteProcess].map((mock) => mock.mock.calls[0][0]);
+    }
+
+    /**
+     * the context each process tool hands its action, called straight as the
+     * fleet calls it: a turn a machine started can't approve a launch change.
+     */
+    async function contextsFor(options: BuildExecutableToolsOptions) {
+      mockProcessActions();
+      const { db } = createProcessConfigDb(PROCESSES);
+      for (const [name, params] of PROCESS_CALLS) {
+        await executeServerSideTool(db, 's1', ['m1'], name, params, options);
+      }
+      return processContexts();
+    }
+
+    it('hands every process tool the machine as its actor and its audit name, over the key owner', async () => {
+      const contexts = await contextsFor({ ...KEY_OWNER, machineActor: LOBBY });
+
+      expect(contexts).toHaveLength(3);
+      for (const ctx of contexts) {
+        expect(ctx).toEqual({ siteId: 's1', actor: LOBBY, auditActor: 'machine:lobby-01' });
+      }
+    });
+
+    it('does the same with no person at all, as a direct call has none', async () => {
+      for (const ctx of await contextsFor({ machineActor: LOBBY })) {
+        expect(ctx).toEqual({ siteId: 's1', actor: LOBBY, auditActor: 'machine:lobby-01' });
+      }
+    });
+
+    it('refuses a launch change on a turn it started, as nobody there can approve it', async () => {
+      mockProcessActions();
+      const { db } = createProcessConfigDb(PROCESSES);
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', PROCESS_TOOLS, false, [], {
+        ...KEY_OWNER,
+        machineActor: LOBBY,
+      });
+
+      for (const [name, params] of PROCESS_CALLS) {
+        expect(await tools[name].execute(params, { toolCallId: 'call_1' })).toMatchObject({
+          ok: false,
+          error: 'launch_change_needs_approval',
+        });
+      }
+      for (const mock of [mockUpdateProcess, mockCreateProcess, mockDeleteProcess]) expect(mock).not.toHaveBeenCalled();
+    });
+
+    it('hands a tool only the parameters it declares', async () => {
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      const { db } = createStoreDb();
+      const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+      // approvable, so the launch-change gate lets each call through to the parameter check
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+        ...KEY_OWNER,
+        ...DASHBOARD_TURN,
+        machineScope: ['m1'],
+        machineActor: LOBBY,
+      });
+      const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
+
+      // a parameter the tool doesn't declare refuses the call, so no tool is handed one
+      expect(
+        await tools.add_process.execute(
+          { ...notepad, not_a_field: 'x', override_active_hours: true },
+          { toolCallId: 'call_extra' },
+        ),
+      ).toMatchObject({ ok: false, error: 'tool_params_invalid' });
+      await runApproved(db, tools.add_process, notepad);
+
+      // the whole input: the turn's machine, and what the tool declares
+      expect(mockCreateProcess).toHaveBeenCalledTimes(1);
+      expect(mockCreateProcess.mock.calls[0][1]).toEqual({
+        machineId: 'm1',
+        name: 'Notepad',
+        exe_path: 'C:/Windows/notepad.exe',
+      });
+    });
+
+    it('is never offered a tool that leaves something standing in a person\'s name', () => {
+      const db = {} as unknown as FirebaseFirestore.Firestore;
+      const offeredTo = (options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null }) =>
+        Object.keys(buildExecutableTools(db, 's1', 'm1', 'c1', allTools, false, [], options));
+
+      const toMachine = offeredTo({ ...KEY_OWNER, machineScope: null, machineActor: { ...LOBBY, machineIds: null } });
+      for (const name of PERSON_ONLY_TOOLS) expect(toMachine).not.toContain(name);
+      expect([...PERSON_ONLY_TOOLS].sort()).toEqual(
+        ['cancel_followup', 'create_talon', 'schedule_followup', 'set_talon_enabled'],
+      );
+      // the rest of the whole-site turn is as the key owner's would be
+      const toPerson = offeredTo({ ...KEY_OWNER, machineScope: null });
+      expect(toMachine).toEqual(toPerson.filter((name) => !PERSON_ONLY_TOOLS.has(name)));
+      for (const name of PERSON_ONLY_TOOLS) expect(toPerson).toContain(name);
+    });
+
+    it('names the person when no machine asked', async () => {
+      mockProcessActions();
+      const { db, docs } = createStoreDb();
+      docs.set('config/s1/machines/m1', { processes: PROCESSES });
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', PROCESS_TOOLS, false, [], {
+        ...KEY_OWNER,
+        ...DASHBOARD_TURN,
+      });
+
+      for (const [i, [name, params]] of PROCESS_CALLS.entries()) {
+        await runApproved(db, tools[name], params, `call_${i}`);
+      }
+      for (const ctx of processContexts()) {
+        expect(ctx.auditActor).toBe('cortex:user_u1');
+        expect(ctx.actor).toMatchObject({ type: 'user', userId: 'u1', siteRoles: { s1: 'admin' } });
+      }
+    });
+
+    it('lets a system actor win over it', async () => {
+      const contexts = await contextsFor({ systemActor: 'cortex_autonomous', machineActor: LOBBY });
+
+      for (const ctx of contexts) {
+        expect(ctx.auditActor).toBe('system:cortex_autonomous');
+        expect(ctx.actor).toEqual({ type: 'system', name: 'cortex_autonomous', siteId: 's1' });
+      }
+    });
   });
 });
 
@@ -1703,15 +3432,16 @@ describe('capture_screenshot toModelOutput', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', siteMode ? '' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [],
+      { machineScope: null },
     );
-    return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => {
+    return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => Promise<{
       type: string;
       value: unknown;
-    };
+    }>;
   }
 
-  it('projects a single-machine screenshot url as an image-url block', () => {
-    const out = screenshotToModelOutput(false)({ output: { url: 'https://x/s.jpg', message: 'shot' } });
+  it('projects a single-machine screenshot url as an image-url block', async () => {
+    const out = await screenshotToModelOutput(false)({ output: { url: 'https://x/s.jpg', message: 'shot' } });
     expect(out).toEqual({
       type: 'content',
       value: [
@@ -1721,8 +3451,8 @@ describe('capture_screenshot toModelOutput', () => {
     });
   });
 
-  it('projects each machine url in site-wide aggregated output', () => {
-    const out = screenshotToModelOutput(true)({
+  it('projects each machine url in site-wide aggregated output', async () => {
+    const out = await screenshotToModelOutput(true)({
       output: { machines: [
         { machine: 'm1', url: 'https://x/m1.jpg' },
         { machine: 'm2', error: 'offline' },
@@ -1738,8 +3468,42 @@ describe('capture_screenshot toModelOutput', () => {
     });
   });
 
-  it('falls back to text when there is no url', () => {
-    const out = screenshotToModelOutput(false)({ output: { error: 'capture failed' } });
+  it('falls back to text when there is no url', async () => {
+    const out = await screenshotToModelOutput(false)({ output: { error: 'capture failed' } });
     expect(out).toEqual({ type: 'text', value: 'capture failed' });
+  });
+
+  it('hands the model a signed read url for a stored screenshot', async () => {
+    const stored = '/api/sites/s1/machines/m1/screenshots/image?path=screenshots%2Fs1%2Fm1%2F1.jpg';
+    const single = await screenshotToModelOutput(false)({ output: { url: stored, message: 'shot' } });
+    expect(single).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: 'shot' },
+        { type: 'image-url', url: `https://signed.example/s1/m1${stored}` },
+      ],
+    });
+
+    const siteWide = await screenshotToModelOutput(true)({
+      output: { machines: [{ machine: 'm2', url: stored }] },
+    });
+    expect(siteWide).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: 'm2:' },
+        { type: 'image-url', url: `https://signed.example/s1/m2${stored}` },
+      ],
+    });
+  });
+
+  it('leaves out an image it cannot sign', async () => {
+    const forged = '/api/sites/s1/machines/m1/screenshots/image?path=forged';
+    const single = await screenshotToModelOutput(false)({ output: { url: forged, message: 'shot' } });
+    expect(single).toEqual({ type: 'text', value: 'shot' });
+
+    const siteWide = await screenshotToModelOutput(true)({
+      output: { machines: [{ machine: 'm1', url: forged, message: 'shot' }] },
+    });
+    expect(siteWide).toEqual({ type: 'content', value: [{ type: 'text', text: 'm1: shot' }] });
   });
 });

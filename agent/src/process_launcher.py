@@ -151,20 +151,22 @@ def main():
 
         if visibility == 'Hidden':
             # No shell context needed when hidden — subprocess directly.
-            launch_args = []
-            if file_path:
-                if os.path.isfile(file_path):
-                    launch_args.append(file_path)
-                else:
-                    import shlex
-                    launch_args = shlex.split(file_path, posix=False)
             if exe_path.lower().endswith(('.bat', '.cmd')):
+                launch_args = []
+                if file_path:
+                    if os.path.isfile(file_path):
+                        launch_args.append(file_path)
+                    else:
+                        import shlex
+                        launch_args = shlex.split(file_path, posix=False)
                 # .bat/.cmd can't run via CreateProcess (WinError 193) — wrap
                 # in cmd.exe. Built as a single /s /c string, not a list: see
                 # build_hidden_batch_command for the quote-stripping trap.
                 cmd = build_hidden_batch_command(exe_path, launch_args)
             else:
-                cmd = [exe_path] + launch_args
+                # the command line a shown launch gets from lpParameters: as a
+                # list, a token's own quotes would reach the program escaped.
+                cmd = f'"{exe_path}"' + (f' {parameters}' if parameters else '')
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags = subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = 0  # SW_HIDE

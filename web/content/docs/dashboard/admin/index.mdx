@@ -1,85 +1,111 @@
 ---
 title: "admin panel"
-description: "The Admin Panel is where site admins manage members, agent tokens, schedule presets, alert rules, and webhooks for the sites they belong to. Installer management, the template library, user accounts, and email configuration are internal owlette pages and are not shown to customer accounts."
+description: "the admin panel is where a site's owners and admins manage members, agent tokens, live swoop sessions and swoop settings, hoot's settings, schedule presets, alert rules and webhooks. who can do what is decided by your role on each site. installers, the template library, user accounts, issues and email are internal owlette pages, hidden from customer accounts."
+keywords: ["permissions", "roles", "rbac", "access control", "who can do what", "site owner", "site admin", "capabilities", "superadmin"]
 ---
 
+the admin panel holds two kinds of page: site-scoped pages, for the people who run a site, and internal pages, for owlette itself.
+
 ---
 
-## two levels of access
+## site-scoped pages
 
-The Admin Panel holds two kinds of page.
+these open for anyone who is an **owner** or **admin** of the whole site on at least one site. the sidebar groups them: **fleet** holds sites, agent tokens, swoop and hoot, and **configuration** holds alerts, schedules and webhooks.
 
-**Site-scoped pages** are open to site admins — accounts with the global `admin` role — and always act on the sites that account belongs to:
-
-| page | url | what it does |
+| page | URL | what it does |
 |------|-----|--------------|
-| members | `/admin/members` | add and remove the people who can reach one site |
-| agent tokens | `/admin/tokens` | list and revoke agent refresh tokens for a site |
+| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, its billing, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
+| agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
+| swoop | `/admin/swoop` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for each site, see everyone in a swoop session right now, and end a session |
+| hoot | `/admin/hoot` | a site's [hoot](/docs/dashboard/hoot) approval setting and the machines that may act on others through [hoot mcp](/docs/agent/hoot-mcp) |
 | schedules | `/admin/schedules` | manage [schedule presets](/docs/dashboard/admin/schedule-presets) |
-| alerts | `/admin/alerts` | manage threshold alert rules for a site |
-| webhooks | `/admin/webhooks` | manage a site's outbound webhook subscriptions |
+| alerts | `/admin/alerts` | manage a site's threshold alert rules. see [email alerts](/docs/dashboard/admin/email-alerts) |
+| webhooks | `/admin/webhooks` | manage a site's outbound [webhook](/docs/dashboard/admin/webhooks) subscriptions |
 
-**Internal pages** — installers (`/admin/installers`), template library (`/admin/presets`), users (`/admin/users`), and email (`/admin/email`) — cover platform-wide operations run by owlette. They are hidden from the sidebar for customer accounts, and their routes bounce anyone else back to the dashboard.
+**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop page leaves those sites out: neither its switches nor its live sessions list them.
 
 ---
 
-## roles at a glance
+## internal pages
 
-| role | site access | admin panel |
+installers (`/admin/installers`), the template library (`/admin/presets`), users (`/admin/users`), issues (`/admin/issues`, the issues people send with **submit issue**) and email (`/admin/email`) cover platform-wide operations run by owlette. they are hidden from the sidebar for customer accounts, and their routes send anyone else back to the dashboard.
+
+---
+
+## roles
+
+your role is set **per site**: the same person can own one site, administer a second and be a plain member of a third. the role on your owlette account grants nothing on a site by itself. the one exception is owlette's superadmins, who reach every site.
+
+| role on a site | what it can do there | admin panel |
 |------|-------------|-------------|
-| **member** | read-only on the sites they belong to | none |
-| **admin** (site admin) | write access on the sites they belong to — machine commands and configuration, deployments, roosts, talons, webhooks, logs, and site members | the five site-scoped pages above, always limited to those sites |
+| **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
+| **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the seven site-scoped pages above, with whole-site access |
+| **owner** | everything an admin can, plus deleting the site, transferring ownership and, once [plans](/docs/plans) apply, changing the site's billing. every site has exactly one | the seven site-scoped pages above |
 
-Site data never widens with the panel: a site admin who belongs to two sites sees exactly those two in every site selector.
+a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) on a site can change what they get from swoop there, and nothing else.
 
----
-
-## getting site admin access
-
-`admin` is an account-level role, not a per-site setting, so it is granted once and applies to every site that account belongs to. It is set by owlette from the internal user-management page — email [support@tridant.io](mailto:support@tridant.io) to have an account upgraded.
-
-Because the role is account-level, adding someone to a site with the **admin** role does not by itself grant admin rights: an account that is still a member joins as a member. See [member management](/docs/dashboard/admin/member-management).
+a member or an admin can also be [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site. on those machines they keep their role and their swoop mode; everything that spans the site, from the admin panel to deployments, roost and talons, needs the whole site. the owner always has the whole site.
 
 ---
 
-## access
+## getting admin on a site
 
-- **Profile menu** → "admin panel" (visible to site admins; members do not see the entry). For a site admin it opens on **members**.
-- **Direct URLs**: `/admin/members`, `/admin/tokens`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
+ask an owner or admin of that site to change your role. the change applies to that site only, and it takes effect at once. they make it, with any change to your swoop mode, in the site's members section: see [changing a role](/docs/dashboard/admin/member-management#changing-a-role).
 
-Members are redirected to the dashboard with an error message, as is a site admin who opens an internal page directly.
+ownership is not a role anyone can assign: it moves by transfer, from the current owner (or an owlette superadmin).
+
+---
+
+## opening the panel
+
+- **profile menu** → **admin panel**. the entry shows once you are an owner or admin of the whole site on at least one site, and opens on **sites** (owlette's superadmins land on installers)
+- **direct URLs**: `/admin/sites`, `/admin/sites/{siteId}`, `/admin/tokens`, `/admin/swoop`, `/admin/hoot`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
+
+someone who is owner or admin of the whole site on no site, an admin limited to some machines included, is sent back to the dashboard with **access denied**, and so is a site admin who opens an internal page directly.
 
 ---
 
 ## capability matrix
 
-Read access to the sites an account belongs to is baseline role behavior, not a `Capability` enum value. The capability rows below mirror `RoleCapabilityMatrix` in `web/lib/capabilities.ts`; site-scoped grants apply only to the sites that account belongs to.
+every permission check in the web app asks for one capability. a site-scoped capability is held only on the site where you have that role; reading the sites you belong to is baseline membership, not a capability.
 
-| capability | member | site admin | scope |
-|-----------|:------:|:----------:|-------|
-| Read access to sites you belong to | yes | yes | site membership |
-| `USER_SELF_PREFS` | yes | yes | self |
-| `USER_SELF_DELETE` | yes | yes | self |
-| `MACHINE_VIEW` | yes | yes | sites you belong to |
-| `MACHINE_EXEC_COMMAND` | no | yes | sites you belong to |
-| `MACHINE_CONFIG_WRITE` | no | yes | sites you belong to |
-| `MACHINE_REMOVE` | no | yes | sites you belong to |
-| `DEPLOYMENT_MANAGE` | no | yes | sites you belong to |
-| `DISTRIBUTION_MANAGE` (roost) | no | yes | sites you belong to |
-| `UNINSTALL_TRIGGER` | no | yes | sites you belong to |
-| `PRESET_MANAGE` (site presets) | no | yes | sites you belong to |
-| `SITE_MEMBER_MANAGE` | no | yes | sites you belong to |
-| `WEBHOOK_MANAGE` | no | yes | sites you belong to |
-| `SITE_LOGS_MANAGE` | no | yes | sites you belong to |
-| `TALON_MANAGE` | no | yes | sites you belong to |
-| `AGENT_TOKEN_REVOKE` | no | yes | sites you belong to |
-| `ALERT_RULES_MANAGE` | no | yes | sites you belong to |
-| `USER_ROLE_MANAGE` | no | no | internal |
-| `USER_DELETE` | no | no | internal |
-| `SYSTEM_PRESET_MANAGE` (deployment template presets) | no | no | internal |
-| `INSTALLER_MANAGE` | no | no | internal |
-| `GLOBAL_SETTINGS_WRITE` | no | no | internal |
+| capability | member | admin | owner | scope |
+|-----------|:------:|:-----:|:-----:|-------|
+| read access to the site | yes | yes | yes | site membership |
+| `MACHINE_VIEW` (screenshots, live view) | yes | yes | yes | site, or your machines |
+| `MACHINE_REMOTE_VIEW` (watch swoop) | yes | yes | yes | site, or your machines |
+| `MACHINE_EXEC_COMMAND` | no | yes | yes | site, or your machines |
+| `MACHINE_REMOTE_CONTROL` (control swoop) | no | yes | yes | site, or your machines |
+| `SWOOP_SETTINGS_MANAGE` | no | yes | yes | site |
+| `FLEET_SETTINGS_MANAGE` ([hoot mcp](/docs/agent/hoot-mcp): which machines may act on others) | no | yes | yes | site |
+| `MACHINE_CONFIG_WRITE` | no | yes | yes | site, or your machines |
+| `MACHINE_REMOVE` | no | yes | yes | site |
+| `MACHINE_ENROLL` (installers, setup tokens, pairing codes) | no | yes | yes | site |
+| `AGENT_TOKEN_REVOKE` | no | yes | yes | site |
+| `DEPLOYMENT_MANAGE` | no | yes | yes | site |
+| `DISTRIBUTION_MANAGE` (roost) | no | yes | yes | site |
+| `UNINSTALL_TRIGGER` | no | yes | yes | site |
+| `PRESET_MANAGE` (site presets) | no | yes | yes | site |
+| `SITE_MEMBER_MANAGE` | no | yes | yes | site |
+| `WEBHOOK_MANAGE` | no | yes | yes | site |
+| `SITE_LOGS_MANAGE` | no | yes | yes | site |
+| `TALON_MANAGE` | no | yes | yes | site |
+| `ALERT_RULES_MANAGE` | no | yes | yes | site |
+| `SITE_DELETE` | no | no | yes | site |
+| `SITE_BILLING_MANAGE` (put the site on your card) | no | no | yes | site |
+| `USER_SELF_PREFS` | yes | yes | yes | your own account |
+| `USER_SELF_DELETE` | yes | yes | yes | your own account |
+| `USER_ROLE_MANAGE` | no | no | no | platform |
+| `USER_DELETE` | no | no | no | platform |
+| `SYSTEM_PRESET_MANAGE` (deployment template presets) | no | no | no | platform |
+| `INSTALLER_MANAGE` | no | no | no | platform |
+| `ISSUE_MANAGE` (issue triage status) | no | no | no | platform |
+| `GLOBAL_SETTINGS_WRITE` | no | no | no | platform |
 
-The last five capabilities back the internal pages; no customer role holds them.
+the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site. `SITE_BILLING_MANAGE` still stops at the owner: a site is billed to its owner, so nobody else can change its billing, a superadmin included.
 
-hoot chat access follows site read access. hoot actions that execute commands or write machine configuration require `MACHINE_EXEC_COMMAND` or `MACHINE_CONFIG_WRITE`. LLM keys are per-user and are managed by each person in their own account settings — there is no admin-managed shared key.
+**your machines**: someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site holds the five capabilities marked so only on those machines, at their role, and holds no other capability of that site, whatever their role. a machine outside their access answers `404`, the same answer whether it exists or not; anything that spans the site answers `403`. everyone else holds them on the whole site.
+
+a capability is the floor, not the whole check. watching swoop also needs the site's `membersMayWatch` setting for a member with no swoop mode of their own, and taking control also needs a fresh second factor; see [watching versus control](/docs/dashboard/swoop#watching-versus-control). a swoop mode on a person's member row overrides their role for `MACHINE_REMOTE_VIEW` and `MACHINE_REMOTE_CONTROL` only, and never on the owner's row; see [swoop mode](/docs/dashboard/admin/member-management#swoop-mode).
+
+hoot follows the same line. anyone who can read a site can chat with hoot about it, but a member's hoot gets read-only tools; an owner's or admin's hoot can also run commands, change configuration and deploy. limited to some machines, hoot works on those machines only, and offers none of the tools that span the site, deploying included; see [hoot](/docs/dashboard/hoot#choosing-machines). LLM keys are per user, managed by each person in their own [account settings](/docs/dashboard/account-settings#hoot); there is no shared key for an admin to manage.

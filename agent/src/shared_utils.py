@@ -245,6 +245,19 @@ class _CrossProcessLock:
         self.fd = None
 
 def get_hostname():
+    """This machine's name. On macOS the kernel hostname is whatever the
+    network hands out — a router answers `Mac.localdomain` to every Mac, so two
+    of them paired onto one machine doc — and LocalHostName is the name the Mac
+    keeps unique on its LAN."""
+    if _IS_MACOS:
+        try:
+            name = subprocess.check_output(
+                ['scutil', '--get', 'LocalHostName'], text=True, timeout=5
+            ).strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError) as e:
+            logging.debug(f"scutil LocalHostName failed: {e}")
     return socket.gethostname()
 
 # `(osFamily, arch)` the way the fleet spells them: the machine document's
@@ -418,9 +431,14 @@ def get_machine_id():
     Only a persisted identity is cached. A file that exists but could not be
     read yields the hostname for that call alone, so a scanner holding it open
     for a few seconds cannot pin the process to an identity the machine's token
-    does not cover.
+    does not cover. A token in a store only root can write outranks the file, which
+    off Windows sits in a directory the console user can write.
     """
     global _machine_id
+    issued = _issued_claims().get('machine_id')
+    if issued:
+        return issued
+
     if _machine_id is not None:
         return _machine_id
 
@@ -432,6 +450,25 @@ def get_machine_id():
         if persisted:
             _machine_id = machine_id
         return machine_id
+
+
+def retire_machine_id():
+    """Move config/machine_id aside so the next pairing seeds a fresh identity.
+
+    The identity belongs to the document a leave deletes. Renamed to
+    `machine_id.left-<epoch>` rather than removed, so a support case can still
+    read what the machine was known as; the cached identity goes with it, or
+    this process would keep answering with the old one until it restarted. No
+    persisted identity is nothing to move. Raises OSError when the rename fails.
+    """
+    global _machine_id
+    path = get_data_path(MACHINE_ID_FILE)
+    with _machine_id_lock:
+        try:
+            os.rename(path, f"{path}.left-{int(time.time())}")
+        except FileNotFoundError:
+            pass
+        _machine_id = None
 
 
 def _read_machine_id_file(path):
@@ -469,6 +506,16 @@ def _seed_machine_id_file(path, machine_id):
         raise
 
 
+def _identity_hostname():
+    """The hostname an identity is taken from. macOS appends `.local`, and the
+    api's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
+    seeded with it pairs but can never open a swoop session."""
+    name = get_hostname()
+    if sys.platform == 'darwin' and name.lower().endswith('.local'):
+        name = name[:-len('.local')]
+    return name
+
+
 def _read_or_seed_machine_id():
     """(identity, persisted) — config/machine_id, created from the current
     hostname when it is missing.
@@ -490,13 +537,13 @@ def _read_or_seed_machine_id():
                     f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
                     f"for this call only"
                 )
-                return get_hostname(), False
+                return _identity_hostname(), False
             time.sleep(MACHINE_ID_READ_BACKOFF)
 
     if persisted:
         return persisted, True
 
-    machine_id = get_hostname()
+    machine_id = _identity_hostname()
     try:
         _seed_machine_id_file(path, machine_id)
         logging.info(f"Machine identity seeded from the hostname: {machine_id}")
@@ -663,6 +710,10 @@ def get_cpu_temperature():
     """
     if read_config(['temperature', 'enabled']) is False:
         return None
+    # librehardwaremonitor is a .net library over the pawnio driver, so windows
+    # only: elsewhere the read spun up a worker and logged a failure every pass.
+    if not _IS_WINDOWS:
+        return None
     try:
         import temp_sensors
 
@@ -693,31 +744,48 @@ def get_gpu_temperatures():
     if read_config(['temperature', 'enabled']) is False:
         return []
 
-    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel
+    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel. windows
+    # only, as in get_cpu_temperature.
+    if _IS_WINDOWS:
+        try:
+            import temp_sensors
+            all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
+
+            if all_temps:
+                temps = []
+                for i, temp in enumerate(all_temps):
+                    if temp is not None and 0 < temp < 150:
+                        temps.append({
+                            'index': i,
+                            'temperature': float(temp)
+                        })
+                if temps:
+                    return temps
+
+        except ImportError:
+            logging.debug("[TEMP] HardwareMonitor not available")
+        except Exception as e:
+            logging.debug(f"[TEMP] sensor error: {e}")
+
+    # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
+    # fail there. a machine with no nvml library (linux without the nvidia
+    # driver, a windows box on another gpu) shares get_gpus()'s backoff: one
+    # debug line, then five minutes of silence, instead of a warning every pass
+    # (26,000 lines on the kiosk vm, 2026-10-03).
+    global _nvml_retry_after
+    if _IS_MACOS or time.monotonic() < _nvml_retry_after:
+        return []
     try:
-        import temp_sensors
-        all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
+        from pynvml import (
+            nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature,
+            nvmlShutdown, NVML_TEMPERATURE_GPU, NVMLError_DriverNotLoaded, NVMLError_LibraryNotFound,
+        )
+    except ImportError as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
+        return []
 
-        if all_temps:
-            temps = []
-            for i, temp in enumerate(all_temps):
-                if temp is not None and 0 < temp < 150:
-                    temps.append({
-                        'index': i,
-                        'temperature': float(temp)
-                    })
-            if temps:
-                return temps
-
-    except ImportError:
-        logging.debug("[TEMP] HardwareMonitor not available")
-    except Exception as e:
-        logging.debug(f"[TEMP] sensor error: {e}")
-
-    # 2. pynvml — NVIDIA only
     try:
-        from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature, nvmlShutdown, NVML_TEMPERATURE_GPU
-
         temps = []
         nvmlInit()
         try:
@@ -741,10 +809,11 @@ def get_gpu_temperatures():
         if temps:
             return temps
 
-    except ImportError as e:
-        logging.warning(f"[TEMP] pynvml not installed - GPU temperature unavailable: {e}")
+    except (NVMLError_LibraryNotFound, NVMLError_DriverNotLoaded) as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
     except Exception as e:
-        logging.warning(f"[TEMP] pynvml GPU temp failed: {e}")
+        _nvml_warn(f"[TEMP] pynvml GPU temp failed: {e}")
 
     return []
 
@@ -1252,6 +1321,10 @@ def get_path(filename=None):
 
     return path
 
+def get_install_root():
+    """The install root: src lives at <install>/agent/src, two levels down."""
+    return os.path.dirname(os.path.dirname(get_path()))
+
 # Where the bundled interpreter lives on each POSIX platform. Windows resolves
 # its own from the install root so a relocated install still works; the macOS
 # and Linux payloads install to a fixed prefix and there is nothing to relocate.
@@ -1275,8 +1348,7 @@ def get_python_exe_path():
             return candidate
         raise FileNotFoundError(f"Python interpreter not found at {candidate}")
 
-    # src lives at <install>\agent\src — two levels up is the install root
-    install_root = os.path.dirname(os.path.dirname(get_path()))
+    install_root = get_install_root()
 
     pythonw_path = os.path.join(install_root, 'python', 'pythonw.exe')
     if os.path.exists(pythonw_path):
@@ -1353,6 +1425,7 @@ def ensure_data_directories():
         get_data_path('ipc/results'),
         get_data_path('ipc/swoop'),
         get_data_path('ipc/requests'),
+        get_data_path('ipc/issue-attachments'),
     ]
     if not _IS_WINDOWS:
         # off windows the trio is an ordinary data-root directory; on windows
@@ -1361,6 +1434,8 @@ def ensure_data_directories():
             get_data_path('ipc/cortex_commands'),
             get_data_path('ipc/cortex_results'),
             get_data_path('ipc/cortex_events'),
+            # hoot is the console user, who cannot write logs/ itself
+            get_data_path('logs/cortex'),
         ]
 
     try:
@@ -1384,8 +1459,9 @@ def ensure_data_directories():
 
 
 def grant_data_group(path):
-    """Give a file the daemon wrote in the data root to the group that reaches
-    it. A no-op on Windows, where the tree is ACL'd rather than grouped."""
+    """Give a file the daemon wrote in the data root, by path or by the
+    descriptor it holds open, to the group that reaches it. A no-op on Windows,
+    where the tree is ACL'd rather than grouped."""
     if _IS_WINDOWS:
         return
     from osadapter import posix
@@ -1415,8 +1491,46 @@ def _create_cortex_ipc_dirs():
         except Exception as e:
             logging.error(f"Cortex IPC: could not create {path}: {e}")
 
+def _store_is_authoritative():
+    """Whether this process is the daemon off Windows: root, reading a token store
+    only root can write, beside a config.json the console user can."""
+    return not _IS_WINDOWS and os.geteuid() == 0
+
+
+def _issued_claims():
+    """What the server last issued this machine, where that outranks config.json.
+
+    The console user can edit config.json and replace config/machine_id, and a
+    server refusing a refresh token clears it: a paired machine asking the other
+    server, or under another id, would be talked out of its site. Nothing is
+    written for this, so a store from any earlier version already answers. Empty
+    with no store or no readable token, which leaves the files deciding, as they
+    must on a machine that has not paired.
+    """
+    if not _store_is_authoritative():
+        return {}
+    try:
+        import secure_storage
+        return secure_storage.get_storage().issued_claims()
+    except Exception as e:
+        logging.debug(f"Could not read the token store's claims: {e}")
+        return {}
+
+
+def _issued_environment():
+    """The environment whose project issued this machine's token, or None."""
+    audience = _issued_claims().get('aud')
+    for environment in ('production', 'development'):
+        if audience == get_project_id(environment):
+            return environment
+    return None
+
+
 def get_environment():
     """'production' or 'development' from config; 'production' by default."""
+    issued = _issued_environment()
+    if issued:
+        return issued
     config = read_config()
     if config:
         return config.get('environment', 'production')
@@ -1451,6 +1565,9 @@ def get_configured_api_base(config=None):
     Local users can edit config.json, so any other host there would receive this
     machine's refresh token. Reads from disk when config is None.
     """
+    issued = _issued_environment()
+    if issued:
+        return get_api_base_url(issued)
     if config is None:
         config = read_config()
     configured = (config.get('firebase') or {}).get('api_base')
@@ -1471,6 +1588,15 @@ def get_project_id(environment=None):
         return 'owlette-dev-3838a'
     else:
         return 'owlette-prod-90a12'
+
+def get_configured_project_id():
+    """firebase.project_id, else the environment's: the project the cloud client
+    reads its commands from, so it follows the token where the token decides."""
+    issued = _issued_environment()
+    if issued:
+        return get_project_id(issued)
+    return read_config(['firebase', 'project_id']) or get_project_id()
+
 
 def get_web_host(environment=None):
     """Bare web host, e.g. 'owlette.app'. environment defaults to config."""
@@ -1598,13 +1724,63 @@ def _nvml_warn(message):
     logging.warning(message)
 
 
-def get_gpus():
-    """Live per-GPU readings, or [] when no NVIDIA GPU is visible.
+def _get_gpus_darwin():
+    """Apple GPUs from the IORegistry: name, utilisation, memory in use.
 
+    There is no NVML on a Mac and no VRAM either -- the GPU shares the
+    machine's memory, so `memoryTotal` is the unified pool and `memoryUsed`
+    is what the accelerator driver holds of it. `ioreg` needs no privilege
+    and the counters are the ones Activity Monitor's GPU history draws.
+    """
+    import plistlib
+    try:
+        out = subprocess.run(
+            ['/usr/sbin/ioreg', '-r', '-d', '1', '-c', 'IOAccelerator', '-a'],
+            capture_output=True, timeout=5, check=True,
+        ).stdout
+        entries = plistlib.loads(out) if out.strip() else []
+    except Exception as e:
+        logging.debug(f"[GPU] ioreg unavailable: {e}")
+        return []
+
+    total_mb = psutil.virtual_memory().total / (1024 ** 2)
+    gpus = []
+    for i, entry in enumerate(e for e in entries if isinstance(e, dict)):
+        stats = entry.get('PerformanceStatistics') or {}
+        name = entry.get('model') or entry.get('IOClass') or 'Apple GPU'
+        if isinstance(name, bytes):
+            name = name.decode('utf-8', 'replace').rstrip('\x00')
+        try:
+            load = float(stats.get('Device Utilization %', 0)) / 100.0
+        except (TypeError, ValueError):
+            load = 0.0
+        try:
+            used_mb = float(stats.get('In use system memory', 0)) / (1024 ** 2)
+        except (TypeError, ValueError):
+            used_mb = 0.0
+        gpus.append(GpuReading(
+            id=i,
+            # stable across ticks and reboots, which is all the profile join needs
+            uuid=f'apple-gpu-{i}',
+            name=str(name),
+            load=max(0.0, min(load, 1.0)),
+            memoryTotal=total_mb,
+            memoryUsed=used_mb,
+            memoryFree=max(0.0, total_mb - used_mb),
+        ))
+    return gpus
+
+
+def get_gpus():
+    """Live per-GPU readings, or [] when no GPU is visible.
+
+    NVIDIA through NVML everywhere it runs; Apple GPUs through the IORegistry.
     `load` is 0.0-1.0 and the three memory values are MB. Never raises: callers
     read it inline in the metrics path.
     """
     global _nvml_retry_after
+    if sys.platform == 'darwin':
+        return _get_gpus_darwin()
     if time.monotonic() < _nvml_retry_after:
         return []
     try:
@@ -1710,6 +1886,12 @@ CORTEX_PID_PATH = get_data_path('tmp/cortex.pid')
 CORTEX_IPC_CMD_DIR = get_data_path('ipc/cortex_commands')
 CORTEX_IPC_RESULT_DIR = get_data_path('ipc/cortex_results')
 CORTEX_IPC_EVENTS_DIR = get_data_path('ipc/cortex_events')
+# off windows logs/ is the daemon's alone, so hoot logs into a directory the
+# data-root mode table opens to the group
+CORTEX_LOG_DIR = get_data_path('logs' if _IS_WINDOWS else 'logs/cortex')
+# off windows the token store is the daemon's alone too: it publishes its
+# access token here for hoot (auth_manager.PublishedToken)
+CORTEX_TOKEN_PATH = get_data_path('ipc/cortex_token.json')
 
 
 def is_cortex_enabled(config=None):
@@ -1718,34 +1900,52 @@ def is_cortex_enabled(config=None):
         config = read_config()
     return bool(config.get('cortex', {}).get('enabled', False))
 
-# Swoop (remote KVM streamer) paths. The streamer is installed at
-# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service.
-SWOOP_EXE_NAME = 'owlette-swoop.exe'
+# Swoop (remote KVM streamer) paths. On Windows the streamer is installed at
+# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service;
+# elsewhere it is the desktop app's sidecar, launched by the app.
+SWOOP_EXE_NAME = 'owlette-swoop.exe' if _IS_WINDOWS else 'owlette-swoop'
 # The streamer rotates this directory itself; cleanup_old_logs() is
 # deliberately non-recursive and must stay that way.
 SWOOP_LOG_DIR = get_data_path('logs/swoop')
 SWOOP_IPC_DIR = get_data_path('ipc/swoop')
 
+# Where the streamer is installed on each POSIX platform: inside the app bundle
+# on macOS, which is what lets the app launch it as its own child. Fixed
+# prefixes, like _POSIX_PYTHON_PATHS.
+_POSIX_SWOOP_PATHS = {
+    'darwin': '/Applications/owlette.app/Contents/MacOS/owlette-swoop',
+    'linux': '/opt/owlette/swoop/owlette-swoop',
+}
+
 
 def get_swoop_dir():
-    """Install directory of the swoop streamer — <install root>\\swoop.
+    """Install directory of the swoop streamer — <install root>\\swoop on
+    Windows, the directory of the platform's fixed path elsewhere (None where
+    there is none).
 
     Never creates it, and must not be made to. The installer lays it down as
     SYSTEM with a protected DACL, and that ownership is what the spawn path
     trusts; creating it here would hand that trust to whatever already sits at
     the path. Absent means swoop is not installed.
     """
+    if not _IS_WINDOWS:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+        return os.path.dirname(candidate) if candidate else None
     install_root = os.path.dirname(os.path.dirname(get_path()))
     return os.path.join(install_root, 'swoop')
 
 
 def get_swoop_exe_path():
     """Full path to the swoop streamer, or None when not installed. Resolved
-    from the install root like get_desktop_exe_path(), so a relocated install
-    works. None is how "swoop unavailable" reaches the capability heartbeat.
+    from the install root like get_desktop_exe_path() on Windows, so a
+    relocated install works. None is how "swoop unavailable" reaches the
+    capability heartbeat.
     """
-    candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
-    return candidate if os.path.exists(candidate) else None
+    if _IS_WINDOWS:
+        candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
+    else:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+    return candidate if candidate and os.path.exists(candidate) else None
 
 # LOGGING
 def get_log_level_from_config():
@@ -2226,7 +2426,7 @@ def is_within_schedule(schedules, timezone_str=None):
     """True if now falls in ANY schedule block's window, or if schedules is
     empty (safety fallback). timezone_str is IANA; local time when None.
     """
-    if not schedules:
+    if not schedules or not isinstance(schedules, (list, tuple)):
         return True  # No schedules = always active (safety fallback)
 
     from datetime import datetime, time as dt_time
@@ -2247,16 +2447,24 @@ def is_within_schedule(schedules, timezone_str=None):
 
     prev_day = day_names[(day_names.index(current_day) - 1) % 7]
 
+    # a malformed block or range is skipped, never raised: a raise here leaves
+    # the main loop, and owlette-host (launchd, systemd) relaunches the agent
+    # into the same config
     for block in schedules:
+        if not isinstance(block, dict):
+            continue
         days = block.get('days', day_names)
-        for time_range in block.get('ranges', []):
+        ranges = block.get('ranges', [])
+        if not isinstance(days, (list, tuple)) or not isinstance(ranges, (list, tuple)):
+            continue
+        for time_range in ranges:
             try:
                 start_h, start_m = map(int, time_range['start'].split(':'))
                 stop_h, stop_m = map(int, time_range['stop'].split(':'))
-            except (ValueError, KeyError):
+                start = dt_time(start_h, start_m)
+                stop = dt_time(stop_h, stop_m)
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
-            start = dt_time(start_h, start_m)
-            stop = dt_time(stop_h, stop_m)
             if start <= stop:
                 if current_day in days and start <= current_time <= stop:
                     return True
@@ -2733,8 +2941,18 @@ def write_config(keys, value):
 
     Raises ValueError when an intermediate exists but is not a dict: overwriting
     a scalar with a dict to make room would destroy whatever it held.
+
+    Raises OSError when config.json exists but could not be read: a lock or a
+    torn write reads as {}, and writing that back would drop every other
+    section, `firebase` with it, and unpair the machine (upgrade_config guards
+    the same way).
     """
     config = read_json_from_file(CONFIG_PATH)
+    if not config and os.path.exists(CONFIG_PATH):
+        raise OSError(
+            f"Cannot write config path {'.'.join(map(str, keys))}: "
+            f"{CONFIG_PATH} exists but could not be read"
+        )
 
     item = config
     for depth, key in enumerate(keys[:-1]):
@@ -3115,9 +3333,15 @@ def update_process_status_in_json(pid, new_status, firebase_client=None, process
         return
     write_json_to_file(data, RESULT_FILE_PATH)
 
+def _cmdline_key(text):
+    # argv parsing consumes quotes, so a configured `--name "a b"` runs as
+    # `--name a b` and a live command line never shows them.
+    return normalize_exe_path(text).replace('"', '')
+
+
 def _normalized_cmdline(proc):
     """A live command line in the spelling the configured paths compare in."""
-    return normalize_exe_path(' '.join(proc.cmdline()))
+    return _cmdline_key(' '.join(proc.cmdline()))
 
 def find_running_process_by_exe(exe_path, file_path=None, strict=False,
                                 expected_cmdline=None):
@@ -3164,10 +3388,10 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
     try:
         exe_key = normalize_exe_path(resolve_exec_target(exe_path))
         exe_basename = os.path.basename(exe_key)
-        file_path_key = normalize_exe_path(file_path) if file_path else None
+        file_path_key = _cmdline_key(file_path) if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence
         # compares exactly regardless of slash direction or case.
-        expected_key = (normalize_exe_path(expected_cmdline)
+        expected_key = (_cmdline_key(expected_cmdline)
                         if expected_cmdline else None)
         is_script = exe_key.endswith(('.bat', '.cmd'))
         candidates = []      # (pid, full_match, cmdline-or-None) -- exe targets
@@ -3289,6 +3513,26 @@ def fetch_process_id_by_name(name, data):
     process = next((process for process in data['processes'] if process['name'] == name), None)
     return process['id'] if process else None
 
+
+def state_rows_by_process(runtime_state):
+    """The app_states row that speaks for each process, as {process id: (pid, row)}.
+
+    The last row in the file wins: a restart leaves the terminated pid's row there
+    until the next cleanup_stale_tracking_data, ahead of the relaunch's row.
+    The dashboard's metrics and hoot's get_process_list both ask here, so they
+    cannot disagree about which row that is.
+    """
+    rows = {}
+    for pid, row in (runtime_state or {}).items():
+        # "None" keys come from failed launches.
+        try:
+            pid_int = int(pid)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(row, dict) and row.get('id'):
+            rows[row['id']] = (pid_int, row)
+    return rows
+
 # METRICS
 def get_system_info():
     cpu_info = get_cpu_name()
@@ -3344,7 +3588,11 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
 
         # GB, emitted in both snake_case and camelCase for v1 + v2 readers.
         mem = psutil.virtual_memory()
-        mem_used_gb = round(mem.used / (1024**3), 2)
+        # total - available, not psutil's `used`: on macos and linux `used`
+        # leaves out inactive and cached pages while `percent` counts them,
+        # so the pair the card draws (a bar and a figure) disagreed by half.
+        # on windows the two are the same number.
+        mem_used_gb = round((mem.total - mem.available) / (1024**3), 2)
         mem_total_gb = round(mem.total / (1024**3), 2)
         mem_percent = round(mem.percent, 1)
 
@@ -3404,22 +3652,15 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
             runtime_state = read_json_from_file(RESULT_FILE_PATH)
 
             if config and 'processes' in config:
-                pid_to_runtime = {}
-                if runtime_state:
-                    for pid, state_info in runtime_state.items():
-                        # "None" keys come from failed launches.
-                        try:
-                            pid_int = int(pid)
-                        except (ValueError, TypeError):
-                            continue
-                        process_id = state_info.get('id')
-                        if process_id:
-                            pid_to_runtime[process_id] = {
-                                'pid': pid_int,
-                                'status': state_info.get('status', 'UNKNOWN'),
-                                'responsive': state_info.get('responsive', True),
-                                'timestamp': state_info.get('timestamp', 0)
-                            }
+                pid_to_runtime = {
+                    process_id: {
+                        'pid': pid,
+                        'status': state_info.get('status', 'UNKNOWN'),
+                        'responsive': state_info.get('responsive', True),
+                        'timestamp': state_info.get('timestamp', 0)
+                    }
+                    for process_id, (pid, state_info) in state_rows_by_process(runtime_state).items()
+                }
 
                 for index, process in enumerate(config['processes']):
                     process_id = process.get('id')

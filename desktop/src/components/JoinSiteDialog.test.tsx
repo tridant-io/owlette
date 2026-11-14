@@ -297,4 +297,109 @@ describe('JoinSiteDialog', () => {
     expect(startAgentRun).toHaveBeenCalledTimes(2)
     expect(startAgentRun.mock.calls[1][1]).toEqual(expect.objectContaining({ server: 'prod' }))
   })
+
+  it('switches to dev after five quick clicks on the title — the backdoor no customer sees', async () => {
+    const run = fakeRun()
+    await open()
+    run.emit(PROD_PHRASE)
+    expect(screen.queryByTestId('join-environment')).toBeNull()
+
+    for (let i = 0; i < 5; i++) fireEvent.click(screen.getByText('join a site'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(run.cancel).toHaveBeenCalled()
+    expect(startAgentRun).toHaveBeenCalledTimes(2)
+    expect(startAgentRun.mock.calls[1][1]).toEqual(expect.objectContaining({ server: 'dev' }))
+    expect(screen.getByTestId('join-environment').textContent).toBe('dev')
+  })
+
+  it('ignores four clicks, and a fifth that comes too late', async () => {
+    vi.useFakeTimers()
+    try {
+      const run = fakeRun()
+      await open()
+      run.emit(PROD_PHRASE)
+      const title = screen.getByText('join a site')
+
+      for (let i = 0; i < 4; i++) fireEvent.click(title)
+      act(() => {
+        vi.advanceTimersByTime(2001)
+      })
+      fireEvent.click(title)
+
+      expect(startAgentRun).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('join-environment')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a click on the badge returns the pairing to production', async () => {
+    const run = fakeRun()
+    await open({ server: 'dev' })
+    run.emit(PHRASE)
+
+    fireEvent.click(screen.getByTestId('join-environment'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(run.cancel).toHaveBeenCalled()
+    expect(startAgentRun.mock.calls[1][1]).toEqual(expect.objectContaining({ server: 'prod' }))
+    expect(screen.queryByTestId('join-environment')).toBeNull()
+  })
+
+  it('ignores the switch while the first phrase is in flight, and once paired', async () => {
+    const run = fakeRun()
+    await open({ server: 'dev' })
+    const title = screen.getByText('join a site')
+
+    // Off windows the cancel and the new request would race for the daemon's
+    // pairing lock, so nothing switches until the phrase is up.
+    for (let i = 0; i < 5; i++) fireEvent.click(title)
+    fireEvent.click(screen.getByTestId('join-environment'))
+    run.emit(PHRASE)
+    run.emit({ event: 'authorized', value: { siteId: 'default_site', serviceRestarted: false } })
+
+    // Paired: a stray click must not wipe the outcome and mint another phrase.
+    for (let i = 0; i < 5; i++) fireEvent.click(title)
+    fireEvent.click(screen.getByTestId('join-environment'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(startAgentRun).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('join-status').textContent).toContain('paired')
+  })
+
+  it('keeps the badge out of the tab order — a dev install must not focus a switch', async () => {
+    fakeRun()
+    await open({ server: 'dev' })
+
+    expect(screen.getByTestId('join-environment').getAttribute('tabindex')).toBe('-1')
+    expect(document.activeElement).not.toBe(screen.getByTestId('join-environment'))
+  })
+
+  it("forgets the backdoor once closed — a tray re-open pairs with the config's own environment", async () => {
+    const run = fakeRun()
+    const { view } = await open()
+    run.emit(PROD_PHRASE)
+
+    for (let i = 0; i < 5; i++) fireEvent.click(screen.getByText('join a site'))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(startAgentRun.mock.calls[1][1]).toEqual(expect.objectContaining({ server: 'dev' }))
+
+    view.rerender(<JoinSiteDialog open={false} onClose={vi.fn()} onJoined={vi.fn()} />)
+    view.rerender(<JoinSiteDialog open onClose={vi.fn()} onJoined={vi.fn()} />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const last = startAgentRun.mock.calls.at(-1)?.[1] as { server?: string }
+    expect(last.server).toBeUndefined()
+  })
 })

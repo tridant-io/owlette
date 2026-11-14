@@ -3,12 +3,12 @@
 The 3.0.1 cutover shipped four artifacts that no `git push` deploys: the talons Firestore indexes
 (`firestore.indexes.json`), the Cloud Functions that back the display and `process_restarted` talon
 taps (`functions/src/talonLogEvents.ts`), the cron-job.org registration for `/api/cron/talons`, and
-the cortex CLI pins that a 3.0.0+ installer needs or Cortex is dead on every fresh install —
+the hoot CLI pins that a 3.0.0+ installer needs or local hoot is dead on every fresh install —
 `installer_metadata/cortex_cli_<osFamily>_<arch>` for a 3.4+ agent, the legacy
 `installer_metadata/cortex_cli` for everything fielded before it
 (`docs/internal/cortex-cli-provisioning.md`). Two runbooks disagreed on the order:
-`docs/runbooks/talons.md:75-99` says indexes first, wait for `Enabled`, register the cron last, while
-`docs/runbooks/production-deploy.md:152-206` deploys the web app at step 6 and Firestore at step 8 —
+`docs/runbooks/talons.md` ("deploy order") says indexes first, wait for `Enabled`, register the cron last, while
+`docs/runbooks/production-deploy.md` (steps 6-8) deploys the web app at step 6 and Firestore at step 8 —
 the exact reversal that talons.md exists to prevent.
 
 This file is the single answer to "what else do I have to do by hand, and in what order". It is the
@@ -34,32 +34,34 @@ work simply never happens. Those are the rows that bite.
 | Firestore security rules | manual | `firebase deploy --only firestore:rules --project prod` | yes | **SILENT** — no CI job exists, the previous ruleset stays live indefinitely. Surfaces as permission-denied, or as old permissive rules still allowing what the new ones blocked. |
 | Cloud Storage rules | manual | `firebase deploy --only storage --project prod` | yes | **SILENT** — same shape. `storage.rules:19` reads `users/{uid}.role == 'superadmin'`, so it carries the same migration-before-rules constraint. |
 | Cloud Functions (all exports) | manual | `firebase deploy --only functions --project prod` | yes | **SILENT** for the fleet — old revisions keep running, new behaviour never ships. The deploy itself fails loudly if the predeploy build breaks (`firebase.json:17-19`). |
-| Cloud Scheduler jobs (9 `onSchedule` functions) | manual (side effect of the functions deploy) | `firebase deploy --only functions --project prod`, then `gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1` | yes | **SILENT** — a scheduler job only exists in a project after that function has been deployed there. A function only ever deployed to dev has no prod job and nothing says so. |
-| `functions/.env.<projectId>` | manual (local file) | `ls functions/.env.owlette-prod-90a12` before deploying | yes | **SILENT and dangerous** — `functions/.gitignore` blocks all `.env*`, so a clean checkout deploys functions with the secrets missing and the deploy still reports success. A missing `CORTEX_INTERNAL_SECRET` 503s the internal HTTPS functions (`functions/src/lib/requireInternalSecret.ts:14-18`) **and silently kills two talon paths**: `talonLogEvents.ts:91-95` and `metricsHistory.ts:559-563` each log a warning and then resolve *successfully*, so every display talon, every `process_restarted` talon, and every threshold alert simply stops firing. |
-| cron-job.org scheduled jobs (7 endpoints) | manual (vendor UI) | no CLI — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, all seven** — talons never fire, queued alerts never email, retention never deletes (which makes the privacy policy untrue), status-ping never publishes. A wrong secret answers 401 and also fires nothing. |
-| Cloudflare failover LB (monitor + 2 pools + LB) | manual | `cd infra/cloudflare`, `cp terraform.tfvars.example terraform.tfvars` (fill it in), `export CLOUDFLARE_API_TOKEN=…`, then `terraform init && terraform plan && terraform apply` | account-wide | LOUD at apply on a bad token or missing add-on. **SILENT afterwards** — state is local `*.tfstate` (gitignored), so a second machine applying without it recreates resources or drifts. |
+| Cloud Scheduler jobs (10 `onSchedule` functions) | manual (side effect of the functions deploy) | `firebase deploy --only functions --project prod`, then `gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1` | yes | **SILENT** — a scheduler job only exists in a project after that function has been deployed there. A function only ever deployed to dev has no prod job and nothing says so. |
+| `functions/.env.<projectId>` | manual (local file) | `ls functions/.env.owlette-prod-90a12` before deploying | yes | **SILENT and dangerous** — `functions/.gitignore` blocks all `.env*`, so a clean checkout deploys functions with the secrets missing and the deploy still reports success. A missing `CORTEX_INTERNAL_SECRET` 503s the internal HTTPS functions (`functions/src/lib/requireInternalSecret.ts:14-18`) **and silently kills two talon paths**: `talonLogEvents.ts:69-73` and `metricsHistory.ts:493-497` each log a warning and then resolve *successfully*, so every display talon, every `process_restarted` talon, and every threshold alert simply stops firing. |
+| cron-job.org scheduled jobs (the 10 scheduled endpoints in `infra/cron-jobs.json`) | manual (vendor UI) | no CLI — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, all ten** — talons never fire, queued alerts never email, retention never deletes (which makes the privacy policy untrue), status-ping never publishes. A wrong secret answers 401 and also fires nothing. |
+| Cloudflare failover LB (monitor + 2 pools + LB) | manual | `cd infra/cloudflare`, `cp terraform.tfvars.example terraform.tfvars` (fill it in), `export CLOUDFLARE_API_TOKEN=…` and `export TF_VAR_edge_shared_secret=…` (the `EDGE_SHARED_SECRET` value, never in the tfvars file), then `terraform init && terraform plan && terraform apply` | account-wide | LOUD at apply on a bad token or missing add-on. **SILENT afterwards** — state is local `*.tfstate` (gitignored), so a second machine applying without it recreates resources or drifts. |
 | Cloudflare Load Balancing add-on | one-time bootstrap | dashboard only: Traffic → Load Balancing → enable | account-wide | LOUD — the API rejects LB creation until the add-on is on, so `terraform apply` errors rather than half-building. |
-| `owlette.app` as a domain on the Vercel standby | one-time bootstrap | `cd web && vercel domains add owlette.app` | account-wide | **SILENT until the day it matters** — both pools rewrite `Host: owlette.app`; if Vercel does not accept that host the standby answers wrong only once Railway has already failed. |
+| `vercel-origin.owlette.app` as a domain on the Vercel standby | one-time bootstrap | a DNS-only (grey cloud) A record `vercel-origin` → `76.76.21.21`, then add the domain to the Vercel project (`cd web && vercel domains add vercel-origin.owlette.app`) so Vercel issues its certificate | account-wide | **SILENT until the day it matters** — the Vercel pool sends `Host: vercel-origin.owlette.app` (`infra/cloudflare/main.tf`), its health checks included; if Vercel does not serve that host the standby pool reads unhealthy and a failover has nowhere to go. Proxying the record breaks Vercel's certificate renewals. |
 | Instatus status-page components (9 ids) | manual (vendor UI + env vars) | create in Instatus, set the ids, then `node scripts/check-status-page-ready.mjs --env-only` | yes | **SILENT** — `setInstatusComponentStatus` returns `{skipped:true}` with a reason when the key, page id, or component id is missing (`web/lib/instatusClient.ts:104`). It never throws, status-ping still returns 200, the component just never updates. |
 | Cloudflare Turnstile widget | one-time bootstrap | dashboard only: Turnstile → add a widget covering `owlette.app`, `dev.owlette.app`, `localhost`; then set `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`, `TURNSTILE_HOSTNAMES` | yes (env vars; one widget serves every host) | LOUD — a prod boot without `TURNSTILE_SECRET` prints a banner and raises a Sentry event (`web/instrumentation.ts:47-64`) and register + forgot-password 403 every request (`web/lib/turnstile.server.ts:69-77`). The silent variant: `TURNSTILE_SECRET` is a **`must-match`** var, so a prod/standby mismatch breaks both flows on failover only. |
 | Upstash Redis database | one-time bootstrap | dashboard only: create the database, then set `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | yes | MIXED — a boot banner and a Sentry event fire (`web/instrumentation.ts:14-36`) but nothing throws and the app serves normally. Every endpoint silently collapses to a per-process 15/min in-memory limiter (`web/lib/rateLimit.ts:21-42`) — roughly 90x looser than the signup limit, multiplied by the replica count. |
-| Resend account + verified sending domain | one-time bootstrap | dashboard only: verify the `RESEND_FROM_EMAIL` domain, then set `RESEND_API_KEY` | yes | **SILENT** — `getResend()` returns null and all three email crons log a warning and `continue` (`process-alerts:170`, `display-alerts:94`, `health-check:565`). The queues drain, the crons answer `ok: true`, nobody is emailed. An unverified domain is the same shape, rejected per send. |
-| R2 buckets + CORS policy | manual | `node scripts/provision-r2.mjs --verify-only`, then `node scripts/provision-r2.mjs` | account-wide (creates all four buckets) | LOUD — exits 1 on a bad token, on R2 not enabled, and on any CORS PUT failure (`scripts/provision-r2.mjs:272`). Note the CORS rules are a **full-replace PUT** (`:178-179`) applied to the two *content* buckets only — the manifest buckets are deliberately CORS-less — so this script is the sole source of truth for allowed origins. |
-| R2 S3-compatible access keys | one-time bootstrap | dashboard only: R2 → Manage R2 API Tokens → Object Read & Write over the four buckets; then set `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, `R2_S3_ENDPOINT` | yes (env vars) | LOUD at runtime (uploads fail) with a **SILENT** variant: if `ROOST_ENV` is not explicitly `prod` on the prod service, `r2Client.server.ts:44-60` defaults to dev and prod writes land in the **dev bucket** with no error. |
-| R2 object lifecycle rules | not implemented | none — no script, no terraform, no wrangler config in this repo | account-wide | **SILENT** — the buckets have no lifecycle policy, so abandoned staged uploads accumulate and there is no deleted-object recovery window. `docs/internal/threat-model.md:350` and `:518` call for both; nothing implements them. |
-| GCS bucket + SA for the security-boundary audit export | one-time bootstrap | five `gcloud` commands — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, and silent right now in prod** — `functions/src/securityBoundaryAuditExport.ts:135-140` guards on project id, logs `skipping — prod export infra not yet provisioned`, and returns success. The daily 06:30 UTC job (`:121-122`) reports green while exporting nothing. |
+| Resend account + verified sending domain | one-time bootstrap | dashboard only: verify the `RESEND_FROM_EMAIL` domain, then set `RESEND_API_KEY` | yes | **SILENT** — `getResend()` returns null and all three email crons log a warning and `continue` (`process-alerts:160`, `display-alerts:85`, `health-check:525`). The queues drain, the crons answer `ok: true`, nobody is emailed. An unverified domain is the same shape, rejected per send. |
+| R2 buckets + CORS policy | manual | `node scripts/provision-r2.mjs --verify-only`, then `node scripts/provision-r2.mjs` | account-wide (creates all six buckets: four roost, two issue-logs) | LOUD — exits 1 on a bad token, on R2 not enabled, and on any CORS PUT failure (`scripts/provision-r2.mjs:307`). Note the CORS rules are a **full-replace PUT** (`:210`), one rule per bucket in `CORS_RULES`: the two *content* buckets take GET/PUT/HEAD from the hosted and localhost origins; the two *issue-logs* buckets take only PUT with a `content-type` header (dashboard issue attachments upload from the browser; downloads are redirects CORS never sees), the prod one from the hosted origins only; the manifest buckets are deliberately CORS-less. This script is the sole source of truth for allowed origins. |
+| R2 S3-compatible access keys | one-time bootstrap | dashboard only: R2 → Manage R2 API Tokens → Object Read & Write over the four buckets; then set `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, `R2_S3_ENDPOINT` | yes (env vars) | LOUD at runtime (uploads fail) with a **SILENT** variant: if `ROOST_ENV` is not explicitly `prod` on the prod service, `r2Client.server.ts:31-46` defaults to dev and prod writes land in the **dev bucket** with no error. |
+| R2 object lifecycle rules | manual (issue-logs buckets only) | `node scripts/provision-r2.mjs` re-applies it: on `owlette-dev-issue-logs` and `owlette-prod-issue-logs`, delete every object 30 days after upload (`putBucketLifecycle`, `scripts/provision-r2.mjs:226`). Check it in the dashboard: R2 → bucket → Settings → Object lifecycle rules | account-wide | LOUD at apply — exits 1 on any lifecycle PUT failure. It is a **full-replace PUT**, so a rule added by hand in the dashboard is dropped on the next run; the script restates R2's default 7-day multipart abort for the same reason. **SILENT** if never run: attached issue logs are kept forever, and the privacy policy's 30 days is untrue. The four roost buckets still have no lifecycle policy, so abandoned staged uploads accumulate and there is no deleted-object recovery window; `docs/internal/threat-model.md:350` and `:518` call for both. |
+| GCS bucket + SA for the security-boundary audit export | one-time bootstrap | five `gcloud` commands — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, and silent right now in prod** — `functions/src/securityBoundaryAuditExport.ts:132-137` guards on project id, logs `skipping — prod export infra not yet provisioned`, and returns success. The daily 06:30 UTC job (`:120-121`) reports green while exporting nothing. |
 | Cloud Monitoring uptime check + alert policies | one-time bootstrap | console only: GCP → Monitoring → Uptime checks / Alerting. The dev resource ids are recorded in `infra/monitoring/security-boundary-alerts.yaml:20-23` and `:136` — record the prod ones the same way | yes | **SILENT** — that file is `environment: dev` at `:3` and every id in it names a dev project. There is no prod synthetic probe and no prod alert policy; those pages never fire for production. |
 | Railway env vars (dev + prod services) | manual | `node scripts/sync-env.mjs check` (exit 1 on drift), writes via Railway UI/CLI | yes | MIXED — a missing `NEXT_PUBLIC_*` is **silent** (inlined at build time; redeploy after adding it). A missing server secret is loud at boot or first use. A missing `ROOST_ENV` is the silent one — R2 writes go to dev. |
 | Vercel env mirror (failover origin) | manual | `node scripts/sync-env.mjs diff railway-prod vercel-prod`, then `node scripts/sync-env.mjs sync vercel-prod --apply` | mirror of prod | **CATASTROPHICALLY SILENT** — Vercel stores sensitive vars write-only, so `check` proves a key exists, never that its value matches. `SESSION_SECRET` mismatch logs every user out on failover; `MFA_ENCRYPTION_KEY` locks out every 2FA user; `LLM_ENCRYPTION_KEY` breaks stored-key decryption; `TURNSTILE_SECRET` breaks register + forgot-password. None of it shows until Railway actually fails over. |
 | Firebase Auth authorized domains | one-time bootstrap | console only: Authentication → Settings → Authorized Domains | yes | LOUD for users, invisible to the deploy — the app deploys clean and then nobody can sign in. Add the Vercel standby alias too, or failover breaks login. |
-| Firebase App Check enforcement | one-time bootstrap | console only, per project: App Check → Authentication → Enforce. Full procedure: [app-check-rollout.md](app-check-rollout.md) | yes | Currently a no-op — without the site key `maybeInitAppCheck()` returns immediately (`web/lib/firebase.ts:125-127`). The trap is the CSP in `web/proxy.ts`: reCAPTCHA Enterprise is blocked by the current policy and fails **silently**, so every client reports unverified and the rollout metrics mislead. **Never enforce Cloud Firestore** — it takes the whole agent fleet offline. |
+| Firebase App Check enforcement | one-time bootstrap | console only, per project: App Check → Authentication → Enforce. Full procedure: [app-check-rollout.md](app-check-rollout.md) | yes | Currently a no-op — without the site key `maybeInitAppCheck()` returns immediately (`web/lib/firebase.ts:112-113`). The trap is the CSP in `web/proxy.ts`: reCAPTCHA Enterprise is blocked by the current policy and fails **silently**, so every client reports unverified and the rollout metrics mislead. **Never enforce Cloud Firestore** — it takes the whole agent fleet offline. |
 | npm publish — `@owlette/cli` | git tag | `git tag cli-v1.0.0 && git push origin cli-v1.0.0` | no | LOUD — the workflow refuses on a tag/version mismatch, a wrong tag shape, or a real publish with no tag. npm OIDC trusted publishing; the very first publish must be bootstrapped by hand. |
 | npm publish — `@owlette/sdk` | git tag | `git tag node-sdk-v1.0.0 && git push origin node-sdk-v1.0.0` | no | LOUD — same guard chain, same OIDC prerequisite, same manual first publish. |
 | PyPI publish — `owlette-sdk` | git tag | `git tag py-sdk-v1.0.0 && git push origin py-sdk-v1.0.0` | no | LOUD — refuses on tag/version mismatch. PyPI supports a pending publisher, so no bootstrap and no token; but a pending publisher does not reserve the name, so push the tag promptly. |
 | agent installer — build | manual | `cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"` | no | LOUD (exit code + log), but it **hangs a non-interactive shell forever** without `< NUL` — the batch file ends with `pause` and pauses on every error branch. Invoke by full path; never cd-then-run. |
-| agent installer — CI build + SLSA L3 provenance | git tag | `git tag v3.0.2 && git push origin v3.0.2` | no | LOUD (the verify job runs `slsa-verifier`). The **silent** part is what it does not do: it attaches the exe and attestation to the GitHub Release and stops. No Firebase Storage push, no `installer_metadata`, no `latest` pointer — tagging rolls out nothing. |
-| agent installer — rollout to agents | manual | 3-step signed-URL upload — see below | yes | LOUD: 400 without an `Idempotency-Key` (`web/lib/idempotency.ts:103-115`), 403 on a key without `installer=*:write`, 412 `checksum_mismatch` on corruption, and the signed URL dies after 15 minutes. **Silent failure = skipping it entirely**: a green CI run on a tag looks like a release while no agent ever sees the version. |
-| cortex CLI pins (`installer_metadata/cortex_cli_<osFamily>_<arch>`, plus the legacy `cortex_cli` every pre-3.4 agent reads) | manual | `node scripts/upload-cortex-cli.mjs --env=prod --windows-x64="<claude.exe>" --macos-universal="<claude>" --linux-x64="<claude>" --linux-arm64="<claude>" --yes` | yes | **SILENT per machine** — a fresh Firebase project has no pin, so `ensure_cli()` fails closed, `main()` writes `cortexStatus.error` and exits without an exception, backing off 5 min to 1 h (`agent/src/cortex_cli_fetch.py:93-94`). A 3.0.0+ installer promoted into an environment with a missing pin leaves Cortex dead on every fresh install. |
+| agent installer — CI build + SLSA L3 provenance | git tag | `git tag v3.0.2 && git push origin v3.0.2` | no | LOUD (the verify job runs `slsa-verifier`). The **silent** part is what it does not do: it attaches the exe and attestation to the GitHub Release and stops. No storage push, no `installer_metadata`, no `latest` pointer — tagging rolls out nothing. |
+| agent installer — rollout to agents | manual | 3-step signed-URL upload — see below | yes | LOUD: 400 without an `Idempotency-Key` (`web/lib/idempotency.ts:91-100`), 403 on a key without `installer=*:write` (or without `installer=*:admin` when the upload sets latest, its default), 412 `checksum_mismatch` on corruption, 409 `installer_published` on a version already on the download host, and the signed URL dies after 15 minutes. **Silent failure = skipping it entirely**: a green CI run on a tag looks like a release while no agent ever sees the version. The tridant id registration on promote is reported, never fatal: check the `tridant` field (or `/admin/installers`) after a promote. |
+| installer download host (R2 + tridant id) | one-time per environment | Railway: `INSTALLER_R2_ACCESS_KEY_ID` + `INSTALLER_R2_SECRET_ACCESS_KEY` (an R2 token with object read & write on `owlette-downloads-staging` for dev, `owlette-downloads` for prod, made from the R2 page's API tokens), `TRIDANT_API_URL` (`https://api-staging.tridant.io` / `https://api.tridant.io`) and `TRIDANT_RELEASE_KEY` (release.write on owlette Core, from the tridant id admin) | no | **SILENT** — without the R2 pair, uploads stay on Firebase Storage with no warning; without the tridant id pair, promotes register nothing (`tridant.status: not_configured`). tridant id refuses a staging URL until its staging `settings.release_host` is `download-staging.tridant.io` (`400 download_url_not_allowed`). |
+| issue-logs R2 token | one-time | after `node scripts/provision-r2.mjs` has made the buckets: R2 → Manage API tokens → create a token with Object Read & Write on `owlette-dev-issue-logs` and `owlette-prod-issue-logs` only, then set its S3 pair as `ISSUE_LOGS_R2_ACCESS_KEY_ID` + `ISSUE_LOGS_R2_SECRET_ACCESS_KEY` on railway-dev, railway-prod and vercel-prod (`node scripts/sync-env.mjs sync <target> --apply`) | no | **SILENT** — without the pair the upload-url route answers 500 and every desktop issue goes out without its log zip; the user sees "the logs could not be attached" and the reason sits only in the issue text. Proven on 4.1.13 (2026-10-14), which shipped before the pair was set. |
+| hoot CLI pins (`installer_metadata/cortex_cli_<osFamily>_<arch>`, plus the legacy `cortex_cli` every pre-3.4 agent reads) | manual | `node scripts/upload-cortex-cli.mjs --env=prod --windows-x64="<claude.exe>" --macos-universal="<claude>" --linux-x64="<claude>" --linux-arm64="<claude>" --yes` | yes | **SILENT per machine** — a fresh Firebase project has no pin, so `ensure_cli()` fails closed, `main()` writes `cortexStatus.error` and exits without an exception, backing off 5 min to 1 h (`agent/src/cortex_cli_fetch.py:84-85`). A 3.0.0+ installer promoted into an environment with a missing pin leaves local hoot dead on every fresh install. |
 
 ### the two commands that do not fit a table cell
 
@@ -67,7 +69,7 @@ work simply never happens. Those are the rows that bite.
 committed — the exe bakes its own version into its filename):
 
 ```bash
-API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
+API_KEY=$(grep '^OWLETTE_API_KEY_PROD=' .claude/.env.local | cut -d= -f2)   # dev: '^OWLETTE_API_KEY='
 BASE_URL="https://owlette.app"   # dev: https://dev.owlette.app
 VERSION="X.Y.Z"
 SHA256=$(sha256sum agent/build/installer_output/Owlette-Installer-v$VERSION.exe | cut -d' ' -f1)
@@ -79,7 +81,7 @@ curl -s -X POST "$BASE_URL/api/installer/upload" \
   -H "Idempotency-Key: installer-upload-$VERSION-$(date +%s)" \
   -d "{\"version\":\"$VERSION\",\"fileName\":\"Owlette-Installer-v$VERSION.exe\",\"releaseNotes\":\"Release $VERSION\",\"setAsLatest\":true}"
 
-# 2. PUT the bytes to the returned uploadUrl — no Idempotency-Key, no api key (direct to GCS)
+# 2. PUT the bytes to the returned uploadUrl — no Idempotency-Key, no api key (direct to R2 or GCS)
 curl -X PUT "$UPLOAD_URL" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @agent/build/installer_output/Owlette-Installer-v$VERSION.exe
@@ -117,9 +119,9 @@ gcloud storage buckets add-iam-policy-binding $BUCKET \
 
 Then set `SECURITY_BOUNDARY_AUDIT_EXPORT_BUCKET` and `SECURITY_BOUNDARY_AUDIT_EXPORT_ENV=prod` in
 `functions/.env.owlette-prod-90a12` and redeploy. Setting the env vars alone does **not** enable it:
-the early return in `securityBoundaryAuditExport.ts:135-140` keys off the *project id*, not those
+the early return in `securityBoundaryAuditExport.ts:132-137` keys off the *project id*, not those
 vars, so enabling prod export also requires removing that guard and attaching a prod service account
-(the conditional `serviceAccount` at `:130-132` is dev-only today).
+(the conditional `serviceAccount` at `:127-129` is dev-only today).
 
 ### the four scheduler jobs that log green while doing nothing
 
@@ -127,10 +129,10 @@ Worth knowing before you read a green Cloud Scheduler dashboard as proof of anyt
 
 | function | why it is inert | what the run reports |
 |---|---|---|
-| `chunkGcNightly` | `getDefaultStore()` throws `R2 object store not wired — blocked on wave 0.5` (`chunkGc.ts:315`) | per-site error caught, summary of all-skipped sites |
-| `reconcileQuota` | `getDefaultStorageMetrics()` throws `R2 storage metrics not wired — blocked on wave 0.5` (`quotaEnforce.ts:403`) | completes green with `sites=0` reconciled |
-| `exportAuditDaily` | `getDefaultExporter()` throws `BigQuery audit sink not wired — deferred to wave 0.6` (`auditLog.ts:313`) | logs `records=0`, exits successfully |
-| `exportSecurityBoundaryAuditDevDaily` | returns early outside `owlette-dev-3838a` (`securityBoundaryAuditExport.ts:135-140`) | logs `skipping — prod export infra not yet provisioned` |
+| `chunkGcNightly` | dry run unless `CHUNK_GC_MODE=apply` (`chunkGc.ts:129-130`); without the R2 config it aborts before scanning (`chunkGc.ts:365-371`) | logs `[chunkGc:dry-run]` would-delete counts and deletes nothing, or `[chunkGc] aborting run, storage not configured`; exits successfully either way |
+| `reconcileQuota` | `getDefaultStorageMetrics()` throws `R2 storage metrics not wired — blocked on wave 0.5` (`quotaEnforce.ts:363-367`) | completes green with `sites=0` reconciled |
+| `exportAuditDaily` | `getDefaultExporter()` returns no sink (BigQuery is not wired), so the run returns before reading any audit record (`auditLog.ts`) | logs `daily export skipped: no audit sink is wired`, exits successfully |
+| `exportSecurityBoundaryAuditDevDaily` | returns early outside `owlette-dev-3838a` (`securityBoundaryAuditExport.ts:132-137`) | logs `skipping — prod export infra not yet provisioned` |
 
 The in-Firestore audit chain remains authoritative, and 7-year retention holds because nothing prunes
 `audit_log` — not because the export works.
@@ -163,17 +165,17 @@ node scripts/sync-env.mjs            # coverage grid + drift
 node scripts/sync-env.mjs check      # exit 1 on drift
 ```
 
-Two limits on what that check proves. It only sees keys the manifest lists, and of the nine Instatus
-component ids only `INSTATUS_COMPONENT_DASHBOARD_ID` is registered — use step 5's gate for the rest.
-And it compares key *presence*, never values (see the Vercel caveat below).
+Two limits on what that check proves. It only sees keys the manifest lists (the nine Instatus
+component ids are there; step 5's gate checks them on a live status ping). And it compares key
+*presence*, never values (see the Vercel caveat below).
 
 The ones that are silent when wrong: `ROOST_ENV=prod` on the prod service (without it R2 writes go to
 the dev bucket), every `NEXT_PUBLIC_*` (build-time inlined — redeploy after adding one), and
-`CRON_SECRET` (rotating it silently invalidates every one-click unsubscribe link already sitting in a
-recipient's inbox, because `web/app/api/unsubscribe/route.ts:23-28` uses it as the HMAC key).
+`CRON_SECRET` (rotating it silently invalidates every unsubscribe link already sitting in a
+recipient's inbox, because `web/app/api/unsubscribe/route.ts` uses it as the HMAC key).
 
 For prod only, mirror to the Vercel failover origin and re-run this after **every** prod secret
-rotation — it is the only way to guarantee the four `must-match` secrets actually match:
+rotation — it is the only way to guarantee the `must-match` secrets actually match:
 
 ```bash
 node scripts/sync-env.mjs diff railway-prod vercel-prod
@@ -181,15 +183,18 @@ node scripts/sync-env.mjs sync vercel-prod --apply
 ```
 
 **4. R2 buckets, CORS, and keys.** The buckets are account-wide, not per environment — one run
-creates all four (`owlette-{prod,dev}-{content,manifests}`):
+creates all six (`owlette-{prod,dev}-{content,manifests,issue-logs}`):
 
 ```bash
 node scripts/provision-r2.mjs --verify-only
 node scripts/provision-r2.mjs
 ```
 
-The CORS policy is a full-replace PUT applied to the two content buckets only (manifests move
-server-side and stay CORS-less on purpose), so adding a dev port means re-running the whole script.
+The CORS policy is a full-replace PUT applied to the two content buckets and, as a PUT-only rule
+with a `content-type` header, to the two issue-logs buckets, which take dashboard issue
+attachments straight from the browser (the prod one allows only the hosted origins; manifests
+move server-side and stay CORS-less on purpose), so adding a dev port means re-running the whole
+script.
 The S3-compatible access keys it cannot mint are a dashboard visit: R2 → Manage R2 API Tokens →
 Object Read & Write across the four buckets → set `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`,
 `R2_S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com`.
@@ -220,7 +225,7 @@ firebase deploy --only functions --project prod
 Other keys read by the functions codebase: `API_BASE_URL` (auto-derived from the project id unless
 overridden), `CHUNK_VERIFY_CALLER_UIDS`, `CHUNK_GC_MODE` (must equal `apply` or chunk GC stays
 dry-run), and `SECURITY_BOUNDARY_AUDIT_EXPORT_BUCKET` / `_ENV`. This deploy is also what creates the
-nine Cloud Scheduler jobs in that project — confirm them:
+ten Cloud Scheduler jobs in that project — confirm them:
 
 ```bash
 gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1
@@ -228,7 +233,7 @@ gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1
 
 **8. Deploy the web app.** Push to `dev` or merge to `main`; Railway builds. Watch it to completion.
 
-**9. Cortex CLI pin.** Required before any 3.0.0+ installer is promoted into this environment:
+**9. hoot CLI pin.** Required before any 3.0.0+ installer is promoted into this environment:
 
 ```bash
 node scripts/upload-cortex-cli.mjs --env=prod \
@@ -269,8 +274,13 @@ customer doc does not. Update all three in the same commit.
 | `GET /api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 | `GET /api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer <CRON_SECRET>` | default |
+| `GET /api/cron/plan-daily` | `30 23 * * *` (keep 23:30 UTC: the last run of a month is the one that bills) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** |
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
+| `GET /api/cron/swoop-retention` | `30 4 * * *` (or any quiet time apart from retention) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
+
+`/api/cron/plan-trials` is in the registry too, but is never scheduled: it is run by hand once per
+environment just before plans are switched on ([plans-and-billing.md](plans-and-billing.md)).
 
 Four things to get right:
 
@@ -278,16 +288,16 @@ Four things to get right:
   `dev.owlette.app` correctly returns 401 and fires nothing. A registry that lists one job per path
   under-counts by half.
 - **`/api/hoot/escalation` is the odd one out.** It reads `Authorization: Bearer`, not
-  `X-Cron-Secret` (`web/app/api/hoot/escalation/route.ts:103`). The wrong header shape is a silent
+  `X-Cron-Secret` (`web/app/api/hoot/escalation/route.ts:98`). The wrong header shape is a silent
   401 with no other symptom. Existing jobs pointed at `/api/cortex/escalation` keep working — that
   path is a thin re-export of the same handler — but use the `/api/hoot/` path for anything new.
 - **The talons sweep needs a 60s+ client timeout.** It budgets up to ~50s of wall clock
-  (`SWEEP_BUDGET_MS = 50_000`, talons/route.ts:74). `/api/cron/health-check` is the genuinely
+  (`SWEEP_BUDGET_MS = 50_000`, talons/route.ts:52). `/api/cron/health-check` is the genuinely
   unbounded one — it iterates every site, then every machine, with serial Firestore writes and serial
   per-recipient sends — so give it headroom too. No other route defines a time budget.
 - **Verify each by hand after registering, and gate on the status code, not the body.** Healthy is
-  `200`. The seven `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
-  you: `/api/cron/status-ping` computes `ok` from component health (`route.ts:262`), so a correctly
+  `200`. The `/api/cron/*` routes answer `{"ok":true,…}`, but two bodies differ and will mislead
+  you: `/api/cron/status-ping` computes `ok` from component health (`route.ts:249`), so a correctly
   registered job legitimately returns `200` with `"ok":false` while any component is degraded; and
   `/api/hoot/escalation` answers `{"success":true,…}` with no `ok` field at all.
 
@@ -314,9 +324,8 @@ curl -si https://owlette.app/api/health
 ```
 
 `/api/health` is unauthenticated and returns 200 only when the origin can reach Firestore — it is the
-Cloudflare load balancer's readiness probe and the single best "is prod alive" check. (Note that
-[production-deploy.md](production-deploy.md) still says at `:213-214` and `:412` that this route does
-not exist; it does — `web/app/api/health/route.ts`.) The API key for the R2 smoke must carry
+Cloudflare load balancer's readiness probe and the single best "is prod alive" check
+(`web/app/api/health/route.ts`). The API key for the R2 smoke must carry
 `site=<siteId>:write` scope.
 
 ---
@@ -352,7 +361,7 @@ deploys the web app before the Firestore indexes it queries and collapses rules 
    direction: a function deployed early is a Firestore trigger and a scheduled job with no new web
    caller — inert until the app that uses it ships. Web before functions is the dangerous direction —
    the new UI calls a callable or expects a trigger that is not there yet, and the failure lands on
-   users. This step also creates or updates the nine Cloud Scheduler jobs in that project.
+   users. This step also creates or updates the ten Cloud Scheduler jobs in that project.
 8. **Deploy the web app.** Merge `dev` into `main` and push; Railway auto-deploys. Watch the build to
    completion before smoke checks. Every backend surface it depends on is now live.
 9. **Register or verify the cron-job.org jobs, last.** Once the routes they call are serving, per
@@ -367,7 +376,7 @@ deploys the web app before the Firestore indexes it queries and collapses rules 
 
 Agent installer releases run on their own track and are **not** part of this sequence — see
 [agent-installer-release.md](agent-installer-release.md). The only ordering constraint they share is
-step 1, and the cortex CLI pin gate: provision every `installer_metadata/cortex_cli_<osFamily>_<arch>`
+step 1, and the hoot CLI pin gate: provision every `installer_metadata/cortex_cli_<osFamily>_<arch>`
 document whose platform you are promoting an installer for *before* promoting it — a 3.4+ agent
 reads only its own, so a platform you skip has no working hoot there. The legacy
 `installer_metadata/cortex_cli`, which the Windows payload rewrites on every run, covers only what
@@ -380,21 +389,23 @@ was fielded before 3.4.
 Four documents carry the detail this file deliberately does not duplicate. The summaries are here so
 a person on call knows what exists without opening `.claude/`.
 
-**`.claude/skills/cf-load-balancing.md` — the `owlette.app` failover load balancer.**
+**`.claude/skills/cf-load-balancing/SKILL.md` — the `owlette.app` failover load balancer.**
 `owlette.app` sits behind a Cloudflare LB with two origins on different clouds: Railway
 (`owlette-prod`) as primary, Vercel (`owlette` project) as standby, kept fresh via git-connect. A
-monitor polls `GET /api/health` every 60s expecting 200 and sending `Host: owlette.app`; both pools
-rewrite the Host header so each origin routes and serves TLS correctly;
+monitor polls `GET /api/health` every 60s expecting 200; each pool sends its origin's own Host header
+(`owlette.app` to Railway, `vercel-origin.owlette.app` to Vercel), on its health checks too, so each
+origin routes and serves TLS correctly;
 `steering_policy = "off"` makes it a pure cascade — all traffic to the first healthy pool, Vercel only
 when Railway's monitor fails. It is Terraform in `infra/cloudflare/`, applied by hand with a filled-in
-`terraform.tfvars` and `CLOUDFLARE_API_TOKEN` scoped to *Account → Load Balancing: Monitors and Pools
-→ Edit* and *Zone → Load Balancers → Edit*. Three traps the skill spells out: state is local and
+`terraform.tfvars`, `TF_VAR_edge_shared_secret`, and `CLOUDFLARE_API_TOKEN` scoped to *Account → Load
+Balancing: Monitors and Pools → Edit*, *Zone → Load Balancers → Edit* and *Zone → Transform Rules →
+Edit* (the edge-headers ruleset). Three traps the skill spells out: state is local and
 gitignored, so a second machine applying without it drifts; `railway_origin` must be the underlying
 Railway origin hostname, never `owlette.app` itself (the LB would loop back on itself); and the
 `~> 4.52` provider pin is deliberate — v5 renamed `default_pool_ids`, `fallback_pool_id`, and the
 `header {}` blocks.
 
-**`.claude/skills/env-management.md` — env var parity across three surfaces.**
+**`.claude/skills/env-management/SKILL.md` — env var parity across three surfaces.**
 The three targets are `railway-dev` (serves dev.owlette.app), `railway-prod` (serves owlette.app), and
 `vercel-prod` (owlette.app failover). Both Railway services live in the **single environment named
 `dev`** — production is a separate *service*, not an environment, so address it as
@@ -402,9 +413,8 @@ The three targets are `railway-dev` (serves dev.owlette.app), `railway-prod` (se
 `vercel-prod` are a mirror pair whose values must be identical; `railway-dev` is independent.
 `scripts/env-manifest.json` is the canonical key registry (keys and metadata only, never values) and
 `scripts/sync-env.mjs` reconciles live state against it (`status` / `check` / `diff` / `sync`, dry-run
-by default, `--apply` to write). There are **four** `must-match` secrets — `SESSION_SECRET`,
-`MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`, and `TURNSTILE_SECRET`. Trust the manifest over the skill
-here: the skill's prose still says three, having been written before the Turnstile gate shipped. The
+by default, `--apply` to write). There are **fourteen** `must-match` vars; the manifest's `classes` entry
+names each one and what breaks when it differs. The
 limitation that makes all of this dangerous: Vercel stores sensitive vars write-only, so the tool can
 prove a key exists but never that its value matches — a green `check` is not proof. Re-running
 `sync vercel-prod --apply` (idempotent) after every prod secret rotation is the only guarantee. Never
@@ -417,7 +427,7 @@ stale-run janitor, the `talon_dispatch` watchdog, and the quick-triage table for
 run". Read it before touching anything under `/api/cron/talons`.
 
 **`web/content/docs/setup/web-deployment.mdx` — the customer-facing deployment guide.** Railway and
-Vercel setup, the full env var list, the canonical scheduled-endpoints table (§152-167), and the cron
+Vercel setup, the full env var list, the canonical scheduled-endpoints table ("scheduled endpoints"), and the cron
 registration walk-through with example response bodies. It is the public version of parts of this
 file; when the two disagree, this one is the operator source of truth and that one should be
 corrected — except on the scheduled-endpoints list itself, which is maintained there and rendered

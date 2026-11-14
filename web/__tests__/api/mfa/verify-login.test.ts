@@ -42,13 +42,19 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
+    requirePreMfaSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
   };
 });
 
 jest.mock('@/lib/totp', () => ({
   verifyTOTP: (...a: unknown[]) => mockVerifyTOTP(...a),
   verifyBackupCode: (...a: unknown[]) => mockVerifyBackupCode(...a),
+}));
+
+// the attempt budget and the spent-step record are covered in code-attempts.test.ts
+jest.mock('@/lib/mfaAttempts.server', () => ({
+  spendMfaAttempt: async () => ({ success: true }),
+  consumeTotpCode: async (_uid: string, code: string, secret: string) => mockVerifyTOTP(code, secret),
 }));
 
 jest.mock('@/lib/encryption.server', () => ({
@@ -332,5 +338,28 @@ describe('POST /api/mfa/verify-login — device trust ("remember this device")',
   it('still marks the session mfa-verified when trusting the device', async () => {
     await POST(totpReq({ trustDevice: true }));
     expect(mockMarkSessionMfaVerified).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('POST /api/mfa/verify-login — the network the ceremony ran on', () => {
+  afterEach(() => {
+    delete process.env.EDGE_SHARED_SECRET;
+  });
+
+  it('is stamped on the login session, for swoop to bind the ceremony to', async () => {
+    process.env.EDGE_SHARED_SECRET = 'edge-secret-for-tests';
+    docState.data.mfaSecret = 'PLAINSECRET';
+    mockVerifyTOTP.mockReturnValue(true);
+
+    const res = await POST(
+      createMockRequest('http://localhost/api/mfa/verify-login', {
+        method: 'POST',
+        headers: { 'x-owlette-edge': 'edge-secret-for-tests', 'x-owlette-asn': '64500' },
+        body: { userId: 'user-1', code: '123456' },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockMarkSessionMfaVerified).toHaveBeenCalledWith('asn:64500');
   });
 });

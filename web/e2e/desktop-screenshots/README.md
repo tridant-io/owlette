@@ -6,13 +6,13 @@ UI that actually ships.
 
 ```bash
 cd web
-npm run screenshots:desktop     # ~25 s
+npm run screenshots:desktop     # ~50 s, both themes
 ```
 
 ## When to run it
 
 At **release time, after `build_installer_full.bat`** — the step is in
-`.claude/skills/build-system.md` → "Agent Installer Release". Not at version-bump time: a
+`.claude/skills/build-system/SKILL.md` → "Agent Installer Release". Not at version-bump time: a
 bump happens before the build, so there is no release binary to photograph, and
 `sync-versions.js` deliberately does nothing but edit version files.
 
@@ -22,6 +22,27 @@ first (or copy `agent/build/installer_package/app/owlette-desktop.exe` over
 it does not build one.
 
 `git diff --stat web/public/docs-screens` is the review. No diff is a valid result.
+
+## Themes
+
+Every shot is taken twice, once per Playwright project, against the same window. The
+capture opens dark: `snapshotLayout` pins `appearance.theme` to `dark` in the layout file,
+because with nothing stored the window follows the os and a machine in light mode would
+otherwise photograph the dark set light. The `light` project then switches the live window
+the way the app menu does, through the `set_appearance_theme` command, waits for `<html>`
+to carry `light`, and writes `agent-*-light.png` beside each dark file.
+
+- **The binary must know the command.** An app built before light mode has no
+  `set_appearance_theme`, so the `light` project fails at its first step and says so. The
+  `dark` project asks nothing of the binary and still runs. Light desktop shots therefore
+  come from the first release build that ships light mode.
+- **The tray menu is dark only.** It is a native popup, and Windows draws it in the os
+  theme, never the app's, so a light run would photograph the same menu again. The `light`
+  project skips it, and `--check` expects no light pair for `agent-right-click.png`.
+- `scripts/refresh-docs-screens.mjs` records `"themes": ["dark", "light"]` in
+  `captured.json` once a full refresh has taken both. Until then `--check` reports the
+  desktop light shots as pending a release build rather than failing; after it, a missing
+  one fails.
 
 ## Prerequisites
 
@@ -51,7 +72,7 @@ Stubbing `invoke` from inside the page is not an option: `window.__TAURI_INTERNA
 every function on it are non-configurable and non-writable, so an init script cannot wrap
 them. Redirecting the root is the seam.
 
-Two things cannot be redirected and are therefore snapshotted and restored by the global
+Three things cannot be redirected and are therefore snapshotted and restored by the global
 setup/teardown:
 
 - `%APPDATA%\app.owlette.desktop\layout.json` — the window size, read through the Windows
@@ -77,21 +98,18 @@ Two Windows gotchas are worth knowing before touching `capture-tray-menu.ps1`:
 
 | File | What it shows | Referenced by |
 |---|---|---|
-| `agent.png` | The window: process list, status dots, and the selected process's settings | `agent/configuration.mdx` |
+| `agent.png` | The window: process list, status dots, and the selected process's settings | `agent/configuration.mdx`, `agent/index.mdx` |
 | `agent-empty.png` | An enrolled machine with nothing configured yet, and the drop hint | `agent/configuration.mdx` |
 | `agent-menu.png` | The overflow menu, open, on a machine that belongs to a site | `agent/configuration.mdx` |
-| `agent-join-site.png` | The join-a-site dialog showing a pairing phrase | `agent/configuration.mdx` |
-| `agent-leave-site.png` | The leave-site dialog, confirm phase — before anything is stopped or deleted | `agent/configuration.mdx` *(pending)* |
-| `agent-report-issue.png` | The bug-report dialog, empty | `agent/configuration.mdx` *(pending)* |
+| `agent-join-site.png` | The join-a-site dialog showing a pairing phrase | `agent/configuration.mdx`, `agent/installation.mdx` |
+| `agent-leave-site.png` | The leave-site dialog, confirm phase — before anything is stopped or deleted | `agent/configuration.mdx` |
+| `agent-report-issue.png` | The submit issue dialog, empty, with attach logs unticked | `agent/troubleshooting.mdx` |
 | `agent-launch-mode.png` | The settings panel for a scheduled process (segmented control + schedule summary) | `agent/configuration.mdx` |
 | `agent-schedule-editor.png` | The schedule editor dialog | `agent/configuration.mdx` |
-| `agent-how-to-run.png` | The `how to run` section opened: attempts, priority, visibility | `agent/configuration.mdx` *(pending)* |
-| `agent-run-controls.png` | The detail header of a process that is not running — restart and kill both greyed out | `agent/process-monitoring.mdx` *(pending)* |
-| `agent-process-states.png` | The process list with a running, a stalled and an inactive entry (`paired-stalled`) | `agent/process-monitoring.mdx` *(pending)* |
+| `agent-how-to-run.png` | The `how to run` section opened: attempts, priority, visibility | `agent/configuration.mdx` |
+| `agent-run-controls.png` | The detail header of a process that is not running — restart and kill both greyed out | `agent/process-monitoring.mdx` |
+| `agent-process-states.png` | The process list with a running, a stalled and an inactive entry (`paired-stalled`) | `agent/process-monitoring.mdx` |
 | `agent-right-click.png` | The native tray right-click menu | `agent/system-tray.mdx` |
-
-*(pending)* = the shot is captured but the page does not reference it yet; the column names
-where it belongs.
 
 The pairing phrase is a fixture. The scratch tree carries a stand-in for
 `configure_site.py` that speaks the same line protocol with a fixed phrase, so a release
@@ -112,7 +130,8 @@ comment in `agent-app.spec.ts`; do not fake it.
 
 ## Determinism
 
-Output is byte-identical across runs — all twelve files, the native tray menu included.
+Output is byte-identical across runs — all twelve dark files, the native tray menu
+included. The light set has had its first full run (`captured.json` records both themes).
 Nothing in this UI is time-relative, so unlike the landing-page pipeline there is no clock
 to pin; what has to be controlled is:
 

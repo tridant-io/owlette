@@ -83,7 +83,7 @@ export function RoostContentsRow({
               loading file list…
             </div>
           ) : error ? (
-            <div className="px-3 py-2 text-xs text-red-400/80">
+            <div className="px-3 py-2 text-xs text-danger/80">
               couldn&apos;t load file list — {error}
             </div>
           ) : files.length === 0 ? (

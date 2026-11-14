@@ -4,17 +4,31 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import {
   collection,
   collectionGroup,
+  documentId,
   onSnapshot,
   doc,
-  getDoc,
   query,
   where,
   Timestamp,
+  type CollectionReference,
+  type DocumentData,
+  type Query,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
+import { MAX_MACHINE_SCOPE, parseMachineIds } from '@/lib/machineAccess';
 import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
+import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
+import {
+  parseActiveHours,
+  POWER_COUNTDOWN_SECONDS,
+  powerCommandParams,
+  type ActiveHours,
+  type PowerCommandOptions,
+  type PowerCommandSent,
+} from '@/lib/activeHours';
+import type { SwoopSeatMirror } from '@/lib/swoop/sessionStore.server';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -89,8 +103,34 @@ function parseFirestoreSeconds(value: unknown): number {
   return 0;
 }
 
+/** The agent's `displayAwake` mirror, or undefined when it is absent or not that shape. */
+function parseDisplayAwake(value: unknown): Machine['displayAwake'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.wanted !== 'boolean' || typeof v.held !== 'boolean') return undefined;
+  return {
+    wanted: v.wanted,
+    held: v.held,
+    session: typeof v.session === 'boolean' ? v.session : null,
+    how: typeof v.how === 'string' ? v.how : null,
+    reason: typeof v.reason === 'string' ? v.reason : null,
+  };
+}
+
+/** a seat without a string uid is dropped, and a blank name reads as none, as on the bar's pills. */
+function parseSwoopSeats(value: unknown): Machine['swoopSeats'] {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((seat: unknown) => {
+    if (!seat || typeof seat !== 'object') return [];
+    const s = seat as Record<string, unknown>;
+    if (typeof s.uid !== 'string') return [];
+    const name = typeof s.displayName === 'string' ? s.displayName.trim() : '';
+    return [{ uid: s.uid, displayName: name || null, ctl: s.ctl === true }];
+  });
+}
+
 /**
- * Non-2xx from {@link apiJson}. Carries status + RFC-7807 `code` so callers can
+ * Non-2xx from {@link apiJson} or the deployments hook. Carries status + RFC-7807 `code` so callers can
  * tell an expected 401/403 from a real fault and keep it out of Sentry.
  */
 export class ApiRequestError extends Error {
@@ -124,6 +164,51 @@ async function apiJson<T>(
     );
   }
   return body as T;
+}
+
+/** `onPlan`: the caller upgrades the site to core or pro next, which an account whose free site is taken needs. */
+export async function createSite(
+  siteId: string,
+  name: string,
+  timezone?: string,
+  schedulesFollowSiteTime?: boolean,
+  onPlan?: boolean,
+): Promise<string> {
+  if (!db) throw new Error('Firebase not configured');
+
+  const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
+  if (!isValid) {
+    throw new Error(error);
+  }
+
+  // No pre-read existence check: non-owners get permission-denied on getDoc.
+  // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
+  // availability is checked in CreateSiteDialog.
+  try {
+    await apiJson('/api/sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteId,
+        name,
+        timezone: timezone || 'UTC',
+        // Omitted, never `false`, when the caller states nothing. The field is
+        // three-state and an absent flag means "never asked" — sending `false`
+        // would spend that state at creation and permanently suppress the
+        // opt-in banner for a site nobody ever asked.
+        ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
+        ...(onPlan ? { onPlan } : {}),
+      }),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('already exists')) {
+      throw new Error(`site ID "${siteId}" is already taken. choose a different one.`);
+    }
+    throw err;
+  }
+
+  return siteId;
 }
 
 function makeIdempotencyKey(prefix: string): string {
@@ -224,7 +309,8 @@ export interface HardwareProfile {
 }
 
 export interface CpuMetric   { percent: number; temperature?: number | null }
-export interface MemoryMetric { percent: number; usedGb: number }
+/** `totalGb` arrives as the heartbeat's `total_gb`; absent on a heartbeat that predates it. */
+export interface MemoryMetric { percent: number; usedGb: number; totalGb?: number }
 export interface DiskMetric  { percent: number; usedGb: number }
 export interface GpuMetric   { usagePercent: number; vramUsedGb: number; temperature?: number | null }
 export interface NicMetric   { txBps: number; rxBps: number; txUtil: number; rxUtil: number }
@@ -269,17 +355,44 @@ export interface Machine {
    * Agent capability handshake, written as dotted paths by the heartbeat
    * (`firebase_client.py`). Absent on every agent that predates a key, so each
    * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
-   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
+   * entry here; SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is enforced
+   * later, by the session bundle route, not by the dashboard.
    */
   capabilities?: {
     swoop?: number;
     displayRemoteApply?: number;
+    keepAwake?: number;
+    /** windows agents that refuse restarts, shutdowns and deployments inside `activeHours`. */
+    activeHoursGuard?: number;
+  };
+  /** the machine's windows active hours as the agent reads them; absent off windows and on older agents. */
+  activeHours?: ActiveHours;
+  /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
+  swoopViewers?: number;
+  /** those viewers' seats, each with its person's name, for the swoop picker's cards; absent until the server first mirrors them */
+  swoopSeats?: SwoopSeatMirror[];
+  /**
+   * What the agent holds for the site's keep screens awake switch, mirrored on
+   * each change. `held` is the service's own hold (system sleep, and on macOS
+   * the display), `session` the desktop app's (idle lock, screensaver, and on
+   * Windows the display), null without a fresh report from
+   * it. `reason` says why a wanted hold is not fully held (`no_display` when
+   * nobody is signed in at the machine). Absent on agents without
+   * `capabilities.keepAwake`.
+   */
+  displayAwake?: {
+    wanted: boolean;
+    held: boolean;
+    session: boolean | null;
+    how: string | null;
+    reason: string | null;
   };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
   shuttingDown?: boolean;
   rebootScheduledAt?: number;    // Unix seconds — countdown anchor (matches lastHeartbeat convention)
   shutdownScheduledAt?: number;
+  rebootDeferredUntil?: number;  // Unix seconds — a restart waiting for active hours to end
   rebootPending?: {
     active: boolean;
     processName: string | null;
@@ -303,7 +416,7 @@ export interface Machine {
     } | null;
   };
   lastScreenshot?: {
-    url: string;       // Firebase Storage public URL
+    url: string;       // image route: redirects a signed-in viewer to a short-lived read url
     timestamp: FirestoreTs;
     sizeKB: number;
   };
@@ -446,12 +559,14 @@ function shimLegacyMachine(machine: Machine): Machine {
   // Legacy memory is snake_case at runtime despite the camelCase TS type (which
   // describes the post-shim shape) — read structurally and normalize.
   const legacyMemory = legacy.memory as unknown as
-    | { percent: number; used_gb?: number; usedGb?: number }
+    | { percent: number; used_gb?: number; usedGb?: number; total_gb?: number; totalGb?: number }
     | undefined;
+  const legacyTotalGb = legacyMemory?.total_gb ?? legacyMemory?.totalGb;
   const memory: MemoryMetric | undefined = legacyMemory
     ? {
         percent: legacyMemory.percent,
         usedGb: legacyMemory.used_gb ?? legacyMemory.usedGb ?? 0,
+        ...(typeof legacyTotalGb === 'number' && legacyTotalGb > 0 ? { totalGb: legacyTotalGb } : {}),
       }
     : undefined;
 
@@ -517,6 +632,27 @@ function shimLegacyMachine(machine: Machine): Machine {
     metrics: shimmedMetrics,
     profile: machine.profile ?? shimmedProfile,
   };
+}
+
+/**
+ * Structural equality for Firestore document data. Timestamps and the SDK's
+ * other value types compare with their own `isEqual`; everything else is plain
+ * JSON-like data.
+ */
+function sameDocData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const isEqual = (a as { isEqual?: unknown }).isEqual;
+  if (typeof isEqual === 'function') return isEqual.call(a, b) === true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b)
+      && a.length === b.length && a.every((item, i) => sameDocData(item, b[i]));
+  }
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const keys = Object.keys(aRecord);
+  return keys.length === Object.keys(bRecord).length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(bRecord, key) && sameDocData(aRecord[key], bRecord[key]));
 }
 
 /** Join `metrics` with `profile` into `devices`; flags isMissing / isOrphan. */
@@ -600,6 +736,17 @@ const SITE_ROLES: readonly string[] = ['owner', 'admin', 'member'];
 export interface SiteMemberships {
   /** siteId -> the caller's role there. Empty until the listener first resolves. */
   roleMap: Map<string, SiteRole>;
+  /**
+   * siteId -> the machines the caller reaches there, only for sites where their
+   * row carries a machine scope. a site absent here is whole site; `[]` is no
+   * machines, as the rules read a malformed scope.
+   */
+  scopeMap: Map<string, readonly string[]>;
+  /**
+   * siteId -> the swoop mode the caller's row carries, only for rows that carry
+   * one. a site absent here leaves the mode to the role.
+   */
+  swoopMap: Map<string, SwoopMode>;
   loading: boolean;
   /**
    * Non-null when the listener was refused or failed.
@@ -618,6 +765,25 @@ function roleMapsEqual(a: Map<string, SiteRole>, b: Map<string, SiteRole>): bool
   return true;
 }
 
+function scopeMapsEqual(
+  a: Map<string, readonly string[]>,
+  b: Map<string, readonly string[]>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const w = b.get(k);
+    if (w === undefined || w.length !== v.length) return false;
+    for (let i = 0; i < v.length; i++) if (v[i] !== w[i]) return false;
+  }
+  return true;
+}
+
+function swoopMapsEqual(a: Map<string, SwoopMode>, b: Map<string, SwoopMode>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+
 /**
  * The caller's site memberships, live.
  *
@@ -627,12 +793,15 @@ function roleMapsEqual(a: Map<string, SiteRole>, b: Map<string, SiteRole>): bool
  * against the rules — see the recursive members block in `firestore.rules`, which
  * is also what makes a collection-group query legal at all.
  *
- * No composite index is needed: a single-field equality is covered by automatic
- * single-field indexing at collection-group scope. Role is filtered in memory,
- * over tens of documents.
+ * the `members.uid` COLLECTION_GROUP field override in firestore.indexes.json is
+ * what makes the query servable: automatic single-field indexing does not extend
+ * to collection-group scope (scripts/check-membership-read-path.mjs). role,
+ * scope and swoop mode are read in memory, over tens of documents.
  */
 export function useSiteMemberships(userId?: string): SiteMemberships {
   const [roleMap, setRoleMap] = useState<Map<string, SiteRole>>(() => new Map());
+  const [scopeMap, setScopeMap] = useState<Map<string, readonly string[]>>(() => new Map());
+  const [swoopMap, setSwoopMap] = useState<Map<string, SwoopMode>>(() => new Map());
   // `db` is a module constant, so its absence is knowable at first render.
   const [loading, setLoading] = useState(Boolean(db));
   const [error, setError] = useState<string | null>(db ? null : 'Firebase not configured');
@@ -646,6 +815,8 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
   if (subscribedUid !== userId) {
     setSubscribedUid(userId);
     setRoleMap(new Map());
+    setScopeMap(new Map());
+    setSwoopMap(new Map());
     setLoading(Boolean(db));
     setError(db ? null : 'Firebase not configured');
   }
@@ -667,6 +838,8 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
       membershipQuery,
       (snapshot) => {
         const next = new Map<string, SiteRole>();
+        const nextScopes = new Map<string, readonly string[]>();
+        const nextModes = new Map<string, SwoopMode>();
         snapshot.forEach((memberDoc) => {
           // sites/{siteId}/members/{uid} — the grandparent is the site.
           const siteId = memberDoc.ref.parent.parent?.id;
@@ -675,8 +848,14 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
           if (data.status !== 'active') return;
           if (typeof data.role !== 'string' || !SITE_ROLES.includes(data.role)) return;
           next.set(siteId, data.role as SiteRole);
+          const scope = parseMachineIds(data);
+          if (scope !== null) nextScopes.set(siteId, scope);
+          const mode = parseSwoopMode(data.swoop);
+          if (mode !== null) nextModes.set(siteId, mode);
         });
         setRoleMap((prev) => (roleMapsEqual(prev, next) ? prev : next));
+        setScopeMap((prev) => (scopeMapsEqual(prev, nextScopes) ? prev : nextScopes));
+        setSwoopMap((prev) => (swoopMapsEqual(prev, nextModes) ? prev : nextModes));
         setLoading(false);
       },
       (err) => {
@@ -689,7 +868,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
     return () => unsubscribe();
   }, [userId]);
 
-  return { roleMap, loading, error };
+  return { roleMap, scopeMap, swoopMap, loading, error };
 }
 
 export interface MembershipUnion {
@@ -725,7 +904,11 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // loading is set synchronously in this effect by design (it re-arms on every
+    // access change, below); the rule reports only the first such call, so the
+    // one suppression covers them all.
     if (!db) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       setError('Firebase not configured');
       return;
@@ -863,53 +1046,10 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
     }
   }, [userId, userSites, isSuperadmin]);
 
-  const createSite = async (
-    siteId: string,
-    name: string,
-    _userId: string,
-    timezone?: string,
-    schedulesFollowSiteTime?: boolean,
-  ): Promise<string> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      throw new Error(error);
-    }
-
-    // No pre-read existence check: non-owners get permission-denied on getDoc.
-    // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
-    // availability is checked in CreateSiteDialog.
-    try {
-      await apiJson('/api/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteId,
-          name,
-          timezone: timezone || 'UTC',
-          // Omitted, never `false`, when the caller states nothing. The field is
-          // three-state and an absent flag means "never asked" — sending `false`
-          // would spend that state at creation and permanently suppress the
-          // opt-in banner for a site nobody ever asked.
-          ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
-        }),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('already exists')) {
-        throw new Error(`Site ID "${siteId}" is already taken. Please choose a different ID.`);
-      }
-      throw err;
-    }
-
-    return siteId;
-  };
-
   const updateSite = async (siteId: string, updates: { name?: string; timezone?: string; timeFormat?: '12h' | '24h'; schedulesFollowSiteTime?: boolean }) => {
     if (!db) throw new Error('Firebase not configured');
     if (updates.name !== undefined && !updates.name.trim()) {
-      throw new Error('Site name cannot be empty');
+      throw new Error('site name cannot be empty');
     }
 
     const updateData: Record<string, string | boolean> = {};
@@ -935,47 +1075,31 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const deleteSite = async (siteId: string) => {
     if (!db) throw new Error('Firebase not configured');
 
-    // Firestore does not cascade-delete the machines subcollection.
     await apiJson(`/api/sites/${encodeURIComponent(siteId)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     });
-
-    // TODO: arrayRemove this siteId from every user's `sites`. Until then admins
-    // clean up orphans via the Manage Site Access dialog.
-    logger.info(`Site ${siteId} deleted. Note: User references may need manual cleanup.`);
   };
 
-  const checkSiteIdAvailability = async (siteId: string): Promise<boolean> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    if (!siteId || siteId.trim() === '') {
-      return false;
-    }
-
-    const { isValid } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      return false;
-    }
-
-    // A live site OR a tombstone from a deleted one makes the id unavailable —
-    // createSite refuses retired ids, so reporting them as free would send the
-    // user through the form only to 409 on submit.
-    const [siteSnap, tombstoneSnap] = await Promise.all([
-      getDoc(doc(db, 'sites', siteId)),
-      getDoc(doc(db, 'site_ids', siteId)),
-    ]);
-
-    return !siteSnap.exists() && !tombstoneSnap.exists();
-  };
-
-  return { sites, loading, error, createSite, updateSite, deleteSite, checkSiteIdAvailability };
+  return { sites, loading, error, createSite, updateSite, deleteSite };
 }
 
 // Module-level so consumers' memo/effect deps don't churn on a fresh [] each render.
 const EMPTY_MACHINES: Machine[] = [];
+// keyed by the pre-join machine object, so a machine whose doc and profile
+// are both unchanged keeps its joined object across renders
+const joinedMachineCache = new WeakMap<Machine, { profile: HardwareProfile | undefined; joined: Machine }>();
 const PROFILE_LISTENER_LIMIT = 50;
+// the scope key of a scoped member who reaches no machines: no listener opens
+const EMPTY_SCOPE_KEY = '[]';
+
+// a scoped member cannot list the collection. the rules prove a documentId() `in`
+// against the row's machineIds, and one id outside them refuses the whole query.
+function scopedMachines(col: CollectionReference, scopeKey: string | null): Query {
+  if (scopeKey === null) return col;
+  return query(col, where(documentId(), 'in', JSON.parse(scopeKey) as string[]));
+}
 
 // Heartbeat age at which the pill flips offline. 300s tolerates two missed idle
 // beats (120s each); 180s greyed out healthy machines on one slow tick. Must match
@@ -1037,13 +1161,35 @@ export function useMachineHardware(siteId: string | null, machineId: string | nu
   };
 }
 
-export function useMachines(siteId: string) {
+/**
+ * the site's machines, live. `machineIds` is the caller's machine scope there:
+ * null or absent reads the whole site, a list reads only those machines (a
+ * scoped member), and `[]` reads nothing.
+ */
+export function useMachines(siteId: string, machineIds?: readonly string[] | null) {
+  // one key per scope, so a fresh array with the same ids keeps the listeners
+  const scopeIds = machineIds == null ? null : [...new Set(machineIds)].sort();
+  const scopeOverflow = scopeIds === null ? 0 : Math.max(0, scopeIds.length - MAX_MACHINE_SCOPE);
+  const scopeKey = scopeIds === null ? null : JSON.stringify(scopeIds.slice(0, MAX_MACHINE_SCOPE));
+  const emptyScope = scopeKey === EMPTY_SCOPE_KEY;
+  const loadKey = scopeKey === null ? siteId : `${siteId}:${scopeKey}`;
+
   const [machines, setMachines] = useState<Machine[]>([]);
   const [profiles, setProfiles] = useState<Record<string, HardwareProfile>>({});
-  // Pins `machines` to the site it was populated for: a mismatch with `siteId`
-  // yields empty + loading, so the effect never flips loading synchronously.
-  const [loadedSiteId, setLoadedSiteId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(db ? null : 'Firebase not configured');
+  // Pins `machines` to the site and scope it was populated for: a mismatch with
+  // `loadKey` yields empty + loading, so the effect never flips loading synchronously.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  // keyed like `machines`, so a refusal on one site or scope is not reported on the next
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+
+  useEffect(() => {
+    // the server never writes more than MAX_MACHINE_SCOPE ids, so a longer row is a data error
+    if (scopeOverflow > 0) {
+      console.warn(
+        `[useMachines] the machine scope on site ${siteId} lists ${MAX_MACHINE_SCOPE + scopeOverflow} machines; only the first ${MAX_MACHINE_SCOPE} load`,
+      );
+    }
+  }, [siteId, scopeKey, scopeOverflow]);
 
   // Capped: one listener per machine hits Firebase's soft client listener ceiling
   // on large sites. Machines past the cap get metric-only `devices` below.
@@ -1061,11 +1207,16 @@ export function useMachines(siteId: string) {
   // list/card views need no per-row sub. Keyed by machineId; absent == false.
   const displayBreakerTrippedOverridesRef = useRef<Record<string, boolean>>({});
 
+  // Last snapshot's raw status-doc data by machineId. Every heartbeat snapshot
+  // carries every doc; comparing against this is how a machine whose doc did
+  // not change keeps its object, and with it every memoized row and card.
+  const statusDocDataRef = useRef<Map<string, DocumentData>>(new Map());
+
   // Config doc is source of truth; the status doc lags 10-120s. onSnapshot (not
   // getDocs) so agent-originated changes propagate.
   useEffect(() => {
-    if (!db || !siteId) return;
-    const configCol = collection(db, 'config', siteId, 'machines');
+    if (!db || !siteId || scopeKey === EMPTY_SCOPE_KEY) return;
+    const configCol = scopedMachines(collection(db, 'config', siteId, 'machines'), scopeKey);
     const unsubConfig = onSnapshot(configCol, (snapshot) => {
       const overrides: typeof configOverridesRef.current = {};
       const restartOverrides: typeof restartScheduleOverridesRef.current = {};
@@ -1108,12 +1259,23 @@ export function useMachines(siteId: string) {
           next.processes = next.processes.map(p => {
             const override = machineOverrides[p.id];
             if (!override) return p;
-            return {
+            const launchMode = (override.launch_mode || p.launch_mode) as LaunchMode;
+            const updated: Process = {
               ...p,
-              launch_mode: (override.launch_mode || p.launch_mode) as LaunchMode,
+              launch_mode: launchMode,
               schedules: override.schedules ?? p.schedules,
               schedulePresetId: override.schedulePresetId,
             };
+            // the config doc now agrees with the optimistic write, so release the
+            // hold here too: an offline machine's status doc never changes again,
+            // and the status path alone would keep showing the stale mode
+            if (p._optimisticLaunchMode !== undefined && p._optimisticLaunchMode === launchMode) {
+              delete updated._optimisticLaunchMode;
+              delete updated._optimisticAutolaunch;
+              delete updated._optimisticSchedules;
+              delete updated._optimisticPresetId;
+            }
+            return updated;
           });
         }
         return next;
@@ -1123,7 +1285,7 @@ export function useMachines(siteId: string) {
       console.debug('Config override listener error:', e);
     });
     return () => unsubConfig();
-  }, [siteId]);
+  }, [siteId, scopeKey]);
 
   // 30s staleness sweep for machines that died without writing online=false
   // (crashes, installer kills). Must keep using `isMachineOnline` — the pill
@@ -1156,12 +1318,15 @@ export function useMachines(siteId: string) {
   }, [machines.length]);
 
   useEffect(() => {
-    if (!db || !siteId) return;
+    if (!db || !siteId || scopeKey === EMPTY_SCOPE_KEY) return;
 
-    // No sync state reset: loading derives from `loadedSiteId !== siteId` below.
+    // No sync state reset: loading derives from `loadedKey !== loadKey` below.
     // No try/catch: collection() only throws on invalid paths (guarded above) and
     // onSnapshot reports runtime errors via its own callback.
-    const machinesRef = collection(db, 'sites', siteId, 'machines');
+    const machinesRef = scopedMachines(collection(db, 'sites', siteId, 'machines'), scopeKey);
+    // a new site's first snapshot rebuilds every machine, even one whose id the
+    // previous site shared
+    statusDocDataRef.current = new Map();
 
     const unsubscribe = onSnapshot(
       machinesRef,
@@ -1170,12 +1335,20 @@ export function useMachines(siteId: string) {
         // them and trusting `data.online` painted green pills on minutes-stale
         // machines until the 30s tick corrected them.
 
+        const previousDocData = statusDocDataRef.current;
+        const docData = new Map<string, DocumentData>();
+        const changedMachineIds = new Set<string>();
+        snapshot.forEach((d) => {
+          const data = d.data();
+          docData.set(d.id, data);
+          if (!sameDocData(previousDocData.get(d.id), data)) changedMachineIds.add(d.id);
+        });
+        statusDocDataRef.current = docData;
+
         // Reconcile the capped profile listeners; the first N IDs are deterministic
         // because the collection is sorted by machineId. Detail views use
         // useMachineHardware for an uncapped single-machine listener.
-        const currentMachineIds = new Set<string>();
-        snapshot.forEach((d) => currentMachineIds.add(d.id));
-        const profiledMachineIds = Array.from(currentMachineIds)
+        const profiledMachineIds = Array.from(docData.keys())
           .sort((a, b) => a.localeCompare(b))
           .slice(0, PROFILE_LISTENER_LIMIT);
         const profiledMachineIdSet = new Set(profiledMachineIds);
@@ -1220,12 +1393,17 @@ export function useMachines(siteId: string) {
         }
 
         setMachines(prevMachines => {
+          const prevById = new Map(prevMachines.map((m) => [m.machineId, m]));
           const machineData: Machine[] = [];
 
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-
-            const prevMachine = prevMachines.find(m => m.machineId === doc.id);
+          docData.forEach((data, machineId) => {
+            const prevMachine = prevById.get(machineId);
+            // unchanged doc: the previous object already carries any optimistic
+            // and config-override state applied since
+            if (prevMachine && !changedMachineIds.has(machineId)) {
+              machineData.push(prevMachine);
+              return;
+            }
 
           // processes live under metrics in newer agents, top-level in older ones
           let processes: Process[] = [];
@@ -1259,7 +1437,7 @@ export function useMachines(siteId: string) {
               .map(([id, processData]) => {
                 const prev = prevProcessMap[id];
                 // config doc wins over the status doc for launch_mode/schedules
-                const configOverride = configOverridesRef.current[doc.id]?.[id];
+                const configOverride = configOverridesRef.current[machineId]?.[id];
                 const firestoreMode: LaunchMode = (configOverride?.launch_mode as LaunchMode) || processData.launch_mode || prev?.launch_mode || (processData.autolaunch ? 'always' : 'off');
                 const firestoreSchedules = configOverride?.schedules ?? processData.schedules ?? prev?.schedules ?? null;
                 const firestorePresetId = configOverride?.schedulePresetId ?? processData.schedulePresetId ?? null;
@@ -1306,6 +1484,8 @@ export function useMachines(siteId: string) {
           const restartScheduledAt = restartScheduledAtParsed > 0 ? restartScheduledAtParsed : undefined;
           const shutdownScheduledAtParsed = parseFirestoreSeconds(data.shutdownScheduledAt);
           const shutdownScheduledAt = shutdownScheduledAtParsed > 0 ? shutdownScheduledAtParsed : undefined;
+          const rebootDeferredUntilParsed = parseFirestoreSeconds(data.rebootDeferredUntil);
+          const rebootDeferredUntil = rebootDeferredUntilParsed > 0 ? rebootDeferredUntilParsed : undefined;
 
           const now = Math.floor(Date.now() / 1000);
           const isOnline = isMachineOnline(data.online, lastHeartbeat, now);
@@ -1319,7 +1499,7 @@ export function useMachines(siteId: string) {
             } : prevMachine?.metrics;
 
             machineData.push({
-              machineId: doc.id,
+              machineId,
               lastHeartbeat,
               online: isOnline,
               agent_version: data.agent_version,
@@ -1331,12 +1511,17 @@ export function useMachines(siteId: string) {
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
               capabilities: data.capabilities,
+              activeHours: parseActiveHours(data.activeHours),
+              swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
+              swoopSeats: parseSwoopSeats(data.swoopSeats),
+              displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,
               shutdownScheduledAt,
-              rebootSchedule: restartScheduleOverridesRef.current[doc.id],
-              displayBreakerTripped: displayBreakerTrippedOverridesRef.current[doc.id] === true,
+              rebootDeferredUntil,
+              rebootSchedule: restartScheduleOverridesRef.current[machineId],
+              displayBreakerTripped: displayBreakerTrippedOverridesRef.current[machineId] === true,
               rebootState: data.rebootState,
               // agent-published "needs restart" banner payload, passed through verbatim
               rebootPending: data.rebootPending,
@@ -1348,13 +1533,19 @@ export function useMachines(siteId: string) {
           // stable ordering prevents row flicker
           machineData.sort((a, b) => a.machineId.localeCompare(b.machineId));
 
-          return machineData;
+          const unchanged = machineData.length === prevMachines.length
+            && machineData.every((m, i) => m === prevMachines[i]);
+          return unchanged ? prevMachines : machineData;
         });
-        setLoadedSiteId(siteId);
+        setLoadedKey(loadKey);
       },
       (err) => {
         console.error('Error fetching machines:', err);
-        setError(err.message);
+        // a refused listener is final until the site or scope changes, so stop
+        // loading: a page that waited would spin forever
+        setFailure({ key: loadKey, message: err.message });
+        setMachines([]);
+        setLoadedKey(loadKey);
       }
     );
 
@@ -1367,7 +1558,7 @@ export function useMachines(siteId: string) {
       profileListenersRef.current = {};
       setProfiles({});
     };
-  }, [siteId]);
+  }, [siteId, scopeKey, loadKey]);
 
   const killProcess = async (machineId: string, processId: string, processName: string) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
@@ -1568,14 +1759,6 @@ export function useMachines(siteId: string) {
         processId
       });
 
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to update process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
-
       throw error;
     }
   };
@@ -1611,14 +1794,6 @@ export function useMachines(siteId: string) {
         machineId,
         processId
       });
-
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to delete process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
 
       throw error;
     }
@@ -1687,14 +1862,6 @@ export function useMachines(siteId: string) {
         processData
       });
 
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to create process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
-
       throw error;
     }
   };
@@ -1720,35 +1887,52 @@ export function useMachines(siteId: string) {
     return response.data.commandId;
   };
 
-  const restartMachine = async (machineId: string) => {
-    if (!db || !siteId) throw new Error('Firebase not configured');
-    // optimistic countdown while the API queues the command
-    const targetRestart = Math.floor(Date.now() / 1000) + 30;
-    // 'reboot_machine' is the agent's wire verb — keep it.
-    await sendMachineCommand(machineId, 'reboot_machine', { delay_seconds: 30 });
+  /**
+   * Draws the countdown before the agent writes its own, and returns a way to
+   * take it back: a refused command never reaches the OS, and the agent writes
+   * nothing to the machine doc to clear it. Only this exact countdown goes, so
+   * one the agent wrote in the meantime stays.
+   */
+  const drawCountdown = (
+    machineId: string,
+    field: 'rebootScheduledAt' | 'shutdownScheduledAt',
+    target: number,
+  ): (() => void) => {
     setMachines(prevMachines =>
       prevMachines.map(machine =>
-        machine.machineId === machineId ? {
-          ...machine,
-          rebootScheduledAt: targetRestart,
-        } : machine
+        machine.machineId === machineId ? { ...machine, [field]: target } : machine
+      )
+    );
+    return () => setMachines(prevMachines =>
+      prevMachines.map(machine =>
+        machine.machineId === machineId && machine[field] === target
+          ? { ...machine, [field]: undefined }
+          : machine
       )
     );
   };
 
-  const shutdownMachine = async (machineId: string) => {
+  const restartMachine = async (
+    machineId: string,
+    options: PowerCommandOptions = {},
+  ): Promise<PowerCommandSent> => {
     if (!db || !siteId) throw new Error('Firebase not configured');
-    // optimistic countdown while the API queues the command
-    const targetShutdown = Math.floor(Date.now() / 1000) + 30;
-    await sendMachineCommand(machineId, 'shutdown_machine', { delay_seconds: 30 });
-    setMachines(prevMachines =>
-      prevMachines.map(machine =>
-        machine.machineId === machineId ? {
-          ...machine,
-          shutdownScheduledAt: targetShutdown,
-        } : machine
-      )
-    );
+    const targetRestart = Math.floor(Date.now() / 1000) + POWER_COUNTDOWN_SECONDS;
+    // 'reboot_machine' is the agent's wire verb — keep it.
+    const commandId = await sendMachineCommand(machineId, 'reboot_machine', powerCommandParams('restart', options));
+    // a deferred restart has no countdown until the agent says when the window ends
+    if (options.when === 'after_active_hours') return { commandId };
+    return { commandId, revertCountdown: drawCountdown(machineId, 'rebootScheduledAt', targetRestart) };
+  };
+
+  const shutdownMachine = async (
+    machineId: string,
+    options: PowerCommandOptions = {},
+  ): Promise<PowerCommandSent> => {
+    if (!db || !siteId) throw new Error('Firebase not configured');
+    const targetShutdown = Math.floor(Date.now() / 1000) + POWER_COUNTDOWN_SECONDS;
+    const commandId = await sendMachineCommand(machineId, 'shutdown_machine', powerCommandParams('shutdown', options));
+    return { commandId, revertCountdown: drawCountdown(machineId, 'shutdownScheduledAt', targetShutdown) };
   };
 
   const cancelRestart = async (machineId: string) => {
@@ -1803,18 +1987,23 @@ export function useMachines(siteId: string) {
   };
 
   // Shim legacy machines to v2, then derive `devices`. Memoized on the raw
-  // inputs so unrelated re-renders don't re-derive.
+  // inputs so unrelated re-renders don't re-derive, and per machine so an
+  // unchanged one keeps its joined object.
   const joinedMachines = useMemo(() => {
     return machines.map((m) => {
       const profile = profiles[m.machineId];
+      const cached = joinedMachineCache.get(m);
+      if (cached && cached.profile === profile) return cached.joined;
       const withProfile = profile ? { ...m, profile } : m;
-      const shimmed = shimLegacyMachine(withProfile);
-      return joinMachineDevices(shimmed);
+      const joined = joinMachineDevices(shimLegacyMachine(withProfile));
+      joinedMachineCache.set(m, { profile, joined });
+      return joined;
     });
   }, [machines, profiles]);
 
-  const machinesForCurrentSite = loadedSiteId === siteId ? joinedMachines : EMPTY_MACHINES;
-  const loading = !!db && !!siteId && loadedSiteId !== siteId;
+  const machinesForCurrentSite = !emptyScope && loadedKey === loadKey ? joinedMachines : EMPTY_MACHINES;
+  const loading = !!db && !!siteId && !emptyScope && loadedKey !== loadKey;
+  const error = !db ? 'Firebase not configured' : failure?.key === loadKey ? failure.message : null;
 
   return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView, updateRestartSchedule };
 }

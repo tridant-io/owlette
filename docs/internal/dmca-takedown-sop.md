@@ -11,7 +11,8 @@
 | Designated agent registered at `copyright.gov/dmca-directory/` ($6 + $90/yr renewal) | operator | pending (wave 0.2) |
 | Takedown form live at `/legal/dmca` | **done** (wave 0.2) | ✅ |
 | 24-48 hour response SOP (this doc) | **done** (wave 0.2) | ✅ |
-| Repeat-infringer log + 3-strike automation | **done** (wave 0.2) | ✅ |
+| 3-strike evaluation (`evaluateStrike` in `web/lib/dmcaLogic.ts`) | **done** (wave 0.2) | ✅ |
+| Repeat-infringer log + strike recording and emails | follow-up | deferred (manual until built) |
 | Counter-notice flow | follow-up | deferred |
 | Subpoena-response playbook | follow-up | deferred |
 
@@ -38,11 +39,11 @@ A notice missing any of these is **not elements-complete** — we are NOT requir
 
 | step | deadline | actor |
 |---|---|---|
-| Acknowledge receipt | within 4 business hours | automated email from `/api/legal/dmca` |
+| Acknowledge receipt | within 4 business hours | the form's `202` response (`acknowledged: true`); no acknowledgement email is sent yet, so email and postal notices are acknowledged by hand |
 | Elements-complete check | within 24 hours | designated agent |
 | Take down flagged material | within **48 hours** of elements-complete | ops on-call |
-| Notify uploader (counter-notice opportunity) | same 48-hour window | automated |
-| Log notice against uploader's strike count | at takedown time | automated (wave 0.2 helper) |
+| Notify uploader (counter-notice opportunity) | same 48-hour window | designated agent, by hand |
+| Log notice against uploader's strike count | at takedown time | designated agent, by hand (`evaluateStrike` picks the tier) |
 
 48-hour takedown is our policy, not a statutory requirement (DMCA says "expeditiously" without defining it). Courts have accepted 72 hours; 48 gives us margin.
 
@@ -64,13 +65,12 @@ Strikes **expire after 12 months** — this matches industry convention (YouTube
 
 When a notice arrives:
 
-1. **Read** the auto-generated acknowledgement in the `dmca_notices` firestore doc. If elements-complete:
-   - Material is already flagged for takedown in the doc (`status: pending_takedown`).
+1. **Read** the notice in the `dmca_notices` firestore collection (Firebase console; there is no admin view yet). The form files an elements-complete notice as `status: pending_review` and an incomplete one as `elements_incomplete`. If elements-complete:
    - Locate the content by the `identifiedMaterial` field + the uploader's siteId.
-2. **Take down** via the admin dashboard (for roost content: deletion of the synced_folder's current manifest, or revocation of the signed URL for a specific chunk).
+2. **Take down.** There is no operator takedown tool yet. For roost content the material lives in a roost version: deleting the roost (`DELETE /api/roosts/{roostId}`) soft-deletes it behind a tombstone, and the roost kill switch ([roost-kill-switch.md](../runbooks/roost-kill-switch.md)) stops roost for the whole site. A signed URL cannot be revoked; it lapses with its TTL (15 minutes for downloads).
 3. **Log the takedown** — set `dmca_notices/{id}.status = 'taken_down'`, stamp `takenDownAt`, record the acting admin's UID.
-4. **Strike the uploader** — call `recordStrike(uid)` which increments `repeat_infringers/{uid}.strikeCount` + triggers the corresponding notification.
-5. **Notify the uploader** — automated email from the strike handler, but verify it went out.
+4. **Strike the uploader** — there is no strike recorder yet: add the strike to `repeat_infringers/{uid}` by hand (`{ at, noticeId }`, the `StrikeRecord` shape in `web/lib/dmcaLogic.ts`) and apply the tier `evaluateStrike` returns for the uploader's prior strikes.
+5. **Notify the uploader** — by email, by hand; no strike email is sent automatically yet.
 
 If the notice is **abuse** (e.g., weaponised DMCA from a competitor):
 1. Document the evidence in the notice's `adminNotes` field.

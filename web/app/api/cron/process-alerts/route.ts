@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
@@ -115,8 +116,7 @@ function alertRow(label: string, value: string, alt: boolean, highlight?: string
 }
 
 export async function GET(request: NextRequest) {
-  const cronSecret = request.headers.get('x-cron-secret');
-  if (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretMatches(request.headers.get('x-cron-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -169,7 +169,7 @@ export async function GET(request: NextRequest) {
         // Per-recipient, so each carries its own unsubscribe link.
         for (const recipient of recipients) {
           try {
-            const userAlerts = siteAlerts.filter(a => !recipient.mutedMachines.includes(a.machineId));
+            const userAlerts = siteAlerts.filter(a => recipientWantsMachine(recipient, a.machineId));
             if (userAlerts.length === 0) continue;
 
             const unsubscribeUrl = recipient.userId !== 'fallback'

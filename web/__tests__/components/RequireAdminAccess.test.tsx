@@ -15,7 +15,7 @@ import type { UserRole } from '@/contexts/AuthContext';
 const push = jest.fn();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push, replace: jest.fn(), back: jest.fn(), prefetch: jest.fn() }),
-  usePathname: () => '/admin/members',
+  usePathname: () => '/admin/sites',
 }));
 
 const toastError = jest.fn();
@@ -30,6 +30,8 @@ let auth: {
   /** Administers at least one site. Defaults from the role for the cases that
    *  predate wave 5.1; set it explicitly to separate the two. */
   administersAnySite?: boolean;
+  /** undefined until the user doc and the membership rows have both landed */
+  userSites: string[] | undefined;
 };
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -39,23 +41,24 @@ jest.mock('@/contexts/AuthContext', () => ({
     isSuperadmin: auth.role === 'superadmin',
     administersAnySite:
       auth.administersAnySite ?? (auth.role === 'admin' || auth.role === 'superadmin'),
-    userSites: [],
+    userSites: auth.userSites,
   }),
 }));
 
 import RequireAdminAccess from '@/components/RequireAdminAccess';
-import { visibleNavItems, requiredRoleForPath } from '@/app/admin/navItems';
+import { groupNavItems, navItemMatches, visibleNavItems, requiredRoleForPath } from '@/app/admin/navItems';
 
 const setAuth = (role: UserRole | null, overrides: Partial<typeof auth> = {}) => {
-  auth = { user: { uid: 'u1' }, loading: false, role, ...overrides };
+  auth = { user: { uid: 'u1' }, loading: false, role, userSites: ['site-a'], ...overrides };
 };
 
-const renderGuard = (minRole: 'admin' | 'superadmin') =>
-  render(
-    <RequireAdminAccess minRole={minRole}>
-      <p>admin panel</p>
-    </RequireAdminAccess>
-  );
+const guard = (minRole: 'admin' | 'superadmin') => (
+  <RequireAdminAccess minRole={minRole}>
+    <p>admin panel</p>
+  </RequireAdminAccess>
+);
+
+const renderGuard = (minRole: 'admin' | 'superadmin') => render(guard(minRole));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -122,7 +125,7 @@ describe('RequireAdminAccess', () => {
   });
 
   it('sends a signed-out visitor to /login without a toast', async () => {
-    setAuth(null, { user: null });
+    setAuth(null, { user: null, userSites: undefined });
     renderGuard('admin');
 
     await waitFor(() => expect(push).toHaveBeenCalledWith('/login'));
@@ -131,37 +134,118 @@ describe('RequireAdminAccess', () => {
   });
 
   it('shows the spinner and redirects nowhere while auth is still loading', () => {
-    setAuth(null, { user: null, loading: true });
+    setAuth(null, { user: null, loading: true, userSites: undefined });
     renderGuard('admin');
 
     expect(screen.getByText('verifying permissions...')).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
   });
+
+  it('waits for the membership rows before deciding, then admits a site admin', () => {
+    // a hard load: auth's loading ends with the user doc, before the admin row arrives
+    setAuth('member', { userSites: undefined, administersAnySite: false });
+    const { rerender } = renderGuard('admin');
+
+    expect(screen.getByText('verifying permissions...')).toBeInTheDocument();
+    expect(screen.queryByText('admin panel')).not.toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+
+    setAuth('member', { userSites: ['site-a'], administersAnySite: true });
+    rerender(guard('admin'));
+
+    expect(screen.getByText('admin panel')).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('standing lost after admission redirects without a toast', async () => {
+    // deleting the last site you administer removes your own admin row before the delete answers
+    setAuth('member', { administersAnySite: true });
+    const { rerender } = renderGuard('admin');
+    expect(screen.getByText('admin panel')).toBeInTheDocument();
+
+    setAuth('member', { administersAnySite: false });
+    rerender(guard('admin'));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard'));
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('a user denied on first render still gets the toast exactly once', async () => {
+    setAuth('member', { administersAnySite: false });
+    renderGuard('admin');
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard'));
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith('access denied', {
+      description: 'you do not have permission to access this page.',
+    });
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('navItemMatches', () => {
+  const issues = visibleNavItems('superadmin', false).find((item) => item.name === 'issues')!;
+
+  it.each([
+    ['/admin/issues', true],
+    ['/admin/issues/42', true],
+    ['/admin/issuesx', false],
+    ['/admin/installers', false],
+    [null, false],
+  ])('matches %p: %p', (pathname, expected) => {
+    expect(navItemMatches(issues, pathname)).toBe(expected);
+  });
 });
 
 describe('visibleNavItems', () => {
-  it('gives a site administrator exactly the site-scoped destinations, members first', () => {
+  it('gives a site administrator exactly the site-scoped destinations, sites first', () => {
     expect(visibleNavItems('member', true).map((item) => item.name)).toEqual([
-      'members',
+      'sites',
       'agent tokens',
-      'schedules',
+      'swoop',
+      'hoot',
       'alerts',
+      'schedules',
       'webhooks',
     ]);
   });
 
   it('gives a superadmin every destination, with no membership', () => {
     expect(visibleNavItems('superadmin', false).map((item) => item.name)).toEqual([
-      'installers',
-      'template library',
-      'members',
       'users',
+      'sites',
+      'installers',
       'agent tokens',
-      'schedules',
+      'swoop',
+      'hoot',
       'alerts',
+      'schedules',
+      'template library',
       'webhooks',
+      'issues',
       'email',
+    ]);
+  });
+
+  it('groups the destinations into the owner sections in order, dropping empty ones', () => {
+    expect(
+      groupNavItems(visibleNavItems('superadmin', false)).map(
+        ({ group, items }) => `${group}: ${items.map((item) => item.name).join(', ')}`,
+      ),
+    ).toEqual([
+      'people: users',
+      'fleet: sites, installers, agent tokens, swoop, hoot',
+      'configuration: alerts, schedules, template library, webhooks',
+      'support: issues, email',
+    ]);
+    // a site admin has no people section: users is a superadmin's alone
+    expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
+      'fleet',
+      'configuration',
     ]);
   });
 
@@ -179,20 +263,25 @@ describe('visibleNavItems', () => {
 
 describe('requiredRoleForPath', () => {
   it('reads the requirement off the matching nav entry', () => {
-    expect(requiredRoleForPath('/admin/members')).toBe('admin');
+    expect(requiredRoleForPath('/admin/sites')).toBe('admin');
     expect(requiredRoleForPath('/admin/webhooks')).toBe('admin');
+    expect(requiredRoleForPath('/admin/swoop')).toBe('admin');
     expect(requiredRoleForPath('/admin/users')).toBe('superadmin');
   });
 
   it('lets subpaths inherit their page requirement', () => {
+    expect(requiredRoleForPath('/admin/sites/site-a')).toBe('admin');
     expect(requiredRoleForPath('/admin/schedules/abc123')).toBe('admin');
     expect(requiredRoleForPath('/admin/installers/3.2.3')).toBe('superadmin');
+    expect(requiredRoleForPath('/admin/issues/42')).toBe('superadmin');
   });
 
   it('fails closed on unknown paths and on prefix look-alikes', () => {
     expect(requiredRoleForPath('/admin')).toBe('superadmin');
     expect(requiredRoleForPath('/admin/something-new')).toBe('superadmin');
     expect(requiredRoleForPath('/admin/alertsomething')).toBe('superadmin');
+    // the members page's old path: no nav entry names it any more
+    expect(requiredRoleForPath('/admin/members')).toBe('superadmin');
     expect(requiredRoleForPath(null)).toBe('superadmin');
   });
 });

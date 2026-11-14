@@ -20,6 +20,8 @@ const SUFFIX = crypto.randomBytes(4).toString('hex');
 let superKey: MintedApiKey;
 // A non-platform-scoped key — used to assert the superadmin gate rejects it.
 let nonPlatformKey: MintedApiKey;
+// installer write without admin: uploads, but may not move latest.
+let writeOnlyKey: MintedApiKey;
 
 async function clearInstallerVersions(): Promise<void> {
   const db = getAdminDb();
@@ -65,11 +67,17 @@ test.beforeAll(async () => {
     name: `e2e-installer-non-platform-${SUFFIX}`,
     scopes: [{ resource: 'site', id: 'site-A', permissions: ['read', 'write'] }],
   });
+  writeOnlyKey = await mintApiKey({
+    ownerUid: 'super-uid',
+    name: `e2e-installer-write-only-${SUFFIX}`,
+    scopes: [{ resource: 'installer', id: '*', permissions: ['write'] }],
+  });
 });
 
 test.afterAll(async () => {
   if (superKey) await revokeApiKey(superKey);
   if (nonPlatformKey) await revokeApiKey(nonPlatformKey);
+  if (writeOnlyKey) await revokeApiKey(writeOnlyKey);
   await clearInstallerVersions();
   await clearInstallerUploads();
 });
@@ -127,6 +135,27 @@ test('POST /api/installer/upload — non-superadmin api key gets 403', async ({ 
     },
   });
   expect(res.status()).toBe(403);
+});
+
+test('POST /api/installer/upload — a write-only key uploads without promoting, and is refused promoting', async ({ request }) => {
+  const version = '9.9.3';
+  const fileName = `Owlette-Installer-v${version}.exe`;
+
+  const refused = await request.post('/api/installer/upload', {
+    headers: authHeaders(writeOnlyKey),
+    data: { version, fileName },
+  });
+  expect(refused.status()).toBe(403);
+  expect((await refused.json()).code).toBe('scope_insufficient');
+
+  const res = await request.post('/api/installer/upload', {
+    headers: authHeaders(writeOnlyKey),
+    data: { version, fileName, setAsLatest: false },
+  });
+  expect(res.status()).toBe(200);
+  const body = await res.json();
+  const uploadDoc = await getAdminDb().collection('installer_uploads').doc(body.uploadId).get();
+  expect(uploadDoc.data()?.setAsLatest).toBe(false);
 });
 
 test('POST /api/installer/{version}/set-latest — promotes to latest', async ({ request }) => {

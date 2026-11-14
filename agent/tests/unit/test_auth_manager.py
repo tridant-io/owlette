@@ -20,7 +20,7 @@ try:
 
     with patch("secure_storage.get_storage", return_value=mock_storage), \
          patch("secure_storage.SecureStorage", return_value=mock_storage):
-        from auth_manager import AuthManager, AuthenticationError, TokenRefreshError
+        from auth_manager import AuthManager, AuthenticationError, TokenRefreshError, TokenRevokedError
 except ImportError:
     pytest.skip("auth_manager not importable", allow_module_level=True)
 except Exception as exc:
@@ -57,59 +57,19 @@ def auth_manager(storage):
     return am
 
 
-# TestTokenExchange — registration code -> tokens
-class TestTokenExchange:
-    def test_successful_exchange(self, auth_manager):
-        """exchange_registration_code should return True on 200."""
+# TestDeviceCodeCredentials — what a pairing poll must carry before it is stored
+class TestDeviceCodeCredentials:
+    def test_reply_missing_tokens_is_refused_and_nothing_saved(self, auth_manager, storage):
+        """The legacy plaintext poll reply without a refresh token or site."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "accessToken": "access-123",
-            "refreshToken": "refresh-456",
-            "expiresIn": 3600,
-            "siteId": "site-abc",
-        }
+        mock_response.json.return_value = {"accessToken": "access-123"}
 
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            result = auth_manager.exchange_registration_code("REG-CODE-XYZ")
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(AuthenticationError, match="missing tokens"):
+                auth_manager.poll_device_code("DEVICE-CODE", interval=0, timeout=5)
 
-        assert result is True
-        assert auth_manager._access_token == "access-123"
-        assert auth_manager._site_id == "site-abc"
-
-    def test_error_on_non_200_response(self, auth_manager):
-        """Non-200 response should raise AuthenticationError."""
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
-        mock_response.json.return_value = {"error": "invalid_code"}
-
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("BAD-CODE")
-
-    def test_error_on_network_failure(self, auth_manager):
-        """Network errors should raise AuthenticationError wrapping the original."""
-        with patch("requests.post", side_effect=ConnectionError("DNS resolution failed")), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("REG-CODE")
-
-    def test_error_on_missing_tokens(self, auth_manager):
-        """If response is missing required fields, should raise."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "accessToken": "access-123",
-            # Missing refreshToken and siteId
-        }
-
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("REG-CODE")
+        storage.save_refresh_token.assert_not_called()
 
 
 # TestTokenRefresh — caching and refresh logic
@@ -203,6 +163,111 @@ class TestBackoff:
         # Should have made an HTTP call to refresh
         assert mock_post.called
         assert token == "fresh-token"
+
+
+# TestRefusedRefresh — a 401/403 is the server saying the credential is dead for good
+class TestRefusedRefresh:
+    @staticmethod
+    def _refused(status_code, error):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = {"error": error}
+        return response
+
+    @pytest.mark.parametrize("status_code", [401, 403])
+    def test_the_service_hook_owns_a_refused_refresh(self, storage, status_code):
+        # #327: before this hook the store was cleared and the machine stayed
+        # paired, syncing on its access token for up to an hour with nothing
+        # on the dashboard to show for the revoke.
+        reasons = []
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post", return_value=self._refused(status_code, "Invalid refresh token")):
+            # a distinct error: the unpair handler tells a refused refresh
+            # (the revoke is real) from one it could not ask for
+            with pytest.raises(TokenRevokedError):
+                am.refresh_now()
+
+        assert reasons == ["the server refused the agent token: Invalid refresh token"]
+        # the hook's unpair clears the store itself; a second clear here would
+        # race the offline flush the hook sets in motion
+        storage.clear_tokens.assert_not_called()
+
+    def test_a_store_emptied_by_another_holder_is_the_same_revoke(self, storage):
+        # hoot runs its own AuthManager with no hook and clears the store on
+        # its own 401; if it wins that race the service's refresh finds no
+        # token, which used to be the pre-fix dead state: paired, no credential
+        reasons = []
+        storage.get_refresh_token.return_value = None
+        # clear_tokens unlinks the store, so a cleared store is one that is gone
+        storage.is_cleared.return_value = True
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post") as post:
+            with pytest.raises(TokenRevokedError):
+                am.refresh_now()
+
+        assert not post.called
+        assert reasons == ["no refresh token left in storage"]
+
+    def test_a_store_that_reads_empty_but_is_still_there_is_not_a_revoke(self, storage):
+        # a store held open by a scanner, caught mid-replace or damaged reads as
+        # no token; unpairing on that takes a site visit to undo, so it is a
+        # failed refresh, retried like any other
+        reasons = []
+        storage.get_refresh_token.return_value = None
+        storage.is_cleared.return_value = False
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post") as post:
+            with pytest.raises(TokenRefreshError) as raised:
+                am.refresh_now()
+
+        assert not isinstance(raised.value, TokenRevokedError)
+        assert not post.called
+        assert reasons == []
+        storage.clear_tokens.assert_not_called()
+
+    def test_without_a_hook_a_refused_refresh_only_clears_the_store(self, auth_manager, storage):
+        # the pairing flows and the hoot CLI build an AuthManager with no hook
+        with patch("requests.post", return_value=self._refused(401, "Invalid refresh token")):
+            with pytest.raises(TokenRefreshError):
+                auth_manager.refresh_access_token()
+
+        storage.clear_tokens.assert_called_once()
+
+    def test_a_rate_limited_refresh_is_not_a_revoke(self, storage):
+        reasons = []
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post", return_value=self._refused(429, "Too many requests")) as post:
+            with pytest.raises(TokenRefreshError) as raised:
+                am.refresh_now()
+
+        assert not isinstance(raised.value, TokenRevokedError)
+        assert post.called
+        assert reasons == []
+        storage.clear_tokens.assert_not_called()
 
 
 # TestApiBase — every token request goes to api_base

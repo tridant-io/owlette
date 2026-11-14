@@ -33,6 +33,17 @@ jest.mock('firebase-admin/firestore', () => ({
   },
 }));
 
+// the two billing hooks have their own suites (siteBilling.stranded, userDeleteCascade); here it
+// only matters when this cascade calls them.
+const mockStopBillingBeforeDelete = jest.fn();
+jest.mock('@/lib/siteBilling.server', () => ({
+  stopBillingBeforeDelete: (...a: unknown[]) => mockStopBillingBeforeDelete(...a),
+}));
+const mockUnlinkTridantAccount = jest.fn();
+jest.mock('@/lib/userDeleteCascade.server', () => ({
+  unlinkTridantAccount: (uid: string) => mockUnlinkTridantAccount(uid),
+}));
+
 import {
   deleteOwnAccount,
   BATCH_SIZE,
@@ -345,6 +356,56 @@ function seedSubs(
 beforeEach(() => {
   loggerWarnSpy.mockClear();
   loggerErrorSpy.mockClear();
+  mockStopBillingBeforeDelete.mockResolvedValue(undefined);
+  mockUnlinkTridantAccount.mockResolvedValue(undefined);
+});
+
+// adr 0018: a site deleted with the account stops its billing first, as deleteSite does, and the
+// account is unlinked from its tridant organization, as the admin cascade does.
+describe('deleteOwnAccount — billing', () => {
+  it("stops each sole-owner site's billing before anything of it is destroyed, and unlinks the account", async () => {
+    const userId = 'uid_alice';
+    const seedDocs = seedUser(userId, ['site-a', 'site-b']);
+    seedDocs['sites/site-b'] = { exists: true, data: { name: 'site-b', owner: 'uid_bob' } };
+    const fake = buildFakeDb({ seedDocs, seedCollections: seedSubs(['site-a'], { machines: 1, deployments: 0, logs: 0 }) });
+    let intactAtStop = false;
+    mockStopBillingBeforeDelete.mockImplementation(async () => {
+      intactAtStop = fake.batchDeleteCalls.length === 0 && !fake.deleteCalls.includes('sites/site-a');
+    });
+
+    const result = await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null });
+
+    expect(result.kind).toBe('ok');
+    // the member site is someone else's to bill.
+    expect(mockStopBillingBeforeDelete).toHaveBeenCalledTimes(1);
+    expect(mockStopBillingBeforeDelete).toHaveBeenCalledWith('site-a', { name: 'site-a', owner: userId });
+    expect(intactAtStop).toBe(true);
+    expect(mockUnlinkTridantAccount).toHaveBeenCalledWith(userId);
+    expect(fake.deleteCalls).toContain(`users/${userId}`);
+  });
+
+  it('stops and unlinks nothing on a dry run', async () => {
+    const userId = 'uid_alice';
+    const fake = buildFakeDb({ seedDocs: seedUser(userId, ['site-a']) });
+
+    await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null, dryRun: true });
+
+    expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
+    expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
+  });
+
+  it('stops and unlinks nothing when it refuses for a shared site', async () => {
+    const userId = 'uid_alice';
+    const seedDocs = seedUser(userId, ['site-a']);
+    seedDocs['users/uid_bob'] = { exists: true, data: { sites: ['site-a'] } };
+    const fake = buildFakeDb({ seedDocs });
+
+    const result = await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null });
+
+    expect(result.kind).toBe('needs_successor');
+    expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
+    expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleteOwnAccount — input validation', () => {
@@ -945,7 +1006,7 @@ describe('deleteOwnAccount — edge cases', () => {
     expect(fake.deleteCalls).toEqual([`users/${userId}`]);
   });
 
-  it('drains user-scoped subcollections (passkeys, trustedDevices, api_keys) and top-level api_keys lookups', async () => {
+  it('drains user-scoped subcollections (passkeys, trustedDevices, verified_networks, api_keys) and top-level api_keys lookups', async () => {
     const userId = 'uid_subs';
     const fake = buildFakeDb({
       seedDocs: {
@@ -963,6 +1024,10 @@ describe('deleteOwnAccount — edge cases', () => {
           exists: true,
           data: { tokenHash: 'td2' },
         },
+        [`users/${userId}/verified_networks/asn:64500`]: {
+          exists: true,
+          data: { asn: '64500', lastVerifiedAt: 1 },
+        },
         [`users/${userId}/api_keys/key_a`]: {
           exists: true,
           data: { keyHash: 'hash_a' },
@@ -977,6 +1042,7 @@ describe('deleteOwnAccount — edge cases', () => {
       seedCollections: {
         [`users/${userId}/passkeys`]: ['pk1', 'pk2'],
         [`users/${userId}/trustedDevices`]: ['td1', 'td2'],
+        [`users/${userId}/verified_networks`]: ['asn:64500'],
         [`users/${userId}/api_keys`]: ['key_a', 'key_b'],
       },
     });
@@ -992,6 +1058,7 @@ describe('deleteOwnAccount — edge cases', () => {
     if (result.kind !== 'ok') throw new Error('expected ok result');
     expect(result.deletedCounts.passkeys).toBe(2);
     expect(result.deletedCounts.trustedDevices).toBe(2);
+    expect(result.deletedCounts.verifiedNetworks).toBe(1);
     expect(result.deletedCounts.apiKeys).toBe(2);
     expect(result.deletedCounts.apiKeyLookups).toBe(2);
 
@@ -1001,6 +1068,7 @@ describe('deleteOwnAccount — edge cases', () => {
         `users/${userId}/passkeys/pk2`,
         `users/${userId}/trustedDevices/td1`,
         `users/${userId}/trustedDevices/td2`,
+        `users/${userId}/verified_networks/asn:64500`,
         `users/${userId}/api_keys/key_a`,
         `users/${userId}/api_keys/key_b`,
         'api_keys/hash_a',

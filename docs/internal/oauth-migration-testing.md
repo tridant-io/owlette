@@ -9,6 +9,8 @@
 
     **Current installer flags:** `/ADD=phrase` for silent pairing, `/SERVER=dev` for dev environment.
 
+    **Removed routes:** the registration-code routes this plan exercises (`/api/agent/generate-installer`, `/api/setup/generate-token` and `/api/agent/auth/exchange`) no longer exist, so its registration-code and token-exchange steps cannot be run.
+
 **Version:** 2.1.0
 **Last Updated:** 2025-11-03
 **Status:** Archived (replaced by device code pairing in v2.4.1)
@@ -73,17 +75,6 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY----
    - `project_id` → `FIREBASE_PROJECT_ID`
    - `client_email` → `FIREBASE_CLIENT_EMAIL`
    - `private_key` → `FIREBASE_PRIVATE_KEY` (keep \n escape sequences)
-
-**Verify Backend:**
-```bash
-# Test token generation endpoint
-curl -X POST https://dev.owlette.app/api/agent/generate-installer \
-  -H "Content-Type: application/json" \
-  -H "Cookie: auth=YOUR_AUTH_COOKIE" \
-  -d '{"siteId": "test_site", "userId": "test_user"}'
-```
-
-Should return: `{"registrationCode": "...", "expiresAt": "...", "siteId": "..."}`
 
 ---
 

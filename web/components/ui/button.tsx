@@ -21,7 +21,7 @@ const buttonVariants = cva(
         // it and muddy the sweep. Text/border hover stays ordinary utilities.
         default: "btn-sweep bg-primary text-primary-foreground",
         destructive:
-          "btn-sweep bg-destructive text-white focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "btn-sweep bg-destructive text-danger-solid-foreground focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         // Do NOT reinstate `dark:border-input` here: --input (L≈0.25) against a
         // --card surface (L≈0.23) is a 0.02 delta, i.e. no visible edge, and
         // the control read as a stray background. Inheriting the real --border
@@ -29,13 +29,19 @@ const buttonVariants = cva(
         outline:
           "btn-sweep border bg-background shadow-xs hover:text-secondary-foreground dark:bg-input dark:hover:text-secondary-foreground",
         secondary: "btn-sweep bg-secondary text-secondary-foreground",
-        ghost: "btn-sweep hover:text-secondary-foreground",
+        // pressed is a toggle that is on (`aria-pressed`): filled, so a second
+        // click reads as turning it off.
+        ghost: "btn-sweep hover:text-secondary-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground",
+        // a quiet destructive action, for icon-only controls: red glyph, no fill.
+        "ghost-destructive": "btn-sweep text-destructive hover:text-destructive",
         // link opts out of the button sweep — .hl-link gives it the
         // glyph-accurate text highlight instead.
         link: "hl-link text-primary",
       },
       size: {
         default: "h-9 px-4 py-2 has-[>svg]:px-3",
+        // a toggle inside a segmented control. px-2 below sm keeps the five site settings sections on one row at 390px
+        xs: "h-7 rounded-md gap-1.5 px-2 text-xs sm:px-3 has-[>svg]:px-2.5",
         sm: "h-8 rounded-md gap-1.5 px-3 has-[>svg]:px-2.5",
         lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
         icon: "size-9",

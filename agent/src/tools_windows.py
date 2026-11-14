@@ -15,19 +15,31 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import winreg
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import psutil
 
+import active_hours
 import mcp_tools
+import osadapter
 import shared_utils
+from osadapter.win import MDM_UPDATE_KEY, WU_POLICY_KEY, WU_UX_KEY, hklm_values, mdm_conflict
 
 logger = logging.getLogger(__name__)
 
-# The UpdateOrchestrator task Windows uses to schedule its own reboot.
+# the UpdateOrchestrator task windows 10 uses to schedule its own reboot;
+# windows 11 has no task by this name
 _REBOOT_TASK = r'\Microsoft\Windows\UpdateOrchestrator\Reboot'
+
+# where windows update keeps the rest of its settings and state, under HKLM;
+# the active-hours keys are the osadapter arm's, which reads the window
+_WU_AU_KEY = WU_POLICY_KEY + r'\AU'
+_WU_UPS_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UpdatePolicy\Settings'
+_WU_REBOOT_REQUIRED_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+_SESSION_MANAGER_KEY = r'SYSTEM\CurrentControlSet\Control\Session Manager'
 
 # EventLogEntryType, which ConvertTo-Json serialises as the enum's integer, in
 # the level names get_event_logs takes as a parameter and the POSIX arm reports.
@@ -213,11 +225,27 @@ def _default_profile_hive():
         return os.path.join(os.environ.get('SystemDrive', 'C:') + os.sep, 'Users', 'Default', 'NTUSER.DAT')
 
 
-def _ps_escape(s):
-    """Escape a string for embedding in a PowerShell double-quoted string."""
-    if s is None:
-        return ''
-    return str(s).replace('`', '``').replace('"', '`"').replace('$', '`$')
+def _ps_literal(value):
+    """`value` as one PowerShell single-quoted literal. Nothing expands inside one:
+    only a quote ends it, in any of the five forms the tokenizer reads as one, and
+    doubling a quote keeps it as text.
+    """
+    return "'" + re.sub('[\'\u2018\u2019\u201a\u201b]', lambda m: m.group(0) * 2, str(value)) + "'"
+
+
+def _is_match(pattern, value):
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+# What these parameters can legitimately be, so anything else never reaches a script.
+_EVENT_LOG_NAMES = {'application': 'Application', 'system': 'System', 'security': 'Security'}
+_EVENT_LOG_LEVELS = {name.lower(): name for name in _ENTRY_TYPES.values()}
+_PROVIDER_NAME = re.compile(r'[\w .()/+\-]{1,128}')
+_FEATURE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._~\-]{0,255}')
+_FEATURE_FILTER = re.compile(r'[A-Za-z0-9._~\-*? ]{1,128}')
+_TASK_USER = re.compile(r'[\w .\-\\@]{1,128}')
+_TASK_TIME = re.compile(r'[0-9A-Za-z:.+/\- ]{1,40}')
+_EVENT_CHANNEL = re.compile(r'[\w .\-/]{1,128}')
 
 
 def _run_powershell_script(script, timeout=60, bypass=True):
@@ -237,7 +265,7 @@ def _run_powershell_script(script, timeout=60, bypass=True):
 # Key path prefixes registry_operation may touch (case-insensitive). Mirrors the
 # _validate_file_path() allowlist pattern.
 _SAFE_REGISTRY_PREFIXES = (
-    # Auto-login configuration
+    # Auto-login configuration: only _WINLOGON_VALUES
     r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon',
     # GPU / TDR settings
     r'SYSTEM\CurrentControlSet\Control\GraphicsDrivers',
@@ -250,7 +278,7 @@ _SAFE_REGISTRY_PREFIXES = (
     r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced',
     # Power policy
     r'SYSTEM\CurrentControlSet\Control\Power',
-    # Service parameters (specific services)
+    # Service parameters (specific services): writes only under <service>\Parameters
     r'SYSTEM\CurrentControlSet\Services',
     # Owlette-managed keys (safe by definition)
     r'SOFTWARE\Owlette',
@@ -264,6 +292,125 @@ _FORBIDDEN_REGISTRY_PREFIXES = (
     r'SOFTWARE\Microsoft\Cryptography',             # machine GUID, crypto config
     r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList',  # user SIDs
 )
+
+
+# the HKLM values active hours are read from, the longest window allowed, and
+# the two that let windows rewrite or drop the user's window, by key, in
+# lowercase. manage_windows_update will not move the machine out of its active
+# hours without a person's override; a raw write here would, and a reboot
+# would then pass owlette's guard with nobody approving it.
+_ACTIVE_HOURS_VALUES = {
+    WU_POLICY_KEY.lower(): frozenset({
+        'activehoursstart', 'activehoursend', 'setactivehours',
+        'activehoursmaxrange', 'setactivehoursmaxrange',
+    }),
+    WU_UX_KEY.lower(): frozenset({
+        'activehoursstart', 'activehoursend', 'smartactivehoursstate', 'isactivehoursenabled',
+    }),
+}
+
+
+def _changes_active_hours(hive, key_path, value_name):
+    """Whether writing or deleting this value would change the machine's active hours."""
+    if hive != 'HKLM' or not isinstance(value_name, str):
+        return False
+    return value_name.lower() in _ACTIVE_HOURS_VALUES.get(_registry_key(key_path), ())
+
+
+_WINLOGON_KEY = r'software\microsoft\windows nt\currentversion\winlogon'
+_SERVICES_KEY = r'system\currentcontrolset\services'
+_REGISTRY_ROOTS = frozenset({
+    'computer', 'hklm', 'hkcu', 'hkey_local_machine', 'hkey_current_user',
+})
+# web/lib/hoot/launchChange.ts holds a copy of these rules, for agents older than
+# this one. both are tested on tests/fixtures/registry_refusals.json: change them
+# together.
+# everything else in that key runs at sign-in (Shell, Userinit) or is a password.
+_WINLOGON_VALUES = frozenset({
+    'autoadminlogon', 'defaultusername', 'defaultdomainname', 'forceautologon',
+    'autologoncount',
+})
+_SECRET_VALUE_NAME = re.compile(
+    r'passw|passphrase|(?<![a-z])pass(?![a-z])|secret|token|credential|api.?key'
+    r'|access.?key|private.?key|auth',
+    re.IGNORECASE,
+)
+# under Parameters these name what a service loads: ServiceDll, a wrapper's
+# Application and its App* hooks, a winsock LibraryPath, and their like.
+_SERVICE_VALUE_THAT_RUNS = re.compile(
+    r'dll|path|image|^app|application|command|program|library|exe|script|catalog'
+    r'|module|driver|handler',
+    re.IGNORECASE,
+)
+# and whatever a value is called, data shaped like a program is one.
+_SERVICE_DATA_THAT_RUNS = re.compile(
+    r'\.(?:exe|dll|sys|bat|cmd|ps1|vbs|js|scr|msi|cpl|ocx)\b|[a-z]:[\\/]|\\\\|%\w+%',
+    re.IGNORECASE,
+)
+
+
+def _registry_key_path_unprintable(key_path):
+    """JS trim and Python strip disagree on what is whitespace, so a key path holding
+    anything outside printable ASCII stops here, before either of them runs."""
+    return isinstance(key_path, str) and re.search(r'[^\x20-\x7e]', key_path) is not None
+
+
+def _registry_key(key_path):
+    """A key path as the rules compare it: lowercase, one spelling of the separators
+    and of the views of a key that all open the same place."""
+    parts = [
+        part.strip() for part in key_path.strip().lower().replace('/', '\\').split('\\')
+        if part.strip()
+    ]
+    while parts and parts[0] in _REGISTRY_ROOTS:
+        parts.pop(0)
+    return '\\'.join(
+        'currentcontrolset' if re.fullmatch(r'controlset\d+', part) else part
+        for part in parts if part != 'wow6432node'
+    )
+
+
+def _registry_value_hidden(key_path, value_name):
+    """Whether a read must not return this value."""
+    if _SECRET_VALUE_NAME.search(value_name):
+        return True
+    return _registry_key(key_path) == _WINLOGON_KEY and value_name.lower() not in _WINLOGON_VALUES
+
+
+def _service_write_refusal(key, value_name, value_type, value_data):
+    """Why this write or delete under a service stays out of reach, or None."""
+    service, parameters, *below = (key.split('\\')[3:] + ['', ''])[:2] + key.split('\\')[5:]
+    if parameters != 'parameters' or service == 'winsock2':
+        return "only a service's Parameters key can be changed: use manage_windows_service"
+    data = value_data if isinstance(value_data, str) else json.dumps(value_data or '')
+    if (any(part.startswith('app') for part in below)
+            or _SERVICE_VALUE_THAT_RUNS.search(value_name or '')
+            or _SERVICE_DATA_THAT_RUNS.search(data)
+            or str(value_type or '').lower() == 'binary'):
+        return f'{value_name} can say what a service runs, so this tool will not change it'
+    return None
+
+
+def _registry_refusal(action, key_path, value_name, value_type=None, value_data=None):
+    """Why this read, write or delete is out of reach whoever approved it, or None.
+
+    The allowlist admits whole keys, and these two hold what a machine runs as
+    SYSTEM or at sign-in.
+    """
+    key = _registry_key(key_path)
+    if value_name and not isinstance(value_name, str):
+        return 'value_name is not a string'
+    if key.startswith(_WINLOGON_KEY + '\\'):
+        return 'only the auto-login values of Winlogon itself can be reached'
+    if key == _WINLOGON_KEY and not value_name:
+        return 'only the auto-login values of Winlogon itself can be reached, each by name'
+    if value_name and _registry_value_hidden(key_path, value_name):
+        return f'{value_name} is out of reach of this tool'
+    if action not in ('write', 'delete'):
+        return None
+    if key.startswith(_SERVICES_KEY + '\\'):
+        return _service_write_refusal(key, value_name, value_type, value_data)
+    return None
 
 
 def _validate_registry_path(hive, key_path):
@@ -382,13 +529,23 @@ def get_gpu_processes(params, config):
 
 def get_event_logs(params, config):
     """Get Windows event logs (Application, System, or Security)."""
-    log_name = params.get('log_name', 'Application')
-    max_events = min(params.get('max_events', 20), 100)
+    log_name = _EVENT_LOG_NAMES.get(str(params.get('log_name', 'Application')).lower())
+    if log_name is None:
+        return {'error': 'Invalid log_name. Use: Application/System/Security'}
+    try:
+        max_events = min(int(params.get('max_events', 20)), 100)
+    except (TypeError, ValueError, OverflowError):
+        return {'error': 'max_events must be an integer'}
+    if max_events < 1:
+        return {'error': 'max_events must be at least 1'}
     level_filter = params.get('level', None)  # 'Error', 'Warning', 'Information'
 
     ps_cmd = f'Get-EventLog -LogName {log_name} -Newest {max_events * 2}'
     if level_filter:
-        ps_cmd += f' -EntryType {level_filter}'
+        entry_type = _EVENT_LOG_LEVELS.get(str(level_filter).lower())
+        if entry_type is None:
+            return {'error': f"Invalid level. Use: {'/'.join(_EVENT_LOG_LEVELS.values())}"}
+        ps_cmd += f' -EntryType {entry_type}'
     ps_cmd += ' | Select-Object -First ' + str(max_events) + ' TimeGenerated, EntryType, Source, Message | ConvertTo-Json -Depth 2'
 
     rc, out, err = _run_powershell_script(ps_cmd, timeout=mcp_tools.SUBPROCESS_TIMEOUT, bypass=False)
@@ -491,29 +648,42 @@ def get_service_status(params, config):
         return {'error': f'Failed to query service {service_name}: {e}'}
 
 
+def _windows_build():
+    return sys.getwindowsversion().build
+
+
 def check_pending_reboot(params, config):
-    """Tier 1: Detect whether a system reboot is pending (read-only)."""
+    """Tier 1: Detect whether a system reboot is pending (read-only).
+
+    Only a restart something is waiting on counts: Windows Update's, the
+    servicing stack's or the SCCM client's. File renames queued for the next
+    boot are reported apart, as `file_renames`: installers and drivers leave
+    them for weeks with nothing from Windows Update waiting.
+    """
     reasons = []
 
-    if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'):
+    if _key_exists(winreg.HKEY_LOCAL_MACHINE, _WU_REBOOT_REQUIRED_KEY):
         reasons.append('windows_update')
     if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'):
         reasons.append('cbs')
-    if _value_exists(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager', 'PendingFileRenameOperations'):
-        reasons.append('pending_file_rename')
     if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Updates\UpdateExeVolatile'):
         reasons.append('sccm_client')
 
-    # Query scheduled update tasks for next-run time
-    next_scheduled = None
-    rc, out, _ = mcp_tools.run_capture(
-        ['schtasks.exe', '/Query', '/TN', _REBOOT_TASK, '/FO', 'LIST', '/V'], 10,
-    )
-    if rc == 0:
-        for line in out.splitlines():
-            if line.strip().startswith('Next Run Time:'):
-                next_scheduled = line.split(':', 1)[1].strip()
-                break
+    # windows 11 keeps no reboot task, and no other known place carries the
+    # time windows means to restart
+    if _windows_build() >= 22000:
+        next_scheduled = {'task': None, 'next_run': None, 'note': 'unknown on this build'}
+    else:
+        next_scheduled = None
+        rc, out, _ = mcp_tools.run_capture(
+            ['schtasks.exe', '/Query', '/TN', _REBOOT_TASK, '/FO', 'LIST', '/V'], 10,
+        )
+        if rc == 0:
+            for line in out.splitlines():
+                if line.strip().startswith('Next Run Time:'):
+                    next_run = line.split(':', 1)[1].strip()
+                    next_scheduled = {'task': _REBOOT_TASK, 'next_run': next_run}
+                    break
 
     # Last update installed time (HotFixID from last Get-HotFix)
     last_update = None
@@ -527,8 +697,9 @@ def check_pending_reboot(params, config):
     return {
         'pending': bool(reasons),
         'reasons': reasons,
+        'file_renames': _value_exists(winreg.HKEY_LOCAL_MACHINE, _SESSION_MANAGER_KEY, 'PendingFileRenameOperations'),
         'last_update_installed': last_update,
-        'next_scheduled_update': {'task': _REBOOT_TASK, 'next_run': next_scheduled} if next_scheduled else None,
+        'next_scheduled_update': next_scheduled,
     }
 
 
@@ -730,24 +901,295 @@ def configure_gpu_tdr(params, config):
         return {'error': f'Registry write failed: {e}'}
 
 
-def manage_windows_update(params, config):
-    """Pause/resume/schedule Windows Update via registry policy keys."""
+# the restart-deadline values windows reads from the policy key, by name: the
+# windows 10 auto-restart deadline and the compliance deadlines after it
+_DEADLINE_PREFIXES = (
+    'SetAutoRestartDeadline', 'AutoRestartDeadlinePeriodInDays',
+    'SetComplianceDeadline', 'ConfigureDeadline',
+)
+
+# the six pause values under UX that the settings pause button writes, all
+# UTC text: when the pause began, and when it ends
+_UX_PAUSE_STARTS = (
+    'PauseUpdatesStartTime', 'PauseFeatureUpdatesStartTime', 'PauseQualityUpdatesStartTime',
+)
+_UX_PAUSE_ENDS = (
+    'PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime',
+)
+
+# the six values pause updates at once; PausedQualityStatus and
+# PausedFeatureStatus follow a minute or more later
+_PAUSE_LAG_NOTE = (
+    "windows' own pause status (windows_status) lags: it updates at its next "
+    'update check, usually within a few minutes'
+)
+
+_POLICY_WINDOW_NOTES = (
+    'active hours are set by policy now, so nobody can change them in settings on the machine',
+    'a domain group policy that sets these values puts its own back at its next refresh',
+)
+
+
+def _hklm_values_by_prefix(path, prefixes):
+    """The values under HKLM\\`path` whose names start with one of `prefixes`."""
+    found = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as k:
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(k, i)
+                except OSError:
+                    break
+                i += 1
+                # policymanager keeps <name>_ProviderSet and <name>_WinningProvider
+                # beside each value it sets, and no policy name has an underscore
+                if name.startswith(prefixes) and '_' not in name:
+                    found[name] = value
+    except OSError:
+        pass
+    return found
+
+
+def _delete_values(path, names):
+    """Delete each named value under HKLM\\`path`; the ones that were there."""
+    removed = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as k:
+            for name in names:
+                try:
+                    winreg.DeleteValue(k, name)
+                    removed.append(name)
+                except FileNotFoundError:
+                    pass
+    except FileNotFoundError:
+        pass
+    return removed
+
+
+def _restart_deadlines():
+    """Every restart-deadline value on the machine, and whether it still forces
+    a restart, which a deadline does once it passes, active hours or not.
+
+    Under the policy key a deadline counts only while its Set* value turns it
+    on; MDM sets the deadline alone. The NoAutoReboot values hold restarts off
+    until the deadline rather than force one, and owlette's old write under AU
+    sits where Windows never reads it.
+    """
+    policy = _hklm_values_by_prefix(WU_POLICY_KEY, _DEADLINE_PREFIXES)
+    legacy_on = policy.get('SetAutoRestartDeadline') == 1
+    compliance_on = any(value == 1 for name, value in policy.items()
+                        if name.startswith('SetComplianceDeadline'))
+    found = [
+        {'where': 'policy', 'name': name, 'value': value,
+         'forces_restart': (legacy_on if 'AutoRestartDeadline' in name else compliance_on)
+         and 'NoAutoReboot' not in name}
+        for name, value in policy.items()
+    ]
+    old = hklm_values(_WU_AU_KEY, 'AutoRestartDeadlinePeriodInDays')['AutoRestartDeadlinePeriodInDays']
+    if old is not None:
+        found.append({'where': 'policy_au', 'name': 'AutoRestartDeadlinePeriodInDays',
+                      'value': old, 'forces_restart': False})
+    mdm = _hklm_values_by_prefix(MDM_UPDATE_KEY, ('AutoRestartDeadlinePeriodInDays', 'ConfigureDeadline'))
+    found += [
+        {'where': 'mdm', 'name': name, 'value': value, 'forces_restart': 'NoAutoReboot' not in name}
+        for name, value in mdm.items()
+    ]
+    return found
+
+
+def _restart_warnings():
+    """What on this machine can still force a restart, or keep Windows from
+    honouring the policy owlette writes."""
+    au = hklm_values(_WU_AU_KEY, 'NoAutoRebootWithLoggedOnUsers', 'AlwaysAutoRebootAtScheduledTime')
+    warnings = []
+    if au['NoAutoRebootWithLoggedOnUsers'] == 1:
+        warnings.append(
+            'NoAutoRebootWithLoggedOnUsers is set: windows ignores the policy active hours while '
+            'it is on, and on windows 11 it is a legacy policy reported to be ignored; owlette '
+            'never sets it')
+    if au['AlwaysAutoRebootAtScheduledTime'] == 1:
+        warnings.append(
+            'AlwaysAutoRebootAtScheduledTime is set: on windows 10 it restarts the machine after '
+            'a scheduled install, even with someone signed in')
+    forcing = [d['name'] for d in _restart_deadlines() if d['forces_restart']]
+    if forcing:
+        warnings.append(
+            f"a restart deadline is set ({', '.join(forcing)}): once it passes, windows restarts "
+            'even inside active hours')
+    if 1 in mdm_conflict().values():
+        warnings.append(
+            'mdm wins over group policy on this machine, so windows may ignore the policy '
+            'values owlette writes')
+    return warnings
+
+
+def _ux_pause_values():
+    """The six UX pause values, None for one that is absent."""
+    return hklm_values(WU_UX_KEY, *_UX_PAUSE_STARTS, *_UX_PAUSE_ENDS)
+
+
+def _ux_pause_in_force(ux):
+    """Whether the six UX pause values pause updates now: all six set, and
+    the end still ahead."""
+    if None in ux.values():
+        return False
+    try:
+        ends = datetime.fromisoformat(ux['PauseUpdatesExpiryTime'].replace('Z', '+00:00'))
+        return ends > datetime.now(timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _pause_state():
+    """The Settings pause in force, which the six UX values decide; Windows'
+    own status beside it (0 not paused, 1 paused, 2 resumed by itself), which
+    catches up only at its next update check, whether it agrees yet and a
+    note while it does not; and any policy that decides instead."""
+    ux = _ux_pause_values()
+    state = {
+        'paused': _ux_pause_in_force(ux),
+        'pause_values': ux,
+        'windows_status': hklm_values(_WU_UPS_KEY, 'PausedQualityStatus', 'PausedFeatureStatus',
+                                      'PausedQualityDate', 'PausedFeatureDate'),
+    }
+    state.update(hklm_values(WU_POLICY_KEY, 'SetDisablePauseUXAccess'))
+    policy_pause = _hklm_values_by_prefix(WU_POLICY_KEY, ('PauseQualityUpdates', 'PauseFeatureUpdates'))
+    state['policy_pause'] = {name: value for name, value in policy_pause.items() if value}
+    state['windows_confirmed'] = _windows_confirms(state, state['paused'])
+    if not state['windows_confirmed']:
+        # a policy pause shows in windows' status with no ux values behind it
+        state['note'] = _pause_blocker(state) or _PAUSE_LAG_NOTE
+    return state
+
+
+def _pause_blocker(state):
+    """Why a pause owlette writes would not count here, or None."""
+    if state['SetDisablePauseUXAccess'] == 1:
+        return 'group policy turns pausing off on this machine (SetDisablePauseUXAccess=1)'
+    if state['policy_pause']:
+        named = ', '.join(f'{name}={value}' for name, value in state['policy_pause'].items())
+        return f'group policy already pauses updates here ({named}); owlette leaves that pause to it'
+    return None
+
+
+def _windows_confirms(state, paused):
+    """Whether Windows' own status says updates are paused, both kinds, or
+    not paused, neither kind, as `paused` asks."""
+    status = state['windows_status']
+    flags = (status['PausedQualityStatus'], status['PausedFeatureStatus'])
+    return flags == (1, 1) if paused else 1 not in flags
+
+
+def _update_restart_pending():
+    """Whether Windows Update has a restart waiting: its RebootRequired key and
+    the update agent's own answer, None when the agent could not be asked."""
+    rc, out, _ = _run_powershell_script(
+        '(New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired',
+        timeout=15, bypass=False,
+    )
+    wua = {'True': True, 'False': False}.get(out.strip()) if rc == 0 else None
+    flag = _key_exists(winreg.HKEY_LOCAL_MACHINE, _WU_REBOOT_REQUIRED_KEY)
+    return {'pending': flag or wua is True, 'reboot_required_key': flag, 'wua_reboot_required': wua}
+
+
+def _update_status():
+    """Everything that decides whether and when Windows restarts for updates."""
+    now, window = datetime.now(), osadapter.active_hours()
+    automatic = hklm_values(_WU_AU_KEY, 'AUOptions', 'NoAutoUpdate',
+                             'NoAutoRebootWithLoggedOnUsers', 'AlwaysAutoRebootAtScheduledTime')
+    automatic.update(_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',)))
+    policy = hklm_values(WU_POLICY_KEY, 'AutoRestartDeadlinePeriodInDays',
+                          'DeferFeatureUpdatesPeriodInDays', 'DeferQualityUpdatesPeriodInDays')
+    return {
+        'active_hours_start': window['start'],
+        'active_hours_end': window['end'],
+        'scheduled_install_day': automatic.get('ScheduledInstallDay'),
+        'scheduled_install_time': automatic.get('ScheduledInstallTime'),
+        'auto_restart_deadline_days': policy['AutoRestartDeadlinePeriodInDays'],
+        'feature_update_deferral_days': policy['DeferFeatureUpdatesPeriodInDays'],
+        'quality_update_deferral_days': policy['DeferQualityUpdatesPeriodInDays'],
+        'active_hours': window,
+        'inside_active_hours_now': active_hours.is_inside(window, now),
+        'machine_local_time': now.astimezone().isoformat(timespec='minutes'),
+        'automatic_updates': automatic,
+        'restart_deadlines': _restart_deadlines(),
+        'mdm_conflict': mdm_conflict(),
+        'pause': _pause_state(),
+        'update_restart_pending': _update_restart_pending(),
+        'file_renames_pending': _value_exists(
+            winreg.HKEY_LOCAL_MACHINE, _SESSION_MANAGER_KEY, 'PendingFileRenameOperations'),
+        'warnings': _restart_warnings(),
+    }
+
+
+def _longest_active_hours():
+    """The longest active hours Windows allows here: the policy's maximum when
+    it turns one on, else MDM's, else 18 hours."""
+    policy = hklm_values(WU_POLICY_KEY, 'SetActiveHoursMaxRange', 'ActiveHoursMaxRange')
+    mdm = hklm_values(MDM_UPDATE_KEY, 'ActiveHoursMaxRange')['ActiveHoursMaxRange']
+    for longest in (policy['ActiveHoursMaxRange'] if policy['SetActiveHoursMaxRange'] == 1 else None, mdm):
+        if isinstance(longest, int) and 8 <= longest <= 18:
+            return longest
+    return 18
+
+
+def _write_policy_window(start, end, override):
+    """Write active hours as group policy, the one place Windows reads them
+    over both the user's choice in Settings and its own adjusting: the error
+    that stopped it, or once written the fields the result adds.
+
+    While the machine is inside its active hours, a window that would leave it
+    outside them needs a person's approved override: an unattended caller could
+    otherwise shrink the window and then reboot. A write that took the override
+    adds `override_used` and the window it moved the machine out of, which the
+    service logs to the site with who approved it and why.
+    """
+    if not (0 <= start <= 23 and 0 <= end <= 23):
+        return {'error': 'start_hour and end_hour must be 0-23'}
+    if start == end:
+        return {'error': 'start_hour and end_hour must differ: windows has no empty or 24-hour active hours'}
+    mdm = hklm_values(MDM_UPDATE_KEY, 'ActiveHoursStart', 'ActiveHoursEnd')
+    if mdm['ActiveHoursStart'] is not None or mdm['ActiveHoursEnd'] is not None:
+        return {'error': 'active hours on this machine are managed by MDM; change them there'}
+    longest, length = _longest_active_hours(), (end - start) % 24
+    if length > longest:
+        return {'error': f'active hours can be at most {longest} hours long here; '
+                         f'{start:02d}:00–{end:02d}:00 is {length}'}
+
+    now, current = datetime.now(), osadapter.active_hours()
+    added = {}
+    if active_hours.is_inside(current, now) and not active_hours.is_inside({'start': start, 'end': end}, now):
+        if not active_hours.is_valid_override(override):
+            return {'error': (
+                f'active_hours: inside active hours {active_hours.describe(current)} (machine time); '
+                f'they end at {active_hours.window_end(current, now):%H:%M} — changing the window '
+                'now needs an override'
+            )}
+        added = {'override_used': True, 'previous_active_hours': current}
+
+    with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
+        winreg.SetValueEx(k, 'ActiveHoursStart', 0, winreg.REG_DWORD, start)
+        winreg.SetValueEx(k, 'ActiveHoursEnd', 0, winreg.REG_DWORD, end)
+        # last, so windows never reads the policy switched on with half a window
+        winreg.SetValueEx(k, 'SetActiveHours', 0, winreg.REG_DWORD, 1)
+    return added
+
+
+def manage_windows_update(params, config, active_hours_override=None):
+    """Windows Update through its registry policy: status, pause, active hours,
+    automatic installs and restarts, deferrals.
+
+    `active_hours_override` is the command's server-set override, a person's
+    approval to move the machine out of its active hours while it is inside
+    them; set_active_hours and limit_auto_restart read it.
+    """
     action = (params.get('action') or '').lower()
     logger.info(f"[MCP-AUDIT] manage_windows_update: action={action}")
 
-    POLICY_KEY = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-    UX_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
-
     if action == 'get_status':
-        return {
-            'active_hours_start': _read_dword(winreg.HKEY_LOCAL_MACHINE, UX_KEY, 'ActiveHoursStart'),
-            'active_hours_end': _read_dword(winreg.HKEY_LOCAL_MACHINE, UX_KEY, 'ActiveHoursEnd'),
-            'scheduled_install_day': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'ScheduledInstallDay'),
-            'scheduled_install_time': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'ScheduledInstallTime'),
-            'auto_restart_deadline_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'AutoRestartDeadlinePeriodInDays'),
-            'feature_update_deferral_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'DeferFeatureUpdatesPeriodInDays'),
-            'quality_update_deferral_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'DeferQualityUpdatesPeriodInDays'),
-        }
+        return _update_status()
 
     if action == 'pause':
         try:
@@ -756,42 +1198,123 @@ def manage_windows_update(params, config):
                 return {'error': 'pause_days must be 1-35'}
         except (TypeError, ValueError):
             return {'error': 'pause_days must be an integer'}
-        from datetime import datetime, timedelta, timezone
-        pause_until = (datetime.now(timezone.utc) + timedelta(days=pause_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                winreg.SetValueEx(k, 'PauseUpdatesExpiryTime', 0, winreg.REG_SZ, pause_until)
-            return {'status': 'paused', 'pause_until': pause_until, 'pause_days': pause_days}
+            state = _pause_state()
+            blocker = _pause_blocker(state)
+            if blocker:
+                return {'status': 'not_written', 'reason': blocker, **state}
+            now = datetime.now(timezone.utc)
+            begins = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+            pause_until = (now + timedelta(days=pause_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            written = {**dict.fromkeys(_UX_PAUSE_STARTS, begins),
+                       **dict.fromkeys(_UX_PAUSE_ENDS, pause_until)}
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_UX_KEY) as k:
+                for name, value in written.items():
+                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
+            state = _pause_state()
+            result = {'pause_until': pause_until, 'pause_days': pause_days, **state}
+            if state['pause_values'] != written:
+                return {'status': 'written_not_read_back', **result,
+                        'note': 'written, but the pause values do not read back as written'}
+            return {'status': 'paused', **result}
         except Exception as e:
             return {'error': f'pause failed: {e}'}
 
     if action == 'resume':
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                try:
-                    winreg.DeleteValue(k, 'PauseUpdatesExpiryTime')
-                except FileNotFoundError:
-                    pass
-            return {'status': 'resumed'}
+            removed = _delete_values(WU_UX_KEY, _UX_PAUSE_STARTS + _UX_PAUSE_ENDS)
+            state = _pause_state()
+            result = {'removed': removed, **state}
+            if any(value is not None for value in state['pause_values'].values()):
+                return {'status': 'values_remain', **result,
+                        'note': 'removed, but pause values are still there'}
+            return {'status': 'resumed', **result}
         except Exception as e:
             return {'error': f'resume failed: {e}'}
 
     if action == 'set_active_hours':
         try:
-            start = int(params.get('start_hour'))
-            end = int(params.get('end_hour'))
-            if not (0 <= start <= 23) or not (0 <= end <= 23):
-                return {'error': 'start_hour and end_hour must be 0-23'}
+            start, end = int(params.get('start_hour')), int(params.get('end_hour'))
         except (TypeError, ValueError):
             return {'error': 'start_hour and end_hour required as integers'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                winreg.SetValueEx(k, 'ActiveHoursStart', 0, winreg.REG_DWORD, start)
-                winreg.SetValueEx(k, 'ActiveHoursEnd', 0, winreg.REG_DWORD, end)
-                winreg.SetValueEx(k, 'IsActiveHoursEnabled', 0, winreg.REG_DWORD, 1)
-            return {'status': 'ok', 'active_hours': {'start': start, 'end': end}}
+            written = _write_policy_window(start, end, active_hours_override)
+            if 'error' in written:
+                return written
+            return {
+                'status': 'ok',
+                'active_hours': osadapter.active_hours(),
+                **written,
+                'notes': list(_POLICY_WINDOW_NOTES),
+                'warnings': _restart_warnings(),
+            }
         except Exception as e:
             return {'error': f'set_active_hours failed: {e}'}
+
+    if action == 'limit_auto_restart':
+        start, end = params.get('start_hour'), params.get('end_hour')
+        if start is None and end is None:
+            current = osadapter.active_hours()
+            start, end = current['start'], current['end']
+        try:
+            start, end = int(start), int(end)
+        except (TypeError, ValueError):
+            return {'error': 'give start_hour and end_hour as integers, or neither to keep the current active hours'}
+        try:
+            written = _write_policy_window(start, end, active_hours_override)
+            if 'error' in written:
+                return written
+            deadlines = _hklm_values_by_prefix(WU_POLICY_KEY, _DEADLINE_PREFIXES)
+            removed = [f'WindowsUpdate\\{name}'
+                       for name in _delete_values(WU_POLICY_KEY, list(deadlines))]
+            removed += [f'WindowsUpdate\\AU\\{name}'
+                        for name in _delete_values(_WU_AU_KEY, ['AutoRestartDeadlinePeriodInDays'])]
+            window = osadapter.active_hours()
+            return {
+                'status': 'ok',
+                'active_hours': window,
+                **written,
+                'removed_deadlines': removed,
+                'remaining_deadlines': _restart_deadlines(),
+                'notes': [
+                    f'windows restarts for updates only outside active hours '
+                    f'({active_hours.describe(window)}, machine time), so a restart can still happen then',
+                    *_POLICY_WINDOW_NOTES,
+                ],
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'limit_auto_restart failed: {e}'}
+
+    if action == 'disable_auto_install':
+        try:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, _WU_AU_KEY) as k:
+                winreg.SetValueEx(k, 'NoAutoUpdate', 0, winreg.REG_DWORD, 0)
+                winreg.SetValueEx(k, 'AUOptions', 0, winreg.REG_DWORD, 3)  # download, then notify
+            removed = _delete_values(_WU_AU_KEY, list(_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',))))
+            return {
+                'status': 'ok',
+                'automatic_updates': hklm_values(_WU_AU_KEY, 'AUOptions', 'NoAutoUpdate'),
+                'removed': removed,
+                'note': 'windows now downloads updates and waits: nothing installs or restarts for an '
+                        'update on its own, so security updates wait until someone installs them',
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'disable_auto_install failed: {e}'}
+
+    if action == 'enable_auto_install':
+        try:
+            names = ['AUOptions', 'NoAutoUpdate', *_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',))]
+            return {
+                'status': 'ok',
+                'removed': _delete_values(_WU_AU_KEY, names),
+                'note': "windows' own automatic updates are back: updates install on their own and "
+                        'windows restarts for them outside active hours',
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'enable_auto_install failed: {e}'}
 
     if action == 'set_scheduled_install':
         try:
@@ -802,7 +1325,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'day_of_week and hour required as integers'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, _WU_AU_KEY) as k:
                 winreg.SetValueEx(k, 'AUOptions', 0, winreg.REG_DWORD, 4)  # scheduled install
                 winreg.SetValueEx(k, 'ScheduledInstallDay', 0, winreg.REG_DWORD, day)
                 winreg.SetValueEx(k, 'ScheduledInstallTime', 0, winreg.REG_DWORD, hour)
@@ -810,20 +1333,6 @@ def manage_windows_update(params, config):
             return {'status': 'ok', 'day_of_week': day, 'hour': hour}
         except Exception as e:
             return {'error': f'set_scheduled_install failed: {e}'}
-
-    if action == 'set_restart_deadline':
-        try:
-            days = int(params.get('deadline_days', 7))
-            if not (2 <= days <= 14):
-                return {'error': 'deadline_days must be 2-14'}
-        except (TypeError, ValueError):
-            return {'error': 'deadline_days must be an integer'}
-        try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
-                winreg.SetValueEx(k, 'AutoRestartDeadlinePeriodInDays', 0, winreg.REG_DWORD, days)
-            return {'status': 'ok', 'deadline_days': days}
-        except Exception as e:
-            return {'error': f'set_restart_deadline failed: {e}'}
 
     if action == 'set_feature_deferral':
         try:
@@ -833,7 +1342,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'days must be an integer'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
                 winreg.SetValueEx(k, 'DeferFeatureUpdates', 0, winreg.REG_DWORD, 1 if days > 0 else 0)
                 winreg.SetValueEx(k, 'DeferFeatureUpdatesPeriodInDays', 0, winreg.REG_DWORD, days)
             return {'status': 'ok', 'feature_deferral_days': days}
@@ -848,7 +1357,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'days must be an integer'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
                 winreg.SetValueEx(k, 'DeferQualityUpdates', 0, winreg.REG_DWORD, 1 if days > 0 else 0)
                 winreg.SetValueEx(k, 'DeferQualityUpdatesPeriodInDays', 0, winreg.REG_DWORD, days)
             return {'status': 'ok', 'quality_deferral_days': days}
@@ -1109,7 +1618,7 @@ def manage_scheduled_task(params, config):
 
     if action == 'get_history':
         ps = (
-            f'$info = Get-ScheduledTaskInfo -TaskName "{_ps_escape(task_name)}"; '
+            f'$info = Get-ScheduledTaskInfo -TaskName {_ps_literal(task_name)}; '
             '$info | Select-Object LastRunTime,LastTaskResult,NextRunTime,NumberOfMissedRuns | ConvertTo-Json'
         )
         rc, out, err = _run_powershell_script(ps)
@@ -1121,7 +1630,7 @@ def manage_scheduled_task(params, config):
             return {'error': f'parse failed: {e}', 'raw': out}
 
     if action == 'get_details':
-        ps = f'Export-ScheduledTask -TaskName "{_ps_escape(task_name)}"'
+        ps = f'Export-ScheduledTask -TaskName {_ps_literal(task_name)}'
         rc, out, err = _run_powershell_script(ps)
         if rc != 0:
             return {'error': f'get_details failed: {err or out}'}
@@ -1156,19 +1665,27 @@ def _create_scheduled_task(params):
         trigger_ps = 'New-ScheduledTaskTrigger -AtStartup'
     elif t_type == 'logon':
         user = trigger.get('user')
-        user_part = (' -User "' + _ps_escape(user) + '"') if user else ''
+        if user and not _is_match(_TASK_USER, user):
+            return {'error': 'Invalid trigger.user'}
+        user_part = f' -User {_ps_literal(user)}' if user else ''
         trigger_ps = 'New-ScheduledTaskTrigger -AtLogOn' + user_part
     elif t_type == 'once':
         dt = trigger.get('start_datetime', '')
         if not dt:
             return {'error': 'trigger.start_datetime required for once'}
-        trigger_ps = f'New-ScheduledTaskTrigger -Once -At "{_ps_escape(dt)}"'
+        if not _is_match(_TASK_TIME, dt):
+            return {'error': 'Invalid trigger.start_datetime'}
+        trigger_ps = f'New-ScheduledTaskTrigger -Once -At {_ps_literal(dt)}'
     elif t_type == 'daily':
         st = trigger.get('start_time', '04:00')
+        if not _is_match(_TASK_TIME, st):
+            return {'error': 'Invalid trigger.start_time'}
         interval = int(trigger.get('days_interval', 1))
-        trigger_ps = f'New-ScheduledTaskTrigger -Daily -At "{_ps_escape(st)}" -DaysInterval {interval}'
+        trigger_ps = f'New-ScheduledTaskTrigger -Daily -At {_ps_literal(st)} -DaysInterval {interval}'
     elif t_type == 'weekly':
         st = trigger.get('start_time', '04:00')
+        if not _is_match(_TASK_TIME, st):
+            return {'error': 'Invalid trigger.start_time'}
         days = trigger.get('days_of_week') or ['sun']
         day_map = {'mon': 'Monday', 'tue': 'Tuesday', 'wed': 'Wednesday', 'thu': 'Thursday',
                    'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday'}
@@ -1176,7 +1693,7 @@ def _create_scheduled_task(params):
             ps_days = ','.join(day_map[d.lower()] for d in days)
         except KeyError:
             return {'error': f'invalid day in days_of_week: {days}'}
-        trigger_ps = f'New-ScheduledTaskTrigger -Weekly -At "{_ps_escape(st)}" -DaysOfWeek {ps_days}'
+        trigger_ps = f'New-ScheduledTaskTrigger -Weekly -At {_ps_literal(st)} -DaysOfWeek {ps_days}'
     elif t_type == 'monthly':
         # Use schtasks since New-ScheduledTaskTrigger doesn't have Monthly (requires MSFT_TaskMonthlyTrigger via CIM)
         return {'error': 'monthly trigger: use New-ScheduledTaskTrigger is limited; please use create with a daily/weekly approximation or execute_script for complex monthly schedules'}
@@ -1184,14 +1701,21 @@ def _create_scheduled_task(params):
         log_name = trigger.get('log_name', 'Application')
         event_id = trigger.get('event_id')
         source = trigger.get('source', '')
-        xpath = f"*[System[Provider[@Name='{_ps_escape(source)}'] and EventID={int(event_id)}]]" if source else f"*[System[EventID={int(event_id)}]]"
+        if not _is_match(_EVENT_CHANNEL, log_name):
+            return {'error': 'Invalid trigger.log_name'}
+        if source and not _is_match(_PROVIDER_NAME, source):
+            return {'error': 'Invalid trigger.source'}
+        xpath = f"*[System[Provider[@Name='{source}'] and EventID={int(event_id)}]]" if source else f"*[System[EventID={int(event_id)}]]"
+        subscription = (
+            f'<QueryList><Query Id="0" Path="{log_name}">'
+            f'<Select Path="{log_name}">{xpath}</Select></Query></QueryList>'
+        )
         # Use CIM class for event trigger
         trigger_ps = (
             f'$class = Get-CimClass -ClassName MSFT_TaskEventTrigger '
             f'-Namespace Root/Microsoft/Windows/TaskScheduler; '
             f'$t = New-CimInstance -CimClass $class -ClientOnly; '
-            f'$t.Enabled = $true; $t.Subscription = \'<QueryList><Query Id="0" Path="{_ps_escape(log_name)}">'
-            f'<Select Path="{_ps_escape(log_name)}">{xpath}</Select></Query></QueryList>\'; $t'
+            f'$t.Enabled = $true; $t.Subscription = {_ps_literal(subscription)}; $t'
         )
     elif t_type == 'on_idle':
         mins = int(trigger.get('idle_minutes', 10))
@@ -1210,9 +1734,9 @@ def _create_scheduled_task(params):
         return {'error': 'action.program is required'}
     arguments = action_def.get('arguments', '')
     working_dir = action_def.get('working_directory', '')
-    args_part = f' -Argument "{_ps_escape(arguments)}"' if arguments else ''
-    wd_part = f' -WorkingDirectory "{_ps_escape(working_dir)}"' if working_dir else ''
-    action_ps = f'New-ScheduledTaskAction -Execute "{_ps_escape(program)}"{args_part}{wd_part}'
+    args_part = f' -Argument {_ps_literal(arguments)}' if arguments else ''
+    wd_part = f' -WorkingDirectory {_ps_literal(working_dir)}' if working_dir else ''
+    action_ps = f'New-ScheduledTaskAction -Execute {_ps_literal(program)}{args_part}{wd_part}'
 
     # Build principal
     run_as = (principal.get('run_as') or 'SYSTEM').upper()
@@ -1264,13 +1788,13 @@ def _create_scheduled_task(params):
     settings_ps = 'New-ScheduledTaskSettingsSet ' + ' '.join(settings_parts) if settings_parts else 'New-ScheduledTaskSettingsSet'
 
     # Assemble full script
-    desc_part = f' -Description "{_ps_escape(description)}"' if description else ''
+    desc_part = f' -Description {_ps_literal(description)}' if description else ''
     ps_script = (
         f'$trigger = {trigger_ps}; '
         f'$action = {action_ps}; '
         f'$principal = {principal_ps}; '
         f'$settings = {settings_ps}; '
-        f'Register-ScheduledTask -TaskName "{_ps_escape(task_name)}" '
+        f'Register-ScheduledTask -TaskName {_ps_literal(task_name)} '
         f'-Trigger $trigger -Action $action -Principal $principal -Settings $settings{desc_part} -Force | Out-Null; '
         f'Write-Output "OK"'
     )
@@ -1318,6 +1842,8 @@ def registry_operation(params, config):
     """Allowlisted registry read / write / delete."""
     action = (params.get('action') or '').lower()
     hive = (params.get('hive') or '').upper()
+    if _registry_key_path_unprintable(params.get('key_path')):
+        return {'error': 'key_path holds a control character or unusual whitespace'}
     key_path = (params.get('key_path') or '').strip()
     value_name = params.get('value_name', '')
 
@@ -1326,6 +1852,16 @@ def registry_operation(params, config):
     ok, err = _validate_registry_path(hive, key_path)
     if not ok:
         return {'error': err}
+    refusal = _registry_refusal(
+        action, key_path, value_name, params.get('value_type'), params.get('value_data'))
+    if refusal:
+        return {'error': refusal}
+    if action in ('write', 'delete') and _changes_active_hours(hive, key_path, value_name):
+        return {'error': (
+            f"{value_name} is part of this machine's active hours, which owlette checks before "
+            'a reboot, shutdown or deployment: change them with manage_windows_update '
+            'set_active_hours or limit_auto_restart'
+        )}
 
     hive_const = winreg.HKEY_LOCAL_MACHINE if hive == 'HKLM' else winreg.HKEY_CURRENT_USER
 
@@ -1349,9 +1885,11 @@ def registry_operation(params, config):
                 while True:
                     try:
                         n, v, t = winreg.EnumValue(key, i)
+                        i += 1
+                        if _registry_value_hidden(key_path, n):
+                            continue
                         values.append({'name': n, 'type': t,
                                        'value': v if not isinstance(v, bytes) else v.hex()})
-                        i += 1
                     except OSError:
                         break
                 return {'hive': hive, 'key_path': key_path, 'values': values}
@@ -1497,8 +2035,9 @@ def get_event_logs_filtered(params, config):
     if level and level in level_map:
         filter_parts.append(f'Level={level_map[level]}')
     if process_name:
-        pn = _ps_escape(process_name)
-        filter_parts.append(f"ProviderName='{pn}'")
+        if not _is_match(_PROVIDER_NAME, process_name):
+            return {'error': 'Invalid process_name: an event provider name is letters, digits, spaces and . ( ) / + - _'}
+        filter_parts.append(f'ProviderName={_ps_literal(process_name)}')
 
     hash_table = '@{' + '; '.join(filter_parts) + '}'
     # Wrap Get-WinEvent in try/catch so "no matching events" returns [] instead of
@@ -1536,6 +2075,12 @@ def manage_windows_feature(params, config):
 
     logger.info(f"[MCP-AUDIT] manage_windows_feature: type={ftype} action={action} name={name}")
 
+    # no wildcards in a name: a removal would widen past the critical checks below
+    if name and not _is_match(_FEATURE_NAME, name):
+        return {'error': 'Invalid name: a feature name is letters, digits and . _ ~ -'}
+    if name_filter and not _is_match(_FEATURE_FILTER, name_filter):
+        return {'error': 'Invalid name_filter: use letters, digits, spaces and . _ ~ - * ?'}
+
     # Critical-feature blocklist — can't be disabled regardless of params
     CRITICAL_FEATURES = frozenset({
         'netfx4', 'netfx4-advsrvs', 'netfx3', 'windows-defender-default-definitions',
@@ -1555,15 +2100,15 @@ def manage_windows_feature(params, config):
         if action == 'list':
             ps = 'Get-WindowsOptionalFeature -Online | Select-Object FeatureName,State | ConvertTo-Json -Compress'
             if name_filter:
-                ps = f'Get-WindowsOptionalFeature -Online | Where-Object {{ $_.FeatureName -like "*{_ps_escape(name_filter)}*" }} | Select-Object FeatureName,State | ConvertTo-Json -Compress'
+                ps = f'Get-WindowsOptionalFeature -Online | Where-Object {{ $_.FeatureName -like {_ps_literal(f"*{name_filter}*")} }} | Select-Object FeatureName,State | ConvertTo-Json -Compress'
         elif action == 'install':
             if not name:
                 return {'error': 'name is required for install'}
-            ps = f'Enable-WindowsOptionalFeature -Online -FeatureName "{_ps_escape(name)}" -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Enable-WindowsOptionalFeature -Online -FeatureName {_ps_literal(name)} -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         elif action == 'remove':
             if not name:
                 return {'error': 'name is required for remove'}
-            ps = f'Disable-WindowsOptionalFeature -Online -FeatureName "{_ps_escape(name)}" -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Disable-WindowsOptionalFeature -Online -FeatureName {_ps_literal(name)} -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         else:
             return {'error': f"Invalid action '{action}'"}
 
@@ -1571,22 +2116,22 @@ def manage_windows_feature(params, config):
         if action == 'list':
             ps = 'Get-WindowsCapability -Online | Where-Object { $_.State -ne "NotPresent" } | Select-Object Name,State | ConvertTo-Json -Compress'
             if name_filter:
-                ps = f'Get-WindowsCapability -Online | Where-Object {{ $_.Name -like "*{_ps_escape(name_filter)}*" }} | Select-Object Name,State | ConvertTo-Json -Compress'
+                ps = f'Get-WindowsCapability -Online | Where-Object {{ $_.Name -like {_ps_literal(f"*{name_filter}*")} }} | Select-Object Name,State | ConvertTo-Json -Compress'
         elif action == 'install':
             if not name:
                 return {'error': 'name is required'}
-            ps = f'Add-WindowsCapability -Online -Name "{_ps_escape(name)}" -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Add-WindowsCapability -Online -Name {_ps_literal(name)} -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         elif action == 'remove':
             if not name:
                 return {'error': 'name is required'}
-            ps = f'Remove-WindowsCapability -Online -Name "{_ps_escape(name)}" -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Remove-WindowsCapability -Online -Name {_ps_literal(name)} -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         else:
             return {'error': f"Invalid action '{action}'"}
 
     elif ftype == 'appx_package':
         if action == 'list':
             scope = '-AllUsers' if all_users else ''
-            filter_clause = f' | Where-Object {{ $_.Name -like "*{_ps_escape(name_filter)}*" }}' if name_filter else ''
+            filter_clause = f' | Where-Object {{ $_.Name -like {_ps_literal(f"*{name_filter}*")} }}' if name_filter else ''
             ps = f'Get-AppxPackage {scope}{filter_clause} | Select-Object Name,PackageFullName,Version | ConvertTo-Json -Compress'
         elif action == 'install':
             return {'error': 'AppX install via this tool is not supported — use the Microsoft Store or execute_script.'}
@@ -1595,12 +2140,12 @@ def manage_windows_feature(params, config):
                 return {'error': 'name is required for remove'}
             if all_users:
                 ps = (
-                    f'Get-AppxPackage -AllUsers -Name "{_ps_escape(name)}" | Remove-AppxPackage -AllUsers; '
-                    f'Get-AppxProvisionedPackage -Online | Where-Object {{ $_.DisplayName -like "*{_ps_escape(name)}*" }} | Remove-AppxProvisionedPackage -Online; '
+                    f'Get-AppxPackage -AllUsers -Name {_ps_literal(name)} | Remove-AppxPackage -AllUsers; '
+                    f'Get-AppxProvisionedPackage -Online | Where-Object {{ $_.DisplayName -like {_ps_literal(f"*{name}*")} }} | Remove-AppxProvisionedPackage -Online; '
                     'Write-Output "OK"'
                 )
             else:
-                ps = f'Get-AppxPackage -Name "{_ps_escape(name)}" | Remove-AppxPackage; Write-Output "OK"'
+                ps = f'Get-AppxPackage -Name {_ps_literal(name)} | Remove-AppxPackage; Write-Output "OK"'
         else:
             return {'error': f"Invalid action '{action}'"}
 
@@ -1620,6 +2165,16 @@ def manage_windows_feature(params, config):
         'type': ftype, 'action': action, 'name': name or None,
         'result': data if data is not None else out.strip()[:2000],
     }
+
+
+def _toast_text(value):
+    """`value` for the toast's XML: anything but ASCII letters, digits and spaces as a
+    numeric reference, so what reaches the script holds no character PowerShell or
+    XML reads as syntax, in a field that has to take any text."""
+    return ''.join(
+        c if (c.isascii() and c.isalnum()) or c == ' ' else f'&#{ord(c)};'
+        for c in str(value)
+    )
 
 
 def show_notification(params, config):
@@ -1651,7 +2206,7 @@ def show_notification(params, config):
     ps = (
         '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; '
         '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null; '
-        f'$xml = \'<toast><visual><binding template="ToastText02"><text id="1">{_ps_escape(title)}</text><text id="2">{_ps_escape(message)}</text></binding></visual></toast>\'; '
+        f'$xml = \'<toast><visual><binding template="ToastText02"><text id="1">{_toast_text(title)}</text><text id="2">{_toast_text(message)}</text></binding></visual></toast>\'; '
         '$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; $doc.LoadXml($xml); '
         '$toast = New-Object Windows.UI.Notifications.ToastNotification $doc; '
         '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Owlette").Show($toast); '

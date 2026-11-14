@@ -28,6 +28,12 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+const mockSendEmail = jest.fn();
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
+}));
+
 const mockEmitMutation = jest.fn();
 jest.mock('@/lib/auditLogClient', () => ({
   emitApiKeyUsed: jest.fn(),
@@ -268,9 +274,35 @@ beforeEach(() => {
   autoIdCounter = 0;
   seedUser(SUPERADMIN_UID, { role: 'superadmin', email: 'sa@example.com' });
   authedAs(SUPERADMIN_UID);
+  mockSendEmail.mockResolvedValue({ error: null });
 });
 
 describe('POST /api/users/{uid}/mfa-reset', () => {
+  it("tells the target's own address, and only them", async () => {
+    seedFullyEnrolledTarget();
+
+    const res = await reset();
+    expect(res.status).toBe(200);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      to: 'locked-out@example.com',
+      subject: 'second factors removed from your owlette account',
+    });
+  });
+
+  it('sends nothing when the target held no factor', async () => {
+    seedUser(TARGET_UID, {
+      email: 'locked-out@example.com',
+      mfaFactors: { totp: false, passkeys: 0 },
+      mfaEnrolled: false,
+    });
+
+    const res = await reset();
+    expect(res.status).toBe(200);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
   it('leaves the target with zero factors, setup re-armed, and no trusted devices', async () => {
     seedFullyEnrolledTarget();
 

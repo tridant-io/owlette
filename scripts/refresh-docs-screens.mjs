@@ -15,20 +15,28 @@
  *      tray within seconds of it dying, which holds the exe lock)
  *   3. run the capture
  *   4. record what was photographed, so staleness is detectable later
- *      (`scripts/check-docs-screens-current.mjs`) instead of remembered
+ *      (`--check`) instead of remembered
+ *
+ * Every shot is captured in both themes: `x.png`, and `x-light.png` beside it.
+ * The web half comes from `npm run screenshots`, the desktop half from step 3.
+ * The docs pick a light shot from `light-variants.json`, which this script
+ * writes from what is on disk, so a page never points at a file that is not there.
  *
  * Step 2 needs elevation and step 3 needs an interactive desktop session with
  * the owlette tray icon VISIBLE — not in the hidden-icons overflow, or the
- * tray-menu shot fails while the other eleven succeed.
+ * tray-menu shot fails while the others succeed.
  *
  * Usage:
  *   node scripts/refresh-docs-screens.mjs             full refresh
  *   node scripts/refresh-docs-screens.mjs --no-swap   capture only, exe as-is
- *   node scripts/refresh-docs-screens.mjs --check     report staleness, write nothing
+ *   node scripts/refresh-docs-screens.mjs --manifest  rewrite light-variants.json
+ *                                                     only (after `npm run screenshots`)
+ *   node scripts/refresh-docs-screens.mjs --check     report staleness and unpaired
+ *                                                     shots, write nothing
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -37,11 +45,71 @@ const VERSION = readFileSync(join(ROOT, 'VERSION'), 'utf8').trim();
 
 const BUILT_EXE = join(ROOT, 'agent', 'build', 'installer_package', 'app', 'owlette-desktop.exe');
 const INSTALLED_EXE = 'C:\\ProgramData\\Owlette\\app\\owlette-desktop.exe';
-const MANIFEST = join(ROOT, 'web', 'public', 'docs-screens', 'captured.json');
+const DOCS_SCREENS = join(ROOT, 'web', 'public', 'docs-screens');
+const LANDING_SCREENS = join(ROOT, 'web', 'public', 'landing-screens');
+const MANIFEST = join(DOCS_SCREENS, 'captured.json');
+/** The docs shots that have a light capture, by name; read by `web/mdx-components.tsx`. */
+const LIGHT_MANIFEST = join(DOCS_SCREENS, 'light-variants.json');
+
+const THEMES = ['dark', 'light'];
+const LIGHT_SUFFIX = '-light.png';
+
+/**
+ * Dark only by design. The tray menu is a native popup that Windows draws in the
+ * os theme, not the app's, so a light capture would be the same picture.
+ */
+const DARK_ONLY = new Set(['agent-right-click.png']);
 
 const args = process.argv.slice(2);
 const noSwap = args.includes('--no-swap');
 const checkOnly = args.includes('--check');
+const manifestOnly = args.includes('--manifest');
+
+/** The desktop shots come from step 3, not from `npm run screenshots`. */
+const isDesktopShot = (file) => file === 'agent.png' || file.startsWith('agent-');
+
+const lightOf = (file) => file.replace(/\.png$/, LIGHT_SUFFIX);
+
+function pngs(dir) {
+  return existsSync(dir) ? readdirSync(dir).filter((file) => file.endsWith('.png')) : [];
+}
+
+/** Dark shots in `dir` with no light pair, and light shots with no dark one. */
+function unpaired(dir) {
+  const files = new Set(pngs(dir));
+  const noLight = [];
+  const noDark = [];
+  for (const file of files) {
+    if (file.endsWith(LIGHT_SUFFIX)) {
+      if (!files.has(`${file.slice(0, -LIGHT_SUFFIX.length)}.png`)) noDark.push(file);
+    } else if (!DARK_ONLY.has(file) && !files.has(lightOf(file))) {
+      noLight.push(file);
+    }
+  }
+  return { noLight, noDark };
+}
+
+/** Each docs shot, by name, that has both captures. */
+function lightManifestBody() {
+  const files = new Set(pngs(DOCS_SCREENS));
+  const names = [...files]
+    .filter((file) => !file.endsWith(LIGHT_SUFFIX) && files.has(lightOf(file)))
+    .map((file) => file.slice(0, -'.png'.length))
+    .sort();
+  return `${JSON.stringify(names, null, 2)}\n`;
+}
+
+function writeLightManifest() {
+  const body = lightManifestBody();
+  writeFileSync(LIGHT_MANIFEST, body);
+  console.log(`wrote ${LIGHT_MANIFEST} (${JSON.parse(body).length} light shot(s))`);
+}
+
+/** The tests the list reporter's summary names as failed, one `[theme] › ...` per line. */
+function failedTests(out) {
+  const block = out.match(/^ *\d+ failed\r?\n((?: {4}\S.*(?:\r?\n|$))+)/m);
+  return block ? block[1].split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
+}
 
 /** File version of a Windows exe, or null if absent/unreadable. */
 function exeVersion(path) {
@@ -54,22 +122,57 @@ function exeVersion(path) {
   return v || null;
 }
 
+if (manifestOnly) {
+  writeLightManifest();
+  process.exit(0);
+}
+
 if (checkOnly) {
-  if (!existsSync(MANIFEST)) {
-    console.error(`docs screenshots have no capture record (${MANIFEST} missing).`);
-    console.error(`Run: node scripts/refresh-docs-screens.mjs`);
-    process.exit(1);
+  const problems = [];
+  const pending = [];
+
+  const m = existsSync(MANIFEST) ? JSON.parse(readFileSync(MANIFEST, 'utf8')) : null;
+  if (!m) {
+    problems.push(`docs screenshots have no capture record (${MANIFEST} missing). Run: node scripts/refresh-docs-screens.mjs`);
+  } else if (m.version !== VERSION) {
+    problems.push(`docs screenshots are STALE: captured against ${m.version}, VERSION is ${VERSION}. Run: node scripts/refresh-docs-screens.mjs`);
+  } else {
+    console.log(`docs screenshots are current (captured against ${m.version} on ${m.capturedAt}).`);
   }
-  const m = JSON.parse(readFileSync(MANIFEST, 'utf8'));
-  if (m.version !== VERSION) {
-    console.error(`docs screenshots are STALE: captured against ${m.version}, VERSION is ${VERSION}.`);
-    console.error(`Run: node scripts/refresh-docs-screens.mjs`);
-    process.exit(1);
-  }
-  console.log(`docs screenshots are current (captured against ${m.version} on ${m.capturedAt}).`);
-  if (m.missing?.length) {
+  if (m?.missing?.length) {
     console.log(`note: ${m.missing.length} shot(s) failed in that run: ${m.missing.join(', ')}`);
   }
+
+  // a record without `themes` predates light mode, so its desktop shots are dark
+  // only until the next full refresh; once it records light, a gap is a failure
+  const desktopHasLight = m?.themes?.includes('light') ?? false;
+  for (const dir of [DOCS_SCREENS, LANDING_SCREENS]) {
+    const { noLight, noDark } = unpaired(dir);
+    for (const file of noLight) {
+      const desktop = isDesktopShot(file);
+      if (desktop && !desktopHasLight) pending.push(lightOf(file));
+      else {
+        const fix = desktop ? 'node scripts/refresh-docs-screens.mjs' : 'cd web && npm run screenshots';
+        problems.push(`${file} has no light pair (${lightOf(file)}). Run: ${fix}`);
+      }
+    }
+    for (const file of noDark) problems.push(`${file} has no dark pair`);
+  }
+
+  if (!existsSync(LIGHT_MANIFEST) || readFileSync(LIGHT_MANIFEST, 'utf8') !== lightManifestBody()) {
+    problems.push(`${LIGHT_MANIFEST} does not match the files on disk. Run: node scripts/refresh-docs-screens.mjs --manifest`);
+  }
+
+  if (pending.length) {
+    console.log(
+      `pending a release build: ${pending.length} desktop light shot(s), taken by the full refresh: ${pending.sort().join(', ')}`,
+    );
+  }
+  if (problems.length) {
+    for (const problem of problems) console.error(problem);
+    process.exit(1);
+  }
+  console.log(pending.length ? 'every other shot has its light pair.' : `every shot has its ${THEMES.join(' and ')} pair.`);
   process.exit(0);
 }
 
@@ -123,7 +226,7 @@ if (!noSwap) {
   }
 }
 
-// 3. Capture.
+// 3. Capture, once per theme (the config's projects).
 console.log('\ncapturing...');
 const cap = spawnSync('npm', ['run', 'screenshots:desktop'], {
   cwd: join(ROOT, 'web'),
@@ -134,9 +237,11 @@ const out = `${cap.stdout ?? ''}${cap.stderr ?? ''}`;
 process.stdout.write(out.slice(-4000));
 
 // A partial capture is still worth recording: the tray-menu shot fails whenever
-// the icon sits in the hidden-icons overflow, and the other eleven are fine.
+// the icon sits in the hidden-icons overflow, and the others are fine. Any other
+// failure, a light one included, would make the record a lie.
+const failed = failedTests(out);
 const missing = [];
-if (/the tray right-click menu/.test(out) && /\d+ failed/.test(out)) {
+if (failed.length > 0 && failed.every((title) => /the tray right-click menu/.test(title))) {
   missing.push('agent-right-click.png (tray menu — icon likely in the hidden-icons overflow)');
 }
 if (cap.status !== 0 && missing.length === 0) {
@@ -152,6 +257,7 @@ writeFileSync(
       version: VERSION,
       capturedAt: new Date().toISOString(),
       installedExe: exeVersion(INSTALLED_EXE),
+      themes: THEMES,
       missing,
     },
     null,
@@ -159,6 +265,7 @@ writeFileSync(
   )}\n`,
 );
 console.log(`\nrecorded ${MANIFEST} (version ${VERSION})`);
+writeLightManifest();
 if (missing.length) {
   console.log(`NOTE: ${missing.length} shot(s) not refreshed:`);
   for (const m of missing) console.log(`  - ${m}`);

@@ -22,8 +22,12 @@
  *   24 ms max, which held chrome to ~22 fps against a 60 fps source and put
  *   the stream 14 s behind. timing comes from the user agent's own
  *   `presentationTime` instead.
- * - **`requestVideoFrameCallback` observes, it never schedules** (plan.md
- *   D17). nothing here presents; the element does.
+ * - **one `requestVideoFrameCallback` chain, and nothing paced from rAF.**
+ *   D17's arm-B reading was that rvfc observes and never schedules, with no
+ *   canvas in the shipping path. from 4.2.0 smooth scaling's canvas mirrors
+ *   the element for a picture shown below 1:1, and `onPresent` draws it from
+ *   this chain, one draw per presented frame
+ *   (dev/active/swoop-clarity/plan.md, C2). otherwise the element presents.
  *
  * `swoop-meta` carries `PROTOCOL.md` §4 records header-only
  * (`payloadBytes = 0`) and they are joined to the track by `rtpTimestamp90k`.
@@ -41,6 +45,7 @@ import {
   type SwoopCodec,
   type SwoopFrameHeader,
 } from '@/lib/swoop/protocol';
+import { pickInboundVideoStats, type InboundVideoStats } from '@/lib/swoop/video/stall';
 
 /**
  * unmatched records older than this are dropped from each side of the join.
@@ -82,6 +87,12 @@ export interface SwoopReceiverOptions {
   /** one call per presented frame that joined a host record. */
   onFrame?: (observation: FrameObservation) => void;
   /**
+   * one call per rvfc callback, joined or not: the presenter draws smooth
+   * scaling's canvas from here. a join can land later, from `swoop-meta`, so
+   * `onFrame` cannot drive a draw.
+   */
+  onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
+  /**
    * send `{"t":"idr"}` on `swoop-control`. called once per lost-sync episode —
    * the host coalesces requests behind a 250–500 ms cooldown anyway.
    */
@@ -102,6 +113,10 @@ export interface SwoopReceiverDiagnostics {
   /** what the browser accepted, or why it would not take it. */
   jitterBufferTargetApplied: number | string | null;
   requestVideoFrameCallback: boolean;
+  /** every rvfc callback, joined or not: the stall watchdog's proof the chain is alive. */
+  rvfcCallbacks: number;
+  /** the codec on the host's last frame record; null before the first. */
+  codec: SwoopCodec | null;
 }
 
 /** the client half of a join, held until its host record turns up. */
@@ -153,6 +168,7 @@ function asBytes(data: unknown): ArrayBuffer | ArrayBufferView | null {
 export class SwoopReceiver {
   private readonly video: HTMLVideoElement;
   private readonly onFrame?: (observation: FrameObservation) => void;
+  private readonly onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
   private readonly onIdrRequest?: () => void;
 
   private stream: MediaStream | null = null;
@@ -175,10 +191,15 @@ export class SwoopReceiver {
   private unmatchedClient = 0;
   private jitterBufferTargetApplied: number | string | null = null;
   private readonly rvfcSupported: boolean;
+  private rvfcCallbacks = 0;
+  private codec: SwoopCodec | null = null;
+  /** the one pending rvfc request, so a re-arm replaces it rather than adding a second chain. */
+  private frameCallback: number | null = null;
 
   constructor(options: SwoopReceiverOptions) {
     this.video = options.video;
     this.onFrame = options.onFrame;
+    this.onPresent = options.onPresent;
     this.onIdrRequest = options.onIdrRequest;
     this.rvfcSupported =
       typeof HTMLVideoElement !== 'undefined' &&
@@ -210,6 +231,7 @@ export class SwoopReceiver {
     this.metaRecords += 1;
 
     const header = decoded.value;
+    this.codec = header.codec;
     const next = advanceFrameSequence(this.sequence, header);
     if (!next.ok) {
       this.drop(next.reason);
@@ -266,6 +288,41 @@ export class SwoopReceiver {
     this.clientRecords.clear();
   }
 
+  /**
+   * point the element at the same stream again, play it and re-arm rvfc: a
+   * stuck renderer's recovery short of a new session. the element is kept,
+   * because the presenter, `contentRect` and input capture all hold it. null
+   * first, so the load runs on a browser that skips assigning an unchanged
+   * value.
+   */
+  async reattach(): Promise<void> {
+    if (!this.running || !this.stream) return;
+    this.video.srcObject = null;
+    this.video.srcObject = this.stream;
+    await this.video.play();
+    this.rearmFrameCallback();
+  }
+
+  /** a fresh rvfc request in place of the pending one, for a chain that went silent. */
+  rearmFrameCallback(): void {
+    if (this.running && this.rvfcSupported) this.armFrameCallback();
+  }
+
+  /**
+   * the video receiver's inbound-rtp counters, reduced to the stall report's
+   * allow-list. `getStats()` is not free, so it is read around a stall and once
+   * a second for `feedback.ts`'s drop count, scoped to this receiver, and
+   * never on a faster timer.
+   */
+  async inboundStats(): Promise<InboundVideoStats | null> {
+    if (!this.rtpReceiver) return null;
+    try {
+      return pickInboundVideoStats(await this.rtpReceiver.getStats());
+    } catch {
+      return null;
+    }
+  }
+
   diagnostics(): SwoopReceiverDiagnostics {
     return {
       framesObserved: this.framesObserved,
@@ -278,31 +335,45 @@ export class SwoopReceiver {
       unmatchedClientFramesDropped: this.unmatchedClient,
       jitterBufferTargetApplied: this.jitterBufferTargetApplied,
       requestVideoFrameCallback: this.rvfcSupported,
+      rvfcCallbacks: this.rvfcCallbacks,
+      codec: this.codec,
     };
   }
 
   private armFrameCallback(): void {
-    this.video.requestVideoFrameCallback((_now, metadata) => this.onPresented(metadata));
+    // one chain, ever: a second pending request would count every frame twice.
+    if (this.frameCallback !== null) this.video.cancelVideoFrameCallback?.(this.frameCallback);
+    this.frameCallback = this.video.requestVideoFrameCallback((_now, metadata) => {
+      this.frameCallback = null;
+      this.onPresented(metadata);
+    });
   }
 
   private onPresented(metadata: VideoFrameCallbackMetadata): void {
     if (!this.running) return;
-    if (metadata.rtpTimestamp === undefined) {
-      this.unjoinableFrames += 1;
-    } else {
-      this.addClient(metadata.rtpTimestamp >>> 0, {
-        arrivalMs: metadata.receiveTime ?? null,
-        // seconds per the spec, unlike every other field on this record.
-        decodeMs:
-          typeof metadata.processingDuration === 'number'
-            ? metadata.processingDuration * 1000
-            : null,
-        presentedMs: metadata.presentationTime,
-        expectedDisplayMs: metadata.expectedDisplayTime,
-        presentedFrames: metadata.presentedFrames,
-      });
+    this.rvfcCallbacks += 1;
+    try {
+      // first: the draw is on the picture's path, and the join is not
+      this.onPresent?.(metadata);
+      if (metadata.rtpTimestamp === undefined) {
+        this.unjoinableFrames += 1;
+      } else {
+        this.addClient(metadata.rtpTimestamp >>> 0, {
+          arrivalMs: metadata.receiveTime ?? null,
+          // seconds per the spec, unlike every other field on this record.
+          decodeMs:
+            typeof metadata.processingDuration === 'number'
+              ? metadata.processingDuration * 1000
+              : null,
+          presentedMs: metadata.presentationTime,
+          expectedDisplayMs: metadata.expectedDisplayTime,
+          presentedFrames: metadata.presentedFrames,
+        });
+      }
+    } finally {
+      // a subscriber that throws must not end the chain the stall watchdog counts on.
+      if (this.running) this.armFrameCallback();
     }
-    this.armFrameCallback();
   }
 
   private addHost(record: HostRecord): void {

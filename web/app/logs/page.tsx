@@ -4,6 +4,8 @@ import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { useSitePlan } from '@/hooks/useSitePlan';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -15,17 +17,16 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronsUpDown, ChevronsDownUp, Filter, X, Trash2, ScrollText, AlertTriangle, AlertCircle, Camera, Search } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TruncatedText } from '@/components/ui/truncated-text';
-import { actionDeleteScope, planActionFilter } from '@/lib/logFilters';
+import { FIRESTORE_IN_LIMIT, actionDeleteScope, planActionFilter } from '@/lib/logFilters';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { DatePicker } from '@/components/ui/date-picker';
 import { formatSiteScopedTimestamp, getDisplayTimezone, zonedTimeToUtcMs } from '@/lib/timeUtils';
+import { toast } from '@/lib/toast';
 
 interface LogEvent {
   id: string;
@@ -157,6 +158,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'process_stopped', label: 'process stopped' },
       { value: 'process_killed', label: 'process killed' },
       { value: 'process_crash', label: 'process crashed' },
+      { value: 'process_exited', label: 'process exited' },
       { value: 'process_start_failed', label: 'process start failed' },
       { value: 'process_launch_failed', label: 'process launch failed' },
       { value: 'exe_missing', label: 'executable missing' },
@@ -184,6 +186,16 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
     ],
   },
   {
+    group: 'active hours',
+    options: [
+      { value: 'active_hours_refused', label: 'refused inside active hours' },
+      { value: 'active_hours_override', label: 'active hours overridden' },
+      { value: 'reboot_deferred', label: 'restart held until active hours end' },
+      { value: 'deferred_reboot_announced', label: 'held restart announced' },
+      { value: 'deferred_reboot_failed', label: 'held restart failed' },
+    ],
+  },
+  {
     group: 'displays',
     options: [
       { value: 'display_monitor_added', label: 'monitor added' },
@@ -201,6 +213,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'display_auto_restore_fired', label: 'display auto-restored' },
       { value: 'display_auto_restore_skipped_unfixable', label: 'display auto-restore skipped' },
       { value: 'display_auto_restore_circuit_breaker_tripped', label: 'display auto-restore disabled' },
+      { value: 'display_auto_restore_parked', label: 'display auto-restore waiting' },
     ],
   },
   {
@@ -241,11 +254,11 @@ const getLevelBadge = (level: string) => {
   const base = "inline-flex items-center rounded-full px-1.5 text-[11px] font-medium leading-5 whitespace-nowrap";
   switch (level.toLowerCase()) {
     case 'error':
-      return <span className={`${base} bg-red-700 text-white`}>error</span>;
+      return <span className={`${base} bg-danger-solid text-danger-solid-foreground`}>error</span>;
     case 'warning':
-      return <span className={`${base} bg-yellow-400 text-gray-950`}>warning</span>;
+      return <span className={`${base} bg-warning-solid text-warning-solid-foreground`}>warning</span>;
     case 'info':
-      return <span className={`${base} bg-accent-cyan text-gray-900`}>info</span>;
+      return <span className={`${base} bg-accent-cyan text-primary-foreground`}>info</span>;
     default:
       return <span className={`${base} border border-border text-foreground`}>{level}</span>;
   }
@@ -261,6 +274,14 @@ const formatAction = (action: string) => {
 // visible 50). Bounded so a busy site can't trigger an unbounded read.
 const SEARCH_POOL_CAP = 2000;
 
+// the action `in`'s share of firestore's 30 disjunctions. the query and the
+// in-memory narrowing both read it, so they agree on what the server filtered.
+function actionInLimit(scope: readonly string[] | null, machine: string): number {
+  return scope && machine === 'all'
+    ? Math.max(1, Math.floor(FIRESTORE_IN_LIMIT / scope.length))
+    : FIRESTORE_IN_LIMIT;
+}
+
 // Firestore query for a site's logs honouring the active filters. Always ordered by
 // timestamp desc so the page shows the most recent matches, not an arbitrary
 // __name__-ordered slice. Every filter combination is backed by a composite index in
@@ -269,6 +290,10 @@ const SEARCH_POOL_CAP = 2000;
 //
 // Past 30 selected actions the query drops the action clause entirely and the
 // caller narrows in memory; see `planActionFilter`.
+//
+// a scoped member may read log docs only by machine (rules 2.12.0), so with no
+// machine picked the query carries `machineId in scope`. null when the scope
+// holds no machine the query could ask for, as the rules would refuse it.
 function buildLogsQuery(
   logsRef: Query,
   filters: {
@@ -279,15 +304,20 @@ function buildLogsQuery(
     dateFrom: string;
     dateTo: string;
   },
-  max: number
-): Query {
+  max: number,
+  scope: readonly string[] | null
+): Query | null {
+  if (scope && (scope.length === 0 || (filters.machine !== 'all' && !scope.includes(filters.machine)))) {
+    return null;
+  }
   const dateRange = getDateRange(filters.datePreset, filters.dateFrom, filters.dateTo);
 
   let q: Query = query(logsRef, orderBy('timestamp', 'desc'), limit(max));
 
-  const actionPlan = planActionFilter(filters.actions, ACTION_TYPE_COUNT);
+  const actionPlan = planActionFilter(filters.actions, ACTION_TYPE_COUNT, actionInLimit(scope, filters.machine));
   if (actionPlan.inValues) q = query(q, where('action', 'in', actionPlan.inValues));
   if (filters.machine !== 'all') q = query(q, where('machineId', '==', filters.machine));
+  else if (scope) q = query(q, where('machineId', 'in', scope));
   if (filters.level !== 'all') q = query(q, where('level', '==', filters.level));
   if (dateRange.from) q = query(q, where('timestamp', '>=', Timestamp.fromDate(dateRange.from)));
   if (dateRange.to) q = query(q, where('timestamp', '<=', Timestamp.fromDate(dateRange.to)));
@@ -333,6 +363,7 @@ const LogRow = React.memo(function LogRow({
   userTz,
   siteTz,
   timeFormat,
+  hideScreenshot,
 }: {
   log: LogEvent;
   isExpanded: boolean;
@@ -342,7 +373,9 @@ const LogRow = React.memo(function LogRow({
   userTz?: string;
   siteTz?: string;
   timeFormat: '12h' | '24h';
+  hideScreenshot?: boolean;
 }) {
+  const screenshotUrl = hideScreenshot ? undefined : log.screenshotUrl;
   return (
     <Collapsible
       open={isExpanded}
@@ -382,11 +415,11 @@ const LogRow = React.memo(function LogRow({
             <TruncatedText text={log.processName || '—'} className="text-muted-foreground" data-testid="log-process" />
             {/* details preview (flex, truncates) + screenshot indicator — hidden once expanded, where the full details render below (avoids duplicating the text). Below `md` it takes its own full-width line under the other fields. */}
             <div className="flex items-center gap-2 min-w-0 w-full md:w-auto">
-              {!isExpanded && log.screenshotUrl && <Camera className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
+              {!isExpanded && screenshotUrl && <Camera className="w-3 h-3 text-muted-foreground flex-shrink-0" />}
               {!isExpanded && (log.details ? (
                 <TruncatedText text={log.details} className="text-muted-foreground min-w-0" data-testid="log-details" />
               ) : (
-                <span className="text-muted-foreground/40">—</span>
+                <span className="text-muted-foreground/80">—</span>
               ))}
             </div>
           </div>
@@ -420,13 +453,14 @@ const LogRow = React.memo(function LogRow({
               <p className="text-foreground mt-1 whitespace-pre-wrap break-words select-text">{log.details}</p>
             </div>
           )}
-          {log.screenshotUrl && (
+          {screenshotUrl && (
             <div className="flex-shrink-0 border-t md:border-t-0 md:border-l border-border/50 pt-3 md:pt-0 md:pl-6">
               <span className="text-muted-foreground text-xs">crash screenshot</span>
-              <button onClick={() => onOpenScreenshot(log.screenshotUrl!)} className="block mt-1">
+              <button type="button" onClick={() => onOpenScreenshot(screenshotUrl)} className="block mt-1">
+                {/* eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset */}
                 <img
-                  src={log.screenshotUrl}
-                  alt="Crash screenshot"
+                  src={screenshotUrl}
+                  alt="crash screenshot"
                   className="rounded border border-border/50 max-w-[200px] max-h-[120px] object-cover hover:opacity-80 transition-opacity cursor-pointer"
                 />
               </button>
@@ -440,7 +474,7 @@ const LogRow = React.memo(function LogRow({
 
 export default function LogsPage() {
   const router = useRouter();
-  const { user, loading, userPreferences, isSiteAdmin } = useAuth();
+  const { user, loading, userPreferences, isSiteAdmin, machineScope } = useAuth();
   const {
     sites,
     sitesLoading,
@@ -448,10 +482,6 @@ export default function LogsPage() {
     siteTimezone,
     hasNoSites,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
   } = useCurrentSite();
 
   // `clear logs` calls DELETE /api/sites/{siteId}/logs, gated on
@@ -460,6 +490,9 @@ export default function LogsPage() {
   // member never sees a control that would 403. Hidden, not disabled, matching the
   // dashboard's write-action gating.
   const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId);
+  const scope = currentSiteId ? machineScope(currentSiteId) : null;
+  // crash screenshots are part of control.
+  const { controlLocked } = useSitePlan(currentSiteId);
 
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
@@ -494,10 +527,24 @@ export default function LogsPage() {
 
   const [showClearDialog, setShowClearDialog] = useState(false);
   const [screenshotModalUrl, setScreenshotModalUrl] = useState<string | null>(null);
+  const screenshotCloseRef = useRef<HTMLButtonElement>(null);
   const [isClearing, setIsClearing] = useState(false);
 
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  // the overlay never holds focus, so escape is heard at the document. focus
+  // moves to the close button and returns to the thumbnail that opened it.
+  useEffect(() => {
+    if (!screenshotModalUrl) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    screenshotCloseRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setScreenshotModalUrl(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      opener?.focus();
+    };
+  }, [screenshotModalUrl]);
 
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -552,8 +599,8 @@ export default function LogsPage() {
   // the search pool (the full filtered set, loaded on demand; on-screen logs until it
   // arrives) over formatted label, raw action, machine, process, level and details.
   const actionPlan = useMemo(
-    () => planActionFilter(filterActions, ACTION_TYPE_COUNT),
-    [filterActions],
+    () => planActionFilter(filterActions, ACTION_TYPE_COUNT, actionInLimit(scope, filterMachine)),
+    [filterActions, scope, filterMachine],
   );
 
   // Selections too wide for Firestore's `in` are narrowed here instead, so what
@@ -623,8 +670,15 @@ export default function LogsPage() {
     const q = buildLogsQuery(
       logsRef,
       { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-      LOGS_PER_PAGE + 1
+      LOGS_PER_PAGE + 1,
+      scope
     );
+    if (!q) {
+      setLogs([]);
+      setHasMore(false);
+      setLogsLoading(false);
+      return;
+    }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LogEvent));
@@ -647,7 +701,7 @@ export default function LogsPage() {
     });
 
     return () => unsubscribe();
-  }, [currentSiteId, sitesLoading, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, sitesLoading, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // While searching, load the full set matching the current server-side filters (capped)
   // so search spans the whole scope. Re-runs on filter change, not per keystroke.
@@ -668,8 +722,14 @@ export default function LogsPage() {
         const q = buildLogsQuery(
           logsRef,
           { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-          SEARCH_POOL_CAP + 1
+          SEARCH_POOL_CAP + 1,
+          scope
         );
+        if (!q) {
+          setSearchPool([]);
+          setSearchPoolTruncated(false);
+          return;
+        }
         const snapshot = await getDocs(q);
         if (cancelled) return;
 
@@ -688,7 +748,7 @@ export default function LogsPage() {
 
     return () => { cancelled = true; };
     // `isSearching` (not `searchTerm`) so we don't refetch on every keystroke.
-  }, [isSearching, currentSiteId, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [isSearching, currentSiteId, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // Infinite scroll — load more logs
   const loadMore = useCallback(async () => {
@@ -703,8 +763,10 @@ export default function LogsPage() {
       const baseQuery = buildLogsQuery(
         logsRef,
         { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-        LOGS_PER_PAGE + 1
+        LOGS_PER_PAGE + 1,
+        scope
       );
+      if (!baseQuery) return;
       const q = query(baseQuery, startAfter(lastDoc));
 
       const snapshot = await getDocs(q);
@@ -727,7 +789,7 @@ export default function LogsPage() {
     } finally {
       setIsFetchingMore(false);
     }
-  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // IntersectionObserver for infinite scroll sentinel
   useEffect(() => {
@@ -811,7 +873,7 @@ export default function LogsPage() {
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(body?.detail || body?.title || 'Failed to clear logs');
+        throw new Error(body?.detail || body?.title || 'failed to clear logs');
       }
 
       console.log(`Deleted ${body?.deletedCount ?? 0} log entries`);
@@ -821,6 +883,7 @@ export default function LogsPage() {
 
     } catch (error) {
       console.error('Error clearing logs:', error);
+      toast.error(error instanceof Error ? error.message : 'failed to clear logs');
     } finally {
       setIsClearing(false);
     }
@@ -843,44 +906,14 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="logs"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          // If we deleted the current site, switch to another one
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        // Focus the new site, matching /deployments, /roosts and /talons — logs omitted this,
-        // so a user creating their first site here stayed on the no-sites state.
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       <AccountSettingsDialog
@@ -893,7 +926,7 @@ export default function LogsPage() {
         {/* Section header with inline stats */}
         <div className="mt-3 md:mt-2 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 md:gap-8">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">logs</h2>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">logs</h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:gap-8">
               <div className="flex items-center gap-2.5">
@@ -911,12 +944,12 @@ export default function LogsPage() {
               <div className="hidden md:block h-8 w-px bg-border" />
 
               <div className="flex items-center gap-2.5">
-                <div className={`rounded-md p-1.5 ${warningCount > 0 ? 'bg-yellow-500/10 text-yellow-400' : 'bg-muted text-muted-foreground'}`}>
+                <div className={`rounded-md p-1.5 ${warningCount > 0 ? 'bg-warning-surface text-warning' : 'bg-muted text-muted-foreground'}`}>
                   <AlertTriangle className="h-4 w-4" />
                 </div>
                 <div>
                   <div className="flex items-baseline gap-0.5">
-                    <span className={`text-xl font-bold ${warningCount > 0 ? 'text-yellow-400' : 'text-foreground'}`}>{warningCount}</span>
+                    <span className={`text-xl font-bold ${warningCount > 0 ? 'text-warning' : 'text-foreground'}`}>{warningCount}</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-tight">warnings</p>
                 </div>
@@ -925,12 +958,12 @@ export default function LogsPage() {
               <div className="hidden md:block h-8 w-px bg-border" />
 
               <div className="flex items-center gap-2.5">
-                <div className={`rounded-md p-1.5 ${errorCount > 0 ? 'bg-red-500/10 text-red-400' : 'bg-muted text-muted-foreground'}`}>
+                <div className={`rounded-md p-1.5 ${errorCount > 0 ? 'bg-danger-surface text-danger' : 'bg-muted text-muted-foreground'}`}>
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
                   <div className="flex items-baseline gap-0.5">
-                    <span className={`text-xl font-bold ${errorCount > 0 ? 'text-red-400' : 'text-foreground'}`}>{errorCount}</span>
+                    <span className={`text-xl font-bold ${errorCount > 0 ? 'text-danger' : 'text-foreground'}`}>{errorCount}</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-tight">errors</p>
                 </div>
@@ -986,6 +1019,7 @@ export default function LogsPage() {
                   ref={searchInputRef}
                   type="text"
                   placeholder="search logs..."
+                  aria-label="search logs"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => {
@@ -1028,7 +1062,7 @@ export default function LogsPage() {
                 disabled={isClearing || logs.length === 0}
                 variant="outline"
                 data-testid="logs-clear"
-                className="gap-2 border-red-400/60 text-red-400 hover:bg-red-950/50 hover:text-red-300 dark:hover:bg-red-950/50 dark:hover:text-red-300 transition-colors cursor-pointer"
+                className="gap-2 border-danger/60 text-danger hover:bg-danger-surface hover:text-danger transition-colors cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
                 {isClearing ? 'clearing...' : 'clear logs'}
@@ -1048,7 +1082,9 @@ export default function LogsPage() {
                 date fields reads as a layout accident. */}
             <div className="flex flex-wrap items-end gap-4">
               <div className="w-full sm:w-48">
-                <Label className="text-foreground text-sm mb-2 block">action type</Label>
+                <Label id="logs-filter-action-label" className="text-foreground text-sm mb-2 block">action type</Label>
+                {/* MultiSelect takes no id, so the group carries the label to its trigger */}
+                <div role="group" aria-labelledby="logs-filter-action-label">
                 <MultiSelect
                   groups={ACTION_TYPE_GROUPS}
                   selected={filterActions}
@@ -1058,12 +1094,13 @@ export default function LogsPage() {
                   searchPlaceholder="search actions…"
                   data-testid="logs-filter-action"
                 />
+                </div>
               </div>
 
               <div className="w-full sm:w-40">
-                <Label className="text-foreground text-sm mb-2 block">machine</Label>
+                <Label htmlFor="logs-filter-machine" className="text-foreground text-sm mb-2 block">machine</Label>
                 <Select value={filterMachine} onValueChange={setFilterMachine}>
-                  <SelectTrigger data-testid="logs-filter-machine" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-machine" data-testid="logs-filter-machine" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1078,9 +1115,9 @@ export default function LogsPage() {
               </div>
 
               <div className="w-full sm:w-32">
-                <Label className="text-foreground text-sm mb-2 block">level</Label>
+                <Label htmlFor="logs-filter-level" className="text-foreground text-sm mb-2 block">level</Label>
                 <Select value={filterLevel} onValueChange={setFilterLevel}>
-                  <SelectTrigger data-testid="logs-filter-level" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-level" data-testid="logs-filter-level" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1093,9 +1130,9 @@ export default function LogsPage() {
               </div>
 
               <div className="w-full sm:w-40">
-                <Label className="text-foreground text-sm mb-2 block">date range</Label>
+                <Label htmlFor="logs-filter-date" className="text-foreground text-sm mb-2 block">date range</Label>
                 <Select value={filterDatePreset} onValueChange={(v) => setFilterDatePreset(v as DatePreset)}>
-                  <SelectTrigger data-testid="logs-filter-date" className="bg-muted border-border">
+                  <SelectTrigger id="logs-filter-date" data-testid="logs-filter-date" className="bg-muted border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1111,16 +1148,18 @@ export default function LogsPage() {
               {filterDatePreset === 'custom' && (
                 <>
                   <div className="w-full sm:w-36">
-                    <Label className="text-foreground text-sm mb-2 block">from</Label>
+                    <Label htmlFor="logs-filter-from" className="text-foreground text-sm mb-2 block">from</Label>
                     <DatePicker
+                      id="logs-filter-from"
                       value={fromYMD(filterDateFrom)}
                       onChange={(d) => setFilterDateFrom(d ? toYMD(d) : '')}
                       placeholder="start date"
                     />
                   </div>
                   <div className="w-full sm:w-36">
-                    <Label className="text-foreground text-sm mb-2 block">to</Label>
+                    <Label htmlFor="logs-filter-to" className="text-foreground text-sm mb-2 block">to</Label>
                     <DatePicker
+                      id="logs-filter-to"
                       value={fromYMD(filterDateTo)}
                       onChange={(d) => setFilterDateTo(d ? toYMD(d) : '')}
                       placeholder="end date"
@@ -1154,7 +1193,7 @@ export default function LogsPage() {
         {/* Logs List */}
         <Card className="bg-card-sunken border-border/60 overflow-hidden py-0 gap-0">
           {!logsLoading && filteredLogs.length > 0 && (
-            <div className={`hidden md:grid ${LOG_COLS} items-center px-4 py-3 border-b border-border bg-card-header rounded-t-xl text-[11px] font-medium tracking-wide text-muted-foreground`}>
+            <div className={`hidden md:grid ${LOG_COLS} items-center px-4 py-3 border-b border-border bg-card-header header-lit rounded-t-xl text-[11px] font-medium tracking-wide text-muted-foreground`}>
               <span aria-hidden />
               <span>level</span>
               <span>time</span>
@@ -1164,7 +1203,7 @@ export default function LogsPage() {
               <span>details</span>
             </div>
           )}
-          <div className="divide-y divide-border">
+          <div className="cascade-rows divide-y divide-border">
             {hasNoSites ? (
               <div className="p-8">
                 <NoSitesEmptyState action="view logs" />
@@ -1193,6 +1232,7 @@ export default function LogsPage() {
                   userTz={userPreferences.timezone}
                   siteTz={siteTimezone}
                   timeFormat={userPreferences.timeFormat || '12h'}
+                  hideScreenshot={controlLocked}
                 />
               ))
             )}
@@ -1211,19 +1251,24 @@ export default function LogsPage() {
       {/* Screenshot Modal */}
       {screenshotModalUrl && (
         <div
+          role="dialog"
+          aria-label="crash screenshot"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 cursor-pointer"
           onClick={() => setScreenshotModalUrl(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setScreenshotModalUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset */}
           <img
             src={screenshotModalUrl}
-            alt="Crash screenshot"
+            alt="crash screenshot"
             className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg"
             onClick={(e) => e.stopPropagation()}
           />
           <button
+            ref={screenshotCloseRef}
+            type="button"
             onClick={() => setScreenshotModalUrl(null)}
             aria-label="close screenshot"
+            // eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme
             className="absolute top-4 right-4 text-white/70 hover:text-white transition-colors"
           >
             <X className="w-6 h-6" />
@@ -1268,8 +1313,9 @@ export default function LogsPage() {
       >
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <Label className="text-foreground text-sm mb-1.5 block">from (optional)</Label>
+            <Label htmlFor="logs-clear-from" className="text-foreground text-sm mb-1.5 block">from (optional)</Label>
             <DatePicker
+              id="logs-clear-from"
               value={clearFrom}
               onChange={setClearFrom}
               placeholder="any start"
@@ -1277,8 +1323,9 @@ export default function LogsPage() {
             />
           </div>
           <div>
-            <Label className="text-foreground text-sm mb-1.5 block">to (optional)</Label>
+            <Label htmlFor="logs-clear-to" className="text-foreground text-sm mb-1.5 block">to (optional)</Label>
             <DatePicker
+              id="logs-clear-to"
               value={clearTo}
               onChange={setClearTo}
               placeholder="any end"
@@ -1287,6 +1334,6 @@ export default function LogsPage() {
           </div>
         </div>
       </ConfirmDialog>
-    </div>
+    </PageCascade>
   );
 }

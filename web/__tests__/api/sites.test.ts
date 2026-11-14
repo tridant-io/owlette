@@ -37,6 +37,16 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+// site creation and transfer count an account's free sites by each site's plan, and a delete asks
+// whether tridant bills a site with no billing pointer: not configured, unless a test says otherwise.
+const mockGetSiteEntitlements = jest.fn(
+  async (_siteId: string): Promise<unknown> => ({ ok: false, reason: 'not_configured' }),
+);
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+  invalidateSiteEntitlements: jest.fn(),
+}));
+
 jest.mock('firebase-admin/firestore', () => {
   class MockTimestamp {
     private readonly ms: number;
@@ -167,6 +177,13 @@ function makeCollectionRef(parts: string[]): unknown {
     orderBy: () => ref,
     limit: () => ref,
     startAfter: () => ref,
+    select: () => ref,
+    count: () => ({
+      get: async () => {
+        const snap = await (ref.get as () => Promise<{ docs: unknown[] }>)();
+        return { data: () => ({ count: snap.docs.length }) };
+      },
+    }),
     get: jest.fn(async () => {
       let docs = (collectionDocs[path] || []).slice();
       for (const w of wheres) {
@@ -235,6 +252,16 @@ jest.mock('@/lib/firebase-admin', () => ({
         },
       };
     },
+    // the ownership transfer's transaction. writes land as they are made; nothing here races.
+    runTransaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        set: (ref: { set: (data: unknown) => Promise<void> }, data: unknown) => ref.set(data),
+        update: (
+          ref: { update: (patch: Record<string, unknown>) => Promise<void> },
+          patch: Record<string, unknown>,
+        ) => ref.update(patch),
+      }),
   }),
   getAdminAuth: () => ({
     verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')),
@@ -248,6 +275,7 @@ import {
   PATCH as sitePATCH,
   DELETE as siteDELETE,
 } from '@/app/api/sites/[siteId]/route';
+import { POST as transferPOST } from '@/app/api/sites/[siteId]/transfer-ownership/route';
 
 type Scope = {
   resource: 'site' | 'roost' | 'machine' | 'chat' | 'user' | 'installer';
@@ -441,6 +469,32 @@ describe('/api/sites/{siteId}', () => {
       plan: 'pro',
       timezone: 'UTC',
     });
+  });
+
+  it('returns site detail to a scoped member, whose writes to the site stay refused', async () => {
+    seedSite('site-a', { name: 'Alpha', owner: 'owner-uid' });
+    authedSession('scoped-uid', 'admin', ['site-a']);
+    const row = docStore['sites/site-a/members/scoped-uid'];
+    docStore['sites/site-a/members/scoped-uid'] = { data: { ...row.data, machineIds: ['m1'] } };
+
+    const res = await siteGET(
+      createMockRequest('http://localhost/api/sites/site-a'),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ id: 'site-a', name: 'Alpha', owner: 'owner-uid' });
+
+    const patch = await sitePATCH(
+      createMockRequest('http://localhost/api/sites/site-a', {
+        method: 'PATCH',
+        body: { name: 'Renamed' },
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+    expect(patch.status).toBe(403);
+    expect(docStore['sites/site-a']?.data?.name).toBe('Alpha');
   });
 
   it('creates a site and replays matching idempotency keys', async () => {
@@ -648,5 +702,209 @@ describe('/api/sites/{siteId}', () => {
 
     expect(res.status).toBe(200);
     expect(docStore['sites/site-a']?.data).toBeNull();
+  });
+});
+
+describe('plan limits on sites', () => {
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: { 'owlette.sites': '1', 'owlette.machines': '1' },
+    epoch: 0,
+  };
+
+  beforeEach(() => {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.TRIDANT_API_URL;
+    delete process.env.TRIDANT_LICENSE_KEY;
+  });
+
+  const createRequest = (siteId: string, extra: Record<string, unknown> = {}) =>
+    createMockRequest('http://localhost/api/sites', {
+      method: 'POST',
+      body: { siteId, name: 'Second Site', ...extra },
+    });
+
+  const transferRequest = (siteId: string, successorUid: string) =>
+    transferPOST(
+      createMockRequest(`http://localhost/api/sites/${siteId}/transfer-ownership`, {
+        method: 'POST',
+        body: { successorUid },
+      }),
+      { params: Promise.resolve({ siteId }) },
+    );
+
+  function seedMachine(siteId: string, machineId: string): void {
+    const parts = ['sites', siteId, 'machines', machineId];
+    docStore[pathFor(parts)] = { data: { online: true } };
+    syncCollection(parts, machineId, { online: true });
+  }
+
+  it.each([
+    ['no onPlan', {}],
+    ['an onPlan that is not true', { onPlan: 'yes' }],
+  ])("asks for a plan once the account's free site is taken (%s), naming it, writing nothing", async (_case, extra) => {
+    seedSite('site-a', { owner: 'free-uid', name: 'Lobby' });
+    authedSession('free-uid', 'member', ['site-a']);
+
+    const res = await sitesPOST(createRequest('site-b', extra));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail: 'owlette free covers one site, and Lobby is on it. add this site on core or pro.',
+      entitlement: 'owlette.sites',
+      upgradeUrl: '/settings/plan',
+      siteCreation: { state: 'choose_plan', unpaidSite: { siteId: 'site-a', name: 'Lobby' } },
+    });
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
+    expect(docStore['sites/site-b']).toBeUndefined();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('creates a site on its way to a plan once the free site is taken', async () => {
+    seedSite('site-a', { owner: 'free-uid', name: 'Lobby' });
+    authedSession('free-uid', 'member', ['site-a']);
+
+    const res = await sitesPOST(createRequest('site-b', { onPlan: true }));
+
+    expect(res.status).toBe(201);
+    expect(docStore['sites/site-b']?.data).toMatchObject({ owner: 'free-uid', name: 'Second Site' });
+    expect(docStore['sites/site-b']?.data).not.toHaveProperty('onPlan');
+  });
+
+  it('ignores onPlan from an api key, which the billing route refuses, so the site is never left unpaid', async () => {
+    seedSite('site-a', { owner: 'free-uid', name: 'Lobby' });
+    authedKey('free-uid', 'member', [siteScope('*', 'admin')], { sites: ['site-a'] });
+
+    const res = await sitesPOST(createRequest('site-b', { onPlan: true }));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.sites',
+      siteCreation: { state: 'choose_plan', unpaidSite: { siteId: 'site-a', name: 'Lobby' } },
+    });
+    expect(docStore['sites/site-b']).toBeUndefined();
+  });
+
+  it('refuses any create beside a further site on owlette free, naming the newer and its billing section', async () => {
+    // the site created on its way to a plan, whose checkout was left: on owlette free beside the free one.
+    seedSite('site-a', { owner: 'free-uid', name: 'Lobby', createdAt: new Date('2026-09-01T00:00:00.000Z') });
+    seedSite('site-c', { owner: 'free-uid', name: 'Gallery', createdAt: new Date('2026-11-01T00:00:00.000Z') });
+    authedSession('free-uid', 'member', ['site-a', 'site-c']);
+
+    const res = await sitesPOST(createRequest('site-b', { onPlan: true }));
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail: "Gallery isn't billed. upgrade it to core or pro, or delete it, before adding another site.",
+      entitlement: 'owlette.sites',
+      upgradeUrl: '/admin/sites/site-c?section=billing',
+      siteCreation: { state: 'blocked', unpaidSite: { siteId: 'site-c', name: 'Gallery' } },
+    });
+    expect(docStore['sites/site-b']).toBeUndefined();
+  });
+
+  it("creates any site during the account's trial, whatever reads owlette free", async () => {
+    seedSite('site-a', { owner: 'free-uid' });
+    seedSite('site-c', { owner: 'free-uid' });
+    authedSession('free-uid', 'member', ['site-a', 'site-c']);
+    docStore['plan_accounts/free-uid'] = {
+      data: { trialStartedAt: Date.now() - 60_000, trialEndsAt: Date.now() + 86_400_000 },
+    };
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+  });
+
+  it('creates another site while every site the account owns is billed', async () => {
+    seedSite('site-a', { owner: 'free-uid' });
+    authedSession('free-uid', 'member', ['site-a']);
+    mockGetSiteEntitlements.mockResolvedValue({ ...FREE, resolved: true, standing: 'active', inGoodStanding: true });
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+  });
+
+  it("POSITIVE CONTROL: an account's first free site is created", async () => {
+    authedSession('free-uid', 'member');
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+    expect(docStore['sites/site-b']?.data?.owner).toBe('free-uid');
+  });
+
+  it('creates a second site without asking tridant while enforcement is off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    seedSite('site-a', { owner: 'free-uid' });
+    authedSession('free-uid', 'member', ['site-a']);
+
+    const res = await sitesPOST(createRequest('site-b'));
+
+    expect(res.status).toBe(201);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('refuses a transfer to a free payer who already owns a site', async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedSite('site-a', { owner: 'free-uid' });
+    seedUser('free-uid', { sites: ['site-a'] });
+    authedSession('owner-uid', 'member', ['site-x']);
+
+    const res = await transferRequest('site-x', 'free-uid');
+    const body = await res.json();
+
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({
+      code: 'plan_required',
+      detail:
+        'the new owner already has a site on owlette free. they need to upgrade it, or delete it, before taking this one.',
+      entitlement: 'owlette.sites',
+    });
+    expect(docStore['sites/site-x']?.data?.owner).toBe('owner-uid');
+  });
+
+  it('transfers a billed site to a free payer who already owns a free one', async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedSite('site-a', { owner: 'free-uid' });
+    seedUser('free-uid', { sites: ['site-a'] });
+    authedSession('owner-uid', 'member', ['site-x']);
+    mockGetSiteEntitlements.mockImplementation(async (siteId: string) =>
+      siteId === 'site-x' ? { ...FREE, resolved: true, standing: 'active', inGoodStanding: true } : FREE,
+    );
+
+    const res = await transferRequest('site-x', 'free-uid');
+
+    expect(res.status).toBe(200);
+    expect(docStore['sites/site-x']?.data?.owner).toBe('free-uid');
+  });
+
+  it('POSITIVE CONTROL: a free payer with room takes the site', async () => {
+    seedSite('site-x', { owner: 'owner-uid' });
+    seedMachine('site-x', 'machine-1');
+    seedUser('free-uid');
+    authedSession('owner-uid', 'member', ['site-x']);
+
+    const res = await transferRequest('site-x', 'free-uid');
+
+    expect(res.status).toBe(200);
+    expect(docStore['sites/site-x']?.data?.owner).toBe('free-uid');
   });
 });

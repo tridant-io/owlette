@@ -1,13 +1,20 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { DropConfirm } from '@/components/DropConfirm'
 import type { ProcessEntryDraft } from '@/lib/dropClassifier'
 import type { DropCard } from '@/lib/dropQueue'
+import { launchCopy } from '@/lib/launchCopy'
+import { pickExecutable } from '@/lib/pickers'
 
 vi.mock('@/lib/pickers', () => ({
   pickExecutable: vi.fn(),
   pickFile: vi.fn(),
   pickDirectory: vi.fn(),
+}))
+
+vi.mock('@/lib/ipc', async (original) => ({
+  ...(await original<typeof import('@/lib/ipc')>()),
+  pathStatus: async (path: string) => (path === 'C:\\apps' ? 'folder' : 'missing'),
 }))
 
 const entry: ProcessEntryDraft = {
@@ -44,9 +51,40 @@ function setup(overrides: Partial<Parameters<typeof DropConfirm>[0]> = {}) {
     ...overrides,
   }
 
-  render(<DropConfirm {...props} />)
-  return props
+  const view = render(<DropConfirm {...props} />)
+  return {
+    ...props,
+    rerender: (next: DropCard) => view.rerender(<DropConfirm {...props} card={next} />),
+  }
 }
+
+describe('a typed launch target that is not on this machine', () => {
+  const GONE = 'C:\\apps\\gone.exe'
+  const typed: DropCard = { ...card, entry: { ...entry, exe_path: GONE }, needsInput: ['exe_path'] }
+
+  it('warns when the field is left, and browses from the nearest folder that exists', async () => {
+    vi.mocked(pickExecutable).mockResolvedValue('C:\\apps\\new.exe')
+    const { onChange, onConfirm } = setup({ card: typed })
+
+    fireEvent.blur(screen.getByLabelText(launchCopy().label))
+    expect(await screen.findByText("can't find this file")).toBeTruthy()
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'browse' }))
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ exe_path: 'C:\\apps\\new.exe' }))
+    expect(pickExecutable).toHaveBeenCalledExactlyOnceWith('C:\\apps')
+  })
+
+  it('has nothing to say once the card has moved on', async () => {
+    const view = setup({ card: typed })
+
+    fireEvent.blur(screen.getByLabelText(launchCopy().label))
+    await screen.findByText("can't find this file")
+    view.rerender({ ...card, entry: { ...entry, name: 'next' } })
+
+    await waitFor(() => expect(screen.queryByText("can't find this file")).toBeNull())
+  })
+})
 
 describe('the card', () => {
   it('shows what the drop was read as, and what it derived', () => {

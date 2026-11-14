@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { toast } from '@/lib/toast';
 import { db } from '@/lib/firebase';
+import { launchCopy, type LaunchCopy } from '@/lib/launchCopy';
+import { MAX_MACHINE_SCOPE } from '@/lib/machineAccess';
 
 export interface ExeMissingToastAlert {
   id: string;
@@ -39,24 +41,46 @@ function buildExeMissingAlert(id: string, data: Record<string, unknown>): ExeMis
   };
 }
 
+/**
+ * `launchCopyOf` names the missing target the way the alerting machine's
+ * system does — an .exe, an .app or a program; without it, windows.
+ *
+ * `machineIds` is the caller's machine scope on the site, null for the whole
+ * site. the rules let a scoped member read only their machines' logs, so an
+ * unfiltered query would be refused outright.
+ */
 export function useAgentAlertToasts(
   siteId: string,
   onUseSuggestedPath?: UseSuggestedPathHandler,
+  launchCopyOf?: (machineId: string) => LaunchCopy,
+  machineIds?: readonly string[] | null,
 ): void {
   const onUseSuggestedPathRef = useRef(onUseSuggestedPath);
+  const launchCopyOfRef = useRef(launchCopyOf);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  // callers pass a fresh array each render; the listener follows the ids, not the array
+  const scopeKey = machineIds == null ? null : JSON.stringify([...new Set(machineIds)].sort());
 
   useEffect(() => {
     onUseSuggestedPathRef.current = onUseSuggestedPath;
-  }, [onUseSuggestedPath]);
+    launchCopyOfRef.current = launchCopyOf;
+  }, [onUseSuggestedPath, launchCopyOf]);
 
   useEffect(() => {
     seenIdsRef.current = new Set();
     if (!db || !siteId) return;
+    const ids: string[] | null = scopeKey === null ? null : JSON.parse(scopeKey);
+    if (ids?.length === 0) return;
 
+    // ordered, or firestore sorts by document id: log ids are random, so the
+    // limit would keep an arbitrary 20 and a new alert would rarely be one of
+    // them. backed by the (action, timestamp desc) composite index, and by
+    // (action, machineId, timestamp desc) for a scoped query.
     const q = query(
       collection(db, 'sites', siteId, 'logs'),
       where('action', '==', 'exe_missing'),
+      ...(ids ? [where('machineId', 'in', ids.slice(0, MAX_MACHINE_SCOPE))] : []),
+      orderBy('timestamp', 'desc'),
       limit(20),
     );
     let initialSnapshot = true;
@@ -86,7 +110,8 @@ export function useAgentAlertToasts(
             ? `${alert.exePath}\nsuggested: ${suggestions.join(' | ')}`
             : alert.exePath;
 
-          toast.error(`executable not found for ${alert.processName}`, {
+          const { target } = launchCopyOfRef.current?.(alert.machineId) ?? launchCopy(undefined);
+          toast.error(`${target} not found for ${alert.processName}`, {
             description,
             ...(firstSuggestion
               ? {
@@ -109,5 +134,5 @@ export function useAgentAlertToasts(
     return () => {
       unsubscribe();
     };
-  }, [siteId]);
+  }, [siteId, scopeKey]);
 }

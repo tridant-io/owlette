@@ -82,7 +82,7 @@ def mock_mosaic_inactive(monkeypatch):
     """
     import nvapi_display
     monkeypatch.setattr(
-        nvapi_display, 'detect_mosaic', lambda: {'mosaicActive': False},
+        nvapi_display, 'detect_mosaic', lambda: {'active': False, 'grids': []},
     )
 
 
@@ -475,7 +475,9 @@ class TestApplyTopologyServiceStateMachine:
         """
         import nvapi_display
         monkeypatch.setattr(
-            nvapi_display, 'detect_mosaic', lambda: {'mosaicActive': True},
+            # the shape detect_mosaic really returns: the guard once read a
+            # `mosaicActive` key that only this mock ever carried, and never fired
+            nvapi_display, 'detect_mosaic', lambda: {'active': True, 'grids': []},
         )
 
         spawn_called = []

@@ -8,13 +8,15 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyTOTP, verifyBackupCode } from '@/lib/totp';
+import { verifyBackupCode } from '@/lib/totp';
 import { decrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSessionUser } from '@/lib/apiAuth.server';
+import { rateLimitedResponse, withRateLimit } from '@/lib/withRateLimit';
+import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/mfaAttempts.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   createTrustedDevice,
   mintDeviceTrustToken,
@@ -48,7 +50,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       );
     }
 
-    await requireSessionUser(request, userId);
+    await requirePreMfaSessionUser(request, userId);
     const userData = await assertActiveUser(userId);
 
     const db = getAdminDb();
@@ -59,6 +61,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { error: 'MFA not enrolled for this user' },
         { status: 400 }
       );
+    }
+
+    const attempt = await spendMfaAttempt(userId);
+    if (!attempt.success) {
+      return rateLimitedResponse(attempt, 'endpoint-rate', MFA_ATTEMPTS_EXCEEDED);
     }
 
     let isValid = false;
@@ -130,7 +137,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         secret = encryptedSecret;
       }
 
-      isValid = verifyTOTP(code, secret);
+      isValid = await consumeTotpCode(userId, code, secret);
     }
 
     if (!isValid) {
@@ -143,7 +150,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // The session cookie is the authoritative MFA gate the proxy reads; this
     // flag used to live in client sessionStorage and was settable without any
     // server check.
-    await markSessionMfaVerified();
+    await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
 
     // "Trust this device for 30 days": mint an opaque token, store only its
     // SHA-256 hash, return the raw token in an HTTPOnly cookie that a later

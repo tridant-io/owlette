@@ -1,7 +1,10 @@
 'use client';
 
 /**
- * who else is in this session, who holds control, and where their pointers are.
+ * where the others in control are pointing, each pointer in the colour of that
+ * person's pill. who is in the session is the bar's to say (`SwoopToolbar`);
+ * a pointer carries no name (owner, 2026-11-04: the bar already says it), so
+ * in fullscreen, where the bar is hidden, its colour is the only cue.
  *
  * the roster is the host's: `ctl` on a line is the host's own verdict from that
  * viewer's verified jwt, so this is a read-out and not a control — there is no
@@ -12,16 +15,14 @@
  * on every move, which reads as lag that is not there.
  *
  * the overlay is a child of the stage, and a pointer's position is normalised
- * over the PICTURE — the letterboxed content area, not the element — so the
- * arithmetic here is the same one `session.contentRect()` exists for on the
- * input side, including its `size - 1` convention. measuring is a layout read,
- * so it happens in an effect after a commit and not in render: the position
- * changes 60 times a second and the box changes when the window does.
+ * over the PICTURE — `useSwoopPictureBox` is the one place that box is
+ * measured, shared with the machine's own pointer in `SwoopCursor.tsx`.
  */
 
-import { useEffect, useState, useSyncExternalStore } from 'react';
-import { MousePointer2, Eye } from 'lucide-react';
+import { useSyncExternalStore } from 'react';
+import { MousePointer2 } from 'lucide-react';
 import { NO_PRESENCE, swoopPresence } from '@/lib/swoop/presence';
+import { toPixel, useSwoopPictureBox } from '@/hooks/useSwoopPictureBox';
 import type { SwoopSession } from '@/lib/swoop/features';
 
 export interface SwoopPresenceProps {
@@ -30,14 +31,6 @@ export interface SwoopPresenceProps {
 
 const subscribeNever = (): (() => void) => () => {};
 const noPresence = () => NO_PRESENCE;
-
-/** the picture's box, in the stage's own coordinates. */
-interface PictureBox {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
 
 /**
  * one of the theme's chart tokens per viewer, picked from the id so a viewer
@@ -53,52 +46,6 @@ export function tintOf(viewerId: string): string {
   return CURSOR_TINTS[hash % CURSOR_TINTS.length];
 }
 
-function measure(session: SwoopSession): PictureBox {
-  const picture = session.contentRect();
-  const stage = session.stage.getBoundingClientRect();
-  return {
-    left: picture.left - stage.left,
-    top: picture.top - stage.top,
-    width: picture.width,
-    height: picture.height,
-  };
-}
-
-const sameBox = (a: PictureBox | null, b: PictureBox): boolean =>
-  a !== null && a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
-
-/**
- * re-measured on a window resize, on entering or leaving fullscreen, and on the
- * `<video>` element's own `resize` — the last one is the display switch, which
- * changes the picture's aspect ratio inside an element whose box never moved
- * and so fires nothing else. re-measuring per cursor message instead would be a
- * layout read sixty times a second for a box that changes when the window does.
- */
-function usePictureBox(session: SwoopSession | null): PictureBox | null {
-  const [box, setBox] = useState<PictureBox | null>(null);
-
-  useEffect(() => {
-    // no session means nothing is rendered at all, so the last box measured is
-    // never read again — and the next session re-measures before it is.
-    if (!session) return;
-    const sync = () => {
-      const next = measure(session);
-      setBox((held) => (sameBox(held, next) ? held : next));
-    };
-    sync();
-    window.addEventListener('resize', sync);
-    document.addEventListener('fullscreenchange', sync);
-    session.video.addEventListener('resize', sync);
-    return () => {
-      window.removeEventListener('resize', sync);
-      document.removeEventListener('fullscreenchange', sync);
-      session.video.removeEventListener('resize', sync);
-    };
-  }, [session]);
-
-  return box;
-}
-
 export function SwoopPresence({ session }: SwoopPresenceProps) {
   const store = swoopPresence(session);
   const state = useSyncExternalStore(
@@ -108,54 +55,28 @@ export function SwoopPresence({ session }: SwoopPresenceProps) {
     // hydration fills it in once the first roster lands.
     noPresence,
   );
-  const box = usePictureBox(session);
+  const box = useSwoopPictureBox(session);
 
-  // alone in the session, which is the usual case: nothing to say about who
-  // else is here, and no pointer but the real one.
-  if (state.viewers.length < 2) return null;
+  // alone in the session, which is the usual case, there is no pointer but the
+  // real one; and before the first frame there is no picture to put one on.
+  if (state.viewers.length < 2 || !box) return null;
 
   return (
     <>
-      <ul
-        aria-label="viewers"
-        className="pointer-events-none absolute left-3 top-3 space-y-1 rounded-md border border-border bg-card/90 p-2 text-xs text-muted-foreground shadow-sm"
-      >
-        {state.viewers.map((viewer) => (
-          <li key={viewer.id} className="flex items-center gap-1.5">
-            {viewer.ctl ? (
-              <MousePointer2
-                aria-hidden
-                className={`size-3 ${viewer.id === session?.viewerId ? 'text-foreground' : tintOf(viewer.id)}`}
-              />
-            ) : (
-              <Eye aria-hidden className="size-3" />
-            )}
-            <span className={viewer.id === session?.viewerId ? 'text-foreground' : undefined}>
-              {viewer.name}
-              {viewer.id === session?.viewerId && ' (you)'}
-            </span>
-            {!viewer.ctl && <span>· view only</span>}
-          </li>
-        ))}
-      </ul>
-
-      {box &&
-        state.cursors.map((cursor) => (
-          <div
-            key={cursor.viewer}
-            aria-hidden
-            className={`pointer-events-none absolute flex items-start gap-0.5 ${tintOf(cursor.viewer)}`}
-            style={{
-              left: box.left + cursor.x * Math.max(box.width - 1, 0),
-              top: box.top + cursor.y * Math.max(box.height - 1, 0),
-            }}
-          >
-            <MousePointer2 className="size-4 fill-current" />
-            <span className="rounded-sm bg-card/90 px-1 text-[10px] leading-4">
-              {state.viewers.find((viewer) => viewer.id === cursor.viewer)?.name ?? cursor.viewer}
-            </span>
-          </div>
-        ))}
+      {state.cursors.map((cursor) => (
+        <div
+          key={cursor.viewer}
+          aria-hidden
+          // above the panels, as the machine's pointer is
+          className={`pointer-events-none absolute z-10 ${tintOf(cursor.viewer)}`}
+          style={{
+            left: toPixel(cursor.x, box.left, box.width),
+            top: toPixel(cursor.y, box.top, box.height),
+          }}
+        >
+          <MousePointer2 className="size-4 fill-current" />
+        </div>
+      ))}
     </>
   );
 }

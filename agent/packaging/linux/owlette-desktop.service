@@ -1,0 +1,19 @@
+# the owlette desktop app for every login (tri-platform 5.2, plan decision
+# 2): a user unit enabled globally, so each graphical session starts the tray.
+# ConditionGroup keeps it to accounts in the owlette group — the only ones
+# that can reach the data tree — and there is deliberately no Restart=always:
+# "exit" in the tray menu is a quit the user asked for (decision 4).
+[Unit]
+Description=owlette desktop app
+ConditionGroup=owlette
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/owlette-desktop --tray
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

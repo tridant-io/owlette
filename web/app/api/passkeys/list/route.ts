@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, requireSessionUser } from '@/lib/apiAuth.server';
+import { ApiAuthError, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { getPasskeyListInfo } from '@/lib/webauthn.server';
 import { apiError } from '@/lib/apiErrorResponse';
 
@@ -22,7 +22,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
     }
 
-    await requireSessionUser(request, userId);
+    await requirePreMfaSessionUser(request, userId);
 
     const passkeys = await getPasskeyListInfo(userId);
     return NextResponse.json({ passkeys });

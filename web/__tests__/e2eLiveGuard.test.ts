@@ -17,8 +17,9 @@
  *   approveButton, onApprove and clickApprove are not.
  *
  *   The site's approval gate (sites/{siteId}/settings/cortex.requireTier3Approval). Switched off, it
- *   lets every tier-3 call run with no decision at all. So literals fail on the hoot toolbar toggle's
- *   names ('approval required', 'approval off') and its confirm button ('disable approval'), on the
+ *   lets every tier-3 call run with no decision at all. So literals fail on the switch's name on the
+ *   admin panel's hoot page ('require approval for privileged tools'), on the names of the toggle it
+ *   replaced ('approval required', 'approval off') and on its confirm button ('disable approval'), on the
  *   settings route (hoot-settings), and on a JSON body setting "requireTier3Approval" false; the
  *   setter setHootRequireTier3Approval fails as an identifier; and a write of requireTier3Approval —
  *   object property, shorthand or assignment — fails unless its value is `true` or
@@ -43,7 +44,7 @@ const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx',
 const SKIPPED_DIRS = new Set(['node_modules']);
 
 const LITERAL_PATTERN = /approv(?!al)/i;
-const GATE_LITERAL_PATTERN = /disable approval|approval (?:required|off)|hoot-settings|["']requireTier3Approval["']\s*:\s*false/i;
+const GATE_LITERAL_PATTERN = /disable approval|approval (?:required|off)|require approval for privileged|hoot-settings|["']requireTier3Approval["']\s*:\s*false/i;
 const IDENTIFIER_PATTERN = /approv(?!al|ed)/i;
 const FORBIDDEN_IDENTIFIERS = new Set(['addToolApprovalResponse', 'setHootRequireTier3Approval']);
 
@@ -221,6 +222,7 @@ describe('the approve detector', () => {
     "page.getByRole('button', { name: 'approval required' });",
     'toolbar.getByRole("button", { name: /approval off/ });',
     "dialog.getByRole('button', { name: 'disable approval' });",
+    "page.getByRole('switch', { name: 'require approval for privileged tools' });",
     'await page.request.patch(`/api/sites/${siteId}/hoot-settings`, { data });',
     'await cortexRef.set({ requireTier3Approval: false }, { merge: true });',
     "await cortexRef.set({ 'requireTier3Approval': enabled }, { merge: true });",

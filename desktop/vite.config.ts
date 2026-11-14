@@ -3,10 +3,6 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// Tauri sets this when developing against a physical mobile device; on desktop
-// it is undefined and the dev server stays bound to localhost.
-const host = process.env.TAURI_DEV_HOST
-
 // https://vite.dev/config/ | https://v2.tauri.app/start/frontend/vite/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -25,14 +21,9 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
-    hmr: host ? { protocol: 'ws', host, port: 1421 } : undefined,
     // src-tauri is Rust's; watching it would restart vite on every cargo write.
     watch: { ignored: ['**/src-tauri/**'] },
   },
-
-  // Tauri injects TAURI_ENV_* during builds (platform, arch, target triple).
-  envPrefix: ['VITE_', 'TAURI_ENV_'],
 
   test: {
     environment: 'jsdom',

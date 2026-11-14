@@ -20,6 +20,7 @@ import {
   problem,
   problemFromError,
   problemNotFound,
+  problemPlanRequired,
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
@@ -123,6 +124,11 @@ export const POST = authorizedSiteHandler<RouteParams>({
                 instance: `/api/sites/${siteId}/transfer-ownership`,
                 code: 'site_has_no_owner',
               });
+            case 'plan_limit':
+              return problemPlanRequired(
+                'the new owner already has a site on owlette free. they need to upgrade it, or delete it, before taking this one.',
+                result.failure.entitlement,
+              );
           }
         }
 

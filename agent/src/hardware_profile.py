@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 _IS_WINDOWS = sys.platform == 'win32'
+_IS_MACOS = sys.platform == 'darwin'
+
+# a Mac mounts the sealed system's helper volumes (all but Data, which holds
+# the user's files) and a simulator runtime per installed Xcode platform; the
+# runtimes come and go and read near full, so they churned the profile and won
+# "primary disk"
+_MAC_HIDDEN_MOUNTS = ('/System/Volumes/', '/Library/Developer/CoreSimulator/')
+_MAC_DATA_VOLUME = '/System/Volumes/Data'
+# a vpn or icloud private relay adds and drops a utun at will; awdl and llw are
+# airdrop's side channels
+_MAC_HIDDEN_NICS = ('utun', 'awdl', 'llw')
 
 # GPU temperature cache (used only when multiple GPUs are present to avoid
 # repeated sensor reads inside a single metrics tick).
@@ -123,6 +134,9 @@ def _collect_disks() -> list:
             continue
         if not part.fstype:
             continue
+        if (_IS_MACOS and part.mountpoint.startswith(_MAC_HIDDEN_MOUNTS)
+                and part.mountpoint != _MAC_DATA_VOLUME):
+            continue
         usage = _disk_usage_with_timeout(part.mountpoint)
         if usage is None:
             continue
@@ -182,6 +196,8 @@ def _collect_nics() -> list:
             continue
         lname = name.lower()
         if 'loopback' in lname or lname.startswith('lo'):
+            continue
+        if _IS_MACOS and lname.startswith(_MAC_HIDDEN_NICS):
             continue
         has_ip = any(
             a.family in (socket.AF_INET, socket.AF_INET6) and a.address

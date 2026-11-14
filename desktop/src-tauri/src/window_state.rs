@@ -1,4 +1,4 @@
-//! Layout memory: window size and process-list width.
+//! Layout memory: window size, process-list width and appearance.
 //!
 //! Shell geometry, not user state, so it is device-local: a per-user JSON at
 //! `%APPDATA%\app.owlette.desktop\layout.json`. Per-*user* rather than the
@@ -11,6 +11,9 @@
 //! * Logical pixels, so the file survives a move to a differently-scaled display.
 //! * A namespaced document (`{"window": {...}, "sidebar": {...}}`); every write
 //!   preserves sections it does not own, so a later key needs no migration.
+//! * The appearance is the window theme: the webview's `prefers-color-scheme`
+//!   follows it and the frontend's theme class follows that, so it is set here,
+//!   before the window shows, and nowhere in the webview.
 //!
 //! Nothing here is load-bearing: an unreadable file falls back to `tauri.conf.json`.
 
@@ -21,7 +24,8 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, LogicalSize, Manager, PhysicalSize, Window};
+use tauri::window::Color;
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalSize, Theme, WebviewWindow, Window};
 
 /// File name inside the per-user app-data directory.
 pub const LAYOUT_FILE: &str = "layout.json";
@@ -31,6 +35,38 @@ const KEY_SIDEBAR: &str = "sidebar";
 const KEY_WIDTH: &str = "width";
 const KEY_COLLAPSED: &str = "collapsed";
 const KEY_DETAIL: &str = "detail";
+const KEY_APPEARANCE: &str = "appearance";
+const KEY_THEME: &str = "theme";
+
+/// the operator's appearance: follow the os, or pin dark or light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+  System,
+  Dark,
+  Light,
+}
+
+/// the appearance before anything is stored. an os that gives no answer lands on
+/// dark (see [`current_theme`]).
+pub const DEFAULT_THEME: ThemeChoice = ThemeChoice::System;
+
+impl ThemeChoice {
+  /// the window theme to pin, or `None` to follow the os.
+  fn window_theme(self) -> Option<Theme> {
+    match self {
+      Self::System => None,
+      Self::Dark => Some(Theme::Dark),
+      Self::Light => Some(Theme::Light),
+    }
+  }
+}
+
+/// the native frame behind the webview, which shows before its first frame and in
+/// the edge a resize uncovers: the srgb `--background` of `src/globals.css`. the dark
+/// one is also `backgroundColor` in `tauri.conf.json`, the frame before setup runs.
+const DARK_BACKGROUND: Color = Color(0x02, 0x0b, 0x16, 0xff);
+const LIGHT_BACKGROUND: Color = Color(0xf4, 0xf7, 0xfb, 0xff);
 
 /// The window minimums declared in `tauri.conf.json`. Applied here because the
 /// window manager would correct anything smaller on first paint; a test asserts
@@ -264,6 +300,19 @@ pub fn save_detail_section(path: &Path, section: &str, open: bool) -> io::Result
   write_section_key(path, KEY_DETAIL, section, open.into())
 }
 
+pub fn load_theme(path: &Path) -> ThemeChoice {
+  read_document(path)
+    .get(KEY_APPEARANCE)
+    .and_then(|appearance| appearance.get(KEY_THEME))
+    .and_then(|theme| serde_json::from_value(theme.clone()).ok())
+    .unwrap_or(DEFAULT_THEME)
+}
+
+pub fn save_theme(path: &Path, theme: ThemeChoice) -> io::Result<()> {
+  let value = serde_json::to_value(theme).map_err(io::Error::other)?;
+  write_section_key(path, KEY_APPEARANCE, KEY_THEME, value)
+}
+
 /// Managed state: where the file lives, plus the geometry the window events keep
 /// current so a save never has to ask a window that may already be gone.
 ///
@@ -392,9 +441,74 @@ impl LayoutState {
       .map(|()| open)
       .map_err(|error| format!("could not save the section state: {error}"))
   }
+
+  pub fn theme(&self) -> ThemeChoice {
+    self.path().map(load_theme).unwrap_or(DEFAULT_THEME)
+  }
+
+  pub fn set_theme(&self, theme: ThemeChoice) -> Result<ThemeChoice, String> {
+    let Some(path) = self.path() else {
+      return Ok(theme);
+    };
+    let _guard = self.file.lock();
+    save_theme(path, theme)
+      .map(|()| theme)
+      .map_err(|error| format!("could not save the appearance: {error}"))
+  }
 }
 
-/// Restore the remembered geometry onto the main window and build the managed state.
+/// the event that tells the page which theme to draw. the page can't read it from
+/// its own `prefers-color-scheme`: tauri sets webview2's colour scheme when the
+/// webview is created and when the os changes theme, never when the window is
+/// pinned or freed, so the page would keep its launch theme.
+pub const RESOLVED_EVENT: &str = "appearance-resolved";
+
+/// pin the window theme, or hand it back to the os, then paint and tell the page.
+pub fn apply_theme(window: &WebviewWindow, choice: ThemeChoice) {
+  if let Err(error) = window.set_theme(choice.window_theme()) {
+    log::warn!("could not set the window theme: {error}");
+  }
+  show_theme(window, current_theme(window));
+}
+
+/// paint the frame and tell the page for the theme the window now shows.
+pub fn show_theme(window: &WebviewWindow, theme: Theme) {
+  paint_frame(window, theme);
+  if let Err(error) = window.emit(RESOLVED_EVENT, theme_name(theme)) {
+    log::warn!("could not tell the page the appearance: {error}");
+  }
+}
+
+/// the theme the page should draw now, as the word the page uses.
+pub fn resolved_name(window: &WebviewWindow) -> &'static str {
+  theme_name(current_theme(window))
+}
+
+fn theme_name(theme: Theme) -> &'static str {
+  match theme {
+    Theme::Light => "light",
+    _ => "dark",
+  }
+}
+
+/// under `system` only the window knows what the os said. no answer is dark, the
+/// same fallback as `<html class="dark">`.
+fn current_theme(window: &WebviewWindow) -> Theme {
+  window.theme().unwrap_or(Theme::Dark)
+}
+
+fn paint_frame(window: &WebviewWindow, theme: Theme) {
+  let color = match theme {
+    Theme::Light => LIGHT_BACKGROUND,
+    _ => DARK_BACKGROUND,
+  };
+  if let Err(error) = window.set_background_color(Some(color)) {
+    log::warn!("could not paint the window background: {error}");
+  }
+}
+
+/// Restore the remembered appearance and geometry onto the main window and build the
+/// managed state.
 ///
 /// Called from `setup` — the only point every launch converges on *before* the window
 /// is first shown (`--tray` leaves it hidden for the tray to open later; a second
@@ -415,6 +529,15 @@ pub fn restore(app: &AppHandle) -> LayoutState {
       WindowLayout::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, false),
     );
   };
+
+  let theme = path.as_deref().map(load_theme).unwrap_or(DEFAULT_THEME);
+  // the window opens unpinned, so `system` is already in place; on linux
+  // `set_theme(None)` would also clear the dark preference tao seeded from the portal
+  if theme == ThemeChoice::System {
+    paint_frame(&window, current_theme(&window));
+  } else {
+    apply_theme(&window, theme);
+  }
 
   // The baseline is read off the window rather than duplicated here, so the
   // `tauri.conf.json` size stays the single source of the first-run default.
@@ -520,6 +643,96 @@ mod tests {
     assert_eq!(window["minWidth"].as_f64(), Some(MIN_WINDOW_WIDTH));
     assert_eq!(window["minHeight"].as_f64(), Some(MIN_WINDOW_HEIGHT));
     assert_eq!(window["visible"].as_bool(), Some(false));
+  }
+
+  #[test]
+  fn the_configs_leave_the_theme_to_setup_and_open_on_the_dark_frame() {
+    // a theme pinned in either config would hold until setup applies the stored
+    // one; `backgroundColor` is the frame until setup paints the right one
+    for (name, text) in [
+      ("tauri.conf.json", include_str!("../tauri.conf.json")),
+      (
+        "tauri.macos.conf.json",
+        include_str!("../tauri.macos.conf.json"),
+      ),
+    ] {
+      let config: Value = serde_json::from_str(text).expect(name);
+      let window = &config["app"]["windows"][0];
+      assert!(window.get("theme").is_none(), "{name} pins a theme");
+      let frame: Color = window["backgroundColor"]
+        .as_str()
+        .expect(name)
+        .parse()
+        .expect(name);
+      assert_eq!(frame, DARK_BACKGROUND, "{name}");
+    }
+  }
+
+  #[test]
+  fn the_frame_colours_match_the_palette_they_were_converted_from() {
+    // the two hexes are these tokens in srgb; a palette change must re-derive them
+    // or the window shows a stale colour before the webview's first frame
+    let css = include_str!("../../src/globals.css");
+    assert!(
+      css.contains("--background: oklch(0.975 0.006 250);"),
+      "light --background moved"
+    );
+    assert!(
+      css.contains("--background: oklch(0.145 0.03 250);"),
+      "dark --background moved"
+    );
+  }
+
+  #[test]
+  fn the_page_hears_light_or_dark_and_dark_for_anything_else() {
+    assert_eq!(theme_name(Theme::Light), "light");
+    assert_eq!(theme_name(Theme::Dark), "dark");
+  }
+
+  #[test]
+  fn the_appearance_defaults_to_system_and_round_trips() {
+    let scratch = Scratch::new("appearance");
+    let path = scratch.file();
+    assert_eq!(DEFAULT_THEME, ThemeChoice::System);
+    assert_eq!(load_theme(&path), ThemeChoice::System);
+
+    save_sidebar_width(&path, 320.0).expect("sidebar");
+    for theme in [ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System] {
+      save_theme(&path, theme).expect("save");
+      assert_eq!(load_theme(&path), theme);
+    }
+    // the lowercase word the frontend sends and a hand edit would write
+    assert_eq!(
+      read_document(&path)[KEY_APPEARANCE][KEY_THEME],
+      Value::from("system")
+    );
+    assert_eq!(load_sidebar_width(&path), Some(320.0));
+  }
+
+  #[test]
+  fn an_unreadable_appearance_follows_the_os() {
+    let scratch = Scratch::new("appearance-junk");
+    let path = scratch.file();
+    fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+
+    for junk in [
+      "",
+      "{",
+      r#"{"appearance":"dark"}"#,
+      r#"{"appearance":{}}"#,
+      r#"{"appearance":{"theme":"Dark"}}"#,
+      r#"{"appearance":{"theme":"sepia"}}"#,
+      r#"{"appearance":{"theme":1}}"#,
+    ] {
+      fs::write(&path, junk).expect("seed");
+      assert_eq!(load_theme(&path), ThemeChoice::System, "from {junk}");
+    }
+
+    // a section that is not an object is started over, touching nothing else
+    fs::write(&path, r#"{"appearance":"dark","sidebar":{"width":300}}"#).expect("seed");
+    save_theme(&path, ThemeChoice::Light).expect("save");
+    assert_eq!(load_theme(&path), ThemeChoice::Light);
+    assert_eq!(load_sidebar_width(&path), Some(300.0));
   }
 
   #[test]
@@ -832,6 +1045,8 @@ mod tests {
     assert_eq!(state.set_sidebar_width(5000.0), Ok(MAX_SIDEBAR_WIDTH));
     assert!(!state.sidebar_collapsed());
     assert_eq!(state.set_sidebar_collapsed(true), Ok(true));
+    assert_eq!(state.theme(), DEFAULT_THEME);
+    assert_eq!(state.set_theme(ThemeChoice::Light), Ok(ThemeChoice::Light));
     state.persist();
   }
 
@@ -846,10 +1061,12 @@ mod tests {
     assert_eq!(state.set_sidebar_width(360.0), Ok(360.0));
 
     assert_eq!(state.set_sidebar_collapsed(true), Ok(true));
+    assert_eq!(state.set_theme(ThemeChoice::Dark), Ok(ThemeChoice::Dark));
 
     let reopened = LayoutState::new(Some(path.clone()), WindowLayout::new(1060.0, 640.0, false));
     assert_eq!(reopened.sidebar_width(), 360.0);
     assert!(reopened.sidebar_collapsed());
+    assert_eq!(reopened.theme(), ThemeChoice::Dark);
     assert_eq!(
       load_window(&path),
       Some(WindowLayout::new(1440.0, 900.0, false))

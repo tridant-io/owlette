@@ -94,6 +94,13 @@ jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
 }));
 
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...a: unknown[]) => mockRequireEntitlement(...a),
+}));
+
 const SITE = 'site-a';
 const CHAT = 'chat-1';
 const MACHINE = 'lobby-01';
@@ -102,8 +109,14 @@ const MACHINE_B = 'lobby-02';
 /** `chats/{chatId}`; `null` means the doc does not exist yet (first turn). */
 let chatDoc: Record<string, unknown> | null;
 
+/** `sites/{SITE}/machines`, both online: what the real resolver lists. */
+const siteMachines = [MACHINE, MACHINE_B].map((id) => ({ id, data: () => ({ online: true }) }));
+
 const fakeDb = {
   collection: (name: string) => {
+    if (name === 'sites') {
+      return { doc: () => ({ collection: () => ({ get: async () => ({ docs: siteMachines }) }) }) };
+    }
     if (name !== 'chats') throw new Error(`unexpected collection: ${name}`);
     return {
       doc: (id: string) => ({
@@ -124,26 +137,46 @@ jest.mock('@/lib/firebase-admin', () => ({
 import { POST as TURN } from '@/app/api/hoot/route';
 import { POST as STOP } from '@/app/api/hoot/stop/route';
 import { emitMutation } from '@/lib/auditLogClient';
+import { problemPlanRequired } from '@/lib/apiErrors';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 import type { ResolvedAuth } from '@/lib/apiAuth.server';
 import type { StartTurnParams } from '@/lib/hoot/turnRunner.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
+
+function controlRefusal() {
+  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot');
+}
 
 function authedSession(): ResolvedAuth {
   return { userId: 'user-1', keyContext: null };
 }
 
-function authedKey(): ResolvedAuth {
+function authedKey(maxToolTier?: 1 | 2 | 3): ResolvedAuth {
   return {
     userId: 'user-1',
     keyContext: {
       keyId: 'key-test',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scopes: [{ resource: 'chat', id: '*', permissions: ['write'] }] as any,
+      ...(maxToolTier ? { maxToolTier } : {}),
       environment: 'live',
       expiresAt: Date.now() + 60_000,
       isLegacy: false,
     },
   };
 }
+
+/** `verifyUserSiteAccess` for the site's owner, who holds the whole site. */
+const OWNER_ACCESS = {
+  role: 'admin',
+  siteRole: 'owner',
+  swoopMode: null,
+  standing: { role: 'owner', swoopMode: null, machineIds: null },
+  isSuperadmin: false,
+  isSiteAdmin: true,
+  isSiteOwner: true,
+};
 
 /** What `resolveHootTargets` hands back for a healthy single-machine turn. */
 function resolvedOn(ids: string[], fanOut = ids.length !== 1) {
@@ -178,7 +211,7 @@ function startTurnParams(): StartTurnParams {
 }
 
 /** The request `resolveHootTargets` was asked to resolve. */
-function resolveRequest(): { requested: string[] | null; mentions?: string[] } {
+function resolveRequest(): { requested: string[] | null; mentions?: string[]; machineScope: readonly string[] | null } {
   return mockResolveHootTargets.mock.calls[0][2];
 }
 
@@ -186,18 +219,61 @@ beforeEach(() => {
   jest.clearAllMocks();
   chatDoc = { userId: 'user-1', siteId: SITE };
   mockResolveAuth.mockResolvedValue(authedSession());
-  mockVerifyAccess.mockResolvedValue({
-    role: 'admin',
-    isSuperadmin: false,
-    isSiteAdmin: true,
-    isSiteOwner: true,
-  });
+  mockVerifyAccess.mockResolvedValue(OWNER_ACCESS);
   mockResolveHootTargets.mockResolvedValue(resolvedOn([MACHINE]));
   // `PriorTurn | null`; null is "this chat has never run a turn".
   mockAcquireTurnLock.mockResolvedValue(null);
   mockReadTurnRecord.mockResolvedValue(null);
   mockStartTurn.mockReturnValue({ cancel: jest.fn(async () => {}) });
   mockFinishTurn.mockResolvedValue(true);
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
+});
+
+describe('POST /api/hoot — the payer plan', () => {
+  it('refuses with 402 plan_required before claiming the lock or starting a turn', async () => {
+    mockRequireEntitlement.mockResolvedValue(controlRefusal());
+
+    const res = await TURN(turnRequest());
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockAcquireTurnLock).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses an approval resume the same way', async () => {
+    mockRequireEntitlement.mockResolvedValue(controlRefusal());
+
+    const res = await TURN(
+      turnRequest({
+        messages: [
+          {
+            id: 'a1',
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool-restart_process',
+                toolCallId: 'call-1',
+                state: 'approval-responded',
+                approval: { id: 'ap-1', approved: true },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(res.status).toBe(402);
+    expect(mockReadTurnRecord).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+  });
+
+  it('starts the turn with enforcement off', async () => {
+    const res = await TURN(turnRequest());
+    expect(res.status).toBe(200);
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockStartTurn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('POST /api/hoot — turn-start audit', () => {
@@ -302,8 +378,8 @@ describe('POST /api/hoot — turn-start audit', () => {
 });
 
 describe('POST /api/hoot — turn-start guards', () => {
-  it('hands an api-key caller an access level capped below site admin', async () => {
-    mockResolveAuth.mockResolvedValue(authedKey());
+  it.each([undefined, 3] as const)('hands an api-key caller at maxToolTier %s an access level capped below site admin', async (maxToolTier) => {
+    mockResolveAuth.mockResolvedValue(authedKey(maxToolTier));
 
     const res = await TURN(turnRequest());
     expect(res.status).toBe(200);
@@ -314,7 +390,7 @@ describe('POST /api/hoot — turn-start guards', () => {
     expect(mockStartTurn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        access: { role: 'admin', isSuperadmin: false, isSiteAdmin: false, isSiteOwner: true },
+        access: { ...OWNER_ACCESS, isSuperadmin: false, isSiteAdmin: false },
       }),
     );
   });
@@ -432,7 +508,7 @@ describe('POST /api/hoot — which machines a body resolves to', () => {
 
     await TURN(turnRequest({ machineId: '__site__' }));
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
     expect(startTurnParams().turnTarget).toEqual({
       machineIds: null,
       fanOut: true,
@@ -444,7 +520,7 @@ describe('POST /api/hoot — which machines a body resolves to', () => {
   it('maps a legacy single machineId to exactly that machine', async () => {
     await TURN(turnRequest());
 
-    expect(resolveRequest()).toEqual({ requested: [MACHINE], mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: [MACHINE], mentions: [], machineScope: null });
     expect(startTurnParams().turnTarget).toMatchObject({ machineIds: [MACHINE], fanOut: false });
   });
 
@@ -544,7 +620,7 @@ describe('POST /api/hoot — @mention narrowing', () => {
 
     await TURN(turnRequest(mentionBody()));
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [MACHINE_B] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [MACHINE_B], machineScope: null });
     expect(startTurnParams().turnTarget).toEqual({
       machineIds: [MACHINE_B],
       fanOut: false,
@@ -567,7 +643,7 @@ describe('POST /api/hoot — @mention narrowing', () => {
       ),
     );
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
     expect(startTurnParams().turnTarget.source).toBe('chat');
   });
 
@@ -586,7 +662,7 @@ describe('POST /api/hoot — @mention narrowing', () => {
       ),
     );
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
   });
 
   it('gives an api-key caller no narrowing (D-I)', async () => {
@@ -594,7 +670,7 @@ describe('POST /api/hoot — @mention narrowing', () => {
 
     await TURN(turnRequest(mentionBody()));
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
     expect(startTurnParams().turnTarget.source).toBe('chat');
   });
 
@@ -608,18 +684,23 @@ describe('POST /api/hoot — @mention narrowing', () => {
       }),
     );
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
   });
 
-  it('never narrows on a machine-authored opener', async () => {
+  it.each([
     // A follow-up note is the assistant's own words coming back; an `@id` in it
     // was never a person choosing a target.
+    ['a follow-up note', 'followup_msg_fu-1'],
+    ['a talon directive', 'talon_msg_run-1'],
+    // a granted machine's task for hoot is that machine's words, not the chat owner's
+    ["a machine's task", 'task_msg_turn_1'],
+  ])('never narrows on a machine-authored opener: %s', async (_label, id) => {
     await TURN(
       turnRequest(
         mentionBody({
           messages: [
             {
-              id: 'followup_msg_fu-1',
+              id,
               role: 'user',
               parts: [{ type: 'text', text: `[scheduled follow-up] check @${MACHINE_B}` }],
             },
@@ -628,7 +709,7 @@ describe('POST /api/hoot — @mention narrowing', () => {
       ),
     );
 
-    expect(resolveRequest()).toEqual({ requested: null, mentions: [] });
+    expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
     expect(startTurnParams().turnTarget.source).toBe('chat');
   });
 });
@@ -681,7 +762,7 @@ describe('POST /api/hoot — approval resume binding', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(resolveRequest()).toEqual({ requested: [MACHINE] });
+    expect(resolveRequest()).toEqual({ requested: [MACHINE], machineScope: null });
     expect(startTurnParams().resolved.ids).toEqual([MACHINE]);
     expect(startTurnParams().turnTarget).toMatchObject({
       machineIds: [MACHINE],
@@ -708,7 +789,7 @@ describe('POST /api/hoot — approval resume binding', () => {
 
     await TURN(turnRequest({ machineId: '__site__', messages: approvalHistory() }));
 
-    expect(resolveRequest()).toEqual({ requested: [MACHINE] });
+    expect(resolveRequest()).toEqual({ requested: [MACHINE], machineScope: null });
   });
 
   it('resolves a legacy site-wide prior against whatever is online now', async () => {
@@ -720,7 +801,7 @@ describe('POST /api/hoot — approval resume binding', () => {
 
     await TURN(turnRequest({ messages: approvalHistory() }));
 
-    expect(resolveRequest()).toEqual({ requested: null });
+    expect(resolveRequest()).toEqual({ requested: null, machineScope: null });
     expect(startTurnParams().resolved.ids).toEqual([MACHINE, MACHINE_B]);
   });
 
@@ -747,6 +828,17 @@ describe('POST /api/hoot — approval resume binding', () => {
     expect(mockAcquireTurnLock).not.toHaveBeenCalled();
     expect(mockStartTurn).not.toHaveBeenCalled();
     expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a resume when the chat doc is gone, since nothing then says whose it is', async () => {
+    chatDoc = null;
+    mockReadTurnRecord.mockResolvedValue(priorTurn());
+
+    const res = await TURN(turnRequest({ messages: approvalHistory() }));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'approval_stale' });
+    expect(mockStartTurn).not.toHaveBeenCalled();
   });
 
   it('refuses a resume whose requesting message is no longer the record', async () => {
@@ -814,6 +906,99 @@ describe('POST /api/hoot — approval resume binding', () => {
     const res = await TURN(turnRequest({ messages: approvalHistory() }));
 
     expect(res.status).toBe(503);
+    expect(mockAcquireTurnLock).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * a caller limited to some machines resolves against their scope, through the
+ * real resolver: a machine outside it is a machine this site does not have, and
+ * "all machines" is all of theirs.
+ */
+describe('POST /api/hoot — machine scope', () => {
+  const SCOPED_ADMIN = {
+    ...OWNER_ACCESS,
+    siteRole: 'admin',
+    standing: { role: 'admin', swoopMode: null, machineIds: [MACHINE] },
+    isSiteOwner: false,
+  };
+
+  beforeEach(() => {
+    mockVerifyAccess.mockResolvedValue(SCOPED_ADMIN);
+    mockResolveHootTargets.mockImplementation(jest.requireActual('@/lib/hoot-utils.server').resolveHootTargets);
+  });
+
+  it('refuses a machine outside the scope as unknown, with no lock, no turn and no audit', async () => {
+    const res = await TURN(turnRequest({ machineId: undefined, target: { machineIds: [MACHINE_B] } }));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: `This site has no machine named ${MACHINE_B}.`,
+      code: 'unknown_machine',
+    });
+    expect(resolveRequest()).toMatchObject({ machineScope: [MACHINE] });
+    expect(mockAcquireTurnLock).not.toHaveBeenCalled();
+    expect(mockStartTurn).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mention of a machine outside the scope the same way', async () => {
+    const res = await TURN(
+      turnRequest({
+        machineId: undefined,
+        target: { machineIds: null, mentions: [MACHINE_B] },
+        messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: `@${MACHINE_B} what is running?` }] }],
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'unknown_machine' });
+    expect(mockStartTurn).not.toHaveBeenCalled();
+  });
+
+  it('runs "all machines" on the machines in scope only', async () => {
+    const res = await TURN(turnRequest({ machineId: '__site__' }));
+
+    expect(res.status).toBe(200);
+    expect(startTurnParams().resolved.ids).toEqual([MACHINE]);
+    // the selection stays the dynamic "all", which is all of theirs
+    expect(startTurnParams().chatTarget).toEqual({ machineIds: null });
+    expect(startTurnParams().access.standing.machineIds).toEqual([MACHINE]);
+  });
+
+  it('refuses to resume an approval on a machine that has left the scope', async () => {
+    const prior = {
+      toolCommands: {},
+      fanOut: false,
+      resolvedMachineIds: [MACHINE_B],
+      messageId: 'msg_a',
+      pendingApprovals: ['toolu_appr_1'],
+    };
+    mockReadTurnRecord.mockResolvedValue(prior);
+
+    const res = await TURN(
+      turnRequest({
+        messages: [
+          { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'run the scan' }] },
+          {
+            id: 'msg_a',
+            role: 'assistant',
+            parts: [
+              {
+                type: 'tool-execute_script',
+                toolCallId: 'toolu_appr_1',
+                state: 'approval-responded',
+                approval: { id: 'appr_1', approved: true },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(resolveRequest()).toEqual({ requested: [MACHINE_B], machineScope: [MACHINE] });
     expect(mockAcquireTurnLock).not.toHaveBeenCalled();
     expect(mockStartTurn).not.toHaveBeenCalled();
   });

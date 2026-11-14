@@ -163,7 +163,7 @@ test('active key row renders the green "active" badge', async ({ page }) => {
 
   const badge = row.locator('[data-slot="badge"]', { hasText: /^active$/ });
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveClass(/text-green-400/);
+  await expect(badge).toHaveClass(/text-success/);
 });
 
 test('rotated-in-grace row renders amber "rotated (grace)" badge with retire-by hint', async ({
@@ -179,7 +179,7 @@ test('rotated-in-grace row renders amber "rotated (grace)" badge with retire-by 
 
   const badge = row.locator('[data-slot="badge"]', { hasText: /^rotated \(grace\)$/ });
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveClass(/text-amber-400/);
+  await expect(badge).toHaveClass(/text-warning/);
 
   await expect(row.getByText(/old key stops working /i)).toBeVisible();
 });
@@ -197,7 +197,7 @@ test(
     const row = rowFor(page, 'e2e state expired');
     const badge = row.locator('[data-slot="badge"]', { hasText: /^expired$/ });
     await expect(badge).toBeVisible();
-    await expect(badge).toHaveClass(/text-red-400/);
+    await expect(badge).toHaveClass(/text-danger/);
   },
 );
 

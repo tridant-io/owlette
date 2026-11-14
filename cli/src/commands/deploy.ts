@@ -13,6 +13,7 @@
 import { Command } from 'commander';
 import { randomUUID } from 'crypto';
 import { loadConfig } from '../config';
+import { activeHoursOverrideFrom, addActiveHoursOverrideOptions } from '../lib/activeHoursOverride';
 import { fetchWithTimeout } from '../lib/http';
 import {
   isJson,
@@ -48,31 +49,13 @@ interface DeploymentDetail extends DeploymentListItem {
 }
 
 export function registerDeployCommands(program: Command): void {
-  const deploy =
-    (program.commands.find((c) => c.name() === 'deploy') as Command | undefined) ??
-    program
-      .command('deploy')
-      .description(
-        'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
-      );
+  const deploy = program
+    .command('deploy')
+    .description(
+      'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
+    );
 
-  // Re-set regardless of registration order: the help text must disambiguate
-  // `owlette deploy` from `owlette roost deploy`.
-  deploy.description(
-    'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
-  );
-
-  // Drop any stub verbs left from earlier file-load ordering.
-  for (const verb of ['create', 'list', 'get', 'retry', 'cancel', 'uninstall', 'delete'] as const) {
-    const existing = deploy.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = deploy.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
-
-  deploy
+  const create = deploy
     .command('create')
     .description('create a new classic-installer deployment')
     .requiredOption('--site <siteId>', 'site id that owns the deployment')
@@ -85,7 +68,8 @@ export function registerDeployCommands(program: Command): void {
     .option('--sha256 <hex>', '64-char sha256 digest of the installer for verification')
     .option('--close-processes <csv>', 'comma-separated process exe names agents should close first')
     .option('--suppress-projects <csv>', 'comma-separated project names/paths agents should suppress first')
-    .option('--parallel', 'run install on all targets concurrently (default: serial)')
+    .option('--parallel', 'run install on all targets concurrently (default: serial)');
+  addActiveHoursOverrideOptions(create, "install inside the machines' active hours anyway")
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -109,6 +93,8 @@ export function registerDeployCommands(program: Command): void {
         usageFatal('--suppress-projects must contain at least one non-empty value when supplied');
         return;
       }
+      const override = activeHoursOverrideFrom(opts);
+      if (!override.ok) return;
 
       const body: Record<string, unknown> = {
         name: opts.name,
@@ -122,6 +108,7 @@ export function registerDeployCommands(program: Command): void {
       if (closeProcesses.length > 0) body.close_processes = closeProcesses;
       if (suppressProjects.length > 0) body.suppress_projects = suppressProjects;
       if (opts.parallel) body.parallel_install = true;
+      if (override.override) body.active_hours_override = override.override;
 
       const idempotencyKey = opts.idempotencyKey
         ? String(opts.idempotencyKey)
@@ -286,10 +273,12 @@ export function registerDeployCommands(program: Command): void {
       process.stdout.write(formatDeploymentDetail(data));
     });
 
-  deploy
+  const retry = deploy
     .command('retry <deploymentId>')
     .description('re-issue a deployment to targets that previously failed')
-    .requiredOption('--site <siteId>', 'site id that owns the deployment')
+    .requiredOption('--site <siteId>', 'site id that owns the deployment');
+  // a retry needs its own override; the original deployment's does not carry over.
+  addActiveHoursOverrideOptions(retry, "install inside the machines' active hours anyway")
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -297,6 +286,10 @@ export function registerDeployCommands(program: Command): void {
     .action(async (deploymentId: string, opts, cmd) => {
       const { apiUrl, token, json } = resolveAuth(cmd);
       if (!token) return;
+
+      const override = activeHoursOverrideFrom(opts);
+      if (!override.ok) return;
+      const body = override.override ? { active_hours_override: override.override } : {};
 
       const idempotencyKey = opts.idempotencyKey
         ? String(opts.idempotencyKey)
@@ -313,7 +306,7 @@ export function registerDeployCommands(program: Command): void {
         res = await fetchWithTimeout(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({}),
+          body: JSON.stringify(body),
         });
       } catch (err) {
         unconfirmedMutationFatal({
@@ -430,8 +423,14 @@ export function registerDeployCommands(program: Command): void {
 
   deploy
     .command('uninstall <deploymentId>')
-    .description('queue uninstall on every target machine (requires site=<id>:admin scope)')
+    .description(
+      'uninstall a program from every finished target that lists it (requires site=<id>:admin scope)',
+    )
     .requiredOption('--site <siteId>', 'site id that owns the deployment')
+    .requiredOption(
+      '--software <name>',
+      "the program's exact name in the machines' software list",
+    )
     .option('--yes', 'skip the confirmation prompt')
     .option(
       '--idempotency-key <key>',
@@ -443,7 +442,7 @@ export function registerDeployCommands(program: Command): void {
 
       if (!opts.yes && process.stdin.isTTY) {
         const ok = await promptYesNo(
-          `uninstall ${deploymentId} from every target machine? this is permanent. [y/N] `,
+          `uninstall "${opts.software}" from every target of ${deploymentId} that lists it? this is permanent. [y/N] `,
         );
         if (!ok) {
           process.stdout.write('uninstall aborted\n');
@@ -469,7 +468,7 @@ export function registerDeployCommands(program: Command): void {
         res = await fetchWithTimeout(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({}),
+          body: JSON.stringify({ software_name: opts.software }),
         });
       } catch (err) {
         unconfirmedMutationFatal({
@@ -485,9 +484,15 @@ export function registerDeployCommands(program: Command): void {
         status?: string;
         queued?: number;
         machine_ids?: string[];
+        skipped?: Array<{ machineId: string; reason: string }>;
         detail?: string;
         code?: string;
       };
+
+      // the 200 and the 409 no_uninstallable_targets both carry skipped.
+      const skipped = data.skipped?.length
+        ? `; skipped ${data.skipped.map((s) => `${s.machineId} (${s.reason})`).join(', ')}`
+        : '';
 
       if (!res.ok) {
         if (res.status === 403 && data.code === 'scope_insufficient') {
@@ -498,7 +503,7 @@ export function registerDeployCommands(program: Command): void {
           return;
         }
         fatal(
-          `POST /api/sites/${opts.site}/deployments/${deploymentId}/uninstall failed (${res.status}, ${data.code ?? 'unknown'}): ${data.detail ?? JSON.stringify(data)}`,
+          `POST /api/sites/${opts.site}/deployments/${deploymentId}/uninstall failed (${res.status}, ${data.code ?? 'unknown'}): ${data.detail ?? JSON.stringify(data)}${skipped}`,
         );
         return;
       }
@@ -509,7 +514,7 @@ export function registerDeployCommands(program: Command): void {
       }
 
       process.stdout.write(
-        `owlette: queued uninstall on ${data.queued ?? 0} target(s) for ${deploymentId} — status ${data.status}\n`,
+        `owlette: queued uninstall of "${opts.software}" on ${data.queued ?? 0} target(s) for ${deploymentId}${skipped}\n`,
       );
     });
 

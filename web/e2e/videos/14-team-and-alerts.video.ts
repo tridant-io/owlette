@@ -29,7 +29,7 @@
 import { test, expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminAuth, getAdminDb, E2E_BASE_URL } from '../helpers/emulator';
-import { TEST_USERS, seedUser } from '../helpers/seed';
+import { TEST_USERS, seedMemberRow, seedUser } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from '../screenshots/fixtures';
 import {
   recordScene,
@@ -44,6 +44,15 @@ import {
 
 test('episode 14 — team & alerts', async ({ browser }) => {
   const ctx = await seedScreenshotFixtures('automate-schedule-editor');
+  // b03's tokens, out here so the finally can delete them: episode 17's ledger
+  // counts every live token on the site
+  const tokenMachines = [
+    ['mainstage-led', 26 * 24],
+    ['media-server-stage', 19 * 24],
+    ['td-control-room', 11 * 24],
+    ['touring-rig-04', 6 * 24],
+    ['unreal-render-1', 2 * 24],
+  ] as const;
   try {
     // Pin the RECORDING admin to the seeded site so per-site selectors find
     // data. The admin is a member of the site (fixtures assign it), but the
@@ -53,10 +62,9 @@ test('episode 14 — team & alerts', async ({ browser }) => {
       .collection('users')
       .doc(TEST_USERS.admin.uid)
       .set({ lastSiteId: ctx.siteId }, { merge: true });
-    await getAdminDb()
-      .collection('sites')
-      .doc(ctx.siteId)
-      .set({ owner: TEST_USERS.superadmin.uid }, { merge: true });
+    // the crown comes from an owner member row: the members list reads member
+    // rows, never the site doc's `owner` field. the finally takes it off again
+    await seedMemberRow(ctx.siteId, TEST_USERS.superadmin.uid, 'owner');
     // The owner row renders the account's display name — "E2E Superadmin"
     // would put the internal role word on camera, so the owner films as a
     // person. Both stores, because the members API reads the users doc and
@@ -85,13 +93,6 @@ test('episode 14 — team & alerts', async ({ browser }) => {
     // doc per machine (no supersededAt/expiresAt = live; shape mirrors what
     // the pairing flow writes, read back by /api/sites/{id}/agent-tokens).
     const hoursAgo = (h: number) => new Date(FIXED_NOW_MS - h * 3_600_000);
-    const tokenMachines = [
-      ['mainstage-led', 26 * 24],
-      ['media-server-stage', 19 * 24],
-      ['td-control-room', 11 * 24],
-      ['touring-rig-04', 6 * 24],
-      ['unreal-render-1', 2 * 24],
-    ] as const;
     for (const [machineId, ageHours] of tokenMachines) {
       await getAdminDb()
         .collection('agent_refresh_tokens')
@@ -179,9 +180,9 @@ test('episode 14 — team & alerts', async ({ browser }) => {
       '14-team-and-alerts',
       { baseURL: E2E_BASE_URL, storageState: roleState('admin').storageState },
       async (page) => {
-        // [b01] the team, from your admin seat (~24.2s). Dashboard → the
-        // avatar menu's "admin panel" entry → lands on members; then frame
-        // the filtered nav — the visual proof of "only what's yours to run".
+        // [b01] the team, from your admin seat (~24.2s). dashboard → the avatar
+        // menu's "admin panel", which lands a site admin on their sites; then
+        // frame the filtered nav — the visual proof of "only what's yours to run".
         await openForCapture(page, '/dashboard');
         await narrate(page, 'b01 first, people — register, no invite email', 6.0);
         await clickWithCursor(page, page.getByTestId('user-menu-trigger'));
@@ -189,39 +190,52 @@ test('episode 14 — team & alerts', async ({ browser }) => {
         await expect(adminPanelItem).toBeVisible();
         await highlight(page, adminPanelItem, 1800);
         await clickWithCursor(page, adminPanelItem);
+        await expect(page).toHaveURL(/\/admin\/sites$/);
         await expect(
-          page.getByRole('heading', { name: 'members', exact: true }),
+          page.getByRole('heading', { name: 'sites', exact: true }),
         ).toBeVisible();
         await narrate(page, 'b01 from your admin panel, who is on each site', 3.5);
         await slowPush(page, { scale: 1.04, originXPct: 18, originYPct: 40, seconds: 3.2 });
         await narrate(page, 'b01 the nav only shows what is yours to run', 5.0);
         await slowPush(page, { scale: 1.0, seconds: 2.6 });
         await narrate(page, 'b01 settle', 0.5);
+        // the site's gear (the fixture names site-A flagship), then its members
+        // section. b01's narration is full, so this hop sits in its trimmed tail
+        // and b02 opens on the members table.
+        await clickWithCursor(page, page.getByRole('link', { name: 'settings for flagship', exact: true }));
+        await clickWithCursor(
+          page,
+          page
+            .getByRole('group', { name: 'site settings sections' })
+            .getByRole('button', { name: 'members', exact: true }),
+        );
+        await expect(
+          page.getByRole('heading', { name: 'members', exact: true }),
+        ).toBeVisible();
 
-        // [b02] members: who's on this site (~28.1s). Crown + "you", then a
-        // real add-by-email, then the row menu's "remove..." held on camera.
+        // [b02] members: who's on this site (~28.1s). crown + "you", then a real
+        // add by email, then the row menu held open on "change access...": a
+        // site admin promotes someone from here, on this site only.
         const ownerRow = page.getByRole('row').filter({ hasText: 'avery quinn' });
         await expect(ownerRow.getByText('owner', { exact: true })).toBeVisible();
         await highlight(page, ownerRow, 2200);
         await narrate(page, 'b02 the owner wears the crown, your own row too', 4.5);
         await clickWithCursor(page, page.getByRole('button', { name: /add member/i }));
-        const addDialog = page.getByRole('dialog').filter({
-          has: page.locator('#add-member-email'),
-        });
+        const addDialog = page.getByRole('dialog', { name: 'add member' });
         await expect(addDialog).toBeVisible();
-        await typewrite(page, addDialog.locator('#add-member-email'), 'rae@e2e.test', 45);
-        // Role select stays on its default, member — adding as admin would
-        // trip the roleHonored downgrade toast (honest, but muddies the demo).
+        await typewrite(page, addDialog.getByLabel('name or email', { exact: true }), 'rae@e2e.test', 45);
+        // the role stays on its default, member: b02's narration has them
+        // appear as one
         await narrate(page, 'b02 the email they registered with', 3.5);
         await clickWithCursor(page, addDialog.getByRole('button', { name: /add member/i }));
         const raeRow = page.getByRole('row').filter({ hasText: 'rae calloway' });
         await expect(raeRow).toBeVisible();
         await narrate(page, 'b02 members watch, admins do', 6.5);
         await clickWithCursor(page, raeRow.getByRole('button').last());
-        await highlight(page, page.getByRole('menuitem', { name: /remove/i }), 1800);
+        await highlight(page, page.getByRole('menuitem', { name: /change access/i }), 6000);
+        await narrate(page, 'b02 promotion is per site — change access', 6.0);
         await page.keyboard.press('Escape');
         await page.waitForTimeout(400);
-        await narrate(page, 'b02 promotion is account-level — the operator', 6.0);
 
         // [b03] the rest of your panel (~19.6s). Walk the remaining nav as an
         // admin — tokens, schedules, webhooks — ending on alerts as the
@@ -380,6 +394,11 @@ test('episode 14 — team & alerts', async ({ browser }) => {
       },
     );
   } finally {
+    const db = getAdminDb();
+    await db.doc(`sites/${ctx.siteId}/members/${TEST_USERS.superadmin.uid}`).delete().catch(() => undefined);
+    for (const [machineId] of tokenMachines) {
+      await db.collection('agent_refresh_tokens').doc(`e2e-token-${machineId}`).delete().catch(() => undefined);
+    }
     await ctx.cleanup();
   }
 });

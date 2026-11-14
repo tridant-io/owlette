@@ -1,15 +1,17 @@
 """
 Authentication Manager for Owlette Agent.
 
-Registration-code exchange, access-token lifecycle (cache / expiry / auto-refresh), and
+Device-code pairing, access-token lifecycle (cache / expiry / auto-refresh), and
 encrypted token storage.
 
 Two tokens: a 1-hour Firebase custom access token for Firestore REST calls, and a
-long-lived (30d) refresh token. Tokens are never logged, not even at DEBUG. Storage is
-machine-key encrypted at C:\\ProgramData\\Owlette\\.tokens.enc.
+refresh token that never expires (an admin can revoke it). Tokens are never logged,
+not even at DEBUG. Storage is machine-key encrypted at
+C:\\ProgramData\\Owlette\\.tokens.enc.
 """
 
 import base64
+import os
 import requests
 import time
 import logging
@@ -17,6 +19,7 @@ import json
 import threading
 from typing import Optional, Dict, Any, Callable
 
+from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -109,6 +112,12 @@ class TokenRefreshError(Exception):
     pass
 
 
+class TokenRevokedError(TokenRefreshError):
+    """The server refused the refresh token for good (401/403): revoked, expired, or
+    bound to another machine. Nothing short of a new pairing recovers from it."""
+    pass
+
+
 class TokenRefreshNetworkError(TokenRefreshError):
     """
     Refresh failed at the transport layer — no HTTP response (unreachable host, DNS,
@@ -131,10 +140,17 @@ class AuthManager:
         api_base: Optional[str] = None,
         machine_id: Optional[str] = None,
         storage: Optional[SecureStorage] = None,
+        on_revoked: Optional[Callable[[str], None]] = None,
     ):
-        """api_base must be an owlette API base; machine_id defaults to the persisted id, storage to the singleton."""
+        """api_base must be an owlette API base; machine_id defaults to the persisted id, storage to the singleton.
+
+        on_revoked owns a refused refresh (401/403): the service passes its
+        unpair. Without it the store is cleared and nothing else moves (the
+        pairing flows, the hoot CLI).
+        """
         if not api_base:
             raise ValueError("api_base is required for AuthManager initialization")
+        self._on_revoked = on_revoked
         self.api_base = api_base.rstrip('/')
         # every token request goes to api_base
         if not shared_utils.is_owlette_api_base(self.api_base):
@@ -195,79 +211,6 @@ class AuthManager:
         self._access_token = access_token
         self._token_expiry = expiry_timestamp
         self._site_id = site_id
-
-    def exchange_registration_code(self, registration_code: str, machine_id: Optional[str] = None) -> bool:
-        """
-        Exchange the installer's single-use registration code for access + refresh tokens.
-
-        Raises AuthenticationError on failure.
-        """
-        machine_id = machine_id or self.machine_id
-
-        try:
-            logger.info("Exchanging registration code for tokens...")
-
-            url = f"{self.api_base}/agent/auth/exchange"
-            logger.debug(f"Exchange URL: {url}")
-            logger.debug(f"Machine ID: {machine_id}")
-
-            from pathlib import Path
-            import shared_utils
-            debug_log = Path(shared_utils.get_data_path('logs/oauth_debug.log'))
-            with open(debug_log, 'a') as f:
-                f.write(f"Calling URL: {url}\n")
-
-            response = requests.post(
-                url,
-                json={
-                    'registrationCode': registration_code,
-                    'machineId': machine_id,
-                    'version': shared_utils.APP_VERSION,
-                },
-                timeout=30,
-            )
-            logger.debug(f"Exchange response status: {response.status_code}")
-
-            # Log response to debug file (omit body — may contain tokens)
-            with open(debug_log, 'a') as f:
-                f.write(f"Response Status: {response.status_code}\n")
-                f.write(f"Response Headers: {dict(response.headers)}\n\n")
-
-            if response.status_code != 200:
-                try:
-                    error_msg = response.json().get('error', 'Unknown error')
-                except (ValueError, json.JSONDecodeError):
-                    error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
-                logger.error(f"Token exchange failed: {error_msg}")
-                raise AuthenticationError(f"Token exchange failed: {error_msg}")
-
-            try:
-                data = response.json()
-            except (ValueError, json.JSONDecodeError) as e:
-                logger.error(f"Invalid JSON response from server: {response.text[:200]}")
-                raise AuthenticationError(f"Invalid JSON response from server: {e}")
-
-            access_token = data.get('accessToken')
-            refresh_token = data.get('refreshToken')
-            expires_in = data.get('expiresIn', 3600)
-            site_id = data.get('siteId')
-
-            self._persist_credentials(access_token, refresh_token, expires_in, site_id)
-
-            # Never log the tokens themselves.
-            logger.info(
-                f"Authentication successful: site={site_id}, " +
-                f"token_expires_in={expires_in}s"
-            )
-
-            return True
-
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during token exchange: {e}")
-            raise AuthenticationError(f"Network error: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error during token exchange: {e}")
-            raise AuthenticationError(f"Unexpected error: {e}")
 
     def request_device_code(self) -> dict:
         """
@@ -399,6 +342,16 @@ class AuthManager:
 
             refresh_token = self.storage.get_refresh_token()
             if not refresh_token:
+                if self._on_revoked is not None:
+                    # a store that is gone was cleared by another holder of the
+                    # credential (hoot, on its own refused refresh): the same
+                    # revoke, so the same exit. one still on disk that read as
+                    # empty (held open, mid-replace, damaged) is a failed
+                    # refresh: unpairing on it would take a site visit to undo
+                    if self.storage.is_cleared():
+                        self._on_revoked("no refresh token left in storage")
+                        raise TokenRevokedError("No refresh token found in storage")
+                    logger.warning("Token store is on disk but read as empty; retrying, not unpairing")
                 raise TokenRefreshError("No refresh token found in storage")
 
             url = f"{self.api_base}/agent/auth/refresh"
@@ -425,9 +378,13 @@ class AuthManager:
                     error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
 
                 if response.status_code in [401, 403]:
-                    error_type = "Authentication failed (invalid/expired tokens)"
-                    logger.warning("Refresh token invalid/expired, clearing storage")
-                    self.storage.clear_tokens()
+                    if self._on_revoked is not None:
+                        self._on_revoked(f"the server refused the agent token: {error_msg}")
+                    else:
+                        logger.warning("Refresh token invalid/expired, clearing storage")
+                        self.storage.clear_tokens()
+                    logger.error(f"Token refresh failed: refused by the server - {error_msg}")
+                    raise TokenRevokedError(f"Token refresh refused: {error_msg}")
                 elif response.status_code == 429:
                     error_type = "Rate limited by server"
                 elif response.status_code == 500:
@@ -502,6 +459,13 @@ class AuthManager:
         except Exception as e:
             logger.error(f"Unexpected error during token refresh: {e}")
             raise TokenRefreshError(f"Unexpected error: {e}")
+
+    def refresh_now(self) -> None:
+        """Refresh regardless of expiry, serialised with the automatic refreshes.
+        Raises TokenRevokedError when the server refuses the credential, another
+        TokenRefreshError when it could not be asked."""
+        with self._refresh_lock:
+            self.refresh_access_token()
 
     def get_valid_token(self) -> str:
         """
@@ -598,27 +562,65 @@ class AuthManager:
         """True when a refresh token exists in storage."""
         return self.storage.has_refresh_token()
 
+    def current_token(self) -> tuple[Optional[str], Optional[float]]:
+        """The access token in hand and its expiry, without refreshing."""
+        return self._access_token, self._token_expiry
+
     def get_site_id(self) -> Optional[str]:
         """Site ID this agent is authorized for, or None."""
         if not self._site_id:
             self._site_id = self.storage.get_site_id()
         return self._site_id
 
-    def get_token_info(self) -> Dict[str, Any]:
-        """Current token state, for debugging/monitoring."""
-        if self._token_expiry:
-            time_until_expiry = max(0, self._token_expiry - time.time())
-            is_expired = time_until_expiry <= 0
-        else:
-            time_until_expiry = None
-            is_expired = True
 
-        return {
-            'has_access_token': self._access_token is not None,
-            'has_refresh_token': self.storage.has_refresh_token(),
-            'is_expired': is_expired,
-            'time_until_expiry_seconds': int(time_until_expiry) if time_until_expiry else None,
-            'site_id': self._site_id,
-            'machine_id': self.machine_id,
-            'api_base': self.api_base,
-        }
+def publish_token(token: str, expiry: float) -> None:
+    """Write the daemon's access token where hoot reads it, off Windows.
+
+    hoot is a console-user process and the token store is the daemon's alone
+    there, so this one-hour token is the only credential hoot ever holds.
+    Raises OSError when the file cannot be written.
+    """
+    path = shared_utils.CORTEX_TOKEN_PATH
+    temp_path = f"{path}.tmp"
+    payload = json.dumps({'token': get_storage().encrypt_value(token), 'expiry': expiry})
+    with os.fdopen(shared_utils.open_new_file(temp_path, 0o640), 'w', encoding='utf-8') as f:
+        if hasattr(os, 'fchmod'):
+            # os.open subtracts the umask from the mode it is handed
+            os.fchmod(f.fileno(), 0o640)
+        shared_utils.grant_data_group(f.fileno())
+        f.write(payload)
+    os.replace(temp_path, path)
+
+
+def withdraw_token() -> None:
+    """Remove the published token: hoot is off, or the machine is unpaired."""
+    try:
+        os.remove(shared_utils.CORTEX_TOKEN_PATH)
+    except FileNotFoundError:
+        pass
+
+
+class PublishedToken:
+    """hoot's credential off Windows: the access token the daemon publishes.
+
+    Stands in for AuthManager where FirestoreRestClient is concerned. It never
+    refreshes: the daemon does, and republishes on its next tick.
+    """
+
+    def get_valid_token(self) -> str:
+        try:
+            with open(shared_utils.CORTEX_TOKEN_PATH, encoding='utf-8') as f:
+                published = json.load(f)
+            if float(published['expiry']) > time.time():
+                return get_storage().decrypt_value(str(published['token']))[0]
+        except (OSError, ValueError, KeyError, TypeError, InvalidToken):
+            pass
+        raise AuthenticationError("The agent has not published a valid access token")
+
+    def is_authenticated(self) -> bool:
+        """True when the daemon has published a token that is still valid."""
+        try:
+            self.get_valid_token()
+        except AuthenticationError:
+            return False
+        return True

@@ -2,19 +2,9 @@
 # Install with: pip install -r requirements-dev.txt
 
 # Testing Framework
-pytest==9.1.1
-pytest-cov==7.1.0
-pytest-mock==3.15.1
-pytest-asyncio==1.4.0
+pytest==9.2.0
 
-# Code Quality
-pylint==3.0.3
-black==26.5.1
-flake8==7.3.0
-
-# Type Checking
-mypy==1.7.1
-
-# Testing Utilities
-responses==0.26.3  # Mock HTTP requests
-freezegun==1.5.5   # Mock datetime
+# nothing runs black. the pin stays because dependabot alert 311 (black, filed
+# against main) is still open, and the release gate reads this line as the proof
+# that the alert is fixed here. remove it once main no longer pins black.
+black==26.10.1

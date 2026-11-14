@@ -2,20 +2,37 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
+import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { getUserShortName } from '@/lib/userUtils';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
+import { TrialBanner, planBannerKind } from '@/components/plan/TrialBanner';
+import { usePlan } from '@/hooks/usePlan';
+import { createSite } from '@/hooks/useFirestore';
 
-const MENU_SURFACE = 'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-black/50 ring-1 ring-white/10';
+// out of the first bundle of every page the header is on: few people are offered "new site".
+const CreateSiteDialog = dynamic(
+  () => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })),
+  { ssr: false, loading: () => null },
+);
+
+const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
+
+/** between the breadcrumb's parts: a straight rule, not a slash glyph. */
+const CRUMB_DIVIDER = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />;
 
 const FEEDBACK_LABELS = [
-  'report a bug',
+  'submit issue',
   'share feedback',
   'tell us how terrible we\'re doing',
   'yell into the void',
@@ -24,11 +41,20 @@ const FEEDBACK_LABELS = [
   'we can take it',
 ];
 
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ElementType;
+  description: string;
+  /** spans the site, so hidden where the caller is limited to some machines. */
+  wholeSiteOnly?: boolean;
+}
+
 /**
  * Primary page navigation. Rendered twice — by the desktop page-switcher
  * dropdown and by the mobile drawer — so the two can never drift apart.
  */
-const NAV_ITEMS = [
+const NAV_ITEMS: readonly NavItem[] = [
   {
     name: 'dashboard',
     href: '/dashboard',
@@ -46,18 +72,21 @@ const NAV_ITEMS = [
     href: '/talons',
     icon: Zap,
     description: 'watch schedules, events, and screens — then act',
+    wholeSiteOnly: true,
   },
   {
     name: 'roost',
     href: '/roosts',
     icon: FolderSync,
     description: 'sync project files to your machines',
+    wholeSiteOnly: true,
   },
   {
     name: 'deploy',
     href: '/deployments',
     icon: Rocket,
     description: 'install software across machines',
+    wholeSiteOnly: true,
   },
   {
     name: 'logs',
@@ -65,7 +94,7 @@ const NAV_ITEMS = [
     icon: ScrollText,
     description: 'monitor events and system activities',
   },
-] as const;
+];
 
 /** Icon shown beside the current page name, keyed by the lowercased page label. */
 const PAGE_ICONS: Record<string, React.ElementType> = Object.fromEntries(
@@ -78,11 +107,10 @@ interface Site {
 }
 
 interface PageHeaderProps {
-  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks';
+  currentPage: 'Dashboard' | 'Deploy' | 'Roost' | 'Logs' | 'Hoot' | 'Talons' | 'API Keys' | 'Webhooks' | 'dashboard' | 'deploy' | 'roost' | 'logs' | 'hoot' | 'talons' | 'api keys' | 'webhooks' | 'plan';
   sites?: Site[];
   currentSiteId?: string;
   onSiteChange?: (siteId: string) => void;
-  onManageSites?: () => void;
   actionButton?: React.ReactNode;
   onAccountSettings?: () => void;
   disableNav?: boolean;
@@ -93,51 +121,79 @@ export function PageHeader({
   sites = [],
   currentSiteId,
   onSiteChange,
-  onManageSites,
   actionButton,
   onAccountSettings,
   disableNav,
 }: PageHeaderProps) {
   const router = useRouter();
-  const { user, signOut, isSuperadmin, administersAnySite } = useAuth();
+  const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin, machineScope } = useAuth();
+  const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
-  const [feedbackLabel, setFeedbackLabel] = useState('report a bug');
+  const [createSiteOpen, setCreateSiteOpen] = useState(false);
+  const [feedbackLabel, setFeedbackLabel] = useState('submit issue');
   const [feedbackFading, setFeedbackFading] = useState(false);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [openMenuCount, setOpenMenuCount] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
+  const [drawerSitesOpen, setDrawerSitesOpen] = useState(false);
   const feedbackIndex = useRef(0);
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerTriggerRef = useRef<HTMLButtonElement>(null);
 
   const handleMenuOpenChange = (open: boolean) => {
     setOpenMenuCount((n) => Math.max(0, open ? n + 1 : n - 1));
   };
-
-  // The rotating feedback label runs whenever a surface showing it is open —
-  // the desktop help dropdown or the mobile drawer's help section.
-  const feedbackRotating = helpMenuOpen || navDrawerOpen;
 
   // Drawer dismissal: Escape, plus crossing up into the `md` breakpoint. The
   // drawer is `md:hidden`, so without the media listener a drawer left open on
   // a resized-wide window would silently reappear on the way back down.
   useEffect(() => {
     if (!navDrawerOpen) return;
+    const drawer = drawerRef.current;
+    const trigger = drawerTriggerRef.current;
+    const focusables = () =>
+      Array.from(drawer?.querySelectorAll<HTMLElement>('a[href], button:not(:disabled)') ?? []);
+    // a modal drawer: focus starts inside it and tab wraps there.
+    focusables()[0]?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setNavDrawerOpen(false);
+      if (e.key === 'Escape') {
+        // the site filter spends the first escape on its text
+        if (filterClaimsEscape(e)) return;
+        // claimed, so a panel underneath that closes on escape stays open.
+        e.preventDefault();
+        setNavDrawerOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!drawer?.contains(active) || active === (e.shiftKey ? first : last)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first)?.focus();
+      }
     };
     const mq = window.matchMedia('(min-width: 768px)');
     const onBreakpointChange = (e: MediaQueryListEvent) => {
       if (e.matches) setNavDrawerOpen(false);
     };
-    window.addEventListener('keydown', onKeyDown);
+    // capture: window bubble listeners registered before the drawer opened
+    // would otherwise see the escape before it is claimed.
+    window.addEventListener('keydown', onKeyDown, true);
     mq.addEventListener('change', onBreakpointChange);
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       mq.removeEventListener('change', onBreakpointChange);
+      // back where the drawer was opened from. a dialog opened from inside the
+      // drawer takes focus after this, in its own mount effect.
+      trigger?.focus();
     };
   }, [navDrawerOpen]);
 
+  // the help menu's feedback label rotates while the menu is open
   useEffect(() => {
-    if (!feedbackRotating) return;
+    if (!helpMenuOpen) return;
     feedbackIndex.current = Math.floor(Math.random() * FEEDBACK_LABELS.length);
     setFeedbackLabel(FEEDBACK_LABELS[feedbackIndex.current]);
 
@@ -151,13 +207,34 @@ export function PageHeader({
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [feedbackRotating]);
+  }, [helpMenuOpen]);
 
-  const currentSiteName = sites.find(s => s.id === currentSiteId)?.name ?? 'Select site';
+  const currentSiteName = sites.find(s => s.id === currentSiteId)?.name ?? 'select site';
   // Non-null only when there is actually a site to switch to. Holds the narrowed
   // callback so bar and drawer can call it without re-testing the same conditions.
   const selectSite = sites.length > 0 && currentSiteId && onSiteChange ? onSiteChange : null;
+  const showSiteEntries = !disableNav && !!user;
+  const siteSettingsHref = showSiteEntries && currentSiteId && isSiteAdmin(currentSiteId) ? siteSettingsPath(currentSiteId) : null;
+  const canManageSites = showSiteEntries && (isSuperadmin || administersAnySite);
+  // "new site" is for people who administer nothing; everyone else creates
+  // from admin panel → sites.
+  const canCreateSite = showSiteEntries && !isSuperadmin && !administersAnySite;
+  // one list for the switcher and the drawer, so the two offer the same entries.
+  const siteEntries = [
+    siteSettingsHref ? { label: 'site settings', icon: SlidersHorizontal, onSelect: () => router.push(siteSettingsHref) } : null,
+    canManageSites ? { label: 'manage sites', icon: Settings, onSelect: () => router.push('/admin/sites') } : null,
+    canCreateSite ? { label: 'new site', icon: Plus, onSelect: () => setCreateSiteOpen(true) } : null,
+  ].filter((entry) => entry !== null);
+  const scopedHere = !!currentSiteId && machineScope(currentSiteId) !== null;
+  const navItems = NAV_ITEMS.filter((item) => !(scopedHere && item.wholeSiteOnly));
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
+
+  // the scrim mounts with the first open menu and goes once its fade-out ends:
+  // a full-viewport backdrop blur costs a compositing pass while it exists,
+  // even at opacity 0.
+  const menuOpen = openMenuCount > 0;
+  const [scrimMounted, setScrimMounted] = useState(false);
+  if (menuOpen && !scrimMounted) setScrimMounted(true);
 
   return (
     <>
@@ -173,21 +250,33 @@ export function PageHeader({
               action buttons, so they collapse into the drawer this opens. */}
           {!disableNav && (
             <button
+              ref={drawerTriggerRef}
               type="button"
               aria-label="menu"
               aria-expanded={navDrawerOpen}
-              onClick={() => setNavDrawerOpen(true)}
+              onClick={() => {
+                setDrawerSitesOpen(false);
+                setNavDrawerOpen(true);
+              }}
               className="md:hidden inline-flex items-center justify-center h-8 w-8 flex-shrink-0 rounded-md hover:bg-secondary transition-colors cursor-pointer"
             >
               <Menu className="h-5 w-5 text-muted-foreground" />
             </button>
           )}
 
+          {/* the site stays in view below `md`, where its switcher lives in the
+              drawer: which fleet the page shows should never be a guess. */}
+          {!disableNav && selectSite && (
+            <span data-testid="mobile-current-site" className="md:hidden min-w-0 truncate text-sm text-muted-foreground">
+              {currentSiteName}
+            </span>
+          )}
+
           {/* Breadcrumb: Site > Page — desktop only (mobile uses the drawer) */}
           <div className="hidden md:flex items-center gap-1.5 min-w-0">
             {selectSite && (
               <>
-                <span className="text-muted-foreground/60 text-lg select-none">/</span>
+                {CRUMB_DIVIDER}
                 <DropdownMenu onOpenChange={handleMenuOpenChange}>
                   <DropdownMenuTrigger asChild>
                     <button
@@ -198,35 +287,25 @@ export function PageHeader({
                       <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`}>
-                    {sites.map((site) => (
+                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`} {...siteFilterHostProps}>
+                    <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} />
+                    {siteEntries.length > 0 && <DropdownMenuSeparator className="bg-border" />}
+                    {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                       <DropdownMenuItem
-                        key={site.id}
-                        onClick={() => selectSite(site.id)}
-                        className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer flex items-center justify-between"
+                        key={label}
+                        onClick={onSelect}
+                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
                       >
-                        <span className="truncate">{site.name}</span>
-                        {site.id === currentSiteId && <Check className="h-4 w-4 text-accent-cyan flex-shrink-0" />}
+                        <EntryIcon className="mr-2 h-4 w-4" />
+                        {label}
                       </DropdownMenuItem>
                     ))}
-                    {onManageSites && (
-                      <>
-                        <DropdownMenuSeparator className="bg-border" />
-                        <DropdownMenuItem
-                          onClick={onManageSites}
-                          className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
-                        >
-                          <Settings className="mr-2 h-4 w-4" />
-                          manage sites
-                        </DropdownMenuItem>
-                      </>
-                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </>
             )}
 
-            <span className="text-muted-foreground/60 text-lg select-none">/</span>
+            {CRUMB_DIVIDER}
 
             {disableNav ? (
               <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground px-1.5 py-1">
@@ -243,7 +322,7 @@ export function PageHeader({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-72`}>
-                {NAV_ITEMS.map((item) => {
+                {navItems.map((item) => {
                   const ItemIcon = item.icon;
                   return (
                     <DropdownMenuItem
@@ -275,7 +354,7 @@ export function PageHeader({
               <DropdownMenuTrigger asChild>
                 <button
                   aria-label="help"
-                  className="hidden md:inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors cursor-pointer"
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors cursor-pointer"
                 >
                   <CircleHelp className="h-4 w-4 text-muted-foreground" />
                 </button>
@@ -301,15 +380,18 @@ export function PageHeader({
           )}
 
           {disableNav ? (
-            /* Demo mode: show sign in + get started instead of user menu */
-            <div className="flex items-center gap-2">
-              <Link href="/login" className="text-sm text-muted-foreground hover:text-foreground transition-colors px-2 py-1">
-                sign in
-              </Link>
-              <Link href="/register" className="inline-flex items-center gap-1.5 text-sm text-background font-semibold px-4 py-1.5 rounded-md transition-colors group">
-                get started
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-              </Link>
+            /* Demo mode: show sign in + get started instead of user menu,
+               styled as the landing header's pair */
+            <div className="flex items-center gap-1.5">
+              <Button asChild variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground px-2">
+                <Link href="/login">sign in</Link>
+              </Button>
+              <Button asChild size="sm" className="group text-background font-medium">
+                <Link href="/register">
+                  get started
+                  <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                </Link>
+              </Button>
             </div>
           ) : (
           <DropdownMenu onOpenChange={handleMenuOpenChange}>
@@ -326,7 +408,7 @@ export function PageHeader({
                     so destructive cross-site actions don't catch them off guard. */}
                 {isSuperadmin && (
                   <span
-                    className="hidden sm:inline-flex items-center rounded-full bg-red-600/15 border border-red-500/40 text-red-400 text-[10px] font-medium tracking-wide px-1.5 py-0.5 leading-none overflow-hidden group/superadmin"
+                    className="hidden sm:inline-flex items-center rounded-full bg-danger-solid/15 border border-danger-solid/40 text-danger text-[10px] font-medium tracking-wide px-1.5 py-0.5 leading-none overflow-hidden group/superadmin"
                     aria-label="signed in as superadmin"
                   >
                     <Crown className="h-2.5 w-2.5 shrink-0" />
@@ -346,15 +428,14 @@ export function PageHeader({
                 <p className="text-xs text-muted-foreground truncate mt-0.5">{user?.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-border" />
-              {/* Site admins get the panel too, landing on the one section they
-                  can reach; superadmins keep the installers entry point. The test
-                  is site standing, not the global role, which grants nothing.
-                  The back button's `owlette_pre_admin_path` is written by
+              {/* site admins land on their sites, superadmins on installers. the
+                  test is site standing, not the global role, which grants nothing.
+                  the back button's `owlette_pre_admin_path` is written by
                   LazyAuthProvider on every non-admin route, so it is already
                   correct for both roles without anything set here. */}
               {(isSuperadmin || administersAnySite) && (
                 <DropdownMenuItem
-                  onClick={() => router.push(isSuperadmin ? '/admin/installers' : '/admin/members')}
+                  onClick={() => router.push(isSuperadmin ? '/admin/installers' : '/admin/sites')}
                   className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
                 >
                   <Shield className="mr-2 h-4 w-4" />
@@ -368,6 +449,15 @@ export function PageHeader({
                 >
                   <Settings className="mr-2 h-4 w-4" />
                   account settings
+                </DropdownMenuItem>
+              )}
+              {plan?.enforced && (
+                <DropdownMenuItem
+                  onClick={() => router.push('/settings/plan')}
+                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                >
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  plan
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem
@@ -386,15 +476,20 @@ export function PageHeader({
         </div>
       </div>
     </header>
+    {/* the plan banner's unverified state is the same prompt with its reason, so it stands alone. once
+        dismissed, TrialBanner itself puts VerifyEmailBanner back. */}
+    {planBannerKind(plan) !== 'unverified' && <VerifyEmailBanner />}
+    {/* owlette free is a site's plan, so it shows only on a page about one site; the demo's site has none */}
+    <TrialBanner siteId={disableNav ? undefined : currentSiteId} />
 
-    {/* Mobile nav drawer — carries the site + page switchers (and the help
-        items) that the `md` bar shows inline. Plain fixed positioning rather
+    {/* Mobile nav drawer — carries the site + page switchers that the `md`
+        bar shows inline. Plain fixed positioning rather
         than a Radix sheet: a portalled surface escapes `md:hidden` and would
         need JS breakpoint gating to stay off the desktop viewport. Rendered
         only while open, and force-closed on the way up past `md` (see the
         effect above), so at >=768px this subtree does not exist. */}
     {navDrawerOpen && (
-      <div className="fixed inset-0 z-50 md:hidden">
+      <div ref={drawerRef} role="dialog" aria-modal="true" aria-label="menu" className="fixed inset-0 z-50 md:hidden">
         <div
           aria-hidden
           className="absolute inset-0 bg-black/50"
@@ -421,40 +516,51 @@ export function PageHeader({
 
           {selectSite && (
             <div className="border-b border-border py-2">
-              <p className="px-4 py-1.5 text-xs text-muted-foreground">site</p>
-              {sites.map((site) => (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => {
-                    selectSite(site.id);
+              {/* closed on every open: a long site list pushed the pages out of view */}
+              <button
+                type="button"
+                data-testid="drawer-site-toggle"
+                aria-expanded={drawerSitesOpen}
+                onClick={() => setDrawerSitesOpen((open) => !open)}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
+              >
+                <span className="text-xs text-muted-foreground">site</span>
+                <span className="min-w-0 flex-1 truncate text-foreground">{currentSiteName}</span>
+                <ChevronDown
+                  className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {drawerSitesOpen && (
+                <SiteSwitcherList
+                  surface="drawer"
+                  sites={sites}
+                  currentSiteId={currentSiteId}
+                  onPick={(siteId) => {
+                    selectSite(siteId);
                     setNavDrawerOpen(false);
                   }}
-                  className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground hover:bg-accent transition-colors cursor-pointer"
-                >
-                  <span className="truncate">{site.name}</span>
-                  {site.id === currentSiteId && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
-                </button>
-              ))}
-              {onManageSites && (
+                />
+              )}
+              {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                 <button
+                  key={label}
                   type="button"
                   onClick={() => {
-                    onManageSites();
                     setNavDrawerOpen(false);
+                    onSelect();
                   }}
                   className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
                 >
-                  <Settings className="h-4 w-4 flex-shrink-0" />
-                  manage sites
+                  <EntryIcon className="h-4 w-4 flex-shrink-0" />
+                  {label}
                 </button>
-              )}
+              ))}
             </div>
           )}
 
           <div className="py-2">
             <p className="px-4 py-1.5 text-xs text-muted-foreground">go to</p>
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const ItemIcon = item.icon;
               const isCurrent = item.name === currentPage.toLowerCase();
               return (
@@ -479,42 +585,29 @@ export function PageHeader({
               );
             })}
           </div>
-
-          <div className="mt-auto border-t border-border py-2">
-            <Link
-              href="/docs"
-              onClick={() => setNavDrawerOpen(false)}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-foreground hover:bg-accent transition-colors"
-            >
-              <BookOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-              docs
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                setReportBugOpen(true);
-                setNavDrawerOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-foreground hover:bg-accent transition-colors cursor-pointer"
-            >
-              <Bug className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-              <span className="transition-opacity duration-300" style={{ opacity: feedbackFading ? 0 : 1 }}>
-                {feedbackLabel}
-              </span>
-            </button>
-          </div>
         </nav>
       </div>
     )}
 
-    {/* Subtle top glow for readability over dot grid */}
-    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'linear-gradient(to bottom, oklch(0.20 0.03 250 / 0.7), transparent)' }} />
+    {/* the light under the header: a cool lift at night, a desk lamp's warm pool by day */}
+    <div className="pointer-events-none absolute inset-x-0 top-14 h-48 z-0" style={{ background: 'var(--header-glow)' }} />
     {/* Scrim: subtle blur + dim of page content when a nav dropdown is open */}
-    <div
-      aria-hidden
-      className={`pointer-events-none fixed inset-x-0 top-14 bottom-0 z-40 backdrop-blur-[2px] bg-black/10 transition-opacity duration-150 ${openMenuCount > 0 ? 'opacity-100' : 'opacity-0'}`}
-    />
+    {scrimMounted && (
+      <div
+        aria-hidden
+        onTransitionEnd={() => {
+          if (!menuOpen) setScrimMounted(false);
+        }}
+        className={`pointer-events-none fixed inset-x-0 top-14 bottom-0 z-40 backdrop-blur-[2px] bg-black/10 transition-opacity duration-150 ${menuOpen ? 'opacity-100 animate-in fade-in-0' : 'opacity-0'}`}
+      />
+    )}
     <ReportBugDialog open={reportBugOpen} onOpenChange={setReportBugOpen} />
+    <CreateSiteDialog
+      open={createSiteOpen}
+      onOpenChange={setCreateSiteOpen}
+      onCreateSite={createSite}
+      onSiteCreated={(id) => onSiteChange?.(id)}
+    />
     </>
   );
 }

@@ -60,6 +60,16 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
+const mockGetSessionFromRequest = jest.fn();
+jest.mock('@/lib/sessionManager.server', () => ({
+  getSessionFromRequest: (...args: unknown[]) => mockGetSessionFromRequest(...args),
+}));
+
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
 function collectionPath(parts: string[]): string {
   return parts.join('/');
 }
@@ -129,6 +139,12 @@ function docRef(parts: string[]) {
   };
 }
 
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from './helpers/planEnforcement';
+import { scopeMatches, type ApiKeyScope } from '@/lib/apiKeyTypes';
 import { POST } from '@/app/api/keys/route';
 import { DELETE, PATCH } from '@/app/api/keys/[keyId]/route';
 import { POST as rotatePOST } from '@/app/api/keys/[keyId]/rotate/route';
@@ -182,26 +198,36 @@ beforeEach(() => {
     }
     return data;
   });
-  mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: {} });
+  mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: {}, machineIds: null });
+  mockGetSessionFromRequest.mockResolvedValue({});
 });
 
+/** the cookie of a person who passed their second factor at sign-in. */
+function verifiedSession() {
+  return { userId: 'user-member', expiresAt: Date.now() + 60_000, mfaRequired: true, mfaVerified: true };
+}
+
 describe('/api/keys POST', () => {
-  it.each(['user', 'installer'] as const)(
-    'rejects non-superadmin creation of %s scopes',
-    async (resource) => {
+  it.each([
+    ['user', 'admin'],
+    ['installer', 'admin'],
+    ['issue', 'read'],
+  ] as const)(
+    'rejects non-superadmin creation of %s=*:%s scopes',
+    async (resource, permission) => {
       store.set('users/user-member', { role: 'member' });
 
       const res = await makePost({
         name: 'Platform key',
         environment: 'live',
-        scopes: [{ resource, id: '*', permissions: ['admin'] }],
+        scopes: [{ resource, id: '*', permissions: [permission] }],
       });
       const body = await res.json();
 
       expect(res.status).toBe(403);
       expect(body.code).toBe('forbidden');
       expect(body.detail).toBe(
-        'superadmin access required to grant user or installer scopes',
+        'superadmin access required to grant user, installer or issue scopes',
       );
       expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
     },
@@ -308,6 +334,43 @@ describe('/api/keys POST', () => {
       expect(mockAssertUserHasSiteAccess).toHaveBeenCalledWith('user-member', 'site-1');
     },
   );
+});
+
+describe('/api/keys with plans enforced', () => {
+  const siteKey = {
+    name: 'Site key',
+    scopes: [{ resource: 'site', id: 'site-1', permissions: ['read'] }],
+  };
+
+  beforeEach(enforcePlans);
+  afterEach(stopEnforcingPlans);
+
+  it('mints on the minting user’s free plan: the site’s plan gates each request, not the mint', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+
+    expect((await makePost(siteKey)).status).toBe(200);
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('keeps revoke open on free', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
+    store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
+
+    expect((await makeDelete('key-a')).status).toBe(200);
+  });
+
+  it('rotates on free: the site’s plan gates each request, not the mint', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
+    store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
+
+    const res = await makeRotate('key-a');
+
+    expect(res.status).toBe(200);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
 });
 
 describe('/api/keys/{keyId} DELETE', () => {
@@ -500,18 +563,44 @@ describe('/api/keys/{keyId} PATCH', () => {
     expect(store.get('api_keys/hash-a')).not.toHaveProperty('name');
   });
 
-  it.each(['user', 'installer'] as const)(
-    'refuses %s scopes for a non-superadmin — same gate as create',
-    async (resource) => {
+  it.each([
+    ['user', 'admin'],
+    ['installer', 'admin'],
+    ['issue', 'read'],
+  ] as const)(
+    'refuses %s=*:%s scopes for a non-superadmin — same gate as create',
+    async (resource, permission) => {
       seedKey();
       const res = await makePatch('key-a', {
-        scopes: [{ resource, id: '*', permissions: ['admin'] }],
+        scopes: [{ resource, id: '*', permissions: [permission] }],
       });
       expect(res.status).toBe(403);
       // Unchanged on rejection.
       expect((store.get('api_keys/hash-a') as { scopes: unknown[] }).scopes).toHaveLength(1);
     },
   );
+
+  it('lets a superadmin add issue read and write while keeping the other scopes', async () => {
+    store.set('users/user-member', { role: 'superadmin' });
+    seedKey();
+    const existing = [{ resource: 'site', id: 'site-1', permissions: ['read'] }];
+    const res = await makePatch('key-a', {
+      scopes: [
+        ...existing,
+        { resource: 'issue', id: '*', permissions: ['read'] },
+        { resource: 'issue', id: '*', permissions: ['write'] },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const lookup = store.get('api_keys/hash-a') as { scopes: ApiKeyScope[] };
+    expect(scopeMatches(lookup.scopes, 'site', 'site-1', 'read')).toBe(true);
+    expect(scopeMatches(lookup.scopes, 'issue', '*', 'read')).toBe(true);
+    expect(scopeMatches(lookup.scopes, 'issue', '*', 'write')).toBe(true);
+    expect(lookup.scopes).toHaveLength(3);
+    const record = store.get('users/user-member/api_keys/key-a') as { scopes: unknown };
+    expect(record.scopes).toEqual(lookup.scopes);
+  });
 
   it('409s on a revoked key', async () => {
     seedKey({ revokedAt: Date.now() - 1000 });
@@ -562,5 +651,185 @@ describe('/api/keys/{keyId} PATCH', () => {
     expect(attrs.scopeFingerprintBefore).toEqual(expect.any(String));
     expect(attrs.scopeFingerprintAfter).not.toEqual(attrs.scopeFingerprintBefore);
     expect(attrs.scopeCountAfter).toBe(1);
+  });
+});
+
+describe('maxToolTier', () => {
+  const SCOPES = [{ resource: 'machine', id: '*', permissions: ['write'] }];
+  const NOT_VERIFIED: Array<[string, Record<string, unknown>]> = [
+    ['an id token, no login cookie', {}],
+    ['a password-only cookie', { userId: 'user-member', expiresAt: Date.now() + 60_000, mfaRequired: true, mfaVerified: false }],
+    ['an account with no second factor', { userId: 'user-member', expiresAt: Date.now() + 60_000, mfaRequired: false, mfaVerified: true }],
+    ['an expired cookie', { userId: 'user-member', expiresAt: Date.now() - 1, mfaRequired: true, mfaVerified: true }],
+    ["another user's cookie", { userId: 'someone-else', expiresAt: Date.now() + 60_000, mfaRequired: true, mfaVerified: true }],
+  ];
+
+  function lookupOf(hash: string) {
+    return store.get(`api_keys/${hash}`) as Record<string, unknown>;
+  }
+
+  function seedKey(maxToolTier?: number, extra: Record<string, unknown> = {}) {
+    const tier = maxToolTier === undefined ? {} : { maxToolTier };
+    store.set('users/user-member/api_keys/key-a', {
+      keyHash: 'hash-a',
+      keyPrefix: 'owk_live_aaa',
+      environment: 'live',
+      scopes: SCOPES,
+      name: 'a key',
+      expiresAt: Date.now() + 86_400_000,
+      ...tier,
+      ...extra,
+    });
+    store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a', scopes: SCOPES, ...tier });
+  }
+
+  function newLookup(): Record<string, unknown> {
+    const entry = Array.from(store.entries()).find(
+      ([path, data]) => path.startsWith('api_keys/') && path !== 'api_keys/hash-a' && data,
+    );
+    return entry?.[1] as Record<string, unknown>;
+  }
+
+  describe('POST /api/keys', () => {
+    it('defaults to 1 on both docs when not sent, with no verified session', async () => {
+      const res = await makePost({ name: 'k', scopes: SCOPES });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.maxToolTier).toBe(1);
+      expect(newLookup().maxToolTier).toBe(1);
+      expect((store.get(`users/user-member/api_keys/${body.keyId}`) as Record<string, unknown>).maxToolTier).toBe(1);
+    });
+
+    it('an explicit 1 needs no verified session', async () => {
+      const res = await makePost({ name: 'k', scopes: SCOPES, maxToolTier: 1 });
+      expect(res.status).toBe(200);
+    });
+
+    it.each([2, 3])('a verified session mints tier %i, and the audit row says so', async (tier) => {
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makePost({ name: 'k', scopes: SCOPES, maxToolTier: tier });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.maxToolTier).toBe(tier);
+      expect(newLookup().maxToolTier).toBe(tier);
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({ verb: 'create', maxToolTier: tier }),
+        }),
+      );
+    });
+
+    it.each(NOT_VERIFIED)('refuses tier 3 for %s and mints nothing', async (_label, session) => {
+      mockGetSessionFromRequest.mockResolvedValue(session);
+      const res = await makePost({ name: 'k', scopes: SCOPES, maxToolTier: 3 });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('verified_session_required');
+      expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
+    });
+
+    it.each([0, 4, 2.5, '2', null, true])('400s on %p', async (value) => {
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makePost({ name: 'k', scopes: SCOPES, maxToolTier: value });
+      expect(res.status).toBe(400);
+      expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
+    });
+  });
+
+  describe('PATCH /api/keys/{keyId}', () => {
+    it('raises a key with no value on both docs, for a verified session', async () => {
+      seedKey();
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makePatch('key-a', { maxToolTier: 2 });
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.key.maxToolTier).toBe(2);
+      expect(lookupOf('hash-a').maxToolTier).toBe(2);
+      expect((store.get('users/user-member/api_keys/key-a') as Record<string, unknown>).maxToolTier).toBe(2);
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            verb: 'update',
+            maxToolTierBefore: 1,
+            maxToolTierAfter: 2,
+          }),
+        }),
+      );
+    });
+
+    it.each(NOT_VERIFIED)('refuses a raise for %s and changes nothing', async (_label, session) => {
+      seedKey(1);
+      mockGetSessionFromRequest.mockResolvedValue(session);
+      const res = await makePatch('key-a', { maxToolTier: 3 });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('verified_session_required');
+      expect(lookupOf('hash-a').maxToolTier).toBe(1);
+    });
+
+    it('lowering, and setting the same value, need no verified session', async () => {
+      seedKey(3);
+      expect((await makePatch('key-a', { maxToolTier: 3 })).status).toBe(200);
+      const res = await makePatch('key-a', { maxToolTier: 1 });
+      expect(res.status).toBe(200);
+      expect(lookupOf('hash-a').maxToolTier).toBe(1);
+    });
+
+    it('a rename leaves the tier alone', async () => {
+      seedKey(2);
+      const res = await makePatch('key-a', { name: 'renamed' });
+      expect(res.status).toBe(200);
+      expect(lookupOf('hash-a').maxToolTier).toBe(2);
+    });
+
+    it.each([0, 4, 2.5, '2', null])('400s on %p', async (value) => {
+      seedKey(1);
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makePatch('key-a', { maxToolTier: value });
+      expect(res.status).toBe(400);
+      expect(lookupOf('hash-a').maxToolTier).toBe(1);
+    });
+
+    it('409s on a rotated key', async () => {
+      seedKey(1, { rotatedAt: Date.now() });
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      expect((await makePatch('key-a', { maxToolTier: 2 })).status).toBe(409);
+    });
+  });
+
+  describe('POST /api/keys/{keyId}/rotate', () => {
+    it('a key with no value stays at 1, with no verified session', async () => {
+      seedKey();
+      const res = await makeRotate('key-a');
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.maxToolTier).toBe(1);
+      expect(newLookup().maxToolTier).toBe(1);
+    });
+
+    it.each([2, 3])('keeps tier %i on the successor, for a verified session', async (tier) => {
+      seedKey(tier);
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makeRotate('key-a');
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.maxToolTier).toBe(tier);
+      expect(newLookup().maxToolTier).toBe(tier);
+      expect((store.get(`users/user-member/api_keys/${body.keyId}`) as Record<string, unknown>).maxToolTier).toBe(tier);
+    });
+
+    it('a body cannot raise it', async () => {
+      seedKey(1);
+      mockGetSessionFromRequest.mockResolvedValue(verifiedSession());
+      const res = await makeRotate('key-a', { maxToolTier: 3 });
+      expect((await res.json()).maxToolTier).toBe(1);
+    });
+
+    it.each(NOT_VERIFIED)('a raised key is refused for %s, since rotating hands out its secret', async (_label, session) => {
+      seedKey(3);
+      mockGetSessionFromRequest.mockResolvedValue(session);
+      const res = await makeRotate('key-a');
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('verified_session_required');
+      expect(newLookup()).toBeUndefined();
+    });
   });
 });

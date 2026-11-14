@@ -1,100 +1,118 @@
 # SLSA Build Level 3 — installer provenance
 
-**Wave 5.8.** Hermetic CI build of the roost agent installer with signed in-toto provenance, verifiable by anyone with `slsa-verifier`.
+**Wave 5.8, extended by multi-platform releases 4.2.** Hermetic CI build of the three roost agent installers — the Windows exe, the Apple silicon pkg and the Linux deb — with one signed in-toto provenance, verifiable by anyone with `slsa-verifier`.
 
 ## What it proves
 
-For any downloaded `Owlette-Installer-vX.Y.Z.exe`, a consumer can prove:
+For any downloaded `Owlette-Installer-vX.Y.Z.exe`, `.pkg` or `.deb`, a consumer can prove:
 
 1. **Built from this repo** (`github.com/<org>/owlette`) at the exact commit pinned by the tag
 2. **Built by this workflow** (`.github/workflows/build-installer.yml`) — not a human laptop
 3. **Not tampered with post-build** — the signed hash in the attestation matches the artifact bytes
 4. **Built after the source was committed** — the provenance's `finishedOn` timestamp post-dates the tag's commit
 
-SLSA Build L3 is distinct from **authenticode signing** (wave 5.9), which protects against untrusted code execution on Windows. Both ship side-by-side on a released installer — SLSA proves provenance, authenticode unlocks SmartScreen.
+SLSA Build L3 is distinct from **authenticode signing** (wave 5.9), which protects against untrusted code execution on Windows. Both ship side-by-side on a released installer — SLSA proves provenance, authenticode unlocks SmartScreen. The pkg is already Developer ID signed, notarized and stapled inside its build job; the attested bytes are the stapled ones.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    Tag["git push v3.0.0"] --> Build["build job\n(windows-latest)"]
-    Build --> Sha["SHA-256 of installer"]
-    Build --> Artifact["Owlette-Installer-v3.0.0.exe"]
-    Sha --> Gen["slsa-github-generator\n(generic_slsa3)"]
+    Tag["git push v3.4.0"] --> Gate["security-gate\n(open advisories)"]
+    Gate --> Win["build-windows\n(windows-latest, payload)"]
+    Win --> WinPkg["package-windows\n(sign + compile)"]
+    Gate --> Mac["build-macos\n(macos-26, sign + notarize)"]
+    Gate --> Lin["build-linux\n(ubuntu-24.04)"]
+    WinPkg --> Digest["digest\n(sha256sum of all three)"]
+    Mac --> Digest
+    Lin --> Digest
+    Digest --> Gen["slsa-github-generator\n(generic_slsa3)"]
     Gen --> Provenance["owlette-installer.intoto.jsonl\n(sigstore-signed)"]
-    Artifact --> Release["github release v3.0.0"]
+    WinPkg --> Release["github release v3.4.0"]
+    Mac --> Release
+    Lin --> Release
     Provenance --> Release
-    Release --> Verify["verify job\n(slsa-verifier)"]
+    Release --> Verify["verify job\n(slsa-verifier, three subjects)"]
 ```
 
-### The three-job isolation
+### Job isolation
 
-1. **build** runs on `windows-latest`, produces the installer, outputs its hash. Cannot touch the signing key.
-2. **provenance** runs in the `slsa-framework/slsa-github-generator` reusable workflow. It reads the hash from the build job's outputs, produces a signed in-toto attestation via sigstore + GitHub OIDC, uploads to the release. The build job cannot impersonate this — OIDC scoping prevents a malicious build step from claiming to be the generator.
-3. **verify** runs `slsa-verifier` against the artifact + attestation as a smoke test before the release is considered final.
+0. **security-gate** runs `.github/workflows/security-gate.yml` first; every build job waits on it, so nothing builds past a live advisory.
+1. **build-windows / build-macos / build-linux** each run on their own hosted runner and produce one installer, Windows in two jobs: `build-windows` builds the payload with no credential, and `package-windows`, the only job with an Azure token, signs our executables and compiles the installer. `build-macos` signs the app and the runtime, signs the pkg and notarizes it with the Apple secrets of the `release` GitHub environment, then staples — all before the digest, because signing mutates the bytes. None of the build jobs can touch the provenance signing key.
+2. **digest** downloads the three artifacts and emits one base64 `sha256sum` listing, one line per file. This is the subject list the generator attests.
+3. **provenance** runs in the `slsa-framework/slsa-github-generator` reusable workflow. It reads the digest job's output, produces one signed in-toto attestation via sigstore + GitHub OIDC, and uploads it to the release. The build jobs cannot impersonate this — OIDC scoping prevents a malicious build step from claiming to be the generator.
+4. **verify** runs `slsa-verifier` against all three artifacts + the attestation as a smoke test before the release is considered final.
+
+Everything past the builds needs all three, so a run in which one build fails attests nothing.
 
 ## Running a release
 
 ```bash
-# 1. Update VERSION + changelog + commit (per CLAUDE.md)
-node scripts/sync-versions.js 3.0.0
-# edit docs/changelog.md, add [3.0.0] entry
-git add -A && git commit -m "chore: bump version to 3.0.0"
+# 1. Bump, both changelogs, a local `release: 3.4.0` commit on release/3.4.0,
+#    then build, upload and verify (docs/runbooks/agent-installer-release.md)
+node scripts/sync-versions.js 3.4.0
 
-# 2. Tag + push. The workflow triggers on tag push.
-git tag v3.0.0
-git push origin main --tags
+# 2. After the release PR merges into dev, tag its merge commit and push the tag.
+#    The workflow triggers on the tag push.
+git tag v3.4.0 <merge-commit>
+git push origin v3.4.0
 ```
 
 The workflow then:
-- Builds the installer on `windows-latest` via `agent/build_installer_full.bat`
-- Generates in-toto provenance
-- Attaches both to the GitHub release
+- Builds the exe on `windows-latest` via `agent/build_installer_full.bat payload`, then signs and compiles it in a second job via `build_installer_full.bat compile`, the pkg on `macos-26` via `agent/build/macos/build.sh` (signed, notarized, stapled), the deb on `ubuntu-24.04` via `agent/build/linux/build.sh`
+- Generates one in-toto provenance over the three files
+- Attaches all four to the GitHub release
 - Runs `slsa-verifier` smoke to confirm the chain
+
+A `workflow_dispatch` run on a branch exercises the builds without a release. The `release` environment is restricted to `v*` tags, so GitHub refuses `build-macos` on a branch dispatch (and, until the environment exists, the job's first step fails on the missing secret names); `package-windows` and `build-linux` still produce their installers, and the digest and provenance jobs do not run.
 
 ## Verifying a downloaded installer
 
-Anyone with a downloaded installer and the release URL can verify it:
+Anyone with a downloaded installer and the release URL can verify it. Pass every file you downloaded — one, two or all three — in one call:
 
 ```bash
 # install slsa-verifier
 go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
 
-# download both artifacts
-gh release download v3.0.0 --repo <org>/owlette
+# download the installers and the attestation
+gh release download v3.4.0 --repo <org>/owlette
 
 # verify
 slsa-verifier verify-artifact \
-  Owlette-Installer-v3.0.0.exe \
+  Owlette-Installer-v3.4.0.exe \
+  Owlette-Installer-v3.4.0.pkg \
+  Owlette-Installer-v3.4.0.deb \
   --provenance-path owlette-installer.intoto.jsonl \
   --source-uri github.com/<org>/owlette \
-  --source-tag v3.0.0
+  --source-tag v3.4.0
 ```
 
-Expected output: `PASSED: Verified SLSA provenance`. Any failure (tampered bytes, wrong source repo, provenance mismatch) fails with a specific error.
+Expected output: `PASSED: Verified SLSA provenance` for each file. Any failure (tampered bytes, wrong source repo, provenance mismatch, a file the attestation does not list) fails with a specific error.
 
 ## Supply-chain threat model
 
 | threat | mitigation |
 |---|---|
-| Attacker replaces installer on the release CDN | SHA-256 in signed provenance won't match → `slsa-verifier` fails |
+| Attacker replaces an installer on the release CDN | SHA-256 in signed provenance won't match → `slsa-verifier` fails |
 | Attacker builds a malicious installer on their laptop and uploads to a fake release | No provenance → verifier fails on missing attestation |
 | Attacker modifies the workflow file to upload their own attestation | The attestation is signed by sigstore using GitHub OIDC scoped to the reusable workflow — a modified workflow produces a provenance with different metadata that `--source-uri` / `--source-tag` checks will reject |
-| Dependency poisoning in `choco install innosetup` | **Not mitigated** — Inno Setup is pulled fresh on every run. Pin the version (`--version=6.2.2` in the workflow) and audit updates manually. A future hardening step is to vendor Inno Setup as a stored build asset |
-| Attacker compromises the `slsa-github-generator` reusable workflow itself | **Trust boundary** — if SLSA's own workflow is compromised, the provenance chain is broken. This is why we pin the reusable workflow to a specific tag (`@v2.0.0`), not `@main` |
+| Attacker with write access dispatches the workflow on a tag to sign with the Apple secrets | **Accepted** — the `release` environment is tag-restricted, so a fork PR cannot reach it, but a dispatch on a `v*` tag by anyone with write access can. Stated in the workflow header |
+| Dependency poisoning in Inno Setup | **Trusted with the runner image** — `package-windows` uses the Inno Setup 6 that windows-latest ships and fails if it is missing; nothing installs it from Chocolatey. A future hardening step is to vendor Inno Setup as a stored build asset |
+| A compromised pip, npm or cargo dependency signs as Tridant | **Partly mitigated** — the Azure token reaches only `package-windows`, which runs only our scripts, the runner's Inno, SignTool and the pinned signing client, so the dependency cannot use it or sign arbitrary files. It can still replace one of the four executables in the payload, which a tag run then signs and publishes |
+| Attacker compromises the `slsa-github-generator` reusable workflow itself | **Trust boundary** — if SLSA's own workflow is compromised, the provenance chain is broken. This is why we pin the reusable workflow to a specific tag (`@v2.1.0`), not `@main` |
 
 ## One-time setup (for the repo maintainer)
 
-- Nothing. GitHub-hosted runners + the keyless sigstore path need no stored secrets. The workflow runs as long as the repo has Actions enabled and the tag-push trigger fires.
+- The provenance itself needs nothing: GitHub-hosted runners + the keyless sigstore path need no stored secrets.
+- `build-macos` needs the `release` GitHub environment, restricted to `v*` tags, holding the eight Apple secrets listed under `github-repo-secrets` in `scripts/env-manifest.json` (the two Developer ID p12s and their passwords, the team id, and the App Store Connect API key, key id and issuer id).
+- `package-windows` signs through the same environment: `scripts/setup-ci-signing.sh` creates the Entra app `owlette-ci-signing`, federates it to the `release` environment only, and sets that environment's `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`.
 
 ## Known caveats
 
 - **First tag run**: The first release after this workflow lands may fail the `verify` job if the SLSA rekor transparency log is slow to ingest the attestation (rare, but possible). Re-running the verify job 60 s later typically resolves it.
-- **Not authenticode**: This doesn't solve Windows SmartScreen warnings — end users still see "unrecognised publisher" until wave 5.9 lands with the EV cert from wave 0.7.
-- **Windows runner time**: Each build takes ~15–20 minutes (Python embedded download, Inno Setup compile, dependency unpacking). Plan release windows accordingly.
+- **Not authenticode**: Provenance doesn't name a publisher in Windows. Signing does that separately, with Azure Artifact Signing, in `package-windows` and before the digest job hashes the file (see "code signing context" in `docs/runbooks/agent-installer-release.md`).
+- **Runner time**: The Windows build takes ~15–20 minutes (Python embedded download, Inno Setup compile, dependency unpacking); the macOS build adds `notarytool --wait` on top of a cold Tauri build. The three builds run in parallel under a 60-minute cap each, and `package-windows` follows the Windows one under a 30-minute cap. Plan release windows accordingly.
 
 ## Follow-ups
 
-- Wave 5.9 (authenticode) wraps the signed installer with a windows-trusted signature for SmartScreen
-- Vendor Inno Setup as a build asset to remove the `choco install` supply-chain link
+- Vendor Inno Setup as a build asset, so the installer compiler no longer comes from the runner image
 - Add a scheduled verify job that re-checks the latest release's provenance weekly (catches sigstore-side regressions in rekor)

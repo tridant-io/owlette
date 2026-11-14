@@ -6,16 +6,16 @@ export interface SchedulePresetDefinition {
   blocks: ScheduleBlock[];
 }
 
-/** Color palette for schedule blocks — maximally distinct, never adjacent similar hues */
+/** Color palette for schedule blocks — maximally distinct, never adjacent similar hues (globals.css --block-*) */
 export const BLOCK_COLORS = [
-  { pill: 'bg-blue-600',    pillText: 'text-white', bar: 'bg-blue-500',    label: 'text-blue-400' },
-  { pill: 'bg-amber-500',   pillText: 'text-white', bar: 'bg-amber-500',   label: 'text-amber-400' },
-  { pill: 'bg-emerald-600', pillText: 'text-white', bar: 'bg-emerald-500', label: 'text-emerald-400' },
-  { pill: 'bg-rose-600',    pillText: 'text-white', bar: 'bg-rose-500',    label: 'text-rose-400' },
-  { pill: 'bg-violet-600',  pillText: 'text-white', bar: 'bg-violet-500',  label: 'text-violet-400' },
-  { pill: 'bg-cyan-500',    pillText: 'text-white', bar: 'bg-cyan-500',    label: 'text-cyan-400' },
-  { pill: 'bg-orange-600',  pillText: 'text-white', bar: 'bg-orange-500',  label: 'text-orange-400' },
-  { pill: 'bg-pink-600',    pillText: 'text-white', bar: 'bg-pink-500',    label: 'text-pink-400' },
+  { pill: 'bg-block-1', pillText: 'text-block-1-foreground', bar: 'bg-block-1-bar', label: 'text-block-1-ink' },
+  { pill: 'bg-block-2', pillText: 'text-block-2-foreground', bar: 'bg-block-2-bar', label: 'text-block-2-ink' },
+  { pill: 'bg-block-3', pillText: 'text-block-3-foreground', bar: 'bg-block-3-bar', label: 'text-block-3-ink' },
+  { pill: 'bg-block-4', pillText: 'text-block-4-foreground', bar: 'bg-block-4-bar', label: 'text-block-4-ink' },
+  { pill: 'bg-block-5', pillText: 'text-block-5-foreground', bar: 'bg-block-5-bar', label: 'text-block-5-ink' },
+  { pill: 'bg-block-6', pillText: 'text-block-6-foreground', bar: 'bg-block-6-bar', label: 'text-block-6-ink' },
+  { pill: 'bg-block-7', pillText: 'text-block-7-foreground', bar: 'bg-block-7-bar', label: 'text-block-7-ink' },
+  { pill: 'bg-block-8', pillText: 'text-block-8-foreground', bar: 'bg-block-8-bar', label: 'text-block-8-ink' },
 ] as const;
 
 /** Ensure all blocks have unique colorIndex values assigned */

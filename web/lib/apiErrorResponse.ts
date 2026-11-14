@@ -6,7 +6,7 @@
  */
 import type { NextResponse } from 'next/server';
 import { handleError } from './errorHandler';
-import { problem, ProblemType, type ProblemTypeUri } from './apiErrors';
+import { mfaChallengeProblem, problem, ProblemType, type ProblemTypeUri } from './apiErrors';
 
 /**
  * @param context Short label for log/Sentry context (e.g. 'agent/auth/refresh')
@@ -17,6 +17,8 @@ export function apiError(
   context?: string,
   status = 500,
 ): NextResponse {
+  const refused = mfaChallengeProblem(error);
+  if (refused) return refused;
   const message = handleError(error, context);
   return problem({
     type: problemTypeForStatus(status),

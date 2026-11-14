@@ -1,0 +1,205 @@
+---
+title: "hoot mcp tools reference"
+description: "every tool an AI agent gets through hoot mcp: its tier, what it acts on and what it does, from list_machines and get_site_logs to ask_hoot and hoot's machine tools."
+keywords: ["hoot mcp", "mcp tools", "tool list", "fleet_status", "list_machines", "get_site_logs", "ask_hoot", "get_metrics_history", "list_installed_software", "list_alert_rules", "get_audit_log", "list_recent_screenshots", "capture_screenshot", "get_saved_display_layout", "get_reboot_schedule", "set_reboot_schedule", "create_deployment", "cancel_deployment", "update_owlette_agent", "update_process", "add_process", "delete_process", "tool tier", "tool_not_allowed", "machine_not_granted", "max_tool_tier_exceeded", "claude code tools", "which tools can an ai agent use"]
+---
+
+every tool an AI agent gets through [hoot mcp](/docs/agent/hoot-mcp), with the tier it needs and what it acts on. a machine is offered only the tools at or below the tier it was given, so the list a client shows is shorter on a machine set to **read** than on one set to **privileged**. how to turn a machine on, set its tier and connect a client is in the [guide](/docs/agent/hoot-mcp); this page is the list.
+
+a call that changes what a machine launches counts as tier 3 whatever its tool's tier, so a machine set lower than **privileged** gets `max_tool_tier_exceeded`: `add_process`, `delete_process` and `set_launch_mode` always, `update_process` for any field but the name, priority and visibility, and the actions of `manage_windows_service`, `manage_scheduled_task`, `manage_windows_update`, `manage_windows_feature` and `registry_operation` that change what runs. the [guide](/docs/agent/hoot-mcp#how-far) says what counts.
+
+**acts on** is one of: *nothing*, for a tool that reads the site; *one machine*, named in `machine`; *several machines*, named in the call; or, for `ask_hoot`, the machines the task names. a call that names a machine the calling machine may not act on is refused with `machine_not_granted`. a call that names several machines is refused whole when any one of them is outside what the machine may act on, and names at most 50 machines.
+
+a machine never overrides [active hours](/docs/agent/remote-commands): none of these tools takes the override that a person can approve in the dashboard.
+
+---
+
+## the calling machine
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `fleet_status` | none | nothing | tells you whether the machine may act, as which machine, on which site, and until when. the script on the machine answers it, not the server, so it is there even when the machine has no session |
+
+---
+
+## machines and logs
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `list_machines` | 1 | nothing | lists the machines it may act on, with id, online or not, seconds since the last heartbeat, OS, agent version and whether hoot is on |
+| `get_site_logs` | 1 | nothing | reads the site's activity log, errors and crashes among it, for the machines it may act on |
+
+a machine allowed on only some of the site reads `get_site_logs` from the most recent 200 entries the site has in the window, then keeps its own machines' entries. when that cut some off, the result says `incomplete`; a shorter `hours` window or a `level` or `action` filter brings a quiet machine's entries back.
+
+---
+
+## processes
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `update_process` | 2 | one machine | changes the settings of a process owlette manages: path, arguments, priority, visibility, timing, launch mode, schedule. only the fields you give change. it edits the machine's configuration, so it works while the machine is offline |
+| `add_process` | 2 | one machine | adds a process for owlette to manage, with its launch mode off until you set it. works while the machine is offline |
+| `delete_process` | 2 | one machine | stops owlette managing a process. a copy that is running keeps running; use `kill_process` first to stop it |
+
+the process tools that run on the machine itself, such as `restart_process` and `get_process_list`, are under [hoot's machine tools](#hoots-machine-tools).
+
+---
+
+## reads
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_metrics_history` | 1 | one machine | reads a machine's recorded CPU, memory, disk and GPU usage and temperatures over the last `hours` (up to 168, 24 by default), thinned to at most `max_points` (up to 500, 200 by default) |
+| `list_installed_software` | 1 | one machine | lists the software the agent last reported as installed, with version and publisher, up to `limit` entries (100 by default, at most 500) |
+| `list_alert_rules` | 1 | nothing | lists the site's alert rules and whether each is on |
+| `get_audit_log` | 1 | nothing | reads the site's audit log, newest first, up to `limit` entries (50 by default, at most 200) |
+
+`list_alert_rules` and `get_audit_log` belong to the whole site, so only a machine allowed on every machine of the site can read them. any other machine is refused.
+
+---
+
+## screenshots
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `list_recent_screenshots` | 1 | one machine | lists the screenshots already taken of a machine, newest first, with links that stay valid for an hour. the newest comes back as an image too, and nothing new is captured. up to 20 are kept |
+| `capture_screenshot` | 2 | one machine | takes a screenshot now and returns the image. `monitor` is 0 for every display together, or 1, 2 and so on for one |
+
+---
+
+## displays
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_saved_display_layout` | 1 | one machine | reads the layout owlette restores the machine's displays to, and whether auto-restore is on or paused. it is not the monitors connected now. shows at most 32 monitors |
+| `get_site_display_settings` | 1 | nothing | reads whether the site's machines keep their screen and lock awake. a site setting, so only a machine allowed on every machine of the site can read it |
+
+---
+
+## reboot schedules and power
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_reboot_schedule` | 1 | one machine | reads a machine's reboot schedule: whether it is on and its entries |
+| `set_reboot_schedule` | 3 | one machine | replaces a machine's whole reboot schedule, or clears it with `enabled: false` and no entries. a scheduled reboot is not held back by active hours, so an entry inside them still restarts the machine |
+| `reboot_machine` | 3 | one machine | reboots the machine after a 60 second countdown. on Windows with owlette 4.1.21 or later it is refused inside active hours; `when: after_active_hours` restarts it once they end |
+| `shutdown_machine` | 3 | one machine | shuts the machine down after a 60 second countdown, and it stays off. on Windows with owlette 4.1.21 or later it is refused inside active hours |
+| `cancel_reboot` | 3 | one machine | cancels a reboot or shutdown in its countdown, or a reboot waiting for active hours to end |
+
+read the current schedule with `get_reboot_schedule` before `set_reboot_schedule` if you only mean to change part of it.
+
+---
+
+## deployments and updates
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `list_deployments` | 1 | nothing | lists the site's software deployments, newest first, with how each machine's install is going |
+| `get_deployment` | 1 | nothing | reads one deployment by id |
+| `list_software_presets` | 1 | nothing | lists the software presets a deployment can install, with installer url and silent flags. the same for every site |
+| `create_deployment` | 3 | several machines | installs software on the machines named: each downloads the installer, checks it and runs it silently. the url must be https, and the site's per-deployment machine quota applies |
+| `cancel_deployment` | 2 | several machines | cancels the installs that have not started on a deployment. an install already running or finished is left alone |
+| `update_owlette_agent` | 3 | one machine | sends the machine the latest agent installer for its platform. the machine must be online |
+
+a deployment is listed or read only when every machine it targets is one the calling machine may act on; `list_deployments` says in `leftOut` how many it skipped for that. any other deployment answers as not found, to `get_deployment` and to `cancel_deployment` alike. creating one needs the site's plan to include deployments, as in the dashboard; cancelling does not.
+
+active hours hold back an install, and no call from a machine overrides that: the install on that machine fails with an `active_hours` error. `update_owlette_agent` is not held back by them.
+
+---
+
+## roost
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `list_roosts` | 1 | nothing | lists the site's roosts, newest first, with the machines each deploys to and its current version |
+| `list_roost_versions` | 1 | nothing | lists the published versions of one roost, newest first. versions are immutable |
+| `deploy_roost_version` | 3 | several machines | deploys a published version to the machines of a roost: the first wave (about a tenth, at least 1 and at most 50) first, the rest once enough of it has succeeded. `machines` narrows it |
+| `rollback_roost` | 3 | several machines | points a roost back at a version it already published and tells every machine it deploys to to download it at once, with no first wave |
+
+a roost is listed, or read, only when every machine it deploys to is one the calling machine may act on; `list_roosts` says in `leftOut` how many it skipped. any other roost answers as not found, to `list_roost_versions`, `deploy_roost_version` and `rollback_roost` alike, even when a deploy is narrowed to machines it may act on. deploying and rolling back need the site's plan to include roost, and are refused while roost is switched off for the site.
+
+---
+
+## hoot
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `ask_hoot` | 2 | the task's own machines | hands [hoot](/docs/dashboard/hoot) a task in words and returns its written answer. takes `prompt` and, optionally, `machines`; without them it works on every machine the calling machine may act on |
+
+what a task may do, whose key pays and how many a machine may start are in the [guide](/docs/agent/hoot-mcp#handing-hoot-a-task).
+
+---
+
+## hoot's machine tools
+
+these are the tools of the [hoot tools reference](/docs/reference/hoot-tools) that run on a machine, here with the `machine` parameter. each is queued to the agent on that machine as a command, so the machine must be online. many of them work on Windows only; the [platform table](/docs/reference/hoot-tools#platforms) says which.
+
+### system information
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_system_info` | 1 | one machine | reads hostname, OS, CPU, memory, disk, GPU, uptime and agent version |
+| `get_disk_usage` | 1 | one machine | reads total, used and free space on every drive |
+| `get_network_info` | 1 | one machine | lists network interfaces with address, netmask and link status |
+| `get_gpu_processes` | 1 | one machine | lists the GPU memory each process uses |
+| `check_pending_reboot` | 1 | one machine | tells whether a reboot is pending and why |
+| `get_event_logs` | 1 | one machine | reads Windows event log entries, filtered by log and severity |
+| `get_event_logs_filtered` | 2 | one machine | queries the event log fast by process, event id or time window |
+
+### processes on the machine
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_process_list` | 1 | one machine | lists the processes owlette manages and whether each is running |
+| `get_running_processes` | 1 | one machine | lists running OS processes with CPU and memory use, optionally by name |
+| `restart_process` | 2 | one machine | restarts a process owlette manages |
+| `kill_process` | 2 | one machine | stops a process owlette manages |
+| `start_process` | 2 | one machine | starts a process owlette manages |
+| `set_launch_mode` | 2 | one machine | sets a managed process to off, always or scheduled |
+| `manage_process` | 2 | one machine | kills, suspends or resumes any process by name. refuses critical system processes |
+
+### services and the agent
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `get_service_status` | 1 | one machine | reads a Windows service's status and start type |
+| `get_agent_config` | 1 | one machine | reads the agent's configuration, without tokens |
+| `get_agent_logs` | 1 | one machine | reads recent agent log entries, by level |
+| `get_agent_health` | 1 | one machine | reads the agent's connection state and health checks |
+| `manage_windows_service` | 2 | one machine | starts, stops, restarts or reconfigures a Windows service, including its recovery actions |
+
+### windows settings
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `configure_gpu_tdr` | 2 | one machine | sets the GPU timeout detection delay. needs a reboot |
+| `manage_windows_update` | 2 | one machine | reads and changes how Windows installs updates and restarts, and pauses updates |
+| `suppress_setup_screens` | 2 | one machine | stops the full-screen setup screens Windows shows after an update |
+| `manage_notifications` | 2 | one machine | silences toast notifications and sets Focus Assist |
+| `configure_power_plan` | 2 | one machine | sets the power plan and turns off sleep, hibernate and screen blanking |
+| `manage_scheduled_task` | 2 | one machine | lists, creates, runs, stops and deletes Task Scheduler tasks |
+| `network_reset` | 2 | one machine | flushes DNS, renews the IP lease, restarts an adapter or resets winsock |
+| `registry_operation` | 2 | one machine | reads, writes and deletes registry values inside an allowlist of paths |
+| `clean_disk_space` | 2 | one machine | clears temp files, caches, the recycle bin or owlette logs, with a dry run |
+| `manage_windows_feature` | 2 | one machine | lists, adds and removes optional features, capabilities and store apps |
+| `show_notification` | 2 | one machine | shows a message on the machine's screen, as a toast or a modal box |
+
+### shell and files
+
+| tool | tier | acts on | what it does |
+|---|---|---|---|
+| `run_command` | 3 | one machine | runs a shell command that starts with an allowed command such as `ipconfig` or `nvidia-smi` |
+| `run_powershell` | 3 | one machine | runs a PowerShell command with a 25 second timeout. every call is audit-logged |
+| `run_python` | 3 | one machine | runs Python code in the agent's environment, in the user's desktop session |
+| `execute_script` | 3 | one machine | runs a PowerShell script with no command restrictions, for up to 55 minutes |
+| `read_file` | 3 | one machine | reads a file, up to 100 KB |
+| `write_file` | 3 | one machine | writes a file, creating it if needed |
+| `list_directory` | 3 | one machine | lists a directory with sizes and dates |
+
+a tier 3 tool runs at once on a machine set to **privileged**: nobody approves it first, as they would in the dashboard.
+
+---
+
+## parameters
+
+every tool that acts on one machine takes `machine`, the id from `list_machines`, and requires it. the other parameters are in each tool's schema, which the MCP client shows next to the tool, so they are not repeated here. a tool that names several machines takes a list of ids instead. what a refused call answers, and what the audit log records, is in the [guide](/docs/agent/hoot-mcp#what-is-refused).

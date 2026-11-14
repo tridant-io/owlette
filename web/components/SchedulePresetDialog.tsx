@@ -100,7 +100,7 @@ export default function SchedulePresetDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-card border-border text-foreground">
+      <DialogContent className="sm:max-w-lg border-border text-foreground">
         <DialogHeader>
           <DialogTitle>{isEditing ? 'Edit Schedule Preset' : 'Create Schedule Preset'}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
@@ -110,29 +110,29 @@ export default function SchedulePresetDialog({
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label htmlFor="schedule-preset-name" className="text-white text-sm">Name</Label>
+            <Label htmlFor="schedule-preset-name" className="text-foreground text-sm">Name</Label>
             <Input
               id="schedule-preset-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Business Hours, Night Shift"
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="schedule-preset-description" className="text-white text-sm">Description</Label>
+            <Label htmlFor="schedule-preset-description" className="text-foreground text-sm">Description</Label>
             <Input
               id="schedule-preset-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional description"
-              className="border-border bg-background text-white"
+              className="border-border bg-background text-foreground"
             />
           </div>
 
           <div className="space-y-2">
-            <Label className="text-white text-sm">Schedule</Label>
+            <Label className="text-foreground text-sm">Schedule</Label>
             <div className="flex items-center gap-3 mb-2">
               <WeekSummaryBar schedules={blocks} />
             </div>
@@ -149,7 +149,7 @@ export default function SchedulePresetDialog({
           <Button
             onClick={handleSave}
             disabled={saving}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
             {isEditing ? 'Save Changes' : 'Create Preset'}

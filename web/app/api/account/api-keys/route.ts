@@ -8,7 +8,9 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { authorizedPlatformHandler } from '@/lib/authorizedHandler.server';
 import {
   ALL_RESOURCES,
+  DEFAULT_MAX_TOOL_TIER,
   DEFAULT_TTL_DAYS,
+  normalizeMaxToolTier,
   type ApiKeyEnvironment,
   type ApiKeyLookup,
   type ApiKeyPermission,
@@ -74,6 +76,7 @@ export const GET = withRateLimit(
           keyPrefix: data.keyPrefix,
           environment: data.environment ?? null,
           scopes: data.scopes ?? null,
+          maxToolTier: normalizeMaxToolTier(data.maxToolTier),
           expiresAt: data.expiresAt ?? null,
           createdAt: data.createdAt,
           lastUsedAt: data.lastUsedAt,
@@ -171,6 +174,7 @@ export const POST = withRateLimit(
         name,
         environment,
         scopes,
+        maxToolTier: DEFAULT_MAX_TOOL_TIER,
         expiresAt,
         keyPrefix,
       });

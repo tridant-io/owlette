@@ -2,6 +2,10 @@
 
 import { OwletteFeather } from '@/components/icons/OwletteFeather';
 
+// the brand's warm glow. on light paper the peach sits darker than the ground
+// and reads as a smudge, so it is fainter there
+const GLOW = 'drop-shadow-[0_0_6px_rgba(240,184,154,0.2)] dark:drop-shadow-[0_0_6px_rgba(240,184,154,0.35)]';
+
 /**
  * Two golden feathers drifting down in mirrored pendulum arcs — the boot-splash
  * idle animation. Pure CSS (keyframes in globals.css). Each nested layer
@@ -24,7 +28,7 @@ export function FallingFeather() {
           <div className="feather-sway">
             <div className="feather-arc">
               <div className="feather-tilt">
-                <OwletteFeather className="drop-shadow-[0_0_6px_rgba(240,184,154,0.35)]" />
+                <OwletteFeather className={GLOW} />
               </div>
             </div>
           </div>
@@ -37,7 +41,7 @@ export function FallingFeather() {
           <div className="feather-sway">
             <div className="feather-arc">
               <div className="feather-tilt">
-                <OwletteFeather className="drop-shadow-[0_0_6px_rgba(240,184,154,0.35)]" />
+                <OwletteFeather className={GLOW} />
               </div>
             </div>
           </div>

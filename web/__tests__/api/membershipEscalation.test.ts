@@ -14,7 +14,7 @@
  *
  * NEGATIVE CONTROLS RUN 2026-09-06: four of the six guards redden their own test
  * when removed. The other two paths are guarded twice and either layer alone
- * suffices — role=owner (route role validation + changeRole's ASSIGNABLE_ROLES)
+ * suffices — role=owner (route role validation + updateMember's ASSIGNABLE_ROLES)
  * and remove-owner (the route's early 409 + removeMember's owner vetoes).
  * Removing both reddens that test; removing either alone does not. So deleting
  * one layer will NOT redden this suite — the request is still correctly refused.
@@ -63,9 +63,11 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+// a spy, so blocks 19-23 can tell the wrapper's scope step from a later refusal
+const mockWriteAuditEntry = jest.fn();
 jest.mock('@/lib/auditLog.server', () => ({
   generateCorrelationId: () => 'corr_esc',
-  writeAuditEntry: async () => {},
+  writeAuditEntry: (...a: unknown[]) => mockWriteAuditEntry(...a),
   writeAuditEntryBlocking: async () => {},
   writeGlobalAuditEntryBlocking: async () => {},
 }));
@@ -85,6 +87,23 @@ jest.mock('@/lib/talons/store.server', () => ({
   countTalonsAuthoredBy: jest.fn(async () => 0),
   reassignTalons: jest.fn(async () => ({ reassignedTalonIds: [] })),
   TalonStoreError: class TalonStoreError extends Error {},
+}));
+
+// the site cascade: block 16 is about who reaches it, not what it deletes.
+const mockDeleteSite = jest.fn(async (_ctx: unknown, input: { siteId: string }) => ({
+  kind: 'deleted' as const,
+  siteId: input.siteId,
+}));
+jest.mock('@/lib/actions/deleteSite.server', () => ({
+  deleteSite: (ctx: unknown, input: { siteId: string }) => mockDeleteSite(ctx, input),
+}));
+
+// the site's swoop sessions: block 23 is about who reaches the list, not what is
+// on it, and the double has no collectionGroup to list them from.
+const mockListLiveSwoopSessionsForSite = jest.fn(async (_args: { siteId: string }) => []);
+jest.mock('@/lib/swoop/sessionStore.server', () => ({
+  ...jest.requireActual('@/lib/swoop/sessionStore.server'),
+  listLiveSwoopSessionsForSite: (args: { siteId: string }) => mockListLiveSwoopSessionsForSite(args),
 }));
 
 // --- Firestore double with optimistic concurrency ---------------------------
@@ -270,13 +289,38 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminStorage: () => ({ bucket: () => ({}) }),
 }));
 
+// the double has no collectionGroup, so the listing of a caller's sites reads
+// the seeded member rows here, through the real row readers. the rest of
+// sitePolicy, resolveSiteAccess included, is the real module.
+const MEMBER_ROW_PATH = /^sites\/([^/]+)\/members\/([^/]+)$/;
+const mockListUserStanding = jest.fn(async (uid: string) => {
+  const bySite: Record<string, MemberStanding> = Object.create(null);
+  for (const [path, row] of docs) {
+    const match = MEMBER_ROW_PATH.exec(path);
+    if (!match || match[2] !== uid) continue;
+    const standing = memberStanding(row);
+    if (standing.role !== null) bySite[match[1]] = standing;
+  }
+  return bySite;
+});
+jest.mock('@/lib/sitePolicy.server', () => ({
+  ...jest.requireActual('@/lib/sitePolicy.server'),
+  listUserStanding: (uid: string) => mockListUserStanding(uid),
+}));
+
 import { GET as membersGET, POST as membersPOST } from '@/app/api/sites/[siteId]/members/route';
+import { GET as candidatesGET } from '@/app/api/sites/[siteId]/member-candidates/route';
+import type { MemberStanding } from '@/lib/capabilities';
+import { memberStanding } from '@/lib/sitePolicy.server';
 import {
   DELETE as memberDELETE,
   PATCH as memberPATCH,
 } from '@/app/api/sites/[siteId]/members/[uid]/route';
+import { DELETE as siteDELETE } from '@/app/api/sites/[siteId]/route';
 import { POST as transferPOST } from '@/app/api/sites/[siteId]/transfer-ownership/route';
 import { POST as uninstallPOST } from '@/app/api/sites/[siteId]/deployments/[deploymentId]/uninstall/route';
+import { PATCH as hootEnabledPATCH } from '@/app/api/sites/[siteId]/machines/[machineId]/hoot-enabled/route';
+import { GET as swoopSessionsGET } from '@/app/api/sites/[siteId]/swoop/sessions/route';
 
 const SITE = 'site-alpha';
 const OWNER = 'uid_owner';
@@ -288,8 +332,8 @@ function seedUser(uid: string, data: Record<string, unknown> = {}): void {
   docs.set(`users/${uid}`, { email: `${uid}@example.test`, role: 'member', sites: [], ...data });
 }
 
-function seedMemberRow(uid: string, role: string): void {
-  docs.set(`sites/${SITE}/members/${uid}`, { uid, role, status: 'active' });
+function seedMemberRow(uid: string, role: string, extra: Record<string, unknown> = {}): void {
+  docs.set(`sites/${SITE}/members/${uid}`, { uid, role, status: 'active', ...extra });
 }
 
 /** Session auth (no api key), so scope checks are bypassed and only role matters. */
@@ -297,15 +341,19 @@ function authAs(uid: string): void {
   mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
 }
 
-/** api-key auth carrying exactly `perms` on every site. */
-function authAsKey(uid: string, perms: Array<'read' | 'write' | 'admin'>): void {
+/** api-key auth carrying exactly `perms` on every site, or on every machine. */
+function authAsKey(
+  uid: string,
+  perms: Array<'read' | 'write' | 'admin'>,
+  resource: 'site' | 'machine' = 'site',
+): void {
   mockResolveAuth.mockResolvedValue({
     userId: uid,
     keyContext: {
       keyId: 'key_esc',
       environment: 'live',
       isLegacy: false,
-      scopes: [{ resource: 'site', id: '*', permissions: perms }],
+      scopes: [{ resource, id: '*', permissions: perms }],
       expiresAt: null,
     },
   });
@@ -695,7 +743,7 @@ describe('9. privileged-scope contracts, with the REAL wrapper', () => {
  * skipped for every capability outside BYPASS_EXEMPT_CAPABILITIES, and
  * SITE_MEMBER_MANAGE is outside it. Browser sessions never reach `requireScope`
  * at all, so nothing else stood between a plain site `member` and
- * `PATCH /members/{ownUid} {"role":"admin"}`. `changeRole` refuses only an OWNER
+ * `PATCH /members/{ownUid} {"role":"admin"}`. `updateMember` refuses only an OWNER
  * as a target, and `'admin'` is an accepted value, so the write landed.
  *
  * What made that more than a capability bypass: the caller ends up holding
@@ -795,7 +843,7 @@ describe('10. a caller cannot modify their own membership row', () => {
     });
 
     it('refuses the OWNER on their own row — stepping down is transfer-ownership', async () => {
-      // Nothing is lost: `changeRole` already refused an owner as a target, so
+      // Nothing is lost: `updateMember` already refuses an owner as a target, so
       // the owner never had a way to demote themselves here. They now get the
       // self-refusal first, and ownership still moves only through
       // POST /api/sites/{siteId}/transfer-ownership.
@@ -996,5 +1044,590 @@ describe('12. roleHonored reports what happened to the row', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).roleHonored).toBe(true);
     expect((docs.get(`sites/${SITE}/members/${OUTSIDER}`) as { role: string }).role).toBe('admin');
+  });
+});
+
+/**
+ * 13. the add-member candidates list stays closed to a plain member.
+ *
+ * the list is worked out against the site's roster, which a plain member may
+ * not read. with `capability_enforcement === false` the wrapper skips
+ * SITE_MEMBER_MANAGE, which is outside BYPASS_EXEMPT_CAPABILITIES, so the
+ * handler re-checks it, as members POST does (block 11).
+ *
+ * NEGATIVE CONTROL RUN 2026-11-04: removing the handler's `hasCapability` check
+ * reddens this block (the member gets 200). it is the only thing holding it.
+ */
+describe('13. member candidates stay closed to a plain member with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+  });
+
+  it('refuses a plain member with 403 site_member_manage_required', async () => {
+    authAs(MEMBER);
+    const res = await candidatesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/member-candidates`, { method: 'GET' }),
+      params(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect(mockListUserStanding).not.toHaveBeenCalled();
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still gets the list', async () => {
+    // a second site they administer, so a working list has someone on it
+    docs.set(`sites/site-beta/members/${ADMIN}`, { uid: ADMIN, role: 'admin', status: 'active' });
+    docs.set(`sites/site-beta/members/${OUTSIDER}`, { uid: OUTSIDER, role: 'member', status: 'active' });
+    authAs(ADMIN);
+    const res = await candidatesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/member-candidates`, { method: 'GET' }),
+      params(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).candidates).toEqual([
+      { uid: OUTSIDER, email: `${OUTSIDER}@example.test`, displayName: null },
+    ]);
+  });
+});
+
+/**
+ * 14-17. members PATCH and DELETE, and site DELETE, re-check their capability in
+ * the handler.
+ *
+ * the gap block 11 closed on members POST: with `capability_enforcement ===
+ * false` the wrapper skips SITE_MEMBER_MANAGE and SITE_DELETE, neither of which
+ * is exempt, and browser sessions never reach `requireScope`. block 10's
+ * self-guard holds only the caller's own row, so a plain member could change or
+ * remove anyone else, delete the site, or, through the swoop mode, hand out
+ * MACHINE_REMOTE_CONTROL.
+ *
+ * NEGATIVE CONTROL RUN 2026-11-04: removing PATCH's `refuseWithoutMemberManage`
+ * call reddens blocks 14 and 17 (the PATCH half), removing DELETE's reddens
+ * block 15, and removing site DELETE's `hasCapability` check reddens block 16.
+ * each is the only thing holding its path.
+ */
+
+/** a second plain member, the "someone else" a member acts on below. */
+const PEER = 'uid_peer';
+
+function seedPeer(): void {
+  seedUser(PEER, { role: 'member', sites: [SITE] });
+  seedMemberRow(PEER, 'member');
+}
+
+describe('14. members PATCH re-checks SITE_MEMBER_MANAGE with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+    seedPeer();
+  });
+
+  const promotePeer = () =>
+    memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${PEER}`, {
+        method: 'PATCH',
+        body: { role: 'admin' },
+      }),
+      params({ uid: PEER }),
+    );
+
+  it('refuses a plain member promoting another member to admin', async () => {
+    authAs(MEMBER);
+    const res = await promotePeer();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect((docs.get(`sites/${SITE}/members/${PEER}`) as { role: string }).role).toBe('member');
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still changes a role', async () => {
+    authAs(ADMIN);
+    const res = await promotePeer();
+
+    expect(res.status).toBe(200);
+    expect((docs.get(`sites/${SITE}/members/${PEER}`) as { role: string }).role).toBe('admin');
+  });
+});
+
+describe('15. members DELETE re-checks SITE_MEMBER_MANAGE with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+    seedPeer();
+  });
+
+  const removePeer = () =>
+    memberDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${PEER}`, {
+        method: 'DELETE',
+      }),
+      params({ uid: PEER }),
+    );
+
+  it('refuses a plain member removing another member', async () => {
+    authAs(MEMBER);
+    const res = await removePeer();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect(docs.has(`sites/${SITE}/members/${PEER}`)).toBe(true);
+    expect((docs.get(`users/${PEER}`) as { sites: string[] }).sites).toContain(SITE);
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still removes a member', async () => {
+    authAs(ADMIN);
+    const res = await removePeer();
+
+    expect(res.status).toBe(200);
+    expect(docs.has(`sites/${SITE}/members/${PEER}`)).toBe(false);
+  });
+});
+
+describe('16. site DELETE re-checks SITE_DELETE with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+  });
+
+  const deleteTheSite = () =>
+    siteDELETE(
+      createMockRequest(`http://localhost/api/sites/${SITE}`, { method: 'DELETE' }),
+      params(),
+    );
+
+  it('refuses a plain member, and never reaches the cascade', async () => {
+    authAs(MEMBER);
+    const res = await deleteTheSite();
+
+    expect(res.status).toBe(403);
+    // the wrapper's own answer, so a client sees one refusal whichever layer gave it
+    expect((await res.json()).detail).toBe('capability not granted');
+    expect(mockDeleteSite).not.toHaveBeenCalled();
+  });
+
+  it('POSITIVE CONTROL: the owner with the switch off still deletes the site', async () => {
+    authAs(OWNER);
+    const res = await deleteTheSite();
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ siteId: SITE, deleted: true });
+    expect(mockDeleteSite).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('17. a plain member cannot hand out swoop control with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+    seedPeer();
+  });
+
+  const setPeerToControl = () =>
+    memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${PEER}`, {
+        method: 'PATCH',
+        body: { swoop: 'control' },
+      }),
+      params({ uid: PEER }),
+    );
+
+  it('refuses a plain member setting another member to control', async () => {
+    authAs(MEMBER);
+    const res = await setPeerToControl();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect(docs.get(`sites/${SITE}/members/${PEER}`)).not.toHaveProperty('swoop');
+  });
+
+  it('refuses a plain member adding an account with control', async () => {
+    authAs(MEMBER);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-swoop-add' },
+        body: { uid: OUTSIDER, role: 'member', swoop: 'control' },
+      }),
+      params(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect(docs.has(`sites/${SITE}/members/${OUTSIDER}`)).toBe(false);
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still sets control', async () => {
+    authAs(ADMIN);
+    const res = await setPeerToControl();
+
+    expect(res.status).toBe(200);
+    expect((docs.get(`sites/${SITE}/members/${PEER}`) as { swoop?: string }).swoop).toBe('control');
+  });
+});
+
+/**
+ * 18. the swoop mode follows the two rules every membership change already
+ * keeps: never on your own row (block 10), never on the owner's (block 2). they
+ * are not kill-switch patches, so both switch states are run.
+ */
+describe.each([true, false])(
+  "18. nobody sets their own swoop mode or the owner's, capability_enforcement %s",
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+    });
+
+    it('refuses an admin setting their own swoop mode', async () => {
+      authAs(ADMIN);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+          method: 'PATCH',
+          body: { swoop: 'control' },
+        }),
+        params({ uid: ADMIN }),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect(docs.get(`sites/${SITE}/members/${ADMIN}`)).not.toHaveProperty('swoop');
+    });
+
+    it("refuses an admin setting the owner's swoop mode", async () => {
+      authAs(ADMIN);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${OWNER}`, {
+          method: 'PATCH',
+          body: { swoop: 'none' },
+        }),
+        params({ uid: OWNER }),
+      );
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('cannot_change_owner_role');
+      expect(docs.get(`sites/${SITE}/members/${OWNER}`)).not.toHaveProperty('swoop');
+    });
+
+    it("POSITIVE CONTROL: the same admin sets another member's swoop mode", async () => {
+      authAs(ADMIN);
+      const res = await memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${MEMBER}`, {
+          method: 'PATCH',
+          body: { swoop: 'control' },
+        }),
+        params({ uid: MEMBER }),
+      );
+
+      expect(res.status).toBe(200);
+      expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { swoop?: string }).swoop).toBe(
+        'control',
+      );
+    });
+  },
+);
+
+/**
+ * 19-23. machine scope (ADR 0016). a row with `machineIds` reaches only those
+ * machines and holds nothing site-wide, whatever its role or swoop mode.
+ *
+ * the wrapper's scope step refuses a site-wide route before it reads the kill
+ * switch, so it holds with the switch off too. with the switch off, the members
+ * GET, PATCH, POST and DELETE re-checks answer `site_member_manage_required`
+ * (block 24 for GET). so each refusal here also pins the scope step's own answer
+ * and its `machine_scope_site_wide` audit row.
+ *
+ * NEGATIVE CONTROL RUN 2026-11-09: removing the wrapper's scope step reddens
+ * every refusal in blocks 19, 20, 22 and 23 (17 cases). block 21 is held by the
+ * owner guards, not by the scope step.
+ */
+const SCOPED_ADMIN = 'uid_scoped_admin';
+const SCOPED_MEMBER = 'uid_scoped_member';
+const IN_SCOPE = 'm1';
+const OUT_OF_SCOPE = 'm2';
+
+/** two machines, an admin scoped to the first, and a member scoped to it with swoop control. */
+function seedScoped(): void {
+  for (const machineId of [IN_SCOPE, OUT_OF_SCOPE]) {
+    docs.set(`sites/${SITE}/machines/${machineId}`, { machineId, cortexEnabled: true });
+  }
+  seedUser(SCOPED_ADMIN, { role: 'member', sites: [SITE] });
+  seedMemberRow(SCOPED_ADMIN, 'admin', { machineIds: [IN_SCOPE] });
+  seedUser(SCOPED_MEMBER, { role: 'member', sites: [SITE] });
+  seedMemberRow(SCOPED_MEMBER, 'member', { machineIds: [IN_SCOPE], swoop: 'control' });
+}
+
+/** the wrapper's scope step refused: its 403, and its audit row. returns the body. */
+async function expectScopeStepRefusal(res: Response): Promise<Record<string, unknown>> {
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.detail).toBe('capability not granted');
+  expect(mockWriteAuditEntry).toHaveBeenCalledWith(
+    SITE,
+    expect.objectContaining({ outcome: 'deny', denyReason: 'machine_scope_site_wide' }),
+  );
+  return body;
+}
+
+const MEMBER_VERBS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
+
+describe.each([true, false])(
+  '19. a scoped admin cannot reach the member surface, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    /** add OUTSIDER, promote MEMBER, or remove MEMBER: someone else's row each time. */
+    const call = (verb: (typeof MEMBER_VERBS)[number]) => {
+      const membersUrl = `http://localhost/api/sites/${SITE}/members`;
+      const memberUrl = `${membersUrl}/${MEMBER}`;
+      if (verb === 'GET') return membersGET(createMockRequest(membersUrl, { method: 'GET' }), params());
+      if (verb === 'POST') {
+        return membersPOST(
+          createMockRequest(membersUrl, {
+            method: 'POST',
+            headers: { 'Idempotency-Key': `esc-scoped-add-${enforcement}` },
+            body: { uid: OUTSIDER, role: 'member' },
+          }),
+          params(),
+        );
+      }
+      if (verb === 'PATCH') {
+        return memberPATCH(
+          createMockRequest(memberUrl, { method: 'PATCH', body: { role: 'admin' } }),
+          params({ uid: MEMBER }),
+        );
+      }
+      return memberDELETE(createMockRequest(memberUrl, { method: 'DELETE' }), params({ uid: MEMBER }));
+    };
+
+    it.each(MEMBER_VERBS)('refuses %s with the scope step, and writes nothing', async (verb) => {
+      authAs(SCOPED_ADMIN);
+      await expectScopeStepRefusal(await call(verb));
+
+      expect(docs.has(`sites/${SITE}/members/${OUTSIDER}`)).toBe(false);
+      expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
+    });
+
+    it.each(MEMBER_VERBS)('POSITIVE CONTROL: a whole-site admin reaches %s', async (verb) => {
+      authAs(ADMIN);
+      expect((await call(verb)).status).toBe(200);
+    });
+  },
+);
+
+describe.each([true, false])(
+  '20. a scoped member cannot widen their own scope, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    const widen = (uid: string) =>
+      memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${uid}`, {
+          method: 'PATCH',
+          body: { machineIds: null },
+        }),
+        params({ uid }),
+      );
+
+    it.each([
+      ['a scoped member', SCOPED_MEMBER],
+      ['a scoped admin', SCOPED_ADMIN],
+    ])('refuses %s widening their own row', async (_who, uid) => {
+      authAs(uid);
+      // the scope step answers before the handler's self-guard can
+      await expectScopeStepRefusal(await widen(uid));
+
+      expect((docs.get(`sites/${SITE}/members/${uid}`) as { machineIds?: string[] }).machineIds).toEqual([
+        IN_SCOPE,
+      ]);
+    });
+
+    it("POSITIVE CONTROL: a whole-site admin clears someone else's scope", async () => {
+      authAs(ADMIN);
+      const res = await widen(SCOPED_MEMBER);
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).machineIds).toBeNull();
+      // the delete sentinel removed the field: whole site, not `[]` or null
+      expect(docs.get(`sites/${SITE}/members/${SCOPED_MEMBER}`)).not.toHaveProperty('machineIds');
+    });
+  },
+);
+
+describe('21. the owner cannot be scoped', () => {
+  beforeEach(() => {
+    seedScoped();
+  });
+
+  it('refuses PATCH machineIds on the owner row with 409', async () => {
+    authAs(ADMIN);
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${OWNER}`, {
+        method: 'PATCH',
+        body: { machineIds: [IN_SCOPE] },
+      }),
+      params({ uid: OWNER }),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('cannot_change_owner_role');
+    expect(docs.get(`sites/${SITE}/members/${OWNER}`)).not.toHaveProperty('machineIds');
+  });
+
+  it('refuses POST of the owner with machineIds with 409 target_is_owner', async () => {
+    authAs(ADMIN);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-scope-owner' },
+        body: { uid: OWNER, role: 'member', machineIds: [IN_SCOPE] },
+      }),
+      params(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('target_is_owner');
+    expect(docs.get(`sites/${SITE}/members/${OWNER}`)).toEqual({
+      uid: OWNER,
+      role: 'owner',
+      status: 'active',
+    });
+  });
+
+  it('POSITIVE CONTROL: an admin row is scoped', async () => {
+    authAs(OWNER);
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+        method: 'PATCH',
+        body: { machineIds: [IN_SCOPE] },
+      }),
+      params({ uid: ADMIN }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(docs.get(`sites/${SITE}/members/${ADMIN}`)).toMatchObject({
+      role: 'admin',
+      machineIds: [IN_SCOPE],
+    });
+  });
+});
+
+describe('22. an api key owned by a scoped admin is bounded by the scope', () => {
+  beforeEach(() => {
+    seedScoped();
+    authAsKey(SCOPED_ADMIN, ['write'], 'machine');
+  });
+
+  const turnHootOff = (machineId: string) =>
+    hootEnabledPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/hoot-enabled`, {
+        method: 'PATCH',
+        body: { enabled: false },
+      }),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  it('refuses a machine=*:write key on a machine outside the scope with 404', async () => {
+    const res = await turnHootOff(OUT_OF_SCOPE);
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).detail).toBe('machine not found or no access');
+    expect(mockWriteAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'machine_out_of_scope' }),
+    );
+    expect(docs.get(`sites/${SITE}/machines/${OUT_OF_SCOPE}`)).toMatchObject({ cortexEnabled: true });
+  });
+
+  it('POSITIVE CONTROL: the same key reaches the machine in scope', async () => {
+    const res = await turnHootOff(IN_SCOPE);
+
+    expect(res.status).toBe(200);
+    expect(docs.get(`sites/${SITE}/machines/${IN_SCOPE}`)).toMatchObject({ cortexEnabled: false });
+  });
+});
+
+describe.each([true, false])(
+  '23. a scoped member set to swoop control holds nothing site-wide, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    const listMembers = () =>
+      membersGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, { method: 'GET' }),
+        params(),
+      );
+    const listSwoopSessions = () =>
+      swoopSessionsGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/swoop/sessions`, { method: 'GET' }),
+        params(),
+      );
+
+    it('refuses the members list', async () => {
+      authAs(SCOPED_MEMBER);
+      await expectScopeStepRefusal(await listMembers());
+    });
+
+    it("refuses the site's swoop sessions, and never lists them", async () => {
+      authAs(SCOPED_MEMBER);
+      const body = await expectScopeStepRefusal(await listSwoopSessions());
+
+      // the coded refusal swoop's viewer reads as a withdrawal
+      expect(body.code).toBe('capability_missing');
+      expect(mockListLiveSwoopSessionsForSite).not.toHaveBeenCalled();
+    });
+
+    it('POSITIVE CONTROL: a whole-site admin gets both', async () => {
+      authAs(ADMIN);
+      expect((await listMembers()).status).toBe(200);
+
+      const res = await listSwoopSessions();
+      expect(res.status).toBe(200);
+      expect((await res.json()).data.sessions).toEqual([]);
+      expect(mockListLiveSwoopSessionsForSite).toHaveBeenCalledWith({ siteId: SITE });
+    });
+  },
+);
+
+/**
+ * 24. the members list stays closed to a plain member with the kill switch off.
+ *
+ * the rules let a member read their own row and nobody else's, so the roster is
+ * SITE_MEMBER_MANAGE's alone. with `capability_enforcement === false` the
+ * wrapper skips that capability, so the handler re-checks it, as POST, PATCH and
+ * DELETE do (blocks 11, 14 and 15).
+ */
+describe('24. members GET re-checks SITE_MEMBER_MANAGE with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+  });
+
+  const listMembers = () =>
+    membersGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, { method: 'GET' }),
+      params(),
+    );
+
+  it('refuses a plain member with 403 site_member_manage_required', async () => {
+    authAs(MEMBER);
+    const res = await listMembers();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still gets the list', async () => {
+    authAs(ADMIN);
+    const res = await listMembers();
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).members.map((m: { uid: string }) => m.uid).sort()).toEqual(
+      [ADMIN, MEMBER, OWNER].sort(),
+    );
   });
 });

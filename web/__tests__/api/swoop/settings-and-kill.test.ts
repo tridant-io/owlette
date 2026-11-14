@@ -93,7 +93,13 @@ jest.mock('@/lib/swoop/signal.server', () => ({
 }));
 
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
+}));
+
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import { GET, PATCH } from '@/app/api/sites/[siteId]/swoop-settings/route';
@@ -163,7 +169,6 @@ function stageSession(sid = SID, state: string = 'live'): void {
     state,
     createdBy: `user:${ADMIN}`,
     startedAt,
-    absoluteExpiresAt: startedAt + 43_200_000,
     viewers: [{ viewerId: 'v1', uid: ADMIN, ctl: true, joinedAt: startedAt, leaseExpiresAt: startedAt }],
   });
 }
@@ -592,6 +597,46 @@ describe('POST swoop/kill', () => {
     expect(mockKill).toHaveBeenCalled();
   });
 
+  it('kills on a plan without owlette.swoop, which refuses starting a session', async () => {
+    const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+    const savedEnv = ENV_KEYS.map((key) => process.env[key]);
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-key';
+    mockGetSiteEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: false,
+      standing: 'expired',
+      inGoodStanding: false,
+      ent: { 'owlette.control': '0', 'owlette.swoop': '0' },
+      epoch: 0,
+    });
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: true });
+
+    try {
+      const start = await START_SESSION(
+        createMockRequest(`http://localhost/api/sites/${SITE}/machines/${MACHINE}/swoop/sessions`, {
+          method: 'POST',
+          body: { control: false, fp: FP },
+        }),
+        machineContext(),
+      );
+      expect(start.status).toBe(402);
+
+      const res = await KILL(
+        createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+        machineContext(),
+      );
+      expect(res.status).toBe(200);
+      expect(mockKill).toHaveBeenCalled();
+    } finally {
+      ENV_KEYS.forEach((key, i) => {
+        if (savedEnv[i] === undefined) delete process.env[key];
+        else process.env[key] = savedEnv[i];
+      });
+    }
+  });
+
   it('a member cannot kill another viewer session', async () => {
     signIn(MEMBER);
 
@@ -602,6 +647,36 @@ describe('POST swoop/kill', () => {
 
     expect(res.status).toBe(403);
     expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  // a kill ends everyone's sessions on the machine and closes every step-up
+  // window there. that administers the site's swoop, so a swoop mode never
+  // reaches it.
+  it('a member set to control cannot kill, and nothing is stopped or closed', async () => {
+    seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+    signIn(MEMBER);
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('positive control: an admin held to view still kills', async () => {
+    seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
   });
 
   it('refuses a sid that is not an opaque id', async () => {
@@ -627,6 +702,84 @@ describe('POST swoop/kill', () => {
     );
 
     expect(res.status).toBe(404);
+  });
+});
+
+// kill ends everyone's sessions on a machine and closes every step-up window
+// there, and the settings decide swoop for the whole site. both sit on
+// SWOOP_SETTINGS_MANAGE, which no machine scope reaches (ADR 0016).
+describe('swoop kill and settings — a machine scope', () => {
+  const OTHER_MACHINE = 'machine-2';
+
+  /** narrows `uid`'s row to `machineIds`, as the members api writes a machine scope. */
+  const limitTo = (uid: string, machineIds: string[]): void => {
+    const key = `${SITE}/${uid}`;
+    mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds });
+  };
+
+  const denyReasons = () =>
+    (writeAuditEntry.mock.calls as [string, { outcome?: string; denyReason?: string }][])
+      .filter(([, entry]) => entry.outcome === 'deny')
+      .map(([, entry]) => entry.denyReason);
+
+  // the other machine is on the site, so only the scope can refuse it
+  beforeEach(() => staged.set(`sites/${SITE}/machines/${OTHER_MACHINE}`, { online: true }));
+
+  describe.each([
+    ['a scoped admin', ADMIN, 'admin', {}],
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+  ] as const)('%s', (_who, uid, role, extra) => {
+    beforeEach(() => {
+      seedMember(SITE, uid, role, extra);
+      limitTo(uid, [MACHINE]);
+      signIn(uid);
+    });
+
+    it('cannot kill on the machine in their scope, and nothing is stopped or closed', async () => {
+      stageSession();
+
+      const res = await KILL(
+        createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+        machineContext(),
+      );
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('capability_missing');
+      expect(denyReasons()).toEqual(['machine_scope_site_wide']);
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mocks.set).not.toHaveBeenCalled();
+    });
+
+    it('gets 404 on another machine, and nothing is stopped or closed', async () => {
+      const res = await KILL(
+        createMockRequest(killUrl(OTHER_MACHINE), { method: 'POST', body: { sid: SID } }),
+        machineContext(OTHER_MACHINE),
+      );
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ detail: 'machine not found or no access' });
+      expect(denyReasons()).toEqual(['machine_out_of_scope']);
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mocks.set).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ['GET', () => GET(createMockRequest(settingsUrl()), siteContext())],
+    [
+      'PATCH',
+      () => PATCH(createMockRequest(settingsUrl(), { method: 'PATCH', body: { enabled: true } }), siteContext()),
+    ],
+  ] as const)('a scoped admin cannot %s the swoop settings', async (_verb, call) => {
+    limitTo(ADMIN, [MACHINE]);
+
+    const res = await call();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(denyReasons()).toEqual(['machine_scope_site_wide']);
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(commandWrites()).toHaveLength(0);
   });
 });
 

@@ -18,22 +18,41 @@ use std::io::{ErrorKind, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
+#[cfg(windows)]
+use windows::core::{w, PCWSTR, PWSTR};
+#[cfg(windows)]
+use windows::Win32::Foundation::{
+  CloseHandle, LocalFree, HANDLE, HLOCAL, WAIT_ABANDONED, WAIT_OBJECT_0,
+};
+#[cfg(windows)]
+use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+#[cfg(windows)]
+use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
-  CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject, MUTEX_MODIFY_STATE,
-  SYNCHRONIZATION_SYNCHRONIZE,
+  CreateMutexW, GetCurrentProcess, OpenMutexW, OpenProcessToken, ReleaseMutex, WaitForSingleObject,
+  MUTEX_MODIFY_STATE, SYNCHRONIZATION_SYNCHRONIZE,
 };
 
 /// Name of the cross-process mutex. Byte-identical to the Python constant —
 /// a typo here silently disables all coordination.
+#[cfg(windows)]
 const MUTEX_NAME: PCWSTR = w!("Global\\OwletteJsonFileMutex");
+/// The posix half of the same lock: flock(2) on this file under the data
+/// root, which `shared_utils._CrossProcessLock` takes for the same writes.
+#[cfg(unix)]
+const JSON_LOCK_REL: &str = "tmp/json.lock";
+/// How often a contended flock is retried inside the wait budget — python's
+/// `_JSON_LOCK_RETRY_SECONDS`.
+#[cfg(unix)]
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 /// Wait budget for the mutex, mirroring `_CrossProcessLock(timeout_ms=2000)`.
 const MUTEX_WAIT_MS: u32 = 2000;
@@ -50,13 +69,17 @@ const INDENT: &[u8] = b"    ";
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Process-wide mutex handle, held for process lifetime like Python's `_json_file_mutex`.
+#[cfg(windows)]
 static JSON_MUTEX: OnceLock<Option<SharedMutex>> = OnceLock::new();
 
+#[cfg(windows)]
 struct SharedMutex(HANDLE);
 
 // SAFETY: a mutex HANDLE is a kernel handle, valid process-wide and usable from any thread. Lock
 // *ownership* is per-thread, which is why `LockGuard` is !Send; the handle itself need not be.
+#[cfg(windows)]
 unsafe impl Send for SharedMutex {}
+#[cfg(windows)]
 unsafe impl Sync for SharedMutex {}
 
 /// How the cross-process lock behaved for one operation; surfaced to the frontend.
@@ -67,6 +90,7 @@ pub enum LockOutcome {
   Acquired,
   /// Previous owner died without releasing. We own it and must release, as Python's
   /// `WAIT_ABANDONED` branch does.
+  #[cfg(windows)]
   Abandoned,
   /// 2 s budget elapsed. Proceeds unlocked, matching Python: the write is still atomic, so the
   /// worst case is a lost update, never a torn file.
@@ -203,6 +227,7 @@ pub fn write_json(path: &Path, value: &Value) -> Result<WriteOutcome, JsonIoErro
     }
   }
 
+  let keep_agent_dacl = keeps_agent_dacl(path, &crate::paths::data_root());
   let guard = acquire_lock();
   guard.warn_if_unprotected(path, "write");
 
@@ -211,7 +236,7 @@ pub fn write_json(path: &Path, value: &Value) -> Result<WriteOutcome, JsonIoErro
 
   for attempt in 1..=MAX_ATTEMPTS {
     let temp = temp_path(path);
-    match write_then_rename(&temp, path, text.as_bytes()) {
+    match write_then_rename(&temp, path, text.as_bytes(), keep_agent_dacl) {
       Ok(()) => {
         return Ok(WriteOutcome {
           lock: guard.outcome,
@@ -263,14 +288,151 @@ fn temp_path(path: &Path) -> PathBuf {
   path.with_file_name(format!("{file_name}.{}.{seq}.tmp", std::process::id()))
 }
 
-fn write_then_rename(temp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), JsonIoError> {
+/// Whether `path` is `tmp/app_states.json` under `root`, the one file whose
+/// replacement keeps the agent's protected dacl rather than taking its
+/// directory's (`shared_utils._json_file_dacl`): the service resolves process
+/// identities from its rows, and its directory lets every local account write.
+/// `config.json` keeps its directory's acl, as the agent leaves it.
+fn keeps_agent_dacl(path: &Path, root: &Path) -> bool {
+  crate::paths::compare_key(path)
+    == crate::paths::compare_key(&root.join(crate::paths::APP_STATES_REL))
+}
+
+/// The scratch file, carrying the agent's dacl before a byte is written when
+/// `keep_agent_dacl`. Created here and shared with nobody, as python's writer
+/// creates it: whoever creates a file owns it and can rewrite its dacl, and a
+/// link already at the name is refused rather than followed. A dacl that
+/// cannot be set leaves the write standing on the directory's acl, as python's
+/// does.
+#[cfg(windows)]
+fn create_temp(temp: &Path, keep_agent_dacl: bool) -> std::io::Result<File> {
+  use std::os::windows::fs::OpenOptionsExt;
+  use windows::Win32::Foundation::GENERIC_WRITE;
+  use windows::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, WRITE_DAC};
+
+  if !keep_agent_dacl {
+    return File::create(temp);
+  }
+  let file = fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)
+    .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0)
+    .share_mode(0)
+    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+    .open(temp)?;
+  if let Err(error) = set_agent_dacl(&file) {
+    log::warn!(
+      "{} keeps its inherited permissions: {error}",
+      temp.display()
+    );
+  }
+  Ok(file)
+}
+
+#[cfg(not(windows))]
+fn create_temp(temp: &Path, _keep_agent_dacl: bool) -> std::io::Result<File> {
+  File::create(temp)
+}
+
+#[cfg(windows)]
+fn set_agent_dacl(file: &File) -> windows::core::Result<()> {
+  use std::os::windows::io::AsRawHandle;
+  use windows::core::{BOOL, HSTRING};
+  use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SetSecurityInfo, SDDL_REVISION_1,
+    SE_FILE_OBJECT,
+  };
+  use windows::Win32::Security::{
+    GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR,
+  };
+
+  let sddl = HSTRING::from(agent_dacl_sddl()?);
+  // SAFETY: the descriptor is the OS's, read only while it is alive and
+  // released with LocalFree; the handle is this file's, open for the call.
+  unsafe {
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      &sddl,
+      SDDL_REVISION_1,
+      &mut descriptor,
+      None,
+    )?;
+    let mut present = BOOL::default();
+    let mut defaulted = BOOL::default();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let applied = GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
+      .and_then(|()| {
+        SetSecurityInfo(
+          HANDLE(file.as_raw_handle()),
+          SE_FILE_OBJECT,
+          DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+          None,
+          None,
+          Some(dacl),
+          None,
+        )
+        .ok()
+      });
+    let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+    applied
+  }
+}
+
+/// The SDDL form of python's user-session dacl for `app_states.json`: SYSTEM
+/// and Administrators full, Users read, and modify (generic read, write and
+/// execute, and delete) for this process's user, protected from inheritance.
+#[cfg(windows)]
+fn agent_dacl_sddl() -> windows::core::Result<String> {
+  Ok(format!(
+    "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{})",
+    process_user_sid()?
+  ))
+}
+
+/// This process's token user, as a string SID.
+#[cfg(windows)]
+fn process_user_sid() -> windows::core::Result<String> {
+  // SAFETY: the token handle is closed on every path once read; the buffer is
+  // sized by the first call and u64-aligned for TOKEN_USER; the SID string is
+  // copied out before the LocalFree that releases it.
+  unsafe {
+    let mut token = HANDLE::default();
+    OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
+    let mut needed = 0u32;
+    let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
+    let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+    let read = GetTokenInformation(
+      token,
+      TokenUser,
+      Some(buffer.as_mut_ptr().cast()),
+      needed,
+      &mut needed,
+    );
+    let _ = CloseHandle(token);
+    read?;
+    let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
+    let mut text = PWSTR::null();
+    ConvertSidToStringSidW(user.User.Sid, &mut text)?;
+    let sid = String::from_utf16_lossy(text.as_wide());
+    let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+    Ok(sid)
+  }
+}
+
+fn write_then_rename(
+  temp: &Path,
+  dest: &Path,
+  bytes: &[u8],
+  keep_agent_dacl: bool,
+) -> Result<(), JsonIoError> {
   let io_err = |path: &Path, source: std::io::Error| JsonIoError::Io {
     path: path.to_path_buf(),
     source,
   };
 
   {
-    let mut file = File::create(temp).map_err(|err| io_err(temp, err))?;
+    let mut file = create_temp(temp, keep_agent_dacl).map_err(|err| io_err(temp, err))?;
     file.write_all(bytes).map_err(|err| io_err(temp, err))?;
     // Flush before rename: a kiosk losing power mid-write must not come back with an empty
     // present config.json.
@@ -288,7 +450,12 @@ fn write_then_rename(temp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), JsonI
 /// holds even though commands run on async worker threads.
 struct LockGuard {
   /// `Some` only when we own the mutex and therefore owe a release.
+  #[cfg(windows)]
   handle: Option<HANDLE>,
+  /// `Some` only when the flock is held and therefore owed a release; the
+  /// descriptor closing releases it too, so a lost guard cannot wedge the file.
+  #[cfg(unix)]
+  file: Option<fs::File>,
   outcome: LockOutcome,
   waited: Duration,
   _not_send: PhantomData<*const ()>,
@@ -307,6 +474,7 @@ impl LockGuard {
   }
 }
 
+#[cfg(windows)]
 impl Drop for LockGuard {
   fn drop(&mut self) {
     if let Some(handle) = self.handle {
@@ -318,6 +486,81 @@ impl Drop for LockGuard {
   }
 }
 
+#[cfg(unix)]
+impl Drop for LockGuard {
+  fn drop(&mut self) {
+    if let Some(file) = &self.file {
+      use std::os::unix::io::AsRawFd;
+      // SAFETY: the descriptor is open for as long as `file` is, and LOCK_UN on
+      // a descriptor this process locked is always sound.
+      unsafe {
+        let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+      }
+    }
+  }
+}
+
+/// flock(2) on `tmp/json.lock`, retried every `LOCK_RETRY` inside the same
+/// 2 s budget the windows mutex gets. the file is created at 0660 when the
+/// daemon has not built the tree yet (a dev box), and opened as it is
+/// otherwise — the daemon's `harden_data_root` owns its mode and group.
+#[cfg(unix)]
+fn acquire_lock() -> LockGuard {
+  use std::os::unix::fs::OpenOptionsExt;
+  use std::os::unix::io::AsRawFd;
+
+  let started = Instant::now();
+  let path = crate::paths::data_root().join(JSON_LOCK_REL);
+  let file = match fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o660).open(&path) {
+    Ok(file) => file,
+    Err(error) => {
+      log::error!("could not open the owlette json lock {} ({error}) — json access will proceed unlocked", path.display());
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Unavailable,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+  };
+  let deadline = started + Duration::from_millis(u64::from(MUTEX_WAIT_MS));
+  loop {
+    // SAFETY: `file` is open for the life of this call; a non-blocking flock
+    // either takes the lock or fails without touching anything else.
+    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if taken {
+      return LockGuard {
+        file: Some(file),
+        outcome: LockOutcome::Acquired,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    let error = std::io::Error::last_os_error();
+    // EWOULDBLOCK and EAGAIN are one value on linux and two on macos.
+    let contended = matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN);
+    if !contended {
+      log::error!("could not lock {} ({error}) — json access will proceed unlocked", path.display());
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Unavailable,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    if Instant::now() >= deadline {
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Timeout,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    thread::sleep(LOCK_RETRY);
+  }
+}
+
+#[cfg(windows)]
 fn acquire_lock() -> LockGuard {
   let started = Instant::now();
 
@@ -357,6 +600,7 @@ fn acquire_lock() -> LockGuard {
   }
 }
 
+#[cfg(windows)]
 fn json_mutex() -> Option<HANDLE> {
   JSON_MUTEX
     .get_or_init(|| {
@@ -526,6 +770,140 @@ mod tests {
     );
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn a_guard_only_holds_the_file_when_it_owns_the_flock() {
+    // the same invariant as the windows test below: never release what is not held.
+    let guard = acquire_lock();
+    assert_eq!(guard.file.is_some(), !guard.outcome.is_unprotected(), "{:?}", guard.outcome);
+    // a second guard on the same thread contends with the first and times out
+    // rather than taking a lock it does not own.
+    let second = acquire_lock();
+    if guard.file.is_some() {
+      assert_eq!(second.outcome, LockOutcome::Timeout, "{:?}", second.outcome);
+      assert!(second.file.is_none());
+    }
+  }
+
+  #[test]
+  fn only_app_states_keeps_the_agents_dacl() {
+    use crate::paths::{APP_STATES_REL, CONFIG_REL, SERVICE_STATUS_REL};
+
+    let root = crate::paths::data_root_from(Some("owlette-root".as_ref()), None);
+    assert!(keeps_agent_dacl(&root.join(APP_STATES_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join(CONFIG_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join(SERVICE_STATUS_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join("app_states.json"), &root));
+  }
+
+  /// A file's dacl, as SDDL.
+  #[cfg(windows)]
+  fn sddl_of(path: &Path) -> String {
+    use windows::core::HSTRING;
+    use windows::Win32::Security::Authorization::{
+      ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
+      SE_FILE_OBJECT,
+    };
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    // SAFETY: both buffers come from the OS and are released with LocalFree
+    // once the string has been copied out.
+    unsafe {
+      let mut descriptor = PSECURITY_DESCRIPTOR::default();
+      GetNamedSecurityInfoW(
+        &HSTRING::from(path.as_os_str()),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        None,
+        None,
+        &mut descriptor,
+      )
+      .ok()
+      .expect("the file's security descriptor");
+      let mut text = PWSTR::null();
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor,
+        SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION,
+        &mut text,
+        None,
+      )
+      .expect("as sddl");
+      let sddl = String::from_utf16_lossy(text.as_wide());
+      let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+      let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+      sddl
+    }
+  }
+
+  /// `sddl` as Windows writes it back: a well-known account, such as the built-in
+  /// administrator a CI runner signs in as, comes back as its alias (`LA`), not its SID.
+  #[cfg(windows)]
+  fn canonical_sddl(sddl: &str) -> String {
+    use windows::core::HSTRING;
+    use windows::Win32::Security::Authorization::{
+      ConvertSecurityDescriptorToStringSecurityDescriptorW,
+      ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    // SAFETY: both buffers come from the OS and are released with LocalFree
+    // once the string has been copied out.
+    unsafe {
+      let mut descriptor = PSECURITY_DESCRIPTOR::default();
+      ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        &HSTRING::from(sddl),
+        SDDL_REVISION_1,
+        &mut descriptor,
+        None,
+      )
+      .expect("a security descriptor");
+      let mut text = PWSTR::null();
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor,
+        SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION,
+        &mut text,
+        None,
+      )
+      .expect("as sddl");
+      let canonical = String::from_utf16_lossy(text.as_wide());
+      let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+      let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+      canonical
+    }
+  }
+
+  /// The service resolves process identities from `app_states.json`'s rows, so
+  /// the agent gives the file a protected dacl: writable by the console user,
+  /// read-only to every other account. This app replaces the file on a kill, a
+  /// restart or a launch-mode change, and every replacement carries that dacl
+  /// rather than its directory's. Anything else keeps its directory's.
+  #[cfg(windows)]
+  #[test]
+  fn app_states_keeps_the_agents_dacl_across_a_desktop_write() {
+    let scratch = Scratch::new("dacl");
+    let app_states = scratch.path("app_states.json");
+    let user = process_user_sid().expect("this process has a user");
+    // SYSTEM and Administrators full, Users read, this user modify, and none of
+    // the directory's.
+    let agents = canonical_sddl(&format!("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{user})"));
+
+    for round in 0..2 {
+      let temp = temp_path(&app_states);
+      write_then_rename(&temp, &app_states, b"{}", true).expect("write");
+      assert_eq!(sddl_of(&app_states), agents, "after write {round}");
+    }
+
+    let config = scratch.path("config.json");
+    write_then_rename(&temp_path(&config), &config, b"{}", false).expect("write");
+    let inherited = sddl_of(&config);
+    assert!(!inherited.starts_with("D:P"), "{inherited}");
+  }
+
+  #[cfg(windows)]
   #[test]
   fn a_guard_only_holds_a_handle_when_it_owns_the_lock() {
     // Drop's invariant: never release a mutex we do not own. Whether we *can* own it is
@@ -550,6 +928,7 @@ mod tests {
   /// The holder falls back to `OpenMutex` for the same reason this module does.
   ///
   /// `cargo test --lib -- --ignored --exact json_io::tests::mutex_contention_with_python_holder --nocapture`
+  #[cfg(windows)]
   #[test]
   #[ignore = "needs the deployed agent interpreter and an elevated shell"]
   fn mutex_contention_with_python_holder() {

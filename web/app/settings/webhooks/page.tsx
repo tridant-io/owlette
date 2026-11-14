@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites } from '@/hooks/useFirestore';
+import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -17,6 +18,7 @@ import {
 import { Loader2, Plus, Webhook, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { CopyButton } from '@/components/CopyButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { CreateWebhookDialog } from './CreateWebhookDialog';
 import { WebhookCard, type WebhookListItem } from './WebhookCard';
 
@@ -47,15 +49,17 @@ export default function WebhooksSettingsPage() {
     : lastSiteId && siteIds.includes(lastSiteId)
       ? lastSiteId
       : (siteIds[0] ?? '');
-  // Mutating `/api/webhooks/**` routes require WEBHOOK_MANAGE, which the server
-  // grants to superadmins, site admins — and, via an explicit short-circuit, the
-  // site's owner (self-serve owners carry global role `member`). `isSiteAdmin`
-  // knows nothing about ownership, so the owner leg is resolved here from the
-  // site docs. The picker above deliberately keeps listing raw site ids.
+  // Every `/api/webhooks/**` route, the list included, requires WEBHOOK_MANAGE,
+  // which the server grants to superadmins, site admins — and, via an explicit
+  // short-circuit, the site's owner (self-serve owners carry global role
+  // `member`). `isSiteAdmin` knows nothing about ownership, so the owner leg is
+  // resolved here from the site docs. The picker above deliberately keeps
+  // listing raw site ids.
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
   const site = sites.find((s) => s.id === selectedSite);
   const canManage =
     !!selectedSite && (isSiteAdmin(selectedSite) || (!!user && site?.owner === user.uid));
+  const webhooksGated = usePlanGated('webhooks', selectedSite);
   const [webhooks, setWebhooks] = useState<WebhookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -96,10 +100,10 @@ export default function WebhooksSettingsPage() {
       router.push('/login');
       return;
     }
-    if (!selectedSite) return;
+    if (!selectedSite || !canManage) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch + site-change fetch; state is managed in refresh().
     refresh(selectedSite).catch(() => {});
-  }, [user, authLoading, router, refresh, selectedSite]);
+  }, [user, authLoading, router, refresh, selectedSite, canManage]);
 
   if (authLoading || (!user && loading)) {
     return (
@@ -110,34 +114,35 @@ export default function WebhooksSettingsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background sm:pb-24">
       <PageHeader currentPage="webhooks" />
-      <main className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
+      <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,
-              delivery history, and retry are all live. Automatic dispatch of
-              roost lifecycle events (`version.published`, `version.rolled_back`,
-              `deployment.*`) is deferred — the routes carry explicit TODOs.
+              delivery history, and retry are all live, and so is dispatch of
+              `version.published` and `version.rolled_back`. `deployment.*` has
+              no emitter yet.
               We surface that gap here rather than letting users subscribe
               silently to events that won't fire. It stays up on a gated site
               that still has subscriptions: it is a caveat about delivery, which
               is exactly what those subscriptions are still doing. */}
-          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-3">
-            <div className="flex items-start gap-3">
-              <span className="inline-flex items-center rounded-full border border-accent-cyan/30 bg-accent-cyan/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan flex-shrink-0">
+          <div className="mb-6 rounded-md border border-accent-cyan/30 bg-accent-cyan/10 px-3 py-3 sm:px-4">
+            {/* the pill sits above the note on a phone, so the note keeps the full width */}
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:gap-3">
+              <span className="inline-flex items-center rounded-full border border-accent-cyan/30 bg-card dark:bg-accent-cyan/20 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan flex-shrink-0">
                 developer preview
               </span>
               <div className="text-xs text-foreground/80 leading-relaxed">
                 subscription management, the manual <code className="text-[11px] bg-card px-1 rounded">/api/webhooks/probe</code> endpoint,
-                delivery history, and retry are live. <strong>automatic dispatch</strong> of roost lifecycle events
-                (<code className="text-[11px]">version.published</code>, <code className="text-[11px]">version.rolled_back</code>,
-                <code className="text-[11px]">deployment.*</code>) is not wired yet — subscriptions are accepted but those
+                delivery history, and retry are live, and <code className="text-[11px]">version.published</code> and{' '}
+                <code className="text-[11px]">version.rolled_back</code> are sent as they happen. <strong>automatic dispatch</strong> of{' '}
+                <code className="text-[11px]">deployment.*</code> is not wired yet — subscriptions are accepted but those
                 events will not fire until a future release.
               </div>
             </div>
           </div>
           <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
             <div>
-              <h1 className="text-2xl font-semibold text-white flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-foreground flex items-center gap-2">
                 <Webhook className="h-5 w-5" />
                 webhooks
               </h1>
@@ -149,7 +154,7 @@ export default function WebhooksSettingsPage() {
             <div className="flex items-center gap-2">
               {siteIds.length > 1 && (
                 <Select value={selectedSite} onValueChange={setUserPickedSite}>
-                  <SelectTrigger className="w-48 bg-card border-border text-white">
+                  <SelectTrigger aria-label="site" className="w-48 bg-card border-border text-foreground">
                     <SelectValue placeholder="pick a site" />
                   </SelectTrigger>
                   <SelectContent>
@@ -162,13 +167,15 @@ export default function WebhooksSettingsPage() {
                 </Select>
               )}
               {canManage && (
-                <Button
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className="text-gray-900 cursor-pointer"
-                >
-                  <Plus className="h-4 w-4 mr-1" /> create webhook
-                </Button>
+                <UpgradeGate flag="webhooks" siteId={selectedSite} variant="inline">
+                  <Button
+                    type="button"
+                    onClick={() => setCreateOpen(true)}
+                    className="cursor-pointer"
+                  >
+                    <Plus className="h-4 w-4 mr-1" /> create webhook
+                  </Button>
+                </UpgradeGate>
               )}
             </div>
           </div>
@@ -178,7 +185,7 @@ export default function WebhooksSettingsPage() {
               <button
                 type="button"
                 onClick={() => setRevealedSecret(null)}
-                className="absolute top-3 right-3 text-muted-foreground hover:text-white cursor-pointer"
+                className="absolute top-3 right-3 text-muted-foreground hover:text-foreground cursor-pointer"
                 aria-label="dismiss"
               >
                 <X className="h-4 w-4" />
@@ -187,7 +194,7 @@ export default function WebhooksSettingsPage() {
                 signing secret issued — copy it now. it will not be shown again.
               </p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-white font-mono break-all select-all">
+                <code className="flex-1 text-xs bg-background border border-border rounded px-3 py-2 text-foreground font-mono break-all select-all">
                   {revealedSecret}
                 </code>
                 <CopyButton
@@ -200,53 +207,58 @@ export default function WebhooksSettingsPage() {
 
           {!selectedSite ? (
             <Card className="border-border bg-card/50 p-8 text-center">
-              <p className="text-sm text-white">no sites available</p>
+              <p className="text-sm text-foreground">no sites available</p>
               <p className="text-xs text-muted-foreground mt-1">
                 you need site access to manage webhooks. ask a site admin to add you.
               </p>
             </Card>
-          ) : loading || sitesLoading ? (
+          ) : sitesLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : !canManage ? (
+            <Card className="border-border bg-card/50 p-8 text-center space-y-3">
+              <Webhook className="h-8 w-8 text-muted-foreground mx-auto" />
+              <div>
+                <p className="text-sm text-foreground">this site&apos;s webhooks are managed by its admins</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ask a site admin or the owner about them.
+                </p>
+              </div>
+            </Card>
+          ) : loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : webhooks.length === 0 ? (
             <Card className="border-border bg-card/50 p-8 text-center space-y-3">
               <Webhook className="h-8 w-8 text-muted-foreground mx-auto" />
-              {canManage ? (
-                <>
-                  <div>
-                    <p className="text-sm text-white">no webhooks yet</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      subscribe to events so your ci/cd, slack bot, or monitoring can react to
-                      roost activity.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => setCreateOpen(true)}
-                    className="text-gray-900 cursor-pointer"
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
-                  </Button>
-                </>
-              ) : (
-                <div>
-                  <p className="text-sm text-white">no webhooks configured for this site</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    a site admin can add webhooks.
-                  </p>
-                </div>
+              <div>
+                <p className="text-sm text-foreground">no webhooks yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  subscribe to events so your ci/cd, slack bot, or monitoring can react to
+                  roost activity.
+                </p>
+              </div>
+              {/* the header already carries the upgrade note */}
+              {!webhooksGated && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setCreateOpen(true)}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
+                </Button>
               )}
             </Card>
           ) : (
-            <div className="space-y-3">
+            <div className="cascade-rows space-y-3">
               {webhooks.map((w) => (
                 <WebhookCard
                   key={w.id}
                   webhook={w}
                   siteId={selectedSite}
-                  canManage={canManage}
                   onChanged={() => void refresh(selectedSite)}
                   onSecretRotated={setRevealedSecret}
                 />
@@ -266,6 +278,6 @@ export default function WebhooksSettingsPage() {
           }}
         />
       )}
-    </div>
+    </PageCascade>
   );
 }

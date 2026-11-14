@@ -27,6 +27,7 @@ import type { SwoopPeer } from '@/lib/swoop/peer';
 import type { SwoopChannel } from '@/lib/swoop/protocol';
 import type { SwoopPresenter } from '@/lib/swoop/video/presenter';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
+import type { InboundVideoStats } from '@/lib/swoop/video/stall';
 
 import { attachInputCapture, type InputCapture } from '@/lib/swoop/input';
 import { createSwoopFeedback, type SwoopFeedback } from '@/lib/swoop/feedback';
@@ -34,7 +35,11 @@ import { attach as attachLease } from '@/lib/swoop/lease';
 import { attach as attachClipboard } from '@/lib/swoop/clipboard';
 import { attach as attachAudio } from '@/lib/swoop/audio';
 import { attach as attachDisplays } from '@/lib/swoop/displays';
+import { attach as attachActivity } from '@/lib/swoop/activity';
 import { attach as attachPresence } from '@/lib/swoop/presence';
+import { attach as attachCursor } from '@/lib/swoop/cursor';
+import { attach as attachWakeLock } from '@/lib/swoop/wakeLock';
+import { attach as attachTouch } from '@/lib/swoop/touch';
 
 /** what `attach` hands back: undo everything it did, idempotently. */
 export type SwoopDetach = () => void;
@@ -66,15 +71,15 @@ export interface SwoopSession {
   /** the focusable surface input capture binds to. */
   readonly stage: HTMLElement;
   /**
-   * the PICTURE's box in client coordinates — the letterboxed content area
-   * inside the element, not the element's own rect.
+   * the PICTURE's box in client coordinates: the `<video>` element's own rect,
+   * which `useSwoopView` lays out as the picture's box (`lib/swoop/view.ts`),
+   * the local zoom's transform included.
    *
-   * this exists because arm B presents into a `<video>`, and a `<video>` whose
-   * aspect ratio does not match its box contains black bars. normalising a
-   * pointer position against the element rect makes `0..1` span the bars too,
-   * so every click lands offset and the offset grows with the mismatch — right
-   * on a 16:9 host in a 16:9 window, wrong by a different amount at each edge
-   * on an ultrawide, a rotated panel or a resized window.
+   * the stage around it is bigger wherever the layout leaves bars: a machine
+   * whose shape is not the window's, or a picture snapped or sized down to a
+   * whole fraction. normalising a pointer position against the stage makes
+   * `0..1` span those bars too, so every click lands offset, by a different
+   * amount at each edge.
    *
    * hand this to `attachInputCapture`'s `rect()` and let `input.ts` own the
    * normalisation itself, including its `size - 1` convention, which the rust
@@ -83,6 +88,8 @@ export interface SwoopSession {
   contentRect(): DOMRect;
   readonly peer: SwoopPeer;
   readonly presenter: SwoopPresenter;
+  /** the video receiver's inbound-rtp counters (`video/receiver.ts`), or null before a track. */
+  inboundStats(): Promise<InboundVideoStats | null>;
   /**
    * send on one of the five channels; false when that channel is not open.
    * every viewer→host payload in the protocol is json text — `swoop-meta` is
@@ -97,8 +104,17 @@ export interface SwoopSession {
   renewLease(): Promise<SwoopLease>;
   /** when the lease currently held lapses. */
   leaseExpiresAt(): number;
-  /** end the session: tears down the peer and the page's state. */
-  end(reason: string): void;
+  /**
+   * end the session: tears down the peer and the page's state. `message` is
+   * what the page shows as the reason.
+   */
+  end(reason: string, message?: string): void;
+  /**
+   * a new session to the same machine in place of this one, now: how a choice
+   * only an offer carries (the codec) takes effect. nothing ends server-side,
+   * so the tab's continuity carries control over without a second factor.
+   */
+  restart(): void;
 }
 
 export interface SwoopFeature {
@@ -113,6 +129,8 @@ export interface SwoopFeature {
  * constructors — `attachInputCapture(options)` and `createSwoopFeedback(options)`
  * — because both are used directly by their own tests and neither should know
  * what a `SwoopSession` is. the adapters below are the whole of the coupling.
+ * two more, `touch` and `activity`, are adapted in the list itself: each attach
+ * takes the input capture as well as the session, which is null for a watcher.
  *
  * the handles they produce are kept here, keyed weakly by session, because the
  * toolbar and the overlay need them and the `attach` contract only hands back a
@@ -165,6 +183,14 @@ const feedbackFeature: SwoopFeature = {
         const box = session.contentRect();
         return { widthCss: box.width, heightCss: box.height };
       },
+      // the host stopped answering on a channel that had been working, over a
+      // path that is up. an ice restart would not help — the channels are
+      // what died, and only a new peer gets new ones — so this is the
+      // transient end the hook reconnects from, with the retry ladder it
+      // already has. a path that is down is the peer's to restart instead.
+      onSilence: () => session.end('peer_failed'),
+      linkUp: () => session.peer.linkUp(),
+      framesDecoded: async () => (await session.inboundStats())?.framesDecoded ?? null,
     });
     const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
     const offMessage = session.onChannelMessage('swoop-feedback', (data) =>
@@ -191,8 +217,14 @@ export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'lease', attach: attachLease },
   feedbackFeature,
   inputFeature,
+  // after input, whose capture it drives; a watcher's is null, and still zooms
+  { name: 'touch', attach: (session) => attachTouch(session, swoopInputCapture(session)) },
   { name: 'clipboard', attach: attachClipboard },
   { name: 'audio', attach: attachAudio },
   { name: 'displays', attach: attachDisplays },
+  // before presence, which lights it with the others' moves; the capture lights this viewer's own
+  { name: 'activity', attach: (session) => attachActivity(session, swoopInputCapture(session)) },
   { name: 'presence', attach: attachPresence },
+  { name: 'cursor', attach: attachCursor },
+  { name: 'wake-lock', attach: attachWakeLock },
 ];

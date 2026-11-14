@@ -11,7 +11,9 @@
  *     never called);
  *   - the per-IP signup limit 429s before the handler runs;
  *   - the bot challenge gates CREATION, not calls — it rides bootstrapUser's
- *     `onWillCreate` hook, which fires only when `users/{uid}` is absent.
+ *     `onWillCreate` hook, which fires only when `users/{uid}` is absent;
+ *   - creating an unverified password account sends the verification email,
+ *     and a failed send never fails the bootstrap.
  * A regression that re-trusted body.email, dropped the withRateLimit wrap,
  * moved the disposable check after the write, or hoisted the challenge back
  * ahead of the existence read would pass the old tests, not these.
@@ -66,6 +68,13 @@ jest.mock('@/lib/rateLimit', () => {
   const actual = jest.requireActual('@/lib/rateLimit');
   return { ...actual, checkRateLimit: (...a: unknown[]) => mockCheckRateLimit(...a) };
 });
+
+// needsEmailVerification stays real, so the provider/verified rule is on trial here.
+const mockSendVerificationEmail = jest.fn();
+jest.mock('@/lib/emailVerification.server', () => ({
+  ...jest.requireActual('@/lib/emailVerification.server'),
+  sendVerificationEmail: (...a: unknown[]) => mockSendVerificationEmail(...a),
+}));
 
 import { POST } from '@/app/api/users/bootstrap/route';
 
@@ -253,5 +262,64 @@ describe('POST /api/users/bootstrap — abuse controls', () => {
     const { status } = await parseResponse(res);
     expect(status).toBe(429);
     expect(mockBootstrapUser).not.toHaveBeenCalled();
+  });
+
+  describe('email verification at sign-up', () => {
+    const passwordRecord = {
+      uid: 'uid-test',
+      email: 'real@gmail.com',
+      emailVerified: false,
+      providerData: [{ providerId: 'password' }],
+    };
+
+    beforeEach(() => {
+      mockSendVerificationEmail.mockResolvedValue(undefined);
+    });
+
+    it('sends the verification email when it creates an unverified password account', async () => {
+      mockGetUser.mockResolvedValue(passwordRecord);
+
+      const res = await POST(bootstrapReq({ displayName: 'Real Person' }));
+
+      expect(res.status).toBe(200);
+      expect(mockSendVerificationEmail).toHaveBeenCalledTimes(1);
+      expect(mockSendVerificationEmail).toHaveBeenCalledWith('real@gmail.com');
+    });
+
+    it('sends nothing for a google sign-up, which arrives verified', async () => {
+      mockGetUser.mockResolvedValue({
+        ...passwordRecord,
+        emailVerified: true,
+        providerData: [{ providerId: 'google.com' }],
+      });
+
+      const res = await POST(bootstrapReq({ displayName: 'Real Person' }));
+
+      expect(res.status).toBe(200);
+      expect(mockSendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing when the doc already exists — only the first bootstrap mails', async () => {
+      mockGetUser.mockResolvedValue(passwordRecord);
+      mockBootstrapUser.mockImplementation(existingDocBootstrap);
+
+      const res = await POST(bootstrapReq({ displayName: 'Real Person' }));
+
+      expect(res.status).toBe(200);
+      expect(mockSendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('still bootstraps when the send fails', async () => {
+      mockGetUser.mockResolvedValue(passwordRecord);
+      mockSendVerificationEmail.mockRejectedValue(new Error('resend down'));
+      const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      const res = await POST(bootstrapReq({ displayName: 'Real Person' }));
+      const { status, body } = await parseResponse(res);
+
+      expect(status).toBe(200);
+      expect((body as { alreadyExists?: boolean }).alreadyExists).toBe(false);
+      error.mockRestore();
+    });
   });
 });

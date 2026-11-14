@@ -5,7 +5,8 @@
  * `mcp_tool_call`'s agent command id, from `stream/current.toolCommands`.
  *
  * Authorization, in order: resolveAuth (401) → requireScope(chat=<siteId>:write), api-key
- * callers only → verifyUserSiteAccess → chat must exist on `siteId` and belong to the
+ * callers only → verifyUserSiteAccess → `machineId` in the caller's machine scope (404
+ * 'machine not found or no access') → chat must exist on `siteId` and belong to the
  * caller → `commandId` must appear in that chat's `toolCommands` index AND the request's
  * machineId must match the key it was recorded under. The last check is what stops a caller
  * cancelling arbitrary machine commands through a chat they happen to own.
@@ -23,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { ApiAuthError, resolveAuth, requireScope } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 import { apiError } from '@/lib/apiErrorResponse';
 import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
 import {
@@ -30,7 +32,8 @@ import {
   ExecuteMachineCommandError,
 } from '@/lib/actions/executeMachineCommand.server';
 import { getUserIdFromSession, withRateLimit } from '@/lib/withRateLimit';
-import type { Actor, Role } from '@/lib/capabilities';
+import { siteStanding, type Actor, type Role } from '@/lib/capabilities';
+import { scopeCovers } from '@/lib/machineAccess';
 
 /** `stream/current.toolCommands`: toolCallId → machineId → { commandId }. Declared locally
  * to keep this route off the server-only turn store's type surface. */
@@ -56,7 +59,8 @@ function isNonEmptyString(value: unknown): value is string {
 /**
  * Poll `commands/completed` for the CANCEL command's own ack: immediately, then every second
  * to the deadline. `status: 'running'` is the agent's in-flight marker — non-terminal, keep
- * polling. Consumed acks are deleted best-effort so the doc doesn't grow unbounded.
+ * polling ({@link isTerminalCommandStatus}). Consumed acks are deleted best-effort so the doc
+ * doesn't grow unbounded.
  */
 async function pollForCancelAck(
   db: FirebaseFirestore.Firestore,
@@ -78,7 +82,7 @@ async function pollForCancelAck(
     const entry = snap.exists
       ? ((snap.data() ?? {})[cancelCommandId] as Record<string, unknown> | undefined)
       : undefined;
-    if (entry && entry.status !== 'running') {
+    if (entry && isTerminalCommandStatus(entry.status)) {
       await completedRef
         .update({ [cancelCommandId]: FieldValue.delete() })
         .catch(() => undefined);
@@ -124,6 +128,12 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
         { error: 'you do not have access to this site' },
         { status: 403 },
       );
+    }
+
+    // a machine outside the caller's machine scope answers as a missing one (ADR 0016),
+    // before any chat read
+    if (!scopeCovers(access.standing.machineIds, machineId)) {
+      return NextResponse.json({ error: 'machine not found or no access' }, { status: 404 });
     }
 
     // Chat-scoped and owner-only.
@@ -181,7 +191,7 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
       role,
       // Per-site standing from the same access check above; the global `role`
       // beside it grants nothing on a site.
-      siteRoles: access.siteRole ? { [siteId]: access.siteRole } : {},
+      ...siteStanding([[siteId, access.standing]]),
     };
 
     let queued;

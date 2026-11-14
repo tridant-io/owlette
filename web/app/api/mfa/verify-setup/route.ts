@@ -17,12 +17,14 @@ import { encrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSessionUser } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import { applyMfaFactorChange } from '@/lib/mfaFactors.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import { checkMfaEnrollmentGate } from '@/lib/mfaEnrollmentGate.server';
+import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
@@ -59,8 +61,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       );
     }
 
-    await requireSessionUser(request, userId);
-    await assertActiveUser(userId);
+    await requirePreMfaSessionUser(request, userId);
+    const userData = await assertActiveUser(userId);
 
     if (!isEncryptionConfigured()) {
       console.error('[MFA Verify Setup] MFA_ENCRYPTION_KEY not configured');
@@ -167,7 +169,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // Possession of the new factor was just proved — promote the session to
     // MFA-verified so the next protected navigation isn't bounced to /verify-2fa.
     // Subsequent session-creates still require a fresh challenge.
-    await markSessionMfaVerified();
+    await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
 
     // Platform-tenant mutation (siteId = '') so the cloud function records it on
     // the platform partition; mirrors the `mfa_disabled` row from /api/mfa/disable.
@@ -184,6 +186,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         backupCodesIssued: hashedBackupCodes.length,
         passkeysEnrolled: factorResult.factors.passkeys,
       },
+    });
+
+    await sendMfaFactorNotice(userData.email, {
+      change: 'added',
+      factor: 'authenticator app',
     });
 
     // The plaintext sheet, returned exactly once — only hashes were stored.

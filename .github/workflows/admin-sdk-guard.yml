@@ -1,19 +1,17 @@
 name: firebase-admin namespace guard
 
-# scripts/ and e2e-machine/ are in NO other workflow's path filters, which is
-# exactly how the firebase-admin 14 upgrade (a454e4cd) left 10 files here broken
-# for two weeks: it swept web/ and functions/ and nothing checked the rest.
+# scripts/ is in NO other workflow's path filters, which is exactly how the
+# firebase-admin 14 upgrade (a454e4cd) left 10 files broken for two weeks: it
+# swept web/ and functions/ and nothing checked the rest.
 on:
   pull_request:
     paths:
       - 'scripts/**'
-      - 'e2e-machine/**'
       - '.github/workflows/admin-sdk-guard.yml'
   push:
     branches: [main, dev]
     paths:
       - 'scripts/**'
-      - 'e2e-machine/**'
       - '.github/workflows/admin-sdk-guard.yml'
 
 concurrency:
@@ -29,11 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
@@ -43,5 +41,5 @@ jobs:
       - name: self-test the scanner
         run: node scripts/check-firebase-admin-namespace.mjs --test
 
-      - name: scan scripts/ and e2e-machine/
+      - name: scan scripts/
         run: node scripts/check-firebase-admin-namespace.mjs

@@ -3,7 +3,9 @@
  * the chat UI (for tool-call cards).
  *
  * Tier 1 read-only and tier 2 process management are auto-approved; tier 3 is
- * privileged and requires in-chat user confirmation.
+ * privileged and requires in-chat user confirmation, as does any call that
+ * overrides active hours. A call that changes what a machine launches always
+ * asks, at any tier, and is refused with nobody to ask: lib/hoot/launchChange.ts.
  */
 
 export type ToolTier = 1 | 2 | 3;
@@ -23,6 +25,88 @@ export interface McpToolDefinition {
     }>;
     required?: string[];
   };
+}
+
+/**
+ * The active-hours override pair. A call that sets it waits for a person's
+ * approval in a dashboard chat (hoot-utils.server.ts); a turn no person drives,
+ * autonomous hoot included, is never offered it.
+ */
+export const ACTIVE_HOURS_OVERRIDE_PARAMS = ['override_active_hours', 'reason'] as const;
+
+function activeHoursOverrideFields(override: string): McpToolDefinition['parameters']['properties'] {
+  return {
+    override_active_hours: {
+      type: 'boolean',
+      description: `${override} Set it only when the operator explicitly asked for that and gave a reason. The call then waits for their approval in this chat, and works on one machine at a time. It only matters on Windows machines running owlette 4.1.21 or later; older agents ignore it.`,
+    },
+    reason: {
+      type: 'string',
+      description: "Required with override_active_hours: the operator's reason, 500 characters or fewer. The machine logs it with who approved it.",
+    },
+  };
+}
+
+export function takesActiveHoursOverride(def: McpToolDefinition): boolean {
+  return 'override_active_hours' in def.parameters.properties;
+}
+
+/** The definition without the override pair, for callers no person approves. */
+export function withoutActiveHoursOverride(def: McpToolDefinition): McpToolDefinition {
+  if (!takesActiveHoursOverride(def)) return def;
+  const properties = { ...def.parameters.properties };
+  for (const name of ACTIVE_HOURS_OVERRIDE_PARAMS) delete properties[name];
+  return { ...def, parameters: { ...def.parameters, properties } };
+}
+
+/**
+ * In a turn on several machines, the parameter a call names its machines with
+ * (hoot-utils.server.ts). It exists only on the copy of a definition such a
+ * turn offers: the definitions below never carry it, and no agent is sent it.
+ */
+export const CALL_MACHINES_PARAM = 'machines';
+
+/** The one entry that stands for every machine of the turn. */
+export const EVERY_TURN_MACHINE = '*';
+
+/** The definition as a turn on several machines offers it. `required` is for a tool above read-only. */
+export function withCallMachines(def: McpToolDefinition, required: boolean): McpToolDefinition {
+  const all = `["${EVERY_TURN_MACHINE}"]`;
+  const description = required
+    ? `Required. The machines this call runs on: ids from this turn's machines. Name only the machines the operator's request is about; nothing else is touched. ${all} is every machine in this turn: use it only when the operator asked for all of them.`
+    : `The machines this call runs on: ids from this turn's machines. Name only the machines the operator's request is about. Leave it out, or pass ${all}, to run on every machine in this turn.`;
+  return {
+    ...def,
+    parameters: {
+      ...def.parameters,
+      properties: {
+        ...def.parameters.properties,
+        [CALL_MACHINES_PARAM]: { type: 'array', items: { type: 'string' }, description },
+      },
+      ...(required ? { required: [...(def.parameters.required ?? []), CALL_MACHINES_PARAM] } : {}),
+    },
+  };
+}
+
+/** The machine ids a call's input names, or null when it names none or every machine of its turn. */
+export function namedCallMachines(input: unknown): string[] | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const named = (input as Record<string, unknown>)[CALL_MACHINES_PARAM];
+  if (!Array.isArray(named) || named.length === 0) return null;
+  if (!named.every((id): id is string => typeof id === 'string' && id !== EVERY_TURN_MACHINE)) return null;
+  return [...new Set(named)];
+}
+
+/**
+ * A tool's input cut down to the parameters `def` declares. A granted machine's
+ * call, and a turn it started, hand a tool nothing else (ADR 0017).
+ */
+export function declaredParams(def: McpToolDefinition, input: unknown): Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return {};
+  const declared = def.parameters.properties;
+  return Object.fromEntries(
+    Object.entries(input).filter(([key]) => Object.prototype.hasOwnProperty.call(declared, key)),
+  );
 }
 
 // Tier 1: Read-Only Tools
@@ -220,7 +304,7 @@ const tier1Tools: McpToolDefinition[] = [
   },
   {
     name: 'check_pending_reboot',
-    description: 'Diagnostic: detect whether a system reboot is currently pending (from Windows Update, Component Based Servicing, pending file rename ops, or SCCM client). Read-only. Returns pending (bool), reasons (array), last update install time, and next scheduled update run time if available. Use during incident investigations, after a suspected update, or when the machine is behaving unusually.',
+    description: 'Diagnostic: detect whether a system reboot is currently pending (from Windows Update, Component Based Servicing, or SCCM client). Read-only. Returns pending (bool), reasons (array), file_renames (bool), last update install time, and next scheduled update run time if available. file_renames means file renames are queued for the next boot; installers and drivers leave those for weeks, so they do not count as pending and are not a Windows Update restart. Use during incident investigations, after a suspected update, or when the machine is behaving unusually.',
     tier: 1,
     parameters: {
       type: 'object',
@@ -271,9 +355,21 @@ const tier1Tools: McpToolDefinition[] = [
       required: ['followup_id'],
     },
   },
+  // Read-only: any site member can already read the site's talons.
+  {
+    name: 'list_talons',
+    description: 'List the talons on this site: id, name, whether it is enabled, its trigger, its output types, and how its last run went. Call this before set_talon_enabled to get the talon id, and before create_talon so you do not duplicate a talon that already exists.',
+    tier: 1,
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+  },
 ];
 
 // Tier 2: Process Management
+
+export const LAUNCH_APPROVAL_NOTE = "It waits for a person's approval in a dashboard chat, whatever the site's approval setting, and is refused where nobody can approve it.";
 
 const processScheduleBlocksSchema = {
   type: 'object',
@@ -441,7 +537,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'set_launch_mode',
-    description: 'Set the launch mode for an Owlette-configured process. Modes: "off" (not managed), "always" (24/7 with crash recovery), "scheduled" (runs during configured time windows only). When setting to "scheduled", also provide a schedules array with day/time blocks.',
+    description: 'Set the launch mode for an Owlette-configured process. Modes: "off" (not managed), "always" (24/7 with crash recovery), "scheduled" (runs during configured time windows only). When setting to "scheduled", also provide a schedules array with day/time blocks. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -488,7 +584,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'update_process',
-    description: 'Update an Owlette-configured process\'s configuration fields. Accepts a partial set of fields to change - only fields you provide are updated; others are left unchanged. Available fields: name (display name), exe_path (full path to the executable), file_path (project file or command arguments), cwd (working directory, optional), priority (\'Low\' | \'Normal\' | \'High\' | \'Realtime\'), visibility (\'Normal\' | \'Hidden\'), time_delay (launch delay seconds), time_to_init (init timeout seconds), relaunch_attempts (number of crash relaunches), launch_mode (\'off\' | \'always\' | \'scheduled\'), schedules (array of {days, ranges} blocks for scheduled mode), schedulePresetId (named preset id, or null to clear). Use this when the user asks to rename a process, fix a stale path, change priority/visibility, tune timing, or adjust the schedule.',
+    description: 'Update an Owlette-configured process\'s configuration fields. Accepts a partial set of fields to change - only fields you provide are updated; others are left unchanged. Available fields: name (display name), exe_path (full path to the executable), file_path (project file or command arguments), cwd (working directory, optional), priority (\'Low\' | \'Normal\' | \'High\' | \'Realtime\'), visibility (\'Normal\' | \'Hidden\'), time_delay (launch delay seconds), time_to_init (init timeout seconds), relaunch_attempts (number of crash relaunches), launch_mode (\'off\' | \'always\' | \'scheduled\'), schedules (array of {days, ranges} blocks for scheduled mode), schedulePresetId (named preset id, or null to clear). Use this when the user asks to rename a process, fix a stale path, change priority/visibility, tune timing, or adjust the schedule. Only name, priority and visibility change nothing about what the machine runs or when; any other field does: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -504,7 +600,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'add_process',
-    description: 'Create a new Owlette-managed process on a machine. Required fields: name, exe_path. Optional fields: file_path, cwd, priority, visibility, time_delay, time_to_init, relaunch_attempts, launch_mode, schedules, schedulePresetId. The new process is added with launch_mode=\'off\' by default; set explicitly to \'always\' or \'scheduled\' to enable management.',
+    description: 'Create a new Owlette-managed process on a machine. Required fields: name, exe_path. Optional fields: file_path, cwd, priority, visibility, time_delay, time_to_init, relaunch_attempts, launch_mode, schedules, schedulePresetId. The new process is added with launch_mode=\'off\' by default; set explicitly to \'always\' or \'scheduled\' to enable management. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -514,7 +610,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'delete_process',
-    description: 'Delete an Owlette-configured process by name. The process is removed from the machine\'s config. If the process is currently running, it remains running (the agent stops managing it but does not terminate). Use kill_process first if you want to actually stop the running process.',
+    description: 'Delete an Owlette-configured process by name. The process is removed from the machine\'s config. If the process is currently running, it remains running (the agent stops managing it but does not terminate). Use kill_process first if you want to actually stop the running process. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -574,7 +670,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_service',
-    description: 'Full services.msc parity — start, stop, restart, pause/continue, set startup type, configure failure recovery, or get full service details. Use set_recovery to configure auto-restart on crash (critical for unattended media installations). Use get_details to query everything about a service in one call: status, startup type, binary path, dependencies, recovery config.',
+    description: 'Full services.msc parity — start, stop, restart, pause/continue, set startup type, configure failure recovery, or get full service details. Use set_recovery to configure auto-restart on crash (critical for unattended media installations). Use get_details to query everything about a service in one call: status, startup type, binary path, dependencies, recovery config. set_startup and set_recovery change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -651,14 +747,25 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_update',
-    description: 'Pause, resume, or schedule Windows Update. Use pause before live events, set_active_hours to define quiet hours during which auto-reboot is blocked, set_scheduled_install to define exactly when updates install, and set_feature_deferral / set_quality_deferral to delay update rollouts. Windows Update is the #1 threat to unattended 24/7 installations.',
+    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette 4.1.21 or later refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. limit_auto_restart, disable_auto_install and enable_auto_install need owlette 4.1.21 or later. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts. set_scheduled_install changes when the machine runs and restarts: " + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['get_status', 'pause', 'resume', 'set_active_hours', 'set_scheduled_install', 'set_restart_deadline', 'set_feature_deferral', 'set_quality_deferral'],
+          enum: [
+            'get_status',
+            'pause',
+            'resume',
+            'set_active_hours',
+            'limit_auto_restart',
+            'disable_auto_install',
+            'enable_auto_install',
+            'set_scheduled_install',
+            'set_feature_deferral',
+            'set_quality_deferral',
+          ],
           description: 'The Windows Update operation to perform.',
         },
         pause_days: {
@@ -667,11 +774,11 @@ const tier2Tools: McpToolDefinition[] = [
         },
         start_hour: {
           type: 'number',
-          description: 'For set_active_hours: active hours start hour (0-23).',
+          description: 'For set_active_hours, or optionally limit_auto_restart (default: the current active hours): the hour active hours start (0-23).',
         },
         end_hour: {
           type: 'number',
-          description: 'For set_active_hours: active hours end hour (0-23).',
+          description: 'For set_active_hours, or optionally limit_auto_restart: the hour active hours end (0-23); 17 means until 17:00. At most 18 hours after start_hour.',
         },
         day_of_week: {
           type: 'number',
@@ -679,16 +786,15 @@ const tier2Tools: McpToolDefinition[] = [
         },
         hour: {
           type: 'number',
-          description: 'For set_scheduled_install: hour of day to install (0-23).',
-        },
-        deadline_days: {
-          type: 'number',
-          description: 'For set_restart_deadline: days Windows waits before force-rebooting (2-14).',
+          description: 'For set_scheduled_install: hour of day to install (0-23). Windows restarts the machine then to finish.',
         },
         days: {
           type: 'number',
           description: 'For set_feature_deferral (0-365) or set_quality_deferral (0-30): deferral days.',
         },
+        ...activeHoursOverrideFields(
+          'For set_active_hours or limit_auto_restart: allow new active hours that leave the machine outside them right now, which is refused without it.',
+        ),
       },
       required: ['action'],
     },
@@ -763,7 +869,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_scheduled_task',
-    description: 'Full Task Scheduler parity — list, enable, disable, delete, run_now, stop, create new tasks, get details, and get run history. Use create to schedule weekly memory-flush reboots, hourly health checks, boot-time media app launches, or event-triggered restarts. Specify the trigger (boot/daily/weekly/once/on_event/on_logon/on_idle), the action (run_program), the principal (SYSTEM/LOCAL_SERVICE/etc.), and settings (retry count, execution time limit, etc.).',
+    description: 'Full Task Scheduler parity — list, enable, disable, delete, run_now, stop, create new tasks, get details, and get run history. Use create to schedule weekly memory-flush reboots, hourly health checks, boot-time media app launches, or event-triggered restarts. Specify the trigger (boot/daily/weekly/once/on_event/on_logon/on_idle), the action (run_program), the principal (SYSTEM/LOCAL_SERVICE/etc.), and settings (retry count, execution time limit, etc.). Anything but list, get_details, get_history and stop changes what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -827,7 +933,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'registry_operation',
-    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. Use this for structured registry edits instead of execute_script + reg.exe.',
+    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. On owlette 4.1.21 or later it refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe. Under Winlogon it reaches only the auto-login values, never the password, and under a service only its Parameters key. A write or delete can change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -930,7 +1036,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_feature',
-    description: 'Add, remove, or list Windows Optional Features (DISM, e.g. NetFx3, OpenSSH-Server), Windows Capabilities (FoD, e.g. OpenSSH.Client), or AppX Packages (Microsoft Store apps like OneDrive, Xbox Game Bar, Cortana, Teams). Use for kiosk provisioning — removing OneDrive/Xbox/Cortana bloat and installing needed features. Critical features for Owlette itself are blocklisted and cannot be disabled.',
+    description: 'Add, remove, or list Windows Optional Features (DISM, e.g. NetFx3, OpenSSH-Server), Windows Capabilities (FoD, e.g. OpenSSH.Client), or AppX Packages (Microsoft Store apps like OneDrive, Xbox Game Bar, Cortana, Teams). Use for kiosk provisioning — removing OneDrive/Xbox/Cortana bloat and installing needed features. Critical features for Owlette itself are blocklisted and cannot be disabled. install and remove change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1014,7 +1120,9 @@ SCOPE: omit "scope" to cover every machine in the site. To target specific machi
 
 COPY STYLE: "name" and "description" are shown in the dashboard, which is all lowercase — write them lowercase (e.g. "restart td when the wall goes black").
 
-LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewer. cooldownMinutes 0-1440 (default 60) is the minimum gap between runs.`,
+LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewer. cooldownMinutes 0-1440 (default 60) is the minimum gap between runs.
+
+APPROVAL: a command output, or a hoot output with allowActions, makes a talon that acts on machines by itself. ${LAUNCH_APPROVAL_NOTE}`,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1057,17 +1165,8 @@ LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewe
     },
   },
   {
-    name: 'list_talons',
-    description: 'List the talons on this site: id, name, whether it is enabled, its trigger, its output types, and how its last run went. Call this before set_talon_enabled to get the talon id, and before create_talon so you do not duplicate a talon that already exists.',
-    tier: 2,
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
     name: 'set_talon_enabled',
-    description: 'Arm or disarm an existing talon. Enabling re-arms its schedule from now, so a talon that sat disabled for a while does not fire the moment it comes back. Disabling leaves the talon in place — it does not delete it. Get talon_id from list_talons; never guess it.',
+    description: 'Arm or disarm an existing talon. Enabling re-arms its schedule from now, so a talon that sat disabled for a while does not fire the moment it comes back. Disabling leaves the talon in place — it does not delete it. Get talon_id from list_talons; never guess it. Enabling one: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1228,7 +1327,10 @@ WORKFLOW:
 1. Call get_system_presets first to find presets for the software. Presets provide installer URLs, silent flags, and other configuration.
 2. Gather all parameters and resolve any ambiguity by asking the user.
 3. Present a clear summary of the deployment plan and ASK "Should I proceed?" — wait for explicit confirmation.
-4. Only after the user confirms, call this tool. It returns immediately with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
+4. Only after the user confirms, call this tool. It first pins the installer's SHA-256 checksum: the preset's own when you deploy the preset's installer URL, otherwise the server downloads the installer to compute it, which can take a few minutes for a large one. If that fails, nothing is deployed, no process is closed, and the result says why. Then it returns with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
+
+ACTIVE HOURS:
+- On Windows machines running owlette 4.1.21 or later, owlette refuses a deployment while the machine is inside its active hours, and the Deployments page shows the refusal. Tell the user before you deploy during them. On an older Windows agent a deployment installs right away; macOS and Linux can't run one.
 
 TOUCHDESIGNER SPECIFICS:
 - Provide the version number (e.g. "2025.32280") and the download URL is resolved automatically via https://download.derivative.ca/TouchDesigner.{version}.exe
@@ -1297,31 +1399,41 @@ WHEN TO ASK THE USER:
           description: 'Maximum installation time in minutes (default: 40).',
           default: 40,
         },
+        ...activeHoursOverrideFields('Install now even though the machine is inside its active hours.'),
       },
       required: ['software_name'],
     },
   },
   {
     name: 'reboot_machine',
-    description: 'Reboot the remote machine. Schedules a reboot with a 30-second delay so running processes can be saved. Can be cancelled within the countdown window.',
+    description: 'Reboot the remote machine after a 60-second countdown, so running processes can be saved; cancel_reboot stops it. On Windows machines running owlette 4.1.21 or later, owlette refuses a reboot while the machine is inside its active hours: when: after_active_hours restarts it as soon as they end instead.',
     tier: 3,
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        when: {
+          type: 'string',
+          enum: ['now', 'after_active_hours'],
+          description: "now (default): restart after the countdown. after_active_hours: wait until the machine's active hours end, then restart; outside active hours it restarts now. cancel_reboot cancels a waiting restart too. Only Windows machines running owlette 4.1.21 or later can wait; on any other machine owlette refuses after_active_hours, because its agent would restart at once.",
+        },
+        ...activeHoursOverrideFields('Restart now even though the machine is inside its active hours.'),
+      },
     },
   },
   {
     name: 'shutdown_machine',
-    description: 'Shut down the remote machine. Schedules a shutdown with a 30-second delay. The machine will NOT automatically restart.',
+    description: 'Shut down the remote machine after a 60-second countdown; cancel_reboot stops it. The machine will NOT automatically restart. On Windows machines running owlette 4.1.21 or later, owlette refuses a shutdown while the machine is inside its active hours.',
     tier: 3,
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        ...activeHoursOverrideFields('Shut down now even though the machine is inside its active hours.'),
+      },
     },
   },
   {
     name: 'cancel_reboot',
-    description: 'Cancel a pending reboot or shutdown on the remote machine. Must be called within the 30-second countdown window.',
+    description: 'Cancel a pending reboot or shutdown on the remote machine: one in its 60-second countdown, or a reboot waiting for active hours to end.',
     tier: 3,
     parameters: {
       type: 'object',
@@ -1354,6 +1466,11 @@ export function toAISDKTools(tools: McpToolDefinition[]) {
     };
   }
   return result;
+}
+
+/** A tool's tier. A name nobody classified counts as the highest. */
+export function toolTierOf(toolName: string): ToolTier {
+  return getToolByName(toolName)?.tier ?? 3;
 }
 
 /** Does this tool require user confirmation before execution? */

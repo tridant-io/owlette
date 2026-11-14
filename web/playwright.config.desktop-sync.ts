@@ -17,8 +17,8 @@ import base from './playwright.config';
  * Two projects:
  * - `tier0` runs headless and proves the loop closes. It needs no desktop binary.
  * - `tier1-desktop` drives the app itself and SKIPS unless OWLETTE_DESKTOP_EXE
- *   names a build. Running it kills the operator's tray (the app is
- *   single-instance) — see `e2e/desktop-sync/README.md`.
+ *   names a build. it refuses to run beside a process with that build's image
+ *   name that it did not start — see `e2e/desktop-sync/README.md`.
  *
  * workers: 1 and retries: 0 — one agent, one window, one emulator, and a sync
  * that only works on the second attempt is a bug worth seeing.
@@ -65,7 +65,7 @@ export default defineConfig({
     },
     {
       name: 'tier1-desktop',
-      testMatch: /(desktop-to-web|web-to-desktop)\.spec\.ts/,
+      testMatch: /(desktop-to-web|web-to-desktop|missing-path-warning)\.spec\.ts/,
       dependencies: ['tier0'],
     },
   ],

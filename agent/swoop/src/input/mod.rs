@@ -4,14 +4,15 @@
 //! the whole reason this module has as much arithmetic as it does:
 //!
 //! 1. **viewer space** — what `PROTOCOL.md` §5's `m` message carries: `0..1`
-//!    normalised over the selected display's captured texture. Normalised so a
+//!    normalised over the selected display's picture. Normalised so a
 //!    resolution or scale change mid-session does not move the cursor.
 //! 2. **virtual-desktop pixels** — where the selected output actually sits.
 //!    Both axes go negative: spike 0.8 measured this box's origin at
-//!    (-2160, -1138) on every run, so nothing here may assume zero. The
-//!    captured texture is also *un-rotated* while the desktop rect is rotated —
-//!    a rotate270 output hands back a 3840x2160 texture for a 2160x3840 rect —
-//!    so [`PointerSpace`] applies the rotation the texture never had.
+//!    (-2160, -1138) on every run, so nothing here may assume zero. A rotated
+//!    output's texture is un-rotated — a rotate270 output hands back a
+//!    3840x2160 texture for a 2160x3840 rect — but capture turns it upright
+//!    before anything sees it, so the picture is the desktop rect as
+//!    displayed and [`PointerSpace`] has no rotation to apply.
 //! 3. **`SendInput`'s absolute space** — its own `0..65535` normalisation of
 //!    the virtual desktop, which is neither of the above. Getting this wrong
 //!    still looks perfect on a single 1080p monitor and puts the cursor on the
@@ -63,11 +64,11 @@
 //! [`crate::clipboard`], whose thread must own a message-only window and
 //! therefore binds `Default` once, before creating it, and never follows.
 //!
-//! **Not here, deliberately:** making the secure desktop *work* — `SendSAS`,
-//! and anything that treats `Winlogon` as a destination rather than as a
-//! desktop that happens to be current. Spike 0.3 was never run, so nothing
-//! about injection across that boundary is established and Task 6.1 owns it.
-//! What this module does promise is that landing there is legible: the failure
+//! `Winlogon` — a UAC prompt, the lock screen, the logon screen — is followed
+//! like any other desktop: the streamer is SYSTEM, so injection into the
+//! prompt is not blocked by UIPI. Ctrl+alt+del is not here; only the service
+//! can raise it (see `securedesk`). What this module does promise is
+//! that a desktop it cannot drive is legible: the failure
 //! names the desktop this thread is on, the desktop the input actually went to
 //! and the real last error, **once** — every repeat of it is counted rather
 //! than logged — and the session releases everything the viewer was holding on
@@ -183,6 +184,14 @@ pub trait Injector {
         }
         Ok(())
     }
+
+    /// Follow the input desktop between events, true when this injector has
+    /// moved its thread to another desktop since the last call. The input
+    /// thread calls it every turn and answers a switch with the session's
+    /// release of every held key. Only Windows has more than one desktop.
+    fn follow_desktop(&mut self) -> bool {
+        false
+    }
 }
 
 /// Collapse a batch the way a mouse does: only the last position of a run of
@@ -215,12 +224,11 @@ pub fn coalesce(events: &[InputEvent]) -> Vec<InputEvent> {
 
 /// The display a viewer's normalised coordinates belong to.
 ///
-/// `rotation` is the rotation **as capture reports it, un-applied**: viewer
-/// coordinates are in texture space, and the texture is the un-rotated
-/// framebuffer. If a later convert/scale path rotates the frame before it is
-/// encoded, then the viewer is already clicking in desktop-local space and this
-/// must be built with [`Rotation::Identity`] instead — the session owns that
-/// choice, which is why this is a parameter and not read from the output.
+/// `rotation` is how far the picture the viewer clicks on is turned from the
+/// desktop. Every capture source hands its frames over upright — capture
+/// turns Desktop Duplication's un-rotated texture, and macOS's arrives so —
+/// so the session's space is [`PointerSpace::from_output`]'s, with
+/// [`Rotation::Identity`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointerSpace {
     pub rect: Rect,
@@ -228,10 +236,11 @@ pub struct PointerSpace {
 }
 
 impl PointerSpace {
+    /// The output's own desktop rect, as the upright picture shows it.
     pub fn from_output(output: &OutputInfo) -> Self {
         Self {
             rect: output.desktop_rect,
-            rotation: output.rotation,
+            rotation: Rotation::Identity,
         }
     }
 
@@ -251,10 +260,27 @@ impl PointerSpace {
             py.clamp(self.rect.top, self.rect.bottom - 1),
         )
     }
+
+    /// Virtual-desktop pixels → viewer space: the inverse of
+    /// [`PointerSpace::to_desktop`], for a position the system reports in
+    /// desktop pixels. `None` off this output.
+    pub fn from_desktop(&self, (x, y): (i32, i32)) -> Option<(f64, f64)> {
+        let rect = self.rect;
+        if x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom {
+            return None;
+        }
+        let axis = |v: i32, lo: i32, size: i32| f64::from(v - lo) / f64::from((size - 1).max(1));
+        Some(rotate_back(
+            axis(x, rect.left, rect.width()),
+            axis(y, rect.top, rect.height()),
+            self.rotation,
+        ))
+    }
 }
 
-/// Apply an output's rotation to a normalised texture point, which is what
-/// turns un-rotated texture space into the desktop-local space the user sees.
+/// Apply a [`PointerSpace`]'s rotation to a normalised viewer point, turning
+/// a picture streamed un-rotated into the desktop-local space the user sees.
+/// The session's spaces are upright and pass Identity.
 ///
 /// The displayed image is the texture rotated clockwise by `rotation`, so a
 /// clockwise 90 sends `(u, v)` to `(1-v, u)` and the other two follow from
@@ -265,6 +291,16 @@ fn un_rotate(u: f64, v: f64, rotation: Rotation) -> (f64, f64) {
         Rotation::Rotate90 => (1.0 - v, u),
         Rotation::Rotate180 => (1.0 - u, 1.0 - v),
         Rotation::Rotate270 => (v, 1.0 - u),
+    }
+}
+
+/// [`un_rotate`] undone: a desktop-local point back in texture space.
+fn rotate_back(u: f64, v: f64, rotation: Rotation) -> (f64, f64) {
+    match rotation {
+        Rotation::Identity => (u, v),
+        Rotation::Rotate90 => (v, 1.0 - u),
+        Rotation::Rotate180 => (1.0 - u, 1.0 - v),
+        Rotation::Rotate270 => (1.0 - v, u),
     }
 }
 
@@ -640,7 +676,7 @@ fn per_notch(mode: WheelMode) -> f64 {
     match mode {
         WheelMode::Pixel => PIXELS_PER_NOTCH,
         WheelMode::Line => LINES_PER_NOTCH,
-        WheelMode::Page => LINES_PER_PAGE / LINES_PER_NOTCH,
+        WheelMode::Page => LINES_PER_NOTCH / LINES_PER_PAGE,
     }
 }
 
@@ -659,6 +695,7 @@ mod win32 {
         SetThreadDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS, DESKTOP_JOURNALPLAYBACK,
         DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS, HDESK, UOI_NAME,
     };
+    use windows::Win32::System::Shutdown::LockWorkStation;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS,
@@ -757,6 +794,9 @@ mod win32 {
         held: Option<HDESK>,
         /// The input desktop's name at the last look, empty before the first.
         seen: String,
+        /// A take moved this thread to a differently named desktop since
+        /// [`SendInputInjector::follow_desktop`] last asked.
+        moved: bool,
     }
 
     impl InputDesktop {
@@ -768,6 +808,7 @@ mod win32 {
             let mut desktop = Self {
                 held: None,
                 seen: String::new(),
+                moved: false,
             };
             if let Some((handle, name)) = look() {
                 let _ = unsafe { CloseDesktop(handle) };
@@ -827,9 +868,11 @@ mod win32 {
         /// anything else in the process can have put this thread on the input
         /// desktop through a handle that cannot inject — `capture`'s watcher
         /// does exactly that if it is ever run on this thread — and re-taking
-        /// it with [`INJECT_ACCESS`] is the fix. Once we hold the desktop that
-        /// is current, a further failure is something else and re-attaching
-        /// would only hide it, so it is reported instead.
+        /// it with [`INJECT_ACCESS`] is the fix. That holds after we have taken
+        /// a desktop too, so "ours" is the handle the thread is on now, not the
+        /// one we last took. Once the thread is on our handle for the desktop
+        /// that is current, a further failure is something else and
+        /// re-attaching would only hide it, so it is reported instead.
         ///
         /// Nothing pre-emptive slips in here: a UIPI block does not shorten
         /// `SendInput`'s return, so it never reaches this.
@@ -837,7 +880,9 @@ mod win32 {
             let Some((handle, name)) = look() else {
                 return false;
             };
-            if self.held.is_some() && name == self.seen {
+            let on_ours = unsafe { GetThreadDesktop(GetCurrentThreadId()) }
+                .is_ok_and(|current| Some(current) == self.held);
+            if on_ours && name == self.seen {
                 let _ = unsafe { CloseDesktop(handle) };
                 return false;
             }
@@ -853,6 +898,8 @@ mod win32 {
             if let Some(previous) = self.held.replace(handle) {
                 let _ = unsafe { CloseDesktop(previous) };
             }
+            // a re-take of the desktop already current is a repair, not a switch
+            self.moved |= name != self.seen;
             self.seen = name;
             true
         }
@@ -909,9 +956,9 @@ mod win32 {
     /// `SendInput`, following the input desktop across switches.
     ///
     /// Create it on the input thread and leave it there: the desktop it takes
-    /// is that thread's. A switch *to* `Winlogon` is followed like any other,
-    /// because it is where the input has gone; making the secure desktop
-    /// actually usable is Task 6.1's, gated on a spike that was never run.
+    /// is that thread's, and it must be that thread's only follower. A switch
+    /// *to* `Winlogon` is followed like any other, because it is where the
+    /// input has gone.
     pub struct SendInputInjector {
         space: PointerSpace,
         bounds: Rect,
@@ -919,6 +966,54 @@ mod win32 {
         polled: Instant,
         /// The failure episode currently being suppressed, if any.
         failure: Option<Failure>,
+        lock_chord: LockChord,
+    }
+
+    /// Win+L, watched for in the injected keys.
+    ///
+    /// Windows takes the lock from a real keyboard only: injected, the chord
+    /// locks nothing. And a viewer cannot send a real one — on a Windows viewer
+    /// it locks the viewer's own machine, fullscreen or not — so the host locks
+    /// itself when the chord comes through, from the keyboard menu or a held key.
+    #[derive(Debug, Default)]
+    pub(super) struct LockChord {
+        left_windows: bool,
+        right_windows: bool,
+    }
+
+    impl LockChord {
+        /// Set-1 scancodes, as `testdata/keymap.json` gives them.
+        const L: u16 = 0x26;
+        const LEFT_WINDOWS: u16 = 0x5B;
+        const RIGHT_WINDOWS: u16 = 0x5C;
+
+        /// True on the L that goes down while a Windows key is held.
+        pub(super) fn on(&mut self, event: &InputEvent) -> bool {
+            let InputEvent::Key {
+                scancode,
+                extended,
+                down,
+            } = *event
+            else {
+                return false;
+            };
+            match (scancode, extended) {
+                (Self::LEFT_WINDOWS, true) => self.left_windows = down,
+                (Self::RIGHT_WINDOWS, true) => self.right_windows = down,
+                (Self::L, false) => return down && (self.left_windows || self.right_windows),
+                _ => {}
+            }
+            false
+        }
+    }
+
+    /// Callable from here because the streamer is in the console session, on
+    /// its interactive desktop; from the service in session 0 it would not be.
+    fn lock_workstation() {
+        match unsafe { LockWorkStation() } {
+            Ok(()) => ::log::info!("swoop: a viewer's win+l locked the machine"),
+            Err(e) => ::log::warn!("swoop: win+l did not lock the machine: {e}"),
+        }
     }
 
     /// One run of identical failures, reported on its first event only.
@@ -941,6 +1036,7 @@ mod win32 {
                 desktop: InputDesktop::new(),
                 polled: Instant::now(),
                 failure: None,
+                lock_chord: LockChord::default(),
             }
         }
 
@@ -1124,18 +1220,36 @@ mod win32 {
     impl Injector for SendInputInjector {
         fn inject(&mut self, event: &InputEvent) -> anyhow::Result<()> {
             let inputs = self.build(event);
-            self.send(&inputs)
+            let lock = self.lock_chord.on(event);
+            let sent = self.send(&inputs);
+            if lock {
+                lock_workstation();
+            }
+            sent
+        }
+
+        /// The poll, and a `recover` that crossed to a new desktop since the
+        /// last turn: both are this thread's switch, whichever saw it first.
+        fn follow_desktop(&mut self) -> bool {
+            self.poll_if_due();
+            std::mem::take(&mut self.desktop.moved)
         }
 
         /// One syscall for the whole frame: `SendInput` guarantees the array is
         /// not interleaved with any other thread's input, which is also what
         /// keeps a chord from being split.
         fn inject_all(&mut self, events: &[InputEvent]) -> anyhow::Result<()> {
-            let inputs: Vec<INPUT> = coalesce(events)
+            let events = coalesce(events);
+            let inputs: Vec<INPUT> = events.iter().flat_map(|event| self.build(event)).collect();
+            // every event, not up to the first hit: the chord follows them all
+            let lock = events
                 .iter()
-                .flat_map(|event| self.build(event))
-                .collect();
-            self.send(&inputs)
+                .fold(false, |hit, event| self.lock_chord.on(event) | hit);
+            let sent = self.send(&inputs);
+            if lock {
+                lock_workstation();
+            }
+            sent
         }
     }
 
@@ -1229,6 +1343,7 @@ mod win32 {
                 desktop: InputDesktop::new(),
                 polled: Instant::now(),
                 failure: None,
+                lock_chord: LockChord::default(),
             }
         }
 
@@ -1291,6 +1406,13 @@ mod win32 {
 
 #[cfg(windows)]
 pub use win32::{virtual_screen, SendInputInjector};
+
+// The keymap half of the macOS injector is portable, so the Windows suite
+// walks both keymaps too; the injector itself is macOS only.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac;
+#[cfg(target_os = "macos")]
+pub use mac::CgInjector;
 
 #[cfg(test)]
 mod tests {
@@ -1390,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn viewer_space_crosses_the_rotation_and_the_origin() {
+    fn viewer_space_crosses_the_origin_of_a_rotated_output() {
         let outputs = measured_outputs();
         let bounds = measured_bounds();
 
@@ -1398,21 +1520,73 @@ mod tests {
         assert_eq!(primary.to_desktop(0.0, 0.0), (0, 0));
         assert_eq!(primary.to_desktop(1.0, 1.0), (1919, 1079));
 
-        // The rotate270 panel: the texture is the un-rotated framebuffer, so
-        // its top-left is displayed at the bottom-left of the desktop rect.
+        // The rotate270 panel is streamed upright, so the picture's top-left
+        // is the desktop rect's.
         let rotated = PointerSpace::from_output(&outputs[1]);
-        assert_eq!(rotated.to_desktop(0.0, 0.0), (-2160, 2701));
-        assert_eq!(rotated.to_desktop(1.0, 0.0), (-2160, -1138));
-        assert_eq!(rotated.to_desktop(0.25, 0.5), (-1080, 1741));
+        assert_eq!(rotated.to_desktop(0.0, 0.0), (-2160, -1138));
+        assert_eq!(rotated.to_desktop(1.0, 0.0), (-1, -1138));
+        assert_eq!(rotated.to_desktop(0.25, 0.5), (-1620, 782));
         assert_eq!(
             absolute_from_desktop(rotated.to_desktop(0.25, 0.5), bounds),
-            (17352, 49147)
+            (8676, 32776)
         );
 
-        // Out-of-range coordinates from a viewer clamp in texture space, so
+        // Out-of-range coordinates from a viewer clamp in viewer space, so
         // they land on this display's own corner and never on the neighbouring
         // monitor.
-        assert_eq!(rotated.to_desktop(-5.0, 9.0), (-1, 2701));
+        assert_eq!(rotated.to_desktop(-5.0, 9.0), (-2160, 2701));
+    }
+
+    /// Every rotated output is streamed upright, so its pointer space is the
+    /// desktop rect's own with nothing to turn: a viewer clicks where the
+    /// picture shows.
+    #[test]
+    fn a_rotated_output_is_clicked_as_it_is_displayed() {
+        let outputs = measured_outputs();
+        let (landscape, portrait) = (outputs[0].desktop_rect, outputs[1].desktop_rect);
+        for (rect, rotation) in [
+            (portrait, Rotation::Rotate90),
+            (landscape, Rotation::Rotate180),
+            (portrait, Rotation::Rotate270),
+        ] {
+            let output = OutputInfo {
+                device_name: r"\\.\DISPLAY2".to_string(),
+                desktop_rect: rect,
+                rotation,
+            };
+            let space = PointerSpace::from_output(&output);
+            assert_eq!(space, PointerSpace { rect, rotation: Rotation::Identity }, "{rotation:?}");
+            assert_eq!(space.to_desktop(0.0, 0.0), (rect.left, rect.top), "{rotation:?}");
+            assert_eq!(space.to_desktop(1.0, 1.0), (rect.right - 1, rect.bottom - 1), "{rotation:?}");
+        }
+    }
+
+    #[test]
+    fn from_desktop_undoes_to_desktop_on_every_rotation() {
+        let rect = measured_outputs()[1].desktop_rect;
+        for rotation in [
+            Rotation::Identity,
+            Rotation::Rotate90,
+            Rotation::Rotate180,
+            Rotation::Rotate270,
+        ] {
+            let space = PointerSpace { rect, rotation };
+            for point in [(0.0_f32, 0.0_f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.25, 0.5)] {
+                let (u, v) = space
+                    .from_desktop(space.to_desktop(point.0, point.1))
+                    .expect("on this output");
+                // a pixel's worth of rounding on the way out, nothing more
+                let pixel = 1.0 / f64::from(rect.width().min(rect.height()) - 1);
+                let near = |got: f64, want: f32| (got - f64::from(want)).abs() <= pixel;
+                assert!(
+                    near(u, point.0) && near(v, point.1),
+                    "{rotation:?} {point:?} came back as ({u}, {v})"
+                );
+            }
+        }
+        let space = PointerSpace::from_output(&measured_outputs()[1]);
+        assert_eq!(space.from_desktop((rect.right, rect.top)), None);
+        assert_eq!(space.from_desktop((rect.left, rect.top - 1)), None);
     }
 
     #[test]
@@ -1582,6 +1756,14 @@ mod tests {
             vec![InputEvent::MouseWheel {
                 delta_x: 0,
                 delta_y: 120
+            }]
+        );
+        // One page up is LINES_PER_PAGE lines, which is eight notches.
+        assert_eq!(
+            viewer.accept(&wire_wheel(0.0, -1.0, WheelMode::Page), now),
+            vec![InputEvent::MouseWheel {
+                delta_x: 0,
+                delta_y: 960
             }]
         );
     }
@@ -1829,7 +2011,6 @@ mod tests {
             capture_side.follow(),
             "capture's watcher could not attach; run this unlocked, from an ordinary shell"
         );
-        println!("attached through capture's watcher: {:?}", capture_side.name());
 
         let outputs = crate::capture::enumerate_outputs().expect("enumerate");
         let primary = outputs.first().expect("an attached output").clone();
@@ -1840,6 +2021,79 @@ mod tests {
         let landed = injector.inject(&InputEvent::MouseMoveRelative { dx: 0, dy: 0 });
         println!("first event after the bad attach: {landed:?}");
         landed.expect("the injector re-attached and the event landed");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win_l_from_a_viewer_is_the_lock_chord() {
+        let map = keymap();
+        let mut chord = win32::LockChord::default();
+        let mut locks = |code: &str, down: bool| {
+            map.press(code, down)
+                .iter()
+                .filter(|event| chord.on(event))
+                .count()
+        };
+        assert_eq!(locks("KeyL", true), 0, "l alone");
+        assert_eq!(locks("KeyL", false), 0);
+        assert_eq!(locks("MetaLeft", true), 0);
+        assert_eq!(locks("KeyL", true), 1, "left win + l");
+        assert_eq!(locks("KeyL", false), 0, "the release locks nothing");
+        assert_eq!(locks("MetaLeft", false), 0);
+        assert_eq!(locks("KeyL", true), 0, "win already let go");
+        assert_eq!(locks("KeyL", false), 0);
+        assert_eq!(locks("MetaRight", true), 0);
+        assert_eq!(locks("KeyL", true), 1, "right win + l");
+    }
+
+    /// The same bad attach, but **after** the injector already holds the
+    /// desktop: the UAC round trip. The input thread's own look and capture's
+    /// watcher both followed the switch, and whichever came second left the
+    /// thread on a handle that cannot inject while the injector still believed
+    /// it held the current desktop — so it refused to re-take it, and mouse and
+    /// keyboard stayed dead on the prompt or after it, until the next switch.
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture another_attach
+    /// ```
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "attaches this thread to a real desktop; cargo test -- --ignored --nocapture another_attach"]
+    fn injection_recovers_after_another_attach_moves_its_thread() {
+        let outputs = crate::capture::enumerate_outputs().expect("enumerate");
+        let primary = outputs.first().expect("an attached output").clone();
+        let mut injector = SendInputInjector::new(PointerSpace::from_output(&primary));
+        let probe = InputEvent::MouseMoveRelative { dx: 0, dy: 0 };
+
+        // A first recovery, so the injector holds the input desktop itself.
+        attach_without_inject_rights();
+        injector.inject(&probe).expect("the first recovery");
+
+        // Then the thread is moved again, onto the same desktop by name.
+        attach_without_inject_rights();
+        let landed = injector.inject(&probe);
+        println!("first event after the second attach: {landed:?}");
+        landed.expect("the injector re-took the desktop it had lost");
+    }
+
+    /// What capture's watcher does to a thread: the input desktop, opened with
+    /// capture's rights. The handle is left open: it is this thread's desktop
+    /// now, and closing a thread's desktop fails anyway.
+    #[cfg(windows)]
+    fn attach_without_inject_rights() {
+        use windows::Win32::System::StationsAndDesktops::{
+            OpenInputDesktop, SetThreadDesktop, DESKTOP_ACCESS_FLAGS, DESKTOP_CONTROL_FLAGS,
+            DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
+        };
+        let handle = unsafe {
+            OpenInputDesktop(
+                DESKTOP_CONTROL_FLAGS(0),
+                false,
+                DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
+            )
+        }
+        .expect("open the input desktop; run this unlocked");
+        unsafe { SetThreadDesktop(handle) }.expect("attach this thread");
     }
 
     /// The only check there is for the desktop half, and it needs a human.

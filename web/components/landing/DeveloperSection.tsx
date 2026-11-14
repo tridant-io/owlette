@@ -3,14 +3,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, KeyRound, RefreshCw, Webhook } from 'lucide-react';
-import { CLI_DIR_URL } from '@/lib/repoLinks';
+import { CLI_DIR_URL, GITHUB_REPO, GITHUB_REPO_URL } from '@/lib/repoLinks';
 
-type TabId = 'curl' | 'cli' | 'typescript';
+type TabId = 'curl' | 'cli';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'curl', label: 'curl' },
   { id: 'cli', label: 'cli' },
-  { id: 'typescript', label: 'typescript' },
 ];
 
 const SAMPLES: Record<TabId, string> = {
@@ -20,22 +19,15 @@ URL="https://owlette.app/api/sites/$SITE/machines/$MACHINE"
 curl -X POST "$URL/processes/$PROC/restart" \\
   -H "Authorization: Bearer $OWLETTE_TOKEN" \\
   -H "Idempotency-Key: $(uuidgen)"`,
-  cli: `# install once
-npm i -g @owlette/cli
-owlette login
+  // from source: the cli is not on npm, and a sample that fails at its first line sells nothing
+  cli: `# install once, from source
+git clone ${GITHUB_REPO_URL}.git
+cd ${GITHUB_REPO}/cli && npm install && npm run build && npm link
+owlette auth login
 
 # restart a process anywhere
 owlette process restart $PROC \\
   --site $SITE --machine $MACHINE`,
-  typescript: `import { Owlette } from '@owlette/sdk';
-
-const owlette = new Owlette({
-  token: process.env.OWLETTE_TOKEN!,
-});
-
-await owlette
-  .processes(siteId, machineId)
-  .restart(processId);`,
 };
 
 const PROOF_CHIPS: { icon: typeof KeyRound; label: string; body: string }[] = [
@@ -69,14 +61,14 @@ export function DeveloperSection() {
           <p className="section-subheadline text-balance max-w-3xl mx-auto">
             restart a process, push a deploy, or check machine health from
             wherever your automation already runs — install the CLI on a
-            runner, import the SDK into your backend, or just curl it.
+            runner, or just curl it.
           </p>
         </div>
 
         <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 lg:items-stretch">
           {/* Code block — 60% on desktop, full on mobile */}
           <div className="lg:w-3/5 flex">
-            <div className="flex-1 min-w-0 rounded-xl border border-border bg-card/60 shadow-2xl shadow-black/30 ring-1 ring-white/5 overflow-hidden flex flex-col">
+            <div className="flex-1 min-w-0 rounded-xl border border-border bg-card/60 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 overflow-hidden flex flex-col">
               <div role="tablist" className="flex border-b border-border bg-card/40">
                 {TABS.map((tab) => {
                   const isActive = tab.id === activeTab;
@@ -109,7 +101,7 @@ export function DeveloperSection() {
             {PROOF_CHIPS.map((chip) => (
               <div
                 key={chip.label}
-                className="rounded-xl border border-border bg-card/60 p-4 shadow-2xl shadow-black/30 ring-1 ring-white/5"
+                className="rounded-xl border border-border bg-card/60 p-4 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50"
               >
                 <div className="flex items-center gap-2 mb-1.5">
                   <chip.icon className="w-4 h-4 text-accent-cyan flex-shrink-0" />

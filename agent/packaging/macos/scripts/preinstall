@@ -1,0 +1,42 @@
+#!/bin/sh
+# the owlette installer package, before the payload lands (tri-platform 5.1).
+# an upgrade replaces the runtime under a running daemon and the app under a
+# running tray: both are stopped first so nothing executes from a tree that
+# is being rewritten. config, tokens and logs under the data root are never
+# touched here — the payload does not carry them and the daemon reads them
+# back on its next start.
+set -u
+
+DAEMON_LABEL="app.owlette.agent"
+AGENT_LABEL="app.owlette.desktop"
+
+# a bootout returns while the job is still stopping (launchctl print shows it
+# SIGTERMed). on a fast mac the payload lands in about 3 s, before the agent
+# has finished stopping, and postinstall then finds a job that vanishes under
+# it and never loads the daemon again. 30 s outlasts launchd's 20 s exit
+# timeout, after which it kills the job itself.
+wait_gone() {
+  i=0
+  while launchctl print "$1" >/dev/null 2>&1 && [ "${i}" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+}
+
+# the daemon: a bootout is the stop osadapter/darwin.py itself issues.
+if launchctl print "system/${DAEMON_LABEL}" >/dev/null 2>&1; then
+  launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
+  wait_gone "system/${DAEMON_LABEL}"
+fi
+
+# the app, in every logged-in user's GUI domain.
+for uid in $(ps -axo uid= -o comm= | awk '$2 ~ /loginwindow$/ {print $1}' | sort -u); do
+  if launchctl print "gui/${uid}/${AGENT_LABEL}" >/dev/null 2>&1; then
+    launchctl bootout "gui/${uid}/${AGENT_LABEL}" 2>/dev/null || true
+    wait_gone "gui/${uid}/${AGENT_LABEL}"
+  fi
+done
+pkill -x owlette-desktop 2>/dev/null || true
+pkill -x owlette-swoop-viewer 2>/dev/null || true
+
+exit 0

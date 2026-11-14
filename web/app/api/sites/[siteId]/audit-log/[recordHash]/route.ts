@@ -4,6 +4,7 @@
  *       tamper-evident: we recompute the record's own hash and compare to
  *       the stored hash (internal integrity), and fetch the predecessor
  *       (by the stored `previousHash`) to verify linkage into the chain.
+ *       Site admins and owners only (`requireAuditLogCapability`).
  *
  * roost public api wave 3.8.
  */
@@ -24,6 +25,7 @@ import {
 } from '@/lib/auditLogVerify';
 import {
   applyAuthDeprecations,
+  requireAuditLogCapability,
   requireSiteAuthAndScope,
 } from '../../../../_shared';
 
@@ -44,6 +46,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const auth = await requireSiteAuthAndScope(request, siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireAuditLogCapability(auth.auth, siteId);
+    if (capabilityError) return capabilityError;
 
     const db = getAdminDb();
     const col = db.collection('sites').doc(siteId).collection('audit_log');

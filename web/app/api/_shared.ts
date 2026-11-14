@@ -7,12 +7,15 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import {
+  problem,
   problemValidation,
   problemUnauthorized,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
   problemScopeInsufficient,
   problemTokenExpired,
+  ProblemType,
 } from '@/lib/apiErrors';
 import {
   ApiAuthError,
@@ -29,11 +32,17 @@ import type { ApiKeyPermission, ApiKeyResource } from '@/lib/apiKeyTypes';
 import {
   Capability,
   hasCapability,
+  siteStanding,
   type UserActor,
 } from '@/lib/capabilities';
+import { scopeCovers } from '@/lib/machineAccess';
 import { checkRoostVersion } from '@/lib/versionHeader';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { SITE_ID_RE, resolveSiteAccess } from '@/lib/sitePolicy.server';
+import {
+  requireEntitlement,
+  type PlanFlag,
+} from '@/lib/plan.server';
+import { SITE_ID_RE, resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 
 export const MAX_HASHES_PER_REQUEST = 1000;
 
@@ -50,7 +59,7 @@ export async function requireAuthOrProblem(
     return { ok: true, userId };
   } catch (err) {
     if (err instanceof ApiAuthError) {
-      if (err.status === 403) return { ok: false, response: problemForbidden() };
+      if (err.status === 403) return { ok: false, response: mfaChallengeProblem(err) ?? problemForbidden() };
       if (err.status === 404) return { ok: false, response: problemNotFound() };
       return { ok: false, response: problemUnauthorized() };
     }
@@ -165,6 +174,42 @@ export function requireSiteScopesForBulkMembership(
   return null;
 }
 
+/**
+ * SITE_MEMBER_MANAGE, re-checked inside the members and member-candidates
+ * handlers. not a duplicate of the wrapper's check: the wrapper skips that check
+ * while `capability_enforcement` is off (the operator break-glass in
+ * `global/security_config`), this capability is not in
+ * BYPASS_EXEMPT_CAPABILITIES, and a browser session never reaches
+ * `requireScope`, so in that window a plain site member could add anyone, change
+ * or remove other members, or list candidates worked out against a roster they
+ * may not read.
+ *
+ * a grant made in the window outlives it. an account added or promoted to admin
+ * holds the role on merit, so once the switch is back on it keeps
+ * MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE and can promote the original
+ * caller with enforcement fully restored. a swoop mode set to control is a
+ * second way to hand out MACHINE_REMOTE_CONTROL. time-boxed break-glass,
+ * permanent admin.
+ *
+ * `action` opens the detail, as in `adding a member`.
+ */
+export function refuseWithoutSiteMemberManage(
+  actor: UserActor,
+  siteId: string,
+  action: string,
+  instance: string,
+): NextResponse | null {
+  if (hasCapability(actor, Capability.SITE_MEMBER_MANAGE, siteId)) return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    detail: `${action} requires the SITE_MEMBER_MANAGE capability on this site`,
+    instance,
+    code: 'site_member_manage_required',
+  });
+}
+
 export function validateResourceId(id: string, fieldName: string): NextResponse | null {
   if (!RESOURCE_ID_RE.test(id)) {
     return problemValidation(
@@ -274,6 +319,8 @@ export interface ScopedAuthSuccess {
   userId: string;
   auth: ResolvedAuth;
   scopeCheck: ScopeCheckResult;
+  /** the caller's machine scope on the site; null for an agent, a superadmin and a whole-site member */
+  machineIds: readonly string[] | null;
 }
 
 export type ScopedAuthResult =
@@ -297,7 +344,7 @@ async function resolveAuthOrProblem(
           typeof err.details?.expiredAt === 'number' ? err.details.expiredAt : undefined;
         return { ok: false, response: problemTokenExpired(expiredAt) };
       }
-      if (err.status === 403) return { ok: false, response: problemForbidden() };
+      if (err.status === 403) return { ok: false, response: mfaChallengeProblem(err) ?? problemForbidden() };
       if (err.status === 404) return { ok: false, response: problemNotFound() };
       return { ok: false, response: problemUnauthorized() };
     }
@@ -305,7 +352,7 @@ async function resolveAuthOrProblem(
   }
 }
 
-function runScopeCheck(
+export function runScopeCheck(
   auth: ResolvedAuth,
   resource: ApiKeyResource,
   id: string,
@@ -346,11 +393,14 @@ function runScopeCheck(
  * matrix keyed on the global role locked an owner out of their own site. The
  * matrix is keyed on per-site standing now and `owner` is a row in it, so
  * ownership is granted by the matrix rather than routed around it.
+ *
+ * `planFlag` also requires the site's plan to include that flag, once the capability holds.
  */
 async function requireSiteCapability(
   auth: ResolvedAuth,
   capability: Capability,
   siteId: string,
+  planFlag?: PlanFlag,
 ): Promise<NextResponse | null> {
   const outcome = await resolveSiteAccess(auth.userId, siteId);
   // A refusal here is not distinguished by reason: membership and scope were
@@ -366,34 +416,70 @@ async function requireSiteCapability(
     role: outcome.facts.globalRole,
     // A superadmin legitimately holds no membership; their capabilities
     // short-circuit on the global role before this map is consulted.
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding([[siteId, standingOf(outcome.facts)]]),
   };
 
   if (!hasCapability(actor, capability, siteId)) {
     return problemForbidden('capability not granted');
   }
-  return null;
+  return planFlag ? requireEntitlement(siteId, planFlag, outcome.facts.siteData) : null;
 }
 
+/**
+ * DISTRIBUTION_MANAGE plus `owlette.roost` on the site's plan, for creating a
+ * roost and uploading to one (docs/adr/0018).
+ */
 export async function requireDistributionManageCapability(
   auth: ResolvedAuth,
   siteId: string,
 ): Promise<NextResponse | null> {
-  return requireSiteCapability(auth, Capability.DISTRIBUTION_MANAGE, siteId);
+  return requireSiteCapability(auth, Capability.DISTRIBUTION_MANAGE, siteId, 'owlette.roost');
 }
 
 /**
- * WEBHOOK_MANAGE gate for the mutating `/api/webhooks/**` handlers (create,
- * update, delete, rotate-secret, test). Read paths — list, detail, deliveries,
- * probe — stay at member level.
+ * WEBHOOK_MANAGE gate for every `/api/webhooks/**` handler but `user-created`:
+ * create, update, delete, rotate-secret, test, probe, delivery retry, and the
+ * reads, since the rules give subscription documents to site admins only.
+ *
+ * `create` also requires `owlette.webhooks` on the site's plan (docs/adr/0018). the
+ * rest stay open, so a site whose plan lapsed can still be tidied up.
  */
 export async function requireWebhookManageCapability(
   auth: ResolvedAuth,
   siteId: string,
+  { create = false }: { create?: boolean } = {},
 ): Promise<NextResponse | null> {
-  return requireSiteCapability(auth, Capability.WEBHOOK_MANAGE, siteId);
+  return requireSiteCapability(
+    auth,
+    Capability.WEBHOOK_MANAGE,
+    siteId,
+    create ? 'owlette.webhooks' : undefined,
+  );
+}
+
+/**
+ * the site audit log, which the rules give site admins and owners only. there is
+ * no audit capability; SITE_LOGS_MANAGE is the site's log capability, held by
+ * exactly those roles.
+ */
+export async function requireAuditLogCapability(
+  auth: ResolvedAuth,
+  siteId: string,
+): Promise<NextResponse | null> {
+  return requireSiteCapability(auth, Capability.SITE_LOGS_MANAGE, siteId);
+}
+
+/**
+ * an api-key request also needs `owlette.api_keys` on the site's plan
+ * (docs/adr/0018). sessions are untouched: the dashboard is gated feature by feature.
+ */
+async function requireApiKeyPlan(
+  auth: ResolvedAuth,
+  siteId: string,
+  siteData: Record<string, unknown> | null,
+): Promise<NextResponse | null> {
+  if (!auth.keyContext) return null;
+  return requireEntitlement(siteId, 'owlette.api_keys', siteData);
 }
 
 function isMutationPermission(permission: ApiKeyPermission): boolean {
@@ -406,24 +492,30 @@ function isMutationPermission(permission: ApiKeyPermission): boolean {
  * Goes through `assertUserHasSiteAccess`, which since Wave 1 Task 1.2 is a thin
  * adapter over the single decision core in `lib/sitePolicy.server.ts`. Calling
  * the adapter rather than the core directly is deliberate: this family needs
- * only pass/fail — it builds no actor, so it has no use for the role and
- * membership facts the core returns — and the adapter already serves five
- * production routes that call it on their own. One decision implementation,
- * without a second call shape to keep in step.
+ * only pass/fail and the machine scope — it builds no actor, so it has no use
+ * for the role and the other facts the core returns — and the adapter already
+ * serves five production routes that call it on their own. One decision
+ * implementation, without a second call shape to keep in step.
  *
  * NOTE the response mapping: an INACTIVE caller is 403 `user_inactive`; every
  * other denial collapses to 404. Task 1.3 unified this with
  * `authorizedSiteHandler`, so the divergence this comment used to describe is
  * gone — `__tests__/lib/authorizationParity.test.ts` now pins the AGREEMENT,
  * not the difference. Three auditors were nearly misled by the old wording.
+ *
+ * the site document comes back so the plan gates skip a second read of it, and
+ * the caller's machine scope so each gate can refuse or filter a scoped member.
  */
 async function assertSiteAccessOrProblem(
   userId: string,
   siteId: string,
-): Promise<NextResponse | null> {
+): Promise<
+  | { ok: true; siteData: Record<string, unknown> | null; machineIds: readonly string[] | null }
+  | { ok: false; response: NextResponse }
+> {
   try {
-    await assertUserHasSiteAccess(userId, siteId);
-    return null;
+    const access = await assertUserHasSiteAccess(userId, siteId);
+    return { ok: true, siteData: access.siteData, machineIds: access.machineIds };
   } catch (err) {
     if (err instanceof ApiAuthError) {
       // An INACTIVE caller is 403, not the collapsed 404 (Wave 1 task 1.3).
@@ -435,21 +527,33 @@ async function assertSiteAccessOrProblem(
       // NOTE this fires for a MISSING user document as well as a soft-deleted
       // one, so an api key whose owner was hard-deleted also moves 404 -> 403.
       if (err.code === 'user_inactive') {
-        return problemForbidden(err.message);
+        return { ok: false, response: problemForbidden(err.message) };
       }
       if (err.status === 404 || err.status === 403) {
-        return problemNotFound('site not found or no access');
+        return { ok: false, response: problemNotFound('site not found or no access') };
       }
-      return problemForbidden();
+      return { ok: false, response: problemForbidden() };
     }
     throw err;
   }
 }
 
+/**
+ * site access plus the `site=<siteId>:<permission>` api-key scope, for routes
+ * outside `authorizedSiteHandler`.
+ *
+ * a scoped member is refused by default with 403 'capability not granted'. the
+ * default keeps every site-wide read closed to them: quota, roosts, chunks and
+ * the events stream all sit on this gate and check no capability of their own.
+ * a route that passes `machineScope: 'admit'` gets
+ * the caller's `machineIds` back and must filter its results to them, or check
+ * the one machine it serves (`requireSiteMachineAuthAndScope`).
+ */
 export async function requireSiteAuthAndScope(
   req: NextRequest,
   siteId: string,
   permission: ApiKeyPermission,
+  options: { machineScope?: 'deny' | 'admit' } = {},
 ): Promise<ScopedAuthResult> {
   const versionCheck = checkRoostVersion(req);
   if (!versionCheck.ok) return { ok: false, response: versionCheck.response };
@@ -470,11 +574,18 @@ export async function requireSiteAuthAndScope(
     };
   }
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
+
+  if (access.machineIds !== null && options.machineScope !== 'admit') {
+    return { ok: false, response: problemForbidden('capability not granted') };
+  }
 
   const scopeResult = runScopeCheck(authResult.auth, 'site', siteId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -483,7 +594,28 @@ export async function requireSiteAuthAndScope(
     userId: authResult.auth.userId,
     auth: authResult.auth,
     scopeCheck: { ...scopeResult.scopeCheck, missingVersion: versionCheck.missing },
+    machineIds: access.machineIds,
   };
+}
+
+/**
+ * `requireSiteAuthAndScope` for a route that serves one machine and keeps its
+ * published `site=` api-key scope (machine detail, machine deployments, swoop
+ * step-up). a scoped member reaches only the machines in their machine scope;
+ * any other id answers as a machine that is not there.
+ */
+export async function requireSiteMachineAuthAndScope(
+  req: NextRequest,
+  siteId: string,
+  machineId: string,
+  permission: ApiKeyPermission,
+): Promise<ScopedAuthResult> {
+  const result = await requireSiteAuthAndScope(req, siteId, permission, { machineScope: 'admit' });
+  if (!result.ok) return result;
+  if (!scopeCovers(result.machineIds, machineId)) {
+    return { ok: false, response: problemNotFound('machine not found or no access') };
+  }
+  return result;
 }
 
 /**
@@ -494,6 +626,9 @@ export async function requireSiteAuthAndScope(
  *   `requireScope` for non-key auth).
  * - api-key: must also satisfy `machine=<machineId>:<permission>`; `machine=*`
  *   matches any id.
+ * - a scoped member: a machine outside their machine scope answers 404, as one
+ *   that is not there. the check runs after the agent short-circuit, which it
+ *   leaves alone.
  *
  * machineId validation matches siteId (1-128 of [A-Za-z0-9_-]) because machine
  * ids have several historical shapes (`mach_*`, hostnames, uuids).
@@ -543,6 +678,7 @@ export async function requireMachineAuthAndScope(
           userId: decoded.uid,
           auth: { userId: decoded.uid, keyContext: null },
           scopeCheck: { isLegacy: false },
+          machineIds: null,
         };
       }
     } catch {
@@ -553,11 +689,18 @@ export async function requireMachineAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
+
+  if (!scopeCovers(access.machineIds, machineId)) {
+    return { ok: false, response: problemNotFound('machine not found or no access') };
+  }
 
   const scopeResult = runScopeCheck(authResult.auth, 'machine', machineId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -566,6 +709,7 @@ export async function requireMachineAuthAndScope(
     userId: authResult.auth.userId,
     auth: authResult.auth,
     scopeCheck: scopeResult.scopeCheck,
+    machineIds: access.machineIds,
   };
 }
 
@@ -599,16 +743,34 @@ export async function requireRoostAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
+
+  // a roost spans the site's machines, so a scoped member reads none of it either
+  if (access.machineIds !== null) {
+    return { ok: false, response: problemForbidden('capability not granted') };
+  }
 
   if (isMutationPermission(permission)) {
-    const capabilityError = await requireDistributionManageCapability(authResult.auth, siteId);
+    const capabilityError = await requireSiteCapability(
+      authResult.auth,
+      Capability.DISTRIBUTION_MANAGE,
+      siteId,
+    );
     if (capabilityError) return { ok: false, response: capabilityError };
   }
 
   const scopeResult = runScopeCheck(authResult.auth, 'roost', roostId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
+
+  // deleting stays open on every plan (docs/adr/0018), so a site whose plan lapsed can be cleaned up.
+  if (isMutationPermission(permission) && req.method !== 'DELETE') {
+    const roostError = await requireEntitlement(siteId, 'owlette.roost', access.siteData);
+    if (roostError) return { ok: false, response: roostError };
+  }
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -617,6 +779,7 @@ export async function requireRoostAuthAndScope(
     userId: authResult.auth.userId,
     auth: authResult.auth,
     scopeCheck: { ...scopeResult.scopeCheck, missingVersion: versionCheck.missing },
+    machineIds: null,
   };
 }
 
@@ -663,6 +826,7 @@ export async function requirePlatformAuthAndScope(
     userId: authResult.auth.userId,
     auth: authResult.auth,
     scopeCheck: scopeResult.scopeCheck,
+    machineIds: null,
   };
 }
 
@@ -670,6 +834,9 @@ export async function requirePlatformAuthAndScope(
  * Site-scoped Hoot conversation auth + scope check for
  * `/api/hoot/conversations/*`. session/id-token: site access, scope bypassed.
  * api-key: `chat=<siteId>:<permission>`, `chat=*` matches any siteId.
+ *
+ * a scoped member is admitted, and their `machineIds` come back for the route to
+ * hold hoot to their machines.
  *
  * No `checkRoostVersion()` — chat isn't part of the roost surface.
  */
@@ -690,11 +857,14 @@ export async function requireChatAuthAndScope(
   const authResult = await resolveAuthOrProblem(req);
   if (!authResult.ok) return authResult;
 
-  const accessError = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
-  if (accessError) return { ok: false, response: accessError };
+  const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
+  if (!access.ok) return access;
 
   const scopeResult = runScopeCheck(authResult.auth, 'chat', siteId, permission);
   if (!scopeResult.ok) return scopeResult;
+
+  const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
+  if (planError) return { ok: false, response: planError };
 
   auditApiKeyUse(authResult.auth, siteId, req);
 
@@ -703,6 +873,7 @@ export async function requireChatAuthAndScope(
     userId: authResult.auth.userId,
     auth: authResult.auth,
     scopeCheck: scopeResult.scopeCheck,
+    machineIds: access.machineIds,
   };
 }
 

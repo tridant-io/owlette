@@ -315,6 +315,18 @@ function authedKey(scopes: Scope[], uid = 'admin-uid', role = 'superadmin'): voi
   });
 }
 
+/** a session for a member whose row carries `machineIds`; absent, the whole site. */
+function authedMember(uid: string, machineIds?: string[]): void {
+  seedUser(uid, { role: 'member' });
+  if (machineIds) {
+    putDoc(`sites/${SITE}/members/${uid}`, {
+      ...(docStore[`sites/${SITE}/members/${uid}`] as Record<string, unknown>),
+      machineIds,
+    });
+  }
+  mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
+}
+
 function siteScope(permission: string): Scope {
   return { resource: 'site', id: SITE, permissions: [permission] };
 }
@@ -334,7 +346,7 @@ describe('GET /api/sites/{siteId}/machines', () => {
     seedSite();
     authedKey([siteScope('read')]);
     seedMachine('mach-b', { name: 'Beta' });
-    seedMachine('mach-a', { name: 'Alpha' });
+    seedMachine('mach-a', { name: 'Alpha', osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
     seedRoost('roost-one', {
       name: 'Main Show',
       targets: ['mach-a'],
@@ -352,6 +364,10 @@ describe('GET /api/sites/{siteId}/machines', () => {
     expect(body.items).toBeUndefined();
     expect(body.next_page_token).toBeUndefined();
     expect(body.machines.map((m: { id: string }) => m.id)).toEqual(['mach-a', 'mach-b']);
+    // the os fields the agent heartbeats, and null for a windows agent that
+    // predates them.
+    expect(body.machines[0]).toMatchObject({ osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
+    expect(body.machines[1]).toMatchObject({ osFamily: null, arch: null, osVersion: null });
     expect(body.machines[0].currentRoosts).toEqual([
       {
         roostId: 'roost-one',
@@ -360,6 +376,36 @@ describe('GET /api/sites/{siteId}/machines', () => {
         versionCounter: 7,
       },
     ]);
+  });
+
+  // the machines section of a site's settings asks before restarting inside
+  // active hours, which it can only do with the window, the guard and the
+  // machine's clock.
+  it('carries active hours, the agent capabilities and the machine timezone', async () => {
+    seedSite();
+    authedKey([siteScope('read')]);
+    seedMachine('mach-a', {
+      name: 'Alpha',
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machine_timezone_iana: 'Europe/Berlin',
+    });
+    seedMachine('mach-b', { name: 'Beta' });
+
+    const res = await listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.machines[0]).toMatchObject({
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machineTimezone: 'Europe/Berlin',
+    });
+    // null, never absent, for an agent that reports none of them
+    expect(body.machines[1]).toMatchObject({ activeHours: null, capabilities: null, machineTimezone: null });
   });
 });
 
@@ -370,8 +416,17 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
     seedMachine(MACHINE, {
       name: 'Lobby Player',
       hostname: 'lobby-host',
-      metrics: { cpu: 0.4 },
-      processes: [{ id: 'proc-1', name: 'Player' }],
+      // the heartbeat writes processes as a map under metrics, keyed by process id
+      metrics: {
+        cpu: 0.4,
+        processes: {
+          'proc-2': { name: 'Watchdog', status: 'STOPPED', pid: null, index: 1 },
+          'proc-1': { name: 'Player', status: 'RUNNING', pid: 4242, index: 0 },
+        },
+      },
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
 
     const res = await machineGET(
@@ -387,8 +442,15 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       name: 'Lobby Player',
       hostname: 'lobby-host',
       metrics: { cpu: 0.4 },
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
-    expect(body.processes).toHaveLength(1);
+    // in config order, the shape `owlette machine get` prints
+    expect(body.processes).toEqual([
+      { processId: 'proc-1', name: 'Player', status: 'RUNNING', pid: 4242, index: 0 },
+      { processId: 'proc-2', name: 'Watchdog', status: 'STOPPED', pid: null, index: 1 },
+    ]);
   });
 });
 
@@ -513,5 +575,77 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
     expect(res.status).toBe(403);
     expect(body.code).toBe('scope_insufficient');
     expect(docStore[`sites/${SITE}/machines/${MACHINE}`]).not.toBeNull();
+  });
+});
+
+describe('machine scope on the machines list, detail and deployments', () => {
+  const M1 = 'm1';
+  const M2 = 'm2';
+  const listMachines = () =>
+    listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+  const detail = (machineId: string) =>
+    machineGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}`),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+  const deployments = (machineId: string) =>
+    machineDeploymentsGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/deployments`),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  beforeEach(() => {
+    seedSite();
+    seedMachine(M1, { name: 'One' });
+    seedMachine(M2, { name: 'Two' });
+    seedRoost('roost-both', { name: 'Show', targets: [M1, M2], currentVersionId: null, versionCounter: 1 });
+  });
+
+  it('lists only the machines in scope, each with the roosts that target it', async () => {
+    authedMember('scoped', [M1]);
+
+    const res = await listMachines();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.machines.map((m: { id: string }) => m.id)).toEqual([M1]);
+    expect(body.machines[0].currentRoosts).toEqual([
+      { roostId: 'roost-both', name: 'Show', currentVersionId: null, versionCounter: 1 },
+    ]);
+  });
+
+  it('lists every machine for a whole-site member, as before', async () => {
+    authedMember('whole');
+
+    const body = await (await listMachines()).json();
+
+    expect(body.machines.map((m: { id: string }) => m.id)).toEqual([M1, M2]);
+  });
+
+  it('answers detail and deployments for a machine in scope', async () => {
+    authedMember('scoped', [M1]);
+
+    const detailRes = await detail(M1);
+    const deploymentsRes = await deployments(M1);
+
+    expect(detailRes.status).toBe(200);
+    expect((await detailRes.json()).id).toBe(M1);
+    expect(deploymentsRes.status).toBe(200);
+    expect((await deploymentsRes.json()).deployments).toEqual([
+      expect.objectContaining({ roostId: 'roost-both' }),
+    ]);
+  });
+
+  it('answers a machine outside the scope as one that is not there', async () => {
+    authedMember('scoped', [M1]);
+
+    for (const res of [await detail(M2), await deployments(M2)]) {
+      const body = await res.json();
+      expect(res.status).toBe(404);
+      expect(body.detail).toBe('machine not found or no access');
+    }
   });
 });

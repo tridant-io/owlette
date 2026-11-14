@@ -17,9 +17,16 @@
 //!
 //! The frontend names one of [`MODES`] and this module builds the argv, so
 //! nothing the webview can say becomes an argument to the interpreter.
+//!
+//! Off Windows this app is the console user, and an interpreter it spawned
+//! could neither use the token store nor control the daemon. There the modes
+//! that need root are requests to the daemon instead ([`crate::seam`]): its
+//! answer is the same JSON-line stream, forwarded as the same events, so the
+//! frontend runs one flow on every platform.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -33,6 +40,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::paths;
+#[cfg(unix)]
+use crate::seam::{self, Seam, Verb};
 
 /// Emitted for every line the agent CLI writes, and once more when it exits.
 pub const EVENT_AGENT_CLI: &str = "owlette://agent-cli";
@@ -40,16 +49,29 @@ pub const EVENT_AGENT_CLI: &str = "owlette://agent-cli";
 /// The bundled interpreter, relative to the data root. `python.exe` rather than
 /// `pythonw.exe`: we need its stdout, and `CREATE_NO_WINDOW` already keeps the
 /// console off the operator's screen.
-const PYTHON_REL: &str = "python/python.exe";
+const PYTHON_REL_WINDOWS: &str = "python/python.exe";
+#[cfg(windows)]
+const PYTHON_REL: &str = PYTHON_REL_WINDOWS;
+/// The bundled interpreter under the install root off windows
+/// (`shared_utils.get_python_exe_path`: `/opt/owlette/python/bin/python3`,
+/// `…/Owlette/runtime/python/bin/python3`).
+const PYTHON_REL_UNIX: &str = "python/bin/python3";
+#[cfg(unix)]
+const PYTHON_REL: &str = PYTHON_REL_UNIX;
 
 /// The agent script that hosts every headless mode.
 const SCRIPT_REL: &str = "agent/src/configure_site.py";
+
+/// The MCP server an AI agent's client starts for hoot mcp, beside the other
+/// agent scripts.
+const HOOT_MCP_SCRIPT_REL: &str = "agent/src/fleet_mcp.py";
 
 /// Where a feedback payload is staged for `--report-issue`. The script deletes
 /// it as soon as it has been read.
 const REPORT_DIR_REL: &str = "tmp";
 
 /// Windows creation flag: no console window for the child.
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// How often a running child is checked for having exited.
@@ -107,6 +129,29 @@ pub struct AgentCliEvent {
 pub struct Runs {
   next: AtomicU64,
   children: Mutex<HashMap<String, Arc<Mutex<Child>>>>,
+  /// Requests the daemon is still answering, keyed by run id.
+  #[cfg(unix)]
+  seam: Mutex<HashMap<String, SeamRun>>,
+}
+
+/// One run carried out by the daemon rather than a child of this app.
+#[cfg(unix)]
+struct SeamRun {
+  verb: Verb,
+  cancelled: bool,
+}
+
+/// The daemon's verb for a mode that needs root off Windows: every mode does.
+#[cfg(unix)]
+fn seam_verb(mode: &str) -> Option<Verb> {
+  match mode {
+    MODE_JOIN => Some(Verb::Pair),
+    "leave" => Some(Verb::Leave),
+    MODE_REPORT_ISSUE => Some(Verb::ReportIssue),
+    "reboot-now" => Some(Verb::Reboot),
+    "dismiss-reboot" => Some(Verb::DismissReboot),
+    _ => None,
+  }
 }
 
 /// Translate a mode name into the flag it runs.
@@ -151,19 +196,21 @@ fn build_arguments(
     arguments.push(payload_path.to_string_lossy().into_owned());
   }
 
-  match (mode == MODE_JOIN, server) {
-    (true, Some(server)) => {
-      if !SERVERS.contains(&server) {
-        return Err(format!("unknown server: {server}"));
-      }
-      arguments.push("--server".to_string());
-      arguments.push(server.to_string());
-    }
-    (false, Some(_)) => return Err(format!("the {mode} mode takes no server")),
-    (_, None) => {}
+  if let Some(server) = vetted_server(mode, server)? {
+    arguments.push("--server".to_string());
+    arguments.push(server.to_string());
   }
 
   Ok(arguments)
+}
+
+/// The server a run may name: only `join` names one, and only from [`SERVERS`].
+fn vetted_server<'a>(mode: &str, server: Option<&'a str>) -> Result<Option<&'a str>, String> {
+  match (mode == MODE_JOIN, server) {
+    (true, Some(server)) if !SERVERS.contains(&server) => Err(format!("unknown server: {server}")),
+    (false, Some(_)) => Err(format!("the {mode} mode takes no server")),
+    (_, server) => Ok(server),
+  }
 }
 
 /// Spawn one agent CLI run and start streaming it. Returns the run id.
@@ -177,16 +224,34 @@ pub fn start(
   server: Option<&str>,
 ) -> Result<String, String> {
   let flag = flag_for(mode)?;
-  let root = paths::data_root();
 
-  let python = root.join(PYTHON_REL);
+  #[cfg(unix)]
+  if let Some(verb) = seam_verb(mode) {
+    let server = vetted_server(mode, server)?;
+    // the report goes in the request itself: a file staged in the owlette tree
+    // would be the console user's, and the daemon's run is root's.
+    let fields = match (verb, payload) {
+      (Verb::ReportIssue, Some(payload)) => Some(payload),
+      (Verb::ReportIssue, None) => return Err("a feedback report needs a payload".to_string()),
+      (_, Some(_)) => return Err(format!("the {mode} mode takes no payload")),
+      (_, None) => server.map(|server| serde_json::json!({ "server": server })),
+    };
+    return start_seam_run(app, runs, mode, verb, fields);
+  }
+
+  let root = paths::data_root();
+  // the interpreter and the scripts are the agent's own files: the install
+  // root, which is the data root on windows and its own place elsewhere.
+  let install = paths::install_root();
+
+  let python = install.join(PYTHON_REL);
   if !python.is_file() {
     return Err(format!(
       "the bundled python interpreter is missing ({}) — reinstall the owlette agent",
       python.display()
     ));
   }
-  let script = root.join(SCRIPT_REL);
+  let script = install.join(SCRIPT_REL);
   if !script.is_file() {
     return Err(format!(
       "the agent scripts are missing ({}) — reinstall the owlette agent",
@@ -205,13 +270,16 @@ pub fn start(
 
   let arguments = build_arguments(&script, flag, mode, staged.as_deref(), server)?;
 
-  let mut child = Command::new(&python)
+  let mut command = Command::new(&python);
+  command
     .args(&arguments)
-    .current_dir(root.join("agent").join("src"))
+    .current_dir(install.join("agent").join("src"))
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .creation_flags(CREATE_NO_WINDOW)
+    .stderr(Stdio::piped());
+  #[cfg(windows)]
+  command.creation_flags(CREATE_NO_WINDOW);
+  let mut child = command
     .spawn()
     .map_err(|error| format!("could not start the agent helper: {error}"))?;
 
@@ -239,11 +307,113 @@ pub fn start(
   Ok(run)
 }
 
+/// Ask the daemon for `verb` and forward its answer as this run's stdout,
+/// then one `exit` — the events a spawned helper produces, so the frontend
+/// cannot tell the two apart. A request the daemon never answered becomes the
+/// run's `error` line.
+#[cfg(unix)]
+fn start_seam_run(
+  app: &AppHandle,
+  runs: &Runs,
+  mode: &str,
+  verb: Verb,
+  fields: Option<Value>,
+) -> Result<String, String> {
+  let run = format!("{mode}-{}", runs.next.fetch_add(1, Ordering::Relaxed));
+  runs
+    .seam
+    .lock()
+    .map_err(|_| "the agent run table is poisoned".to_string())?
+    .insert(run.clone(), SeamRun { verb, cancelled: false });
+
+  let (app, id) = (app.clone(), run.clone());
+  let spawned = thread::Builder::new()
+    .name("owlette-seam".into())
+    .spawn(move || {
+      let line = |line: String| AgentCliEvent {
+        run: id.clone(),
+        stream: "stdout".to_string(),
+        line: Some(line),
+        code: None,
+      };
+      let answer = Seam::new(paths::data_root()).ask(verb, fields.as_ref(), &mut |text| {
+        emit(&app, line(text.to_string()))
+      });
+      let code = match answer {
+        Ok(terminal) => i32::from(seam::is_error(&terminal)),
+        Err(message) => {
+          log::warn!("the owlette service did not carry out {}: {message}", verb.name());
+          emit(&app, line(serde_json::json!({ "event": "error", "value": message }).to_string()));
+          1
+        }
+      };
+      if let Some(app_runs) = app.try_state::<Runs>() {
+        if let Ok(mut seam_runs) = app_runs.seam.lock() {
+          seam_runs.remove(&id);
+        }
+      }
+      emit(
+        &app,
+        AgentCliEvent {
+          run: id,
+          stream: "exit".to_string(),
+          line: None,
+          code: Some(code),
+        },
+      );
+    });
+  if let Err(error) = spawned {
+    if let Ok(mut seam_runs) = runs.seam.lock() {
+      seam_runs.remove(&run);
+    }
+    return Err(format!("could not ask the owlette service: {error}"));
+  }
+  Ok(run)
+}
+
+/// A seam run is the daemon's, not a child of this app to kill. A pairing is
+/// ended by asking for that too — the daemon then answers the pairing's own run
+/// with the error that ends it — and a leave or a reboot, once asked for, is
+/// not taken back. None when `run` is no seam run.
+#[cfg(unix)]
+fn cancel_seam_run(runs: &Runs, run: &str) -> Result<Option<bool>, String> {
+  let mut seam_runs = runs
+    .seam
+    .lock()
+    .map_err(|_| "the agent run table is poisoned".to_string())?;
+  let Some(entry) = seam_runs.get_mut(run) else {
+    return Ok(None);
+  };
+  if entry.verb != Verb::Pair || entry.cancelled {
+    return Ok(Some(false));
+  }
+  entry.cancelled = true;
+  drop(seam_runs);
+
+  // answered on the daemon's next tick; nothing here waits for it.
+  thread::Builder::new()
+    .name("owlette-seam-cancel".into())
+    .spawn(|| {
+      match Seam::new(paths::data_root()).ask(Verb::CancelPair, None, &mut |_| {}) {
+        Ok(terminal) if !seam::is_error(&terminal) => log::info!("pairing cancelled"),
+        Ok(terminal) => log::warn!("could not cancel the pairing: {}", seam::error_message(&terminal)),
+        Err(error) => log::warn!("could not cancel the pairing: {error}"),
+      }
+    })
+    .map_err(|error| format!("could not cancel the pairing: {error}"))?;
+  Ok(Some(true))
+}
+
 /// Kill a running child. `false` when the run had already finished.
 ///
 /// Cancelling a pairing run just abandons the device code; it expires
 /// server-side ten minutes later, so there is nothing to tell the server.
 pub fn cancel(runs: &Runs, run: &str) -> Result<bool, String> {
+  #[cfg(unix)]
+  if let Some(cancelled) = cancel_seam_run(runs, run)? {
+    return Ok(cancelled);
+  }
+
   let child = runs
     .children
     .lock()
@@ -266,7 +436,9 @@ pub fn cancel(runs: &Runs, run: &str) -> Result<bool, String> {
 }
 
 /// Kill everything still running. Called when the app exits, so a ten-minute
-/// pairing poll does not outlive the window that started it.
+/// pairing poll does not outlive the window that started it. A seam run is the
+/// daemon's and is left to it: a pairing still polling ends when its phrase
+/// expires.
 pub fn cancel_all(runs: &Runs) {
   let Ok(mut children) = runs.children.lock() else {
     return;
@@ -371,9 +543,117 @@ fn emit(app: &AppHandle, event: AgentCliEvent) {
   }
 }
 
+/// The platforms hoot mcp is told apart by: the interpreter lives in a different
+/// place on each, and only Windows and macOS have one to offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HootPlatform {
+  Windows,
+  Macos,
+  Other,
+}
+
+impl HootPlatform {
+  fn current() -> Self {
+    if cfg!(windows) {
+      Self::Windows
+    } else if cfg!(target_os = "macos") {
+      Self::Macos
+    } else {
+      Self::Other
+    }
+  }
+
+  /// The bundled interpreter under the install root, None where hoot mcp is not offered.
+  fn python_rel(self) -> Option<&'static str> {
+    match self {
+      Self::Windows => Some(PYTHON_REL_WINDOWS),
+      Self::Macos => Some(PYTHON_REL_UNIX),
+      Self::Other => None,
+    }
+  }
+}
+
+/// The interpreter and the script an MCP client starts to reach hoot from this
+/// machine, in that order. They are shown to be copied, so each is spelled
+/// with the platform's own separators. None on Linux, and anywhere the script
+/// is not installed.
+pub fn hoot_mcp_command() -> Option<Vec<String>> {
+  hoot_mcp_command_under(&paths::install_root(), HootPlatform::current())
+}
+
+fn hoot_mcp_command_under(install: &Path, platform: HootPlatform) -> Option<Vec<String>> {
+  let python_rel = platform.python_rel()?;
+  let under = |rel: &str| rel.split('/').fold(install.to_path_buf(), |path, part| path.join(part));
+  let script = under(HOOT_MCP_SCRIPT_REL);
+  if !script.is_file() {
+    return None;
+  }
+  Some(vec![
+    under(python_rel).to_string_lossy().into_owned(),
+    script.to_string_lossy().into_owned(),
+  ])
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// An install root with the script in it, under a name holding a space as the mac's does.
+  fn installed_root(tag: &str) -> PathBuf {
+    let root = std::env::temp_dir()
+      .join(format!("owlette-hoot-mcp-{tag}-{}", std::process::id()))
+      .join("Application Support")
+      .join("runtime");
+    let src = root.join("agent").join("src");
+    std::fs::create_dir_all(&src).expect("make the src dir");
+    std::fs::write(src.join("fleet_mcp.py"), "").expect("write the script");
+    root
+  }
+
+  fn forget(root: &Path) {
+    let _ = std::fs::remove_dir_all(root.parent().and_then(Path::parent).expect("temp parent"));
+  }
+
+  #[test]
+  fn the_windows_command_is_the_interpreter_then_the_script_in_native_separators() {
+    let root = installed_root("win");
+    let command = hoot_mcp_command_under(&root, HootPlatform::Windows).expect("installed");
+    assert_eq!(
+      command,
+      vec![
+        root.join("python").join("python.exe").to_string_lossy().into_owned(),
+        root.join("agent").join("src").join("fleet_mcp.py").to_string_lossy().into_owned(),
+      ]
+    );
+    if cfg!(windows) {
+      assert!(command.iter().all(|part| !part.contains('/')), "{command:?}");
+    }
+    forget(&root);
+  }
+
+  #[test]
+  fn the_macos_command_is_the_bundled_python3_then_the_script_under_the_runtime() {
+    let root = installed_root("mac");
+    let command = hoot_mcp_command_under(&root, HootPlatform::Macos).expect("installed");
+    assert_eq!(
+      command,
+      vec![
+        root.join("python").join("bin").join("python3").to_string_lossy().into_owned(),
+        root.join("agent").join("src").join("fleet_mcp.py").to_string_lossy().into_owned(),
+      ]
+    );
+    assert!(command[0].contains("Application Support"), "{command:?}");
+    forget(&root);
+  }
+
+  #[test]
+  fn there_is_no_command_where_the_script_is_missing_or_on_linux() {
+    let root = installed_root("none");
+    assert_eq!(hoot_mcp_command_under(&root, HootPlatform::Other), None);
+    assert_eq!(hoot_mcp_command_under(&root.join("nowhere"), HootPlatform::Windows), None);
+    assert_eq!(hoot_mcp_command_under(&root.join("nowhere"), HootPlatform::Macos), None);
+    forget(&root);
+  }
 
   #[test]
   fn every_mode_maps_to_exactly_one_flag() {
@@ -483,6 +763,40 @@ mod tests {
         "{mode} should refuse a server"
       );
     }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn off_windows_every_mode_that_needs_root_is_asked_of_the_daemon() {
+    let routed: Vec<(&str, Option<Verb>)> = MODES.iter().map(|(mode, _)| (*mode, seam_verb(mode))).collect();
+    assert_eq!(
+      routed,
+      [
+        ("join", Some(Verb::Pair)),
+        ("leave", Some(Verb::Leave)),
+        ("report-issue", Some(Verb::ReportIssue)),
+        ("reboot-now", Some(Verb::Reboot)),
+        ("dismiss-reboot", Some(Verb::DismissReboot)),
+      ]
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn only_a_pairing_still_running_is_cancelled_through_the_daemon() {
+    let runs = Runs::default();
+    {
+      let mut seam_runs = runs.seam.lock().unwrap();
+      seam_runs.insert("leave-0".to_string(), SeamRun { verb: Verb::Leave, cancelled: false });
+      seam_runs.insert("join-1".to_string(), SeamRun { verb: Verb::Pair, cancelled: true });
+    }
+
+    // a leave asked for is not taken back, and a pairing is cancelled once.
+    assert_eq!(cancel_seam_run(&runs, "leave-0"), Ok(Some(false)));
+    assert_eq!(cancel_seam_run(&runs, "join-1"), Ok(Some(false)));
+    // anything else is a child of this app's, cancelled the way it always was.
+    assert_eq!(cancel_seam_run(&runs, "report-issue-2"), Ok(None));
+    assert_eq!(cancel(&runs, "report-issue-2"), Ok(false));
   }
 
   #[test]

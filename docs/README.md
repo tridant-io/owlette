@@ -2,13 +2,17 @@
 
 two trees, one rule. **published product docs live in `web/content/docs/`** — that tree is app source. it is edited like code, it rides the web build, and a change there triggers CI and an auto-deploy to dev.owlette.app or owlette.app. treat it as shipping code, never as a scratchpad.
 
-**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `e2e-machine/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
+**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
 
 ## start here
 
 - [maintainer-quickstart.md](maintainer-quickstart.md) — first-time path for an engineer cloning the repo: toolchain versions, day-1 web dev server, day-2 agent pairing, week-1 installer ship.
 - [roadmap.md](roadmap.md) — living, roughly-prioritized list of what's next. not a commitment.
 - [changelog.md](changelog.md) — release history; an installer must never ship without a matching `## [X.Y.Z]` entry here.
+
+## adr/ — settled decisions
+
+- [adr/](adr/) — one short record per decision that is hard to reverse, with why it was made and what it costs. read the ones for the area you touch before changing it; the format is in `adr/0001-*`.
 
 ## runbooks/ — operational procedures
 
@@ -20,6 +24,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [runbooks/manual-infrastructure.md](runbooks/manual-infrastructure.md) — the artifacts no `git push` deploys: cron schedules, firestore indexes, functions, load balancer.
 - [runbooks/app-check-rollout.md](runbooks/app-check-rollout.md) — turning on firebase app check enforcement without locking out the real app.
 - [runbooks/talons.md](runbooks/talons.md) — the once-a-minute talon sweep, missed-fire grace, and stale-run janitor; written for "my talon didn't run".
+- [runbooks/plans-and-billing.md](runbooks/plans-and-billing.md) — turning plan enforcement (owlette free, the trial, per-site billing through tridant id) on and off, checking it, and running it day to day.
 - [runbooks/upgrade-2.12.0.md](runbooks/upgrade-2.12.0.md) — the self-contained 2.12.x promotion chain (legacy keys, env vars, R2, migrations); kept for the procedure.
 - [runbooks/roost-kill-switch.md](runbooks/roost-kill-switch.md) — per-site emergency stop for roost publish, signed-URL, and agent sync.
 - [runbooks/security-boundary-kill-switches.md](runbooks/security-boundary-kill-switches.md) — the two W9 enforcement switches (capability, privileged rate limit); incident or drill only.
@@ -32,10 +37,9 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/threat-model.md](internal/threat-model.md) — canonical security design constraint for roost, reconciled against the code that actually shipped.
 - [internal/manifest-format.md](internal/manifest-format.md) — roost manifest format spec v1 (approved).
 - [internal/v1-v2-migration.md](internal/v1-v2-migration.md) — canonical v1 → v2 (roost) migration design.
-- [internal/architecture-decisions.md](internal/architecture-decisions.md) — the owlette 2.0 architecture decision record.
-- [internal/version-management.md](internal/version-management.md) — independent component versioning and `scripts/sync-versions.js`.
+- [internal/version-management.md](internal/version-management.md) — what `scripts/sync-versions.js` writes, why `firestore.rules` keeps its own version, and the tag patterns.
 - [internal/slsa-build-l3.md](internal/slsa-build-l3.md) — hermetic CI installer build with signed in-toto provenance, verifiable with `slsa-verifier`.
-- [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned `claude.exe` that agents fetch on demand.
+- [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned hoot CLI, one pin per platform, that agents fetch on demand.
 - [internal/dmca-takedown-sop.md](internal/dmca-takedown-sop.md) — 17 U.S.C. § 512(c) safe-harbor operator SOP for roost user content.
 - [internal/public-api-launch-runbook.md](internal/public-api-launch-runbook.md) — the public API launch sequence, go/no-go gates, and incident table.
 - [internal/public-api-developer-preview-checklist.md](internal/public-api-developer-preview-checklist.md) — the developer-preview release checklist.
@@ -44,7 +48,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/status-page-uptime.md](internal/status-page-uptime.md) — status page components and the uptime checks behind them.
 - [internal/gui-automation-machine-setup.md](internal/gui-automation-machine-setup.md) — canonical recipe for provisioning a windows GUI-automation box (capture machine and e2e runner).
 - [internal/hyper-v-capture-vm.md](internal/hyper-v-capture-vm.md) — building the windows 11 hyper-v guest that the setup doc then configures.
-- [internal/claude-system.md](internal/claude-system.md) — implementation guide for the `.claude/` workflow system (hooks, skills, commands).
+- [internal/claude-system.md](internal/claude-system.md) — how the `.claude/` agent harness loads and is checked (skills, commands, agents, hooks).
 - [internal/oauth-migration-testing.md](internal/oauth-migration-testing.md) — deprecated v2.1.0 OAuth browser-flow testing guide, kept as history; device code pairing replaced it in v2.4.1.
 
 ## api reference

@@ -281,7 +281,7 @@ export const TALON_DISABLED_REASON_COPY: Readonly<Record<TalonDisabledReason, st
   creator_deleted:
     'the person who created this talon no longer has an account',
   creator_access_revoked:
-    'the person who created this talon no longer has access to this site',
+    'the person who created this talon no longer has whole-site access to this site',
   creator_missing_llm_key:
     'the person who created this talon has no ai key saved in settings → hoot',
   repeated_failures: 'it failed too many times in a row',
@@ -319,7 +319,7 @@ export interface TalonDoc {
   lastRunAt?: TalonTimestamp;
   lastRunStatus?: TalonRunStatus;
   lastRunId?: string;
-  /** Reset to 0 on any successful run; drives auto-disable backoff. */
+  /** Reset to 0 on any successful run and when a person switches the talon from off to on; drives auto-disable backoff. */
   consecutiveFailures: number;
   /** SYSTEM-disable only; cleared whenever a human toggles `enabled` either way. */
   disabledReason?: TalonDisabledReason;

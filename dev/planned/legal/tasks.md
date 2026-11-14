@@ -21,12 +21,9 @@ five production-readiness items deferred from `dev/active/project-distribution-v
   - Do: tech e&o + cyber + media liability rider. vouch / embroker / coalition recommended brokers.
   - Done when: policies bound, certificate of insurance on file.
 
-- [ ] **Task 1.3: EV code-signing cert procurement** [user]
+- [x] **Task 1.3: EV code-signing cert procurement** [dropped]
   - **Originally**: `dev/active/project-distribution-v2/tasks.md` wave 0.7
-  - **Cost**: $400-700/yr
-  - **Lead time**: **6-8 weeks** (longest pole — start day 0)
-  - Do: sectigo or digicert EV cert. hardware token shipped to founder. plan for hsm/kms storage on arrival.
-  - Done when: cert in hsm/kms; test signing of dummy installer succeeds.
+  - Not needed: owlette signs with tridant's Azure Artifact Signing account (2026-11-02). see "code signing context" in `docs/runbooks/agent-installer-release.md`.
 
 - [ ] **Task 1.4: OFAC sanctions screening** [autonomous after vendor pick]
   - **Originally**: `dev/active/project-distribution-v2/tasks.md` wave 0.4
@@ -38,15 +35,11 @@ five production-readiness items deferred from `dev/active/project-distribution-v
 
 ---
 
-## phase 4 — engineering (1-day task after cert arrives)
+## phase 4 — engineering
 
-- [ ] **Task 4.1: authenticode signing in build pipeline** [autonomous, requires Task 1.3 cert]
+- [x] **Task 4.1: authenticode signing in build pipeline** [done differently]
   - **Originally**: `dev/active/project-distribution-v2/tasks.md` wave 5.9
-  - **Cost**: free (engineering only)
-  - **Lead time**: 1 day after cert arrives
-  - Files: `agent/build_installer_full.bat`, `dev/planned/legal/reference/cert-storage-runbook.md` (new)
-  - Do: modify `build_installer_full.bat` to call `signtool.exe sign /a /tr <timestamp-server> /td sha256 /fd sha256 <installer.exe>` after the inno setup compile step. write storage runbook documenting cert location + access + recovery.
-  - Done when: production installer is signed; passes SmartScreen with no warning on first download to a fresh windows machine.
+  - `OWLETTE_SIGN=1` in `agent/build_installer_full.bat`, and CI on a `v*` tag. no certificate to store. no signature grants day-one SmartScreen trust, so "no warning on first download" is not a criterion any more.
 
 ---
 

@@ -45,6 +45,11 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
 function collectionPath(parts: string[]): string {
   return parts.join('/');
 }
@@ -124,6 +129,11 @@ function docRef(parts: string[]) {
   };
 }
 
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from '../helpers/planEnforcement';
 import { GET, POST } from '@/app/api/account/api-keys/route';
 import { DELETE } from '@/app/api/account/api-keys/[keyId]/route';
 
@@ -199,6 +209,7 @@ describe('/api/account/api-keys', () => {
     expect(json.name).toBe('Deploy');
     expect(json.key).toMatch(/^owk_live_/);
     expect(json.environment).toBe('live');
+    expect(json.maxToolTier).toBe(1);
     expect(json.keyPrefix).toBe(json.key.slice(0, 15));
     expect(json.expiresAt).toEqual(expect.any(Number));
     expect(json.scopes).toEqual(
@@ -284,6 +295,25 @@ describe('/api/account/api-keys', () => {
     expect(lookupRecord).toMatchObject({ scopes: callerScopes });
   });
 
+  it("a child key starts at the default tool tier, whatever the caller's is", async () => {
+    mockKeyContext = {
+      scopes: [{ resource: 'site', id: 'site-1', permissions: ['read'] }],
+      maxToolTier: 3,
+    } as typeof mockKeyContext;
+
+    const res = await POST(new NextRequest('http://localhost/api/account/api-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Child key', maxToolTier: 3 }),
+    }));
+    expect(res.status).toBe(200);
+
+    const lookupRecord = Array.from(store.entries()).find(([p]) =>
+      p.startsWith('api_keys/'),
+    )?.[1] as Record<string, unknown>;
+    expect(lookupRecord.maxToolTier).toBeUndefined();
+  });
+
   it('audits child-key creation under the caller API key actor', async () => {
     const callerScopes = [
       { resource: 'site', id: 'site-1', permissions: ['read'] },
@@ -310,6 +340,29 @@ describe('/api/account/api-keys', () => {
       }),
     );
     expect(JSON.stringify(mockEmitMutation.mock.calls)).not.toContain(json.key);
+  });
+});
+
+describe('/api/account/api-keys plan gate', () => {
+  const create = () =>
+    POST(new NextRequest('http://localhost/api/account/api-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Deploy' }),
+    }));
+
+  beforeEach(() => {
+    enforcePlans();
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+  });
+  afterEach(stopEnforcingPlans);
+
+  it('mints on the minting user’s free plan: the site’s plan gates each request, not the mint', async () => {
+    store.set('users/test-admin', { role: 'user' });
+
+    expect((await create()).status).toBe(200);
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 

@@ -14,6 +14,7 @@ import {
   type ScopeSelection,
   validateScopeSelection,
 } from '@/components/ApiKeyScopeFields';
+import { ApiKeyToolTierField } from '@/components/ApiKeyToolTierField';
 import type { ApiKeyListItem, ApiKeyScope } from '@/lib/apiKeyTypes';
 
 /**
@@ -43,6 +44,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       ? apiKey.scopes.map((s) => ({ ...s, permissions: [...s.permissions] }))
       : [{ resource: 'site', id: '*', permissions: ['read'] }],
   );
+  const [maxToolTier, setMaxToolTier] = useState(apiKey.maxToolTier);
   const [saving, setSaving] = useState(false);
   // Pre-scoped-auth keys store no scopes and authenticate as full access, so
   // editing one is a narrowing, not an adjustment.
@@ -64,6 +66,8 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       await onSubmit({
         name: name.trim(),
         scopes: resolveScopes(preset, customScopes),
+        // only when it moved: a raise asks the server for more than the rest of an edit does
+        ...(maxToolTier !== apiKey.maxToolTier ? { maxToolTier } : {}),
       });
     } finally {
       setSaving(false);
@@ -74,7 +78,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
     /* Square top, no top border: this is the lower half of the row above, not
        a second card — a detached panel wouldn't say which key it edits. */
     <div className="space-y-4 rounded-md rounded-t-none border border-t-0 border-accent-cyan/50 bg-background/40 p-3">
-      <h3 className="text-sm font-medium text-white">
+      <h3 className="text-sm font-medium text-foreground">
         editing <span className="text-accent-cyan">{apiKey.name || '(unnamed key)'}</span>
       </h3>
       <p className="text-xs text-muted-foreground">
@@ -84,7 +88,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       </p>
 
       {isLegacy && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-xs text-amber-400">
+        <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-2 text-xs text-warning">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <span>
             this is a legacy key with no scope list, which authenticates as full access. saving
@@ -95,7 +99,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       )}
 
       <div className="space-y-2">
-        <Label htmlFor="editKeyName" className="text-white">
+        <Label htmlFor="editKeyName" className="text-foreground">
           name
         </Label>
         <Input
@@ -103,7 +107,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="bg-background border-border text-white"
+          className="bg-background border-border text-foreground"
           disabled={saving}
         />
       </div>
@@ -115,6 +119,8 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
         onCustomScopesChange={setCustomScopes}
         disabled={saving}
       />
+
+      <ApiKeyToolTierField value={maxToolTier} onChange={setMaxToolTier} disabled={saving} />
 
       <div className="flex justify-end gap-2">
         <Button
@@ -130,7 +136,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
           type="button"
           onClick={handleSave}
           disabled={saving || !name.trim()}
-          className="text-gray-900 cursor-pointer"
+          className="cursor-pointer"
         >
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'save changes'}
         </Button>

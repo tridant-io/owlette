@@ -6,7 +6,6 @@
 
 :root,
 .dark {
-  color-scheme: dark;
   --color-fd-background: var(--background);
   --color-fd-foreground: var(--foreground);
   --color-fd-muted: var(--muted);
@@ -62,16 +61,21 @@
   padding-bottom: 8rem;
 }
 
+/* links never underline: article links read as links by accent colour, and a heavier
+   weight so colour is not the only cue (wcag 1.4.1, axe link-in-text-block) */
 #nd-page a,
 #nd-toc a {
-  text-decoration-color: var(--accent-cyan-muted);
-  text-underline-offset: 0.18em;
+  text-decoration: none;
+}
+
+#nd-page .prose a:not([data-card]) {
+  color: var(--accent-cyan);
+  font-weight: 600;
 }
 
 #nd-page a:hover,
 #nd-toc a:hover {
-  color: var(--accent-cyan);
-  text-decoration-color: var(--accent-cyan);
+  color: var(--accent-cyan-hover);
 }
 
 #nd-page :where(pre, code, kbd),
@@ -103,7 +107,7 @@
   gap: 0.5rem;
 }
 
-.docs-nav-title img {
+.docs-nav-title svg {
   height: 1.25rem;
   width: 1.25rem;
 }

@@ -140,6 +140,14 @@ describe('StatusFooter join site', () => {
     expect(screen.getByRole('button', { name: 'start service' })).toBeTruthy()
     expect(joinButton()).toBeNull()
   })
+
+  it('offers no start it cannot carry out, and still no join', () => {
+    // macos: launchd runs the agent, so the app passes no start handler.
+    setup({ config: unpaired, status: serviceStopped, hostname: 'TEC-A4D', onStart: undefined })
+
+    expect(screen.queryByRole('button', { name: 'start service' })).toBeNull()
+    expect(joinButton()).toBeNull()
+  })
 })
 
 describe('StatusFooter environment chip', () => {

@@ -55,6 +55,7 @@ import {
   TurnActiveError,
   type TurnResumeBinding,
 } from '@/lib/hoot/turnStore.server';
+import { requireEntitlement } from '@/lib/plan.server';
 
 /** The request body, as far as this route reads it. `machineName` is ignored. */
 interface HootRequestBody {
@@ -74,7 +75,7 @@ interface HootRequestBody {
  * never narrow a turn — a follow-up note quoting `@kiosk-01` is the assistant's
  * own words coming back, not a targeting instruction.
  */
-const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_)/;
+const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_|task_msg_)/;
 
 /**
  * What the request ASKS to target: the new `target.machineIds`, else the legacy
@@ -248,6 +249,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // before the turn lock: `startTurn` refuses too, but only as an error chunk
+    // inside a 200 stream.
+    const planRefusal = await requireEntitlement(siteId, 'owlette.hoot');
+    if (planRefusal) return planRefusal;
+
     // Everything below resolves the turn's target. `siteId` is verified by this
     // point, so a machine listing can be trusted to name this site's machines.
     const approvalIds = approvalResponseIds(messages);
@@ -264,6 +270,8 @@ export async function POST(request: NextRequest) {
       const resumeMessageId = messages[messages.length - 1]?.id;
       const prior = await readTurnRecord(db, chatId);
       if (
+        // The ownership guard above needs the chat doc: without one, any site admin could answer.
+        !existingChatSnap.exists ||
         prior === null ||
         typeof resumeMessageId !== 'string' ||
         prior.messageId !== resumeMessageId ||
@@ -278,6 +286,7 @@ export async function POST(request: NextRequest) {
       // down; anything the new lock wrote carries its explicit list.
       const outcome = await resolveHootTargets(db, siteId, {
         requested: prior.resolvedMachineIds,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 
@@ -309,6 +318,7 @@ export async function POST(request: NextRequest) {
       const outcome = await resolveHootTargets(db, siteId, {
         requested: requested.machineIds,
         mentions,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 

@@ -351,8 +351,11 @@ export function isApprovalResume(messages: unknown): boolean {
   return approvalResponseIds(messages).length > 0;
 }
 
-/** Where a turn's target came from. Recorded on the stream doc and in metadata. */
-export type TurnTargetSource = 'chat' | 'mention' | 'resume' | 'followup' | 'talon';
+/**
+ * Where a turn's target came from. Recorded on the stream doc and in metadata.
+ * `machine` is a task a granted machine handed hoot (ADR 0017).
+ */
+export type TurnTargetSource = 'chat' | 'mention' | 'resume' | 'followup' | 'talon' | 'machine';
 
 /** What a turn ASKED for — written into the stream doc inside the claim transaction. */
 export interface TurnTargetRecord {
@@ -416,6 +419,7 @@ const TURN_TARGET_SOURCES: ReadonlySet<string> = new Set<TurnTargetSource>([
   'resume',
   'followup',
   'talon',
+  'machine',
 ]);
 
 /**

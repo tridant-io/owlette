@@ -30,6 +30,7 @@ import {
   DEVICE_TRUST_COOKIE,
   findValidTrustedDevice,
 } from '@/lib/deviceTrust.server';
+import { SESSION_LIFETIME_DAYS, sessionRevoked, tokensRevokedAt } from '@/lib/sessionCutoff.server';
 
 /**
  * How a session's MFA requirement came to be satisfied. Deliberately a *how*
@@ -41,6 +42,12 @@ export type MfaSatisfiedBy = 'challenge' | 'passkey-uv' | 'device-trust';
 export interface SessionData {
   userId: string;
   expiresAt: number;
+  /**
+   * When the session was minted, or re-proved by a factor change it made itself. Compared with
+   * the account's cutoffs (lib/sessionCutoff.server.ts). Absent on older cookies, which are
+   * dated by their expiry.
+   */
+  issuedAt?: number;
   /**
    * Cached from `users/{uid}.mfaEnrolled` so the proxy needn't read Firestore
    * per request. Optional: older sessions lack it (upgraded by
@@ -64,6 +71,13 @@ export interface SessionData {
    */
   mfaSatisfiedBy?: MfaSatisfiedBy;
   /**
+   * The network (`asn:<n>` or `unknown`, `lib/network.server.ts`) the ceremony
+   * behind `mfaCompletedAt` ran on, so swoop lets that ceremony stand in for its
+   * step-up only from the same network. Set and cleared with the ceremony claim;
+   * absent when no ceremony was run or network binding is off.
+   */
+  mfaNetwork?: string;
+  /**
    * Cached from `users/{uid}.requiresMfaSetup` (written by
    * `lib/mfaFactors.server.ts` whenever an account drops to zero factors, and
    * by signup bootstrap). Rides the same single read as `mfaRequired`; same
@@ -79,7 +93,7 @@ const sessionOptions: SessionOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7, // seconds
+    maxAge: 60 * 60 * 24 * SESSION_LIFETIME_DAYS, // seconds
     path: '/',
   },
 };
@@ -124,6 +138,7 @@ async function resolveMfaStateForUser(userId: string): Promise<{
   mfaRequired: boolean;
   mfaVerified: boolean;
   requiresMfaSetup: boolean;
+  sessionsValidAfter?: unknown;
 }> {
   // Doc-not-exists stays fail-soft on purpose: first-login users can hit this
   // before /api/users/bootstrap runs, and with no doc they cannot have MFA.
@@ -141,10 +156,17 @@ async function resolveMfaStateForUser(userId: string): Promise<{
   // ANDing `!enrolled` is a safety belt: a hand-edited doc must never divert an
   // enrolled user into mandatory setup (setup outranks challenge in the proxy).
   const requiresMfaSetup = data?.requiresMfaSetup === true && !enrolled;
+  const sessionsValidAfter = data?.sessionsValidAfter;
   if (enrolled) {
-    return { mfaRequired: true, mfaVerified: false, requiresMfaSetup };
+    return { mfaRequired: true, mfaVerified: false, requiresMfaSetup, sessionsValidAfter };
   }
-  return { mfaRequired: false, mfaVerified: true, requiresMfaSetup };
+  return { mfaRequired: false, mfaVerified: true, requiresMfaSetup, sessionsValidAfter };
+}
+
+/** The account's cutoff and its Firebase token revocation (lib/sessionCutoff.server.ts). */
+interface SessionCutoffs {
+  sessionsValidAfter?: unknown;
+  tokensRevokedAt?: number | null;
 }
 
 /**
@@ -154,25 +176,29 @@ async function resolveMfaStateForUser(userId: string): Promise<{
  *
  * Demands mfaRequired && mfaVerified because only a real challenge produces
  * that pair; post-disable and no-MFA sessions must not skip a newly-required
- * challenge. Shared by `createSession` (gates the device-trust I/O) and
+ * challenge. A session from before the account's cutoff carries nothing over.
+ * Shared by `createSession` (gates the device-trust I/O) and
  * `resolveMfaOnSessionCreate` so the two can't drift.
  */
 function canPreserveVerifiedMfa(
   prev: {
     userId?: string;
+    issuedAt?: number;
     expiresAt?: number;
     mfaRequired?: boolean;
     mfaVerified?: boolean;
   },
   userId: string,
-  now: number
+  now: number,
+  cutoffs: SessionCutoffs
 ): boolean {
   return (
     prev.userId === userId &&
     typeof prev.expiresAt === 'number' &&
     prev.expiresAt > now &&
     prev.mfaRequired === true &&
-    prev.mfaVerified === true
+    prev.mfaVerified === true &&
+    !sessionRevoked(prev, cutoffs.sessionsValidAfter, cutoffs.tokensRevokedAt)
   );
 }
 
@@ -187,9 +213,13 @@ function canPreserveVerifiedMfa(
  *      prev.mfaSatisfiedBy so the ORIGINAL completion time and the ORIGINAL
  *      way it was earned both survive the every-load re-POST
  *   3. mfaSatisfiedBy==='passkey-uv' → verified, now (one UV ceremony proves
- *      credential + human, so it is both factors)
- *   4. deviceTrusted       → verified, now, satisfied BY the device-trust
- *      cookie — recorded as such, because no ceremony was run
+ *      credential + human, so it is both factors); 'challenge' likewise, which
+ *      only an app-link sign-in passes: the approver's ceremony, carried over
+ *      with the time it ran (`mfaSatisfiedAt`), so the app's session is never
+ *      fresher than the ceremony behind it — swoop's step-up reads that time
+ *   4. deviceTrusted, or mfaSatisfiedBy==='device-trust' (an app-link approver
+ *      whose session was device-trust-born) → verified, now, satisfied BY the
+ *      device-trust cookie — recorded as such, because no ceremony was run
  *   otherwise              → unverified → /verify-2fa
  *
  * 3 and 4 are only consulted inside the required arm, so neither can flip
@@ -201,51 +231,66 @@ function canPreserveVerifiedMfa(
 export function resolveMfaOnSessionCreate(input: {
   prev: {
     userId?: string;
+    issuedAt?: number;
     expiresAt?: number;
     mfaRequired?: boolean;
     mfaVerified?: boolean;
     mfaCompletedAt?: number;
     mfaSatisfiedBy?: MfaSatisfiedBy;
+    mfaNetwork?: string;
   };
-  resolved: { mfaRequired: boolean; mfaVerified: boolean };
+  resolved: { mfaRequired: boolean; mfaVerified: boolean } & SessionCutoffs;
   userId: string;
   now: number;
   deviceTrusted: boolean;
   /**
    * SERVER-SIDE ONLY — see the security note on `createSession`'s parameter of
-   * the same name. Set only by a route that itself performed the ceremony.
+   * the same name. Set only by a route that itself performed the ceremony, or
+   * read off a verified app-link custom-token claim.
    */
-  mfaSatisfiedBy?: 'passkey-uv';
+  mfaSatisfiedBy?: MfaSatisfiedBy;
+  /** when that ceremony ran, when it was not now: the app-link approver's. Same rule as above. */
+  mfaSatisfiedAt?: number;
+  /** the network that ceremony ran on. Same rule as above. */
+  mfaNetwork?: string;
 }): {
   mfaRequired: boolean;
   mfaVerified: boolean;
   mfaCompletedAt?: number;
   mfaSatisfiedBy?: MfaSatisfiedBy;
+  mfaNetwork?: string;
 } {
-  const { prev, resolved, userId, now, deviceTrusted, mfaSatisfiedBy } = input;
+  const { prev, resolved, userId, now, deviceTrusted, mfaSatisfiedBy, mfaSatisfiedAt, mfaNetwork } = input;
 
   if (!resolved.mfaRequired) {
     return { mfaRequired: false, mfaVerified: true };
   }
 
   // Preserve a prior, genuinely-challenged, still-live session.
-  if (canPreserveVerifiedMfa(prev, userId, now)) {
+  if (canPreserveVerifiedMfa(prev, userId, now, resolved)) {
     return {
       mfaRequired: true,
       mfaVerified: true,
       mfaCompletedAt: prev.mfaCompletedAt,
       mfaSatisfiedBy: prev.mfaSatisfiedBy,
+      mfaNetwork: prev.mfaNetwork,
     };
   }
 
   // A UV WebAuthn ceremony completed during THIS request satisfies the
   // challenge outright; the verifying route pins requireUserVerification.
-  if (mfaSatisfiedBy === 'passkey-uv') {
-    return { mfaRequired: true, mfaVerified: true, mfaCompletedAt: now, mfaSatisfiedBy };
+  if (mfaSatisfiedBy === 'passkey-uv' || mfaSatisfiedBy === 'challenge') {
+    return {
+      mfaRequired: true,
+      mfaVerified: true,
+      mfaCompletedAt: mfaSatisfiedAt ?? now,
+      mfaSatisfiedBy,
+      mfaNetwork,
+    };
   }
 
   // Valid device-trust cookie; the grant is itself a fresh verification event.
-  if (deviceTrusted) {
+  if (deviceTrusted || mfaSatisfiedBy === 'device-trust') {
     return {
       mfaRequired: true,
       mfaVerified: true,
@@ -268,9 +313,17 @@ export function resolveMfaOnSessionCreate(input: {
  *   `requireUserVerification: true`. Never derive it from anything the client
  *   controls — it is the one input that can birth a verified session without a
  *   challenge, so a request-sourced value is a one-word MFA bypass. Only two
- *   call sites: app/api/auth/session/route.ts (never passes it) and
+ *   call sites: app/api/auth/session/route.ts (only the `appLinkMfa` claim of
+ *   a verified custom-token ID token, via `appLinkMfaFromIdToken` — our own
+ *   server signed it in app-link exchange) and
  *   app/api/passkeys/authenticate/verify/route.ts (literal, after
  *   `verification.verified`).
+ * @param mfaSatisfiedAt SERVER-SIDE ONLY, same rule. When the ceremony behind
+ *   `mfaSatisfiedBy` ran, if not during this request: the app-link approver's
+ *   `mfaCompletedAt`, off the same verified claim. Omitted, it is now.
+ * @param mfaNetwork SERVER-SIDE ONLY, same rule. The network that ceremony ran
+ *   on: this request's for a passkey sign-in, the approver's `mfaNetwork` off the
+ *   same verified claim for an app-link one.
  *
  * Fail-closed: device-trust lookup errors are caught and read as untrusted.
  * `resolveMfaStateForUser`'s throw propagates — a Firestore failure must never
@@ -278,35 +331,45 @@ export function resolveMfaOnSessionCreate(input: {
  */
 export async function createSession(
   userId: string,
-  durationDays: number = 7,
-  mfaSatisfiedBy?: 'passkey-uv'
+  durationDays: number = SESSION_LIFETIME_DAYS,
+  mfaSatisfiedBy?: MfaSatisfiedBy,
+  mfaSatisfiedAt?: number,
+  mfaNetwork?: string
 ): Promise<void> {
   const session = await getSession();
 
   // Snapshot BEFORE overwriting: the preserve rule reads these.
   const prev = {
     userId: session.userId,
+    issuedAt: session.issuedAt,
     expiresAt: session.expiresAt,
     mfaRequired: session.mfaRequired,
     mfaVerified: session.mfaVerified,
     mfaCompletedAt: session.mfaCompletedAt,
     mfaSatisfiedBy: session.mfaSatisfiedBy,
+    mfaNetwork: session.mfaNetwork,
   };
 
   const now = Date.now();
   const expiresAt = now + durationDays * 24 * 60 * 60 * 1000;
 
-  // Fresh Firestore truth; never swallow its throw.
-  const resolved = await resolveMfaStateForUser(userId);
+  // Fresh Firestore truth; never swallow its throw. A session from before a
+  // password reset carries no verified second factor into this one.
+  const [mfaState, revokedAt] = await Promise.all([
+    resolveMfaStateForUser(userId),
+    tokensRevokedAt(userId),
+  ]);
+  const resolved = { ...mfaState, tokensRevokedAt: revokedAt };
 
-  // Preserve and passkey-uv are I/O-free, so decide them first and skip the
-  // device-trust round-trip when either already settles it (behaviour-neutral:
-  // `resolveMfaOnSessionCreate` returns before reading `deviceTrusted`).
+  // Preserve and a passed-in satisfier are I/O-free, so decide them first and
+  // skip the device-trust round-trip when either already settles it
+  // (behaviour-neutral: every satisfier lands on a verified branch without
+  // needing `deviceTrusted`).
   let deviceTrusted = false;
   if (
     resolved.mfaRequired &&
-    !canPreserveVerifiedMfa(prev, userId, now) &&
-    mfaSatisfiedBy !== 'passkey-uv'
+    !canPreserveVerifiedMfa(prev, userId, now, resolved) &&
+    !mfaSatisfiedBy
   ) {
     // Fail-CLOSED: any error here means untrusted → challenge, and must never
     // escape createSession.
@@ -334,9 +397,12 @@ export async function createSession(
     now,
     deviceTrusted,
     mfaSatisfiedBy,
+    mfaSatisfiedAt,
+    mfaNetwork,
   });
 
   session.userId = userId;
+  session.issuedAt = now;
   session.expiresAt = expiresAt;
   session.mfaRequired = mfa.mfaRequired;
   session.mfaVerified = mfa.mfaVerified;
@@ -358,6 +424,11 @@ export async function createSession(
     // see. Dropping an account's last factor lands here too (mfaRequired turns
     // false), so it closes the ceremony claim with it.
     delete session.mfaSatisfiedBy;
+  }
+  if (mfa.mfaNetwork) {
+    session.mfaNetwork = mfa.mfaNetwork;
+  } else {
+    delete session.mfaNetwork;
   }
 
   await session.save();
@@ -519,7 +590,7 @@ export async function destroySession(): Promise<void> {
 }
 
 /** Sliding expiration; call on each request to keep active users signed in. */
-export async function extendSession(durationDays: number = 7): Promise<void> {
+export async function extendSession(durationDays: number = SESSION_LIFETIME_DAYS): Promise<void> {
   const session = await getSession();
 
   if (!session.userId) {
@@ -535,17 +606,26 @@ export async function extendSession(durationDays: number = 7): Promise<void> {
 /**
  * Mark the session as having cleared an MFA challenge. Called by
  * /api/mfa/verify-login and /api/mfa/verify-setup (enrollment counts as a
- * fresh verification). No-op without a `userId`.
+ * fresh verification), and the passkey step-up and first-passkey routes.
+ * `mfaNetwork` is the network the challenge ran on, from
+ * `signInCeremonyNetwork`. No-op without a `userId`. Re-stamps `issuedAt`, so a
+ * session that just enrolled outlives the cutoff its own factor change set.
  */
-export async function markSessionMfaVerified(): Promise<void> {
+export async function markSessionMfaVerified(mfaNetwork?: string): Promise<void> {
   const session = await getSession();
   if (!session.userId) {
     return;
   }
+  session.issuedAt = Date.now();
   session.mfaRequired = true;
   session.mfaVerified = true;
   session.mfaCompletedAt = Date.now();
   session.mfaSatisfiedBy = 'challenge';
+  if (mfaNetwork) {
+    session.mfaNetwork = mfaNetwork;
+  } else {
+    delete session.mfaNetwork;
+  }
   // Reaching here requires a completed challenge, hence at least one factor —
   // mandatory setup is satisfied. Stamping now (not at the next createSession)
   // stops the proxy diverting to /setup-2fa on the very next request.
@@ -557,24 +637,41 @@ export async function markSessionMfaVerified(): Promise<void> {
  * Re-mint MFA state after a server-mediated disable: the disable counts as a
  * verification so the user isn't re-challenged immediately, and the cached
  * `requiresMfaSetup` is invalidated because the disable may have re-armed it.
+ * Re-stamps `issuedAt` past the cutoff the disable set.
  */
 export async function markSessionMfaDisabled(): Promise<void> {
   const session = await getSession();
   if (!session.userId) {
     return;
   }
+  session.issuedAt = Date.now();
   session.mfaRequired = false;
   session.mfaVerified = true;
   session.mfaCompletedAt = Date.now();
   // A disable is not a second-factor ceremony, and the account it leaves behind
   // may hold no second factor at all, so the ceremony claim goes with it.
   delete session.mfaSatisfiedBy;
+  delete session.mfaNetwork;
   // A disable can leave zero factors (re-arms `users/{uid}.requiresMfaSetup`)
   // or passkeys still enrolled; this helper can't see the resulting inventory,
   // and a stale cached `false` would walk the account past the /setup-2fa gate.
   // Dropping it makes `evaluateSessionMfa` resolve from Firestore next request
   // (mfaRequired=false here, so its derivation can't short-circuit).
   delete session.requiresMfaSetup;
+  await session.save();
+}
+
+/**
+ * Keep the session that changed a factor signed in past the cutoff that change set, for the
+ * routes that change one without calling a `markSession*` above. A no-op for another user's
+ * session, so a superadmin's reset of someone else ends theirs.
+ */
+export async function keepSessionPastCutoff(userId: string): Promise<void> {
+  const session = await getSession();
+  if (session.userId !== userId) {
+    return;
+  }
+  session.issuedAt = Date.now();
   await session.save();
 }
 

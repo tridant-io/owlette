@@ -28,13 +28,31 @@ test.describe('public routes', () => {
     await expect(page.getByRole('link', { name: /privacy policy/i })).toHaveAttribute('href', '/privacy');
   });
 
-  test('unsubscribe success and failure states render', async ({ page }) => {
-    await page.goto('/unsubscribe?success=true');
+  test('unsubscribe asks first, then turns alerts off with one click', async ({ page }) => {
+    // the POST itself is the route's unit test; this is the page around it
+    const posted: unknown[] = [];
+    await page.route('**/api/unsubscribe', async (route) => {
+      posted.push(route.request().postDataJSON());
+      await route.fulfill({ status: 200, json: { unsubscribed: true } });
+    });
+
+    await page.goto('/unsubscribe?token=e2e-token');
+    await expect(page.getByRole('heading', { name: /^unsubscribe$/i })).toBeVisible();
+    expect(posted).toEqual([]);
+
+    await page.getByRole('button', { name: 'turn off alert emails', exact: true }).click();
     await expect(page.getByRole('heading', { name: /unsubscribed/i })).toBeVisible();
     await expect(page.getByText(/all alert emails, including offline notifications, have been turned off/i)).toBeVisible();
+    expect(posted).toEqual([{ token: 'e2e-token' }]);
+  });
 
+  test('unsubscribe says so when the link is missing or refused', async ({ page }) => {
     await page.goto('/unsubscribe');
     await expect(page.getByRole('heading', { name: /^unsubscribe$/i })).toBeVisible();
+    await expect(page.getByText(/something went wrong/i)).toBeVisible();
+
+    await page.goto('/unsubscribe?token=not-valid');
+    await page.getByRole('button', { name: 'turn off alert emails', exact: true }).click();
     await expect(page.getByText(/something went wrong/i)).toBeVisible();
   });
 
@@ -59,6 +77,13 @@ test.describe('public routes', () => {
   test('demo route mounts and switches between list and card views', async ({ page }) => {
     await page.goto('/demo');
     await expect(page.getByRole('heading', { name: /welcome to owlette/i })).toBeVisible();
+
+    // both ways in, and "get started" is a filled button, not page-coloured text on nothing
+    const header = page.getByRole('banner');
+    await expect(header.getByRole('link', { name: 'sign in' })).toBeVisible();
+    const getStarted = header.getByRole('link', { name: /get started/i });
+    await expect(getStarted).toBeVisible();
+    expect(await getStarted.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
 
     await page.getByRole('button', { name: /card view/i }).click();
     await expect(page.getByText(/machines/i).first()).toBeVisible();
@@ -129,11 +154,38 @@ test.describe('public routes', () => {
     expect((await typo.json()).length).toBeGreaterThan(0);
   });
 
-  test('download permalink redirects to latest installer and falls back when empty', async ({ request }) => {
-    await seedInstallerLatest('https://example.test/downloads/owlette-e2e.exe');
-    const latest = await request.get('/download', { maxRedirects: 0 });
-    expect([307, 308]).toContain(latest.status());
-    expect(latest.headers().location).toBe('https://example.test/downloads/owlette-e2e.exe');
+  test('download permalink picks a platform and falls back when empty', async ({ request }) => {
+    const exe = 'https://example.test/downloads/owlette-e2e.exe';
+    const pkg = 'https://example.test/downloads/owlette-e2e.pkg';
+    await seedInstallerLatest(exe, {
+      windows_x64: { download_url: exe },
+      macos_arm64: { download_url: pkg },
+    });
+
+    const expectRedirect = async (path: string, location: string, userAgent?: string) => {
+      const response = await request.get(path, {
+        maxRedirects: 0,
+        headers: userAgent ? { 'user-agent': userAgent } : {},
+      });
+      expect([307, 308]).toContain(response.status());
+      expect(response.headers().location).toBe(location);
+      expect(response.headers().vary).toMatch(/user-agent/i);
+      expect(response.headers()['cache-control']).toContain('no-store');
+    };
+
+    await expectRedirect('/download?os=windows', exe);
+    await expectRedirect('/download?os=macos', pkg);
+    await expectRedirect(
+      '/download',
+      pkg,
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    );
+    await expectRedirect('/download', exe, 'curl/8.6.0');
+
+    const missing = await request.get('/download?os=linux', { maxRedirects: 0 });
+    expect(missing.status()).toBe(404);
+    expect(missing.headers()['content-type']).toMatch(/^text\/plain/);
+    expect(await missing.text()).toBe('no linux build in ve2e-latest');
 
     await deleteDocIfExists('installer_metadata/latest');
     const fallback = await request.get('/download', { maxRedirects: 0 });

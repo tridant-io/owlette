@@ -162,8 +162,16 @@ function makeAutoRestore(
   };
 }
 
+// the caller's member row on site-a: its role, and its machine scope (null = whole site)
+interface Access {
+  role: 'owner' | 'admin' | 'member';
+  machineIds: string[] | null;
+}
+const SITE_ADMIN: Access = { role: 'admin', machineIds: null };
+const MEMBER: Access = { role: 'member', machineIds: null };
+
 interface SetupOptions {
-  canSiteAdmin?: boolean;
+  access?: Access;
   userEmail?: string | null;
   hasAssignedLayout?: boolean;
   hasLiveProfile?: boolean;
@@ -187,7 +195,7 @@ interface SetupResult {
 /** Wire all six mocked hooks to a controlled state; returns the action spies. */
 function setup(options: SetupOptions = {}): SetupResult {
   const {
-    canSiteAdmin = true,
+    access = SITE_ADMIN,
     userEmail = 'admin@example.com',
     hasAssignedLayout = true,
     hasLiveProfile = true,
@@ -196,9 +204,16 @@ function setup(options: SetupOptions = {}): SetupResult {
     autoRestore = {},
   } = options;
 
-  // Only `isSiteAdmin` and `user.email` are consumed; cast the partial past AuthContextType.
+  // mirrors AuthContext: isSiteAdmin needs the whole site, isMachineAdmin the
+  // machine in scope, so a panel gated on the wrong one fails the scoped cases.
+  // Only `isMachineAdmin` and `user.email` are consumed; cast the partial past AuthContextType.
+  const admin = access.role !== 'member';
   mockedUseAuth.mockReturnValue({
-    isSiteAdmin: () => canSiteAdmin,
+    isSiteAdmin: (siteId: string) => siteId === 'site-a' && admin && access.machineIds === null,
+    isMachineAdmin: (siteId: string, machineId: string) =>
+      siteId === 'site-a' &&
+      admin &&
+      (access.machineIds === null || access.machineIds.includes(machineId)),
     user: userEmail ? ({ email: userEmail } as never) : null,
   } as unknown as ReturnType<typeof useAuth>);
 
@@ -225,7 +240,6 @@ function setup(options: SetupOptions = {}): SetupResult {
     catalogue: null,
     loading: false,
     error: null,
-    requestEnumerate: jest.fn(),
   });
 
   mockedUseDisplayEventFeed.mockReturnValue({
@@ -274,7 +288,7 @@ function setup(options: SetupOptions = {}): SetupResult {
 }
 
 // Mirrors layout.tsx: without TooltipProvider every render throws on the panel's Radix tooltips.
-function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1') {
+function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1', controlLocked?: boolean, isOwner = false) {
   return (
     <TooltipProvider>
       <DisplayLayoutPanel
@@ -282,6 +296,8 @@ function panelElement(capabilities?: Record<string, number>, machineId = 'machin
         machineName="Lobby Display"
         siteId="site-a"
         capabilities={capabilities}
+        controlLocked={controlLocked}
+        planSite={{ siteId: 'site-a', isOwner }}
         onClose={jest.fn()}
       />
     </TooltipProvider>
@@ -293,15 +309,15 @@ function renderPanel(capabilities?: Record<string, number>) {
 }
 
 describe('DisplayLayoutPanel — auto-restore UI', () => {
-  it('renders the toggle when canSiteAdmin is true', () => {
-    setup({ canSiteAdmin: true });
+  it('renders the toggle for an admin of the machine', () => {
+    setup({ access: SITE_ADMIN });
     renderPanel();
     expect(screen.getByTestId('display-auto-restore-toggle')).toBeInTheDocument();
     expect(screen.getByText('auto-restore')).toBeInTheDocument();
   });
 
-  it('hides the toggle when canSiteAdmin is false', () => {
-    setup({ canSiteAdmin: false });
+  it('hides the toggle from a member', () => {
+    setup({ access: MEMBER });
     renderPanel();
     expect(screen.queryByTestId('display-auto-restore-toggle')).not.toBeInTheDocument();
     expect(screen.queryByText('auto-restore')).not.toBeInTheDocument();
@@ -310,7 +326,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   it('toggle calls setAutoRestore(true, userEmail) when initially disabled', async () => {
     const user = userEvent.setup();
     const { setAutoRestore } = setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       userEmail: 'admin@example.com',
       autoRestore: { enabled: false },
     });
@@ -325,7 +341,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   it('toggle calls setAutoRestore(false, userEmail) when initially enabled', async () => {
     const user = userEvent.setup();
     const { setAutoRestore } = setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       userEmail: 'admin@example.com',
       autoRestore: { enabled: true },
     });
@@ -338,7 +354,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   });
 
   it('toggle is disabled when no assigned layout exists', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: false });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: false });
     renderPanel();
     const toggle = screen.getByTestId('display-auto-restore-toggle');
     // Assert the DOM `disabled` prop, not Radix's data-disabled attr — the former is what the
@@ -347,13 +363,13 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   });
 
   it('toggle is disabled when nvidia mosaic is active', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, mosaicActive: true });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, mosaicActive: true });
     renderPanel();
     expect(screen.getByTestId('display-auto-restore-toggle')).toBeDisabled();
   });
 
   it('toggle is disabled when remote display apply is off', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: false });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: false });
     renderPanel();
     expect(screen.getByTestId('display-auto-restore-toggle')).toBeDisabled();
   });
@@ -361,7 +377,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   it('renders an enable action when remote display apply is off', async () => {
     const user = userEvent.setup();
     const { setRemoteApplyEnabled } = setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       hasAssignedLayout: true,
       remoteApplyEnabled: false,
     });
@@ -377,9 +393,9 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
     expect(setRemoteApplyEnabled).toHaveBeenCalledWith(true);
   });
 
-  it('renders the admin breaker banner with a reset button when tripped + canSiteAdmin', () => {
+  it('renders the admin breaker banner with a reset button when tripped for an admin of the machine', () => {
     setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       autoRestore: {
         enabled: true,
         circuitBreaker: {
@@ -400,9 +416,9 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders the read-only breaker banner when tripped + not canSiteAdmin', () => {
+  it('renders the read-only breaker banner when tripped for a member', () => {
     setup({
-      canSiteAdmin: false,
+      access: MEMBER,
       autoRestore: {
         enabled: true,
         circuitBreaker: {
@@ -424,7 +440,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
 
   it('renders no breaker banner when the breaker is not tripped', () => {
     setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       autoRestore: {
         enabled: true,
         circuitBreaker: { tripped: false, failures: 0 },
@@ -443,7 +459,7 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   it('reset button calls resetAutoRestoreBreaker', async () => {
     const user = userEvent.setup();
     const { resetAutoRestoreBreaker } = setup({
-      canSiteAdmin: true,
+      access: SITE_ADMIN,
       autoRestore: {
         enabled: true,
         circuitBreaker: {
@@ -461,30 +477,70 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
   });
 });
 
+// store, restore and clear are machine routes on MACHINE_CONFIG_WRITE, so a
+// scoped admin acts on the machines in their scope and nowhere else.
+describe('DisplayLayoutPanel — machine scope', () => {
+  const WRITES = ['display-clear-button', 'display-recall-button', 'display-store-button'];
+
+  // store shows on the live tab, clear on the stored tab, restore on both
+  async function visibleWrites() {
+    const user = userEvent.setup();
+    const seen = new Set<string>();
+    const collect = () => {
+      for (const id of WRITES) if (screen.queryByTestId(id)) seen.add(id);
+    };
+    collect();
+    await user.click(screen.getByRole('button', { name: 'stored' }));
+    collect();
+    return [...seen].sort();
+  }
+
+  it('gives a scoped admin of this machine store, restore and clear', async () => {
+    setup({ access: { role: 'admin', machineIds: ['machine-1'] } });
+    renderPanel({ displayRemoteApply: 1 });
+
+    expect(await visibleWrites()).toEqual(WRITES);
+  });
+
+  it('gives a scoped admin whose access does not cover this machine none of them', async () => {
+    setup({ access: { role: 'admin', machineIds: ['machine-2'] } });
+    renderPanel({ displayRemoteApply: 1 });
+
+    expect(await visibleWrites()).toEqual([]);
+  });
+
+  it('gives a member none of them', async () => {
+    setup({ access: MEMBER });
+    renderPanel({ displayRemoteApply: 1 });
+
+    expect(await visibleWrites()).toEqual([]);
+  });
+});
+
 describe('DisplayLayoutPanel — restore capability gate', () => {
   // `capabilities` arrives as a prop off the machines subscription. Anything
   // below displayRemoteApply 1 means the agent cannot dispatch the command, so
   // restore must stay disabled even with a stored layout and restore enabled.
   it('enables restore at displayRemoteApply 1', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
     renderPanel({ displayRemoteApply: 1 });
     expect(screen.getByTestId('display-recall-button')).toBeEnabled();
   });
 
   it('disables restore when the agent reports the capability unsupported', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
     renderPanel({ displayRemoteApply: 0 });
     expect(screen.getByTestId('display-recall-button')).toBeDisabled();
   });
 
   it('disables restore on an agent that sends no capabilities at all', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
     renderPanel();
     expect(screen.getByTestId('display-recall-button')).toBeDisabled();
   });
 
   it('disables restore when the agent writes the capability as a non-number', () => {
-    setup({ canSiteAdmin: true, hasAssignedLayout: true, remoteApplyEnabled: true });
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
     // The map is agent-written and unvalidated, so the declared Record<string, number>
     // is a compile-time claim only — a string must not coerce into "supported".
     renderPanel({ displayRemoteApply: '1' } as unknown as Record<string, number>);
@@ -498,7 +554,7 @@ describe('DisplayLayoutPanel — apply self-test', () => {
   // the subscription with it).
   it('disables the test button while the dispatched command is unresolved', async () => {
     const user = userEvent.setup();
-    const { testDisplayApply } = setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    const { testDisplayApply } = setup({ access: SITE_ADMIN, remoteApplyEnabled: false });
     renderPanel();
 
     await user.click(screen.getByTestId('display-test-apply-button'));
@@ -512,7 +568,7 @@ describe('DisplayLayoutPanel — apply self-test', () => {
 
   it('renders the agent result and dismisses it', async () => {
     const user = userEvent.setup();
-    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    setup({ access: SITE_ADMIN, remoteApplyEnabled: false });
     // Mirrors the real hook: a result exists only while its command id is set.
     mockedUseCommandResult.mockImplementation((_siteId, _machineId, commandId) =>
       commandId ? 'helper reachable' : null,
@@ -530,7 +586,7 @@ describe('DisplayLayoutPanel — apply self-test', () => {
 
   it('drops the command when the panel switches to another machine', async () => {
     const user = userEvent.setup();
-    setup({ canSiteAdmin: true, remoteApplyEnabled: false });
+    setup({ access: SITE_ADMIN, remoteApplyEnabled: false });
     mockedUseCommandResult.mockImplementation((_siteId, _machineId, commandId) =>
       commandId ? 'helper reachable' : null,
     );
@@ -554,7 +610,7 @@ describe('DisplayLayoutPanel — drift dot persistence', () => {
   it('keeps the drift dot on the "stored" pill after clicking it', async () => {
     const user = userEvent.setup();
 
-    setup({ canSiteAdmin: true });
+    setup({ access: SITE_ADMIN });
     // Same edidHash so the monitor matches; different x so computeDisplayDrift records drift.
     mockedUseDisplayState.mockReturnValue({
       profile: makeProfile({
@@ -582,5 +638,85 @@ describe('DisplayLayoutPanel — drift dot persistence', () => {
     expect(
       screen.getByRole('button', { name: /stored, \d+ display change/ }),
     ).toBeInTheDocument();
+  });
+});
+
+// the site's plan leaves out control (useSitePlan): what sends a command
+// gives way to a "part of core" row; configuration stays.
+describe('DisplayLayoutPanel — without control', () => {
+  it("trades restore for a part-of-core link to the site's billing section for its owner", () => {
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
+    render(panelElement({ displayRemoteApply: 1 }, 'machine-1', true, true));
+
+    expect(screen.queryByTestId('display-recall-button')).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'restore is part of core' });
+    expect(link).toHaveAttribute('href', '/admin/sites/site-a?section=billing');
+    expect(link).toHaveTextContent('part of core');
+    expect(screen.getByTestId('display-store-button')).toBeInTheDocument();
+  });
+
+  it('tells anyone else to ask the owner, with no link', () => {
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
+    render(panelElement({ displayRemoteApply: 1 }, 'machine-1', true));
+
+    expect(screen.queryByTestId('display-recall-button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /part of core/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('control-upgrade')).toHaveTextContent('part of core. ask the site owner to upgrade this site');
+    expect(screen.getByTestId('display-store-button')).toBeInTheDocument();
+  });
+
+  it('drops the apply self-test but keeps enabling restore, a setting', () => {
+    setup({ access: SITE_ADMIN, remoteApplyEnabled: false });
+    render(panelElement(undefined, 'machine-1', true));
+
+    expect(screen.queryByTestId('display-test-apply-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('display-enable-remote-apply-button')).toBeInTheDocument();
+  });
+
+  it('asks the agent for no mode catalogue, which would be a command', () => {
+    setup({ access: SITE_ADMIN });
+    render(panelElement(undefined, 'machine-1', true));
+
+    expect(mockedUseDisplayModes).toHaveBeenLastCalledWith('site-a', 'machine-1', expect.objectContaining({ triggerForHash: undefined }));
+  });
+
+  it('leaves restore, the self-test and the catalogue alone with control', () => {
+    setup({ access: SITE_ADMIN, remoteApplyEnabled: false });
+    renderPanel();
+
+    expect(screen.getByTestId('display-test-apply-button')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /part of core/ })).not.toBeInTheDocument();
+    expect(mockedUseDisplayModes).toHaveBeenLastCalledWith('site-a', 'machine-1', expect.objectContaining({ triggerForHash: 'sig-abc' }));
+  });
+});
+
+describe('DisplayLayoutPanel — events tab', () => {
+  it('shows a waiting auto-restore with the stored monitor it waits on', async () => {
+    const user = userEvent.setup();
+    setup({ access: SITE_ADMIN });
+    mockedUseDisplayEventFeed.mockReturnValue({
+      events: [{
+        id: 'evt-1',
+        action: 'display_auto_restore_parked',
+        level: 'warning',
+        details: JSON.stringify({
+          eventType: 'display_auto_restore_parked',
+          reason: 'assigned_monitor_absent',
+          monitor: { edidHash: 'hash-2', friendlyName: 'LG SDQHD', port: 'dp' },
+          missingFromLive: ['hash-2'],
+        }),
+        machineId: 'machine-1',
+        machineName: 'box',
+        timestamp: Date.now(),
+      }],
+      loading: false,
+      error: null,
+    });
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: 'events' }));
+
+    expect(screen.getByText('auto-restore waiting')).toBeInTheDocument();
+    expect(screen.getByText('LG SDQHD')).toBeInTheDocument();
+    expect(screen.getByText('stored monitor not connected')).toBeInTheDocument();
   });
 });

@@ -38,7 +38,7 @@ jest.mock('firebase-admin/firestore', () => ({
 const mockRequireSession = jest.fn().mockResolvedValue('user-123');
 const mockAssertUserHasSiteAccess = jest
   .fn()
-  .mockResolvedValue({ siteId: 'site-1', siteData: {} });
+  .mockResolvedValue({ siteId: 'site-1', siteData: {}, machineIds: null });
 
 jest.mock('@/lib/apiAuth.server', () => {
   class _ApiAuthError extends Error {
@@ -61,6 +61,21 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
+const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/membership.server', () => ({
+  pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
+}));
+
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
+}));
+
 const mockDocGet = jest.fn();
 const mockDocSet = jest.fn();
 const mockWhereGet = jest.fn();
@@ -71,30 +86,80 @@ const mockTransactionDelete = jest.fn();
 const mockRunTransaction = jest.fn();
 const mockCreateCustomToken = jest.fn().mockResolvedValue('mock-custom-token');
 const mockSetCustomUserClaims = jest.fn().mockResolvedValue(undefined);
+const mockCreateUser = jest.fn().mockResolvedValue(undefined);
 
-const mockMakeDocRef = (collectionPath: string, id: string) => ({
+// what the real plan resolver reads: site owners and the machine docs under each site,
+// and the pairing reads a site's settings
+let mockSites: Record<
+  string,
+  {
+    owner: string;
+    machines: Record<string, Record<string, unknown>>;
+    settings?: Record<string, Record<string, unknown>>;
+  }
+> = {};
+const mockPlanRead = jest.fn();
+
+function mockOtherDocGet(collectionPath: string, id: string) {
+  const [root, siteId, sub] = collectionPath.split('/');
+  if (collectionPath === 'sites' || collectionPath === 'users') mockPlanRead(collectionPath, id);
+  const data =
+    collectionPath === 'sites'
+      ? mockSites[id] && { owner: mockSites[id].owner }
+      : root === 'sites' && siteId
+        ? sub === 'settings'
+          ? mockSites[siteId]?.settings?.[id]
+          : mockSites[siteId]?.machines[id]
+        : undefined;
+  return Promise.resolve({ exists: data !== undefined, data: () => data });
+}
+
+const mockMakeDocRef = (collectionPath: string, id: string): Record<string, unknown> => ({
   id,
   path: `${collectionPath}/${id}`,
   collectionPath,
-  get: mockDocGet,
+  get: collectionPath === 'device_codes' ? mockDocGet : () => mockOtherDocGet(collectionPath, id),
   set: mockDocSet,
+  collection: (sub: string) => ({
+    doc: (subId: string) => mockMakeDocRef(`${collectionPath}/${id}/${sub}`, subId),
+    select: () => ({
+      get: async () => ({
+        docs: Object.keys(mockSites[id]?.machines ?? {}).map((machineId) => ({ id: machineId })),
+      }),
+    }),
+  }),
 });
 
 const mockDocRef = mockMakeDocRef('device_codes', 'test-pair-phrase');
+
+// device-code docs come from mockTransactionGet; machine docs (the pairedAt stamp) from mockSites
+const mockTxGet = (ref: { collectionPath: string; id: string }) =>
+  ref.collectionPath === 'device_codes' ? mockTransactionGet(ref) : mockOtherDocGet(ref.collectionPath, ref.id);
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     collection: (name: string) => ({
       doc: (id: string) => mockMakeDocRef(name, id),
-      where: (..._args: unknown[]) => ({
+      where: (field: string, _op: string, value: unknown) => ({
         limit: (_n: number) => ({
           get: mockWhereGet,
+        }),
+        select: () => ({
+          get: async () => {
+            mockPlanRead(name, `${field}==${String(value)}`);
+            return {
+              docs: Object.keys(mockSites)
+                .filter((siteId) => mockSites[siteId].owner === value)
+                .map((siteId) => ({ id: siteId, ref: mockMakeDocRef('sites', siteId) })),
+            };
+          },
         }),
       }),
     }),
     runTransaction: (fn: (tx: unknown) => Promise<unknown>) => mockRunTransaction(fn),
   }),
   getAdminAuth: () => ({
+    createUser: mockCreateUser,
     createCustomToken: mockCreateCustomToken,
     setCustomUserClaims: mockSetCustomUserClaims,
   }),
@@ -103,6 +168,38 @@ jest.mock('@/lib/firebase-admin', () => ({
 import { POST as generatePOST } from '@/app/api/agent/auth/device-code/route';
 import { POST as pollPOST } from '@/app/api/agent/auth/device-code/poll/route';
 import { POST as authorizePOST } from '@/app/api/agent/auth/device-code/authorize/route';
+import { MACHINE_LIMIT_ERROR } from '@/lib/pairingPlan.server';
+
+const FREE = {
+  ok: true,
+  resolved: false,
+  standing: 'expired',
+  inGoodStanding: false,
+  ent: { 'owlette.machines': '1', 'owlette.sites': '1', 'owlette.control': '0' },
+  epoch: 0,
+};
+
+/** enforcement on, tridant configured, and every site on owlette free. */
+function enforceFree() {
+  process.env.PLAN_ENFORCEMENT = 'on';
+  process.env.TRIDANT_API_URL = 'https://id.tridant.test';
+  process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
+}
+
+afterEach(() => {
+  delete process.env.PLAN_ENFORCEMENT;
+  delete process.env.TRIDANT_API_URL;
+  delete process.env.TRIDANT_LICENSE_KEY;
+  mockSites = {};
+});
+
+/** the pairedAt stamp written to a machine doc, if any. */
+function pairedAtWrite(siteId: string, machineId: string) {
+  return mockTransactionSet.mock.calls.find(
+    ([ref]) => ref.path === `sites/${siteId}/machines/${machineId}`,
+  );
+}
 
 function makeRequest(
   path: string,
@@ -175,6 +272,42 @@ describe('POST /api/agent/auth/device-code (generate)', () => {
     expect(written.deviceCode).toBeUndefined();
   });
 
+  it.each([
+    ['slash', 'pc/commands/pending'],
+    ['control char', 'PC\u0001'],
+    ['too long', 'A'.repeat(129)],
+    ['not a string', 42],
+  ])('refuses a %s machine id, storing nothing', async (_case, machineId) => {
+    const req = makeRequest('/api/agent/auth/device-code', { machineId, version: '4.1.28' });
+
+    const { status } = await parseResponse(await generatePOST(req));
+
+    expect(status).toBe(400);
+    expect(mockDocSet).not.toHaveBeenCalled();
+  });
+
+  it('stores the machine id trimmed', async () => {
+    const req = makeRequest('/api/agent/auth/device-code', { machineId: ' test-machine ', version: '4.1.28' });
+
+    const { status } = await parseResponse(await generatePOST(req));
+
+    expect(status).toBe(200);
+    expect((mockDocSet.mock.calls[0]![0] as Record<string, unknown>).machineId).toBe('test-machine');
+  });
+
+  it('keeps the pairing phrase out of the log', async () => {
+    const logger = jest.requireMock('@/lib/logger').default;
+    const req = makeRequest('/api/agent/auth/device-code', {
+      machineId: 'test-machine',
+      version: '2.5.9',
+    });
+
+    await generatePOST(req);
+
+    expect(logger.info).toHaveBeenCalled();
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('test-pair-phrase');
+  });
+
   it('returns 500 after 5 collision attempts', async () => {
     mockDocGet.mockResolvedValue({ exists: true });
 
@@ -193,7 +326,7 @@ describe('POST /api/agent/auth/device-code (generate)', () => {
 
 describe('POST /api/agent/auth/device-code/poll', () => {
   const mockTransaction = {
-    get: mockTransactionGet,
+    get: mockTxGet,
     set: mockTransactionSet,
     update: mockTransactionUpdate,
     delete: mockTransactionDelete,
@@ -346,7 +479,15 @@ describe('POST /api/agent/auth/device-code/poll', () => {
     expect(body.accessToken).toBe('mock-id-token');
     expect(body.refreshToken).toBeDefined();
     expect(body.siteId).toBe('site-1');
-    expect(mockRunTransaction).toHaveBeenCalledTimes(2);
+    // claim, finalize, then the pairedAt stamp
+    expect(mockRunTransaction).toHaveBeenCalledTimes(3);
+    expect(pairedAtWrite('site-1', host)?.slice(1)).toEqual([
+      { pairedAt: 'SERVER_TIMESTAMP' },
+      { merge: true },
+    ]);
+    // a machine new to the site leaves every machine scope, and the fleet grant
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: host });
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: host });
     expect(mockTransactionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionPath: 'device_codes',
@@ -525,6 +666,8 @@ describe('POST /api/agent/auth/device-code/poll', () => {
         status: 'authorized',
         wrapVersion: 'v1',
         encryptedCredentials: 'ENC',
+        siteId: 'site-1',
+        machineId: 'test-machine',
         expiresAt: { toMillis: () => futureTime },
       }),
     });
@@ -539,6 +682,35 @@ describe('POST /api/agent/auth/device-code/poll', () => {
     expect(body.encryptedCredentials).toBe('ENC');
     expect(body.phrase).toBe('test-pair-phrase');
     expect(mockTransactionDelete).toHaveBeenCalled();
+    // the handover is when the machine is paired, so it records the pairing here
+    expect(pairedAtWrite('site-1', 'test-machine')?.slice(1)).toEqual([
+      { pairedAt: 'SERVER_TIMESTAMP' },
+      { merge: true },
+    ]);
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'test-machine' });
+  });
+
+  it('keeps the first pairedAt and the grants when a machine re-pairs', async () => {
+    mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': { pairedAt: 'FIRST' } } } };
+    mockWhereGet.mockResolvedValue({ empty: false, docs: [{ ref: mockDocRef }] });
+    mockTransactionGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        status: 'authorized',
+        wrapVersion: 'v1',
+        encryptedCredentials: 'ENC',
+        siteId: 'site-1',
+        machineId: 'test-machine',
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+      }),
+    });
+
+    const req = makeRequest('/api/agent/auth/device-code/poll', { deviceCode: 'opaque-device-code' });
+    const { status } = await parseResponse(await pollPOST(req));
+
+    expect(status).toBe(200);
+    expect(pairedAtWrite('site-1', 'test-machine')).toBeUndefined();
+    expect(mockPrune).not.toHaveBeenCalled();
   });
 
   it('rejects phrase-based polling for a legacy doc that is not preauthorised', async () => {
@@ -586,11 +758,275 @@ describe('POST /api/agent/auth/device-code/poll', () => {
     expect(body.error).toBe('expired');
     expect(mockTransactionDelete).toHaveBeenCalled();
   });
+
+  it('answers a code refused at authorize with 402 and only its reason, which every agent shows', async () => {
+    mockWhereGet.mockResolvedValue({ empty: false, docs: [{ ref: mockDocRef }] });
+    mockTransactionGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        status: 'refused',
+        refusedReason: MACHINE_LIMIT_ERROR,
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+      }),
+    });
+
+    const req = makeRequest('/api/agent/auth/device-code/poll', { deviceCode: 'opaque-device-code' });
+    const { status, body } = await parseResponse(await pollPOST(req));
+
+    expect(status).toBe(402);
+    expect(body).toEqual({ error: MACHINE_LIMIT_ERROR });
+    expect(mockTransactionDelete).not.toHaveBeenCalled();
+  });
+
+  describe('deferred (/ADD=) mint', () => {
+    // a refusal never reaches the finalise read, so its queued doc must not leak into the next test
+    afterEach(() => mockTransactionGet.mockReset());
+
+    /** a pre-authorised phrase for site-1, claimed and then finalised for `machineId`. */
+    function deferredPhrase(machineId: string, extra: Record<string, unknown> = {}) {
+      const live = {
+        status: 'authorized',
+        deferTokenMint: true,
+        siteId: 'site-1',
+        authorizedBy: 'user-123',
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+        ...extra,
+      };
+      mockDocGet.mockResolvedValue({ exists: true, data: () => live });
+      mockTransactionGet
+        .mockResolvedValueOnce({ exists: true, data: () => live })
+        .mockResolvedValueOnce({
+          exists: true,
+          data: () => ({ ...live, mintMachineId: machineId, mintClaimExpiresAt: Date.now() + 60_000 }),
+        });
+      return makeRequest('/api/agent/auth/device-code/poll', {
+        pairPhrase: 'test-pair-phrase',
+        machineId,
+        version: '4.1.7',
+      });
+    }
+
+    it('refuses a new machine past the limit with 402 { error }, minting nothing and leaving the phrase', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'OTHER-PC': {} } } };
+
+      const { status, body } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(402);
+      expect(body).toEqual({ error: MACHINE_LIMIT_ERROR });
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
+      expect(mockCreateCustomToken).not.toHaveBeenCalled();
+      expect(mockSetCustomUserClaims).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockTransactionSet).not.toHaveBeenCalled();
+      expect(mockTransactionDelete).not.toHaveBeenCalled();
+    });
+
+    it("lets a machine already on the owner's sites re-pair", async () => {
+      enforceFree();
+      mockSites = {
+        'site-1': { owner: 'owner-1', machines: {} },
+        'site-2': { owner: 'owner-1', machines: { 'HOME-PC': {} } },
+      };
+
+      const { status, body } = await parseResponse(await pollPOST(deferredPhrase('HOME-PC')));
+
+      expect(status).toBe(200);
+      expect(body.accessToken).toBe('mock-id-token');
+      expect(mockCreateCustomToken).toHaveBeenCalled();
+    });
+
+    it('mints past the limit with enforcement off, never reading the plan', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'OTHER-PC': {} } } };
+      mockGetSiteEntitlements.mockResolvedValue(FREE);
+
+      const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(200);
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+      expect(mockPlanRead).not.toHaveBeenCalled();
+    });
+
+    it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+      const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(200);
+      expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_NEW_PC' });
+      expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+        (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+      );
+    });
+
+    it('mints as usual when the auth user already exists', async () => {
+      mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+      const { status, body } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(mockCreateUser).toHaveBeenCalledTimes(1);
+      expect(status).toBe(200);
+      expect(body.accessToken).toBe('mock-id-token');
+    });
+
+    it('fails the pairing, minting nothing, when the auth user cannot be created', async () => {
+      mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('quota exceeded'), { code: 'auth/quota-exceeded' }));
+
+      const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(500);
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockTransactionSet).not.toHaveBeenCalled();
+      expect(mockTransactionDelete).not.toHaveBeenCalled();
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it('audits the mint with the machine it was issued to', async () => {
+      const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(200);
+      expect(mockEmitMutation).toHaveBeenCalledTimes(1);
+      expect(mockEmitMutation).toHaveBeenCalledWith({
+        kind: 'site_mutated',
+        siteId: 'site-1',
+        actor: 'user:user-123',
+        targetId: 'NEW-PC',
+        attributes: {
+          verb: 'machine.pair',
+          endpoint: '/api/agent/auth/device-code/poll',
+          method: 'POST',
+          siteId: 'site-1',
+          machineId: 'NEW-PC',
+          deferredTokenMint: true,
+          existingMachine: false,
+          replaceAnyMachine: false,
+        },
+      });
+      expect(JSON.stringify(mockEmitMutation.mock.calls)).not.toContain('test-pair-phrase');
+    });
+
+    it('refuses a machine already on the site, minting nothing and leaving the phrase', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'KIOSK-1': {} } } };
+
+      const { status, body } = await parseResponse(await pollPOST(deferredPhrase('KIOSK-1')));
+
+      expect(status).toBe(409);
+      expect(body.error).toContain('KIOSK-1');
+      expect(mockTransactionUpdate).not.toHaveBeenCalled();
+      expect(mockCreateCustomToken).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockTransactionSet).not.toHaveBeenCalled();
+      expect(mockTransactionDelete).not.toHaveBeenCalled();
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it('lets a code generated to reinstall a machine pair that machine, and says so in the audit', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'KIOSK-1': {} } } };
+
+      const { status, body } = await parseResponse(
+        await pollPOST(deferredPhrase('KIOSK-1', { replaceMachineId: 'KIOSK-1' })),
+      );
+
+      expect(status).toBe(200);
+      expect(body.accessToken).toBe('mock-id-token');
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetId: 'KIOSK-1',
+          attributes: expect.objectContaining({ machineId: 'KIOSK-1', existingMachine: true }),
+        }),
+      );
+    });
+
+    it('lets a code generated to reinstall any machine pair one already on the site, and says so in the audit', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'KIOSK-2': {} } } };
+
+      const { status } = await parseResponse(
+        await pollPOST(deferredPhrase('KIOSK-2', { replaceAnyMachine: true })),
+      );
+
+      expect(status).toBe(200);
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetId: 'KIOSK-2',
+          attributes: expect.objectContaining({ existingMachine: true, replaceAnyMachine: true }),
+        }),
+      );
+    });
+
+    it.each([
+      ['on', true],
+      ['off', false],
+    ])(
+      'refuses a machine that acts on others with a code generated to reinstall any machine, the grant %s',
+      async (_label, enabled) => {
+        mockSites = {
+          'site-1': {
+            owner: 'owner-1',
+            machines: { 'KIOSK-2': {} },
+            settings: { fleet: { enabled, senders: { 'KIOSK-2': { maxTier: 3, wholeSite: true } } } },
+          },
+        };
+
+        const { status, body } = await parseResponse(
+          await pollPOST(deferredPhrase('KIOSK-2', { replaceAnyMachine: true })),
+        );
+
+        expect(status).toBe(409);
+        expect(body.error).toContain('KIOSK-2');
+        expect(mockTransactionUpdate).not.toHaveBeenCalled();
+        expect(mockCreateCustomToken).not.toHaveBeenCalled();
+        expect(mockTransactionSet).not.toHaveBeenCalled();
+        expect(mockEmitMutation).not.toHaveBeenCalled();
+      },
+    );
+
+    it('lets a code that names a machine acting on others reinstall it', async () => {
+      mockSites = {
+        'site-1': {
+          owner: 'owner-1',
+          machines: { 'KIOSK-2': {} },
+          settings: { fleet: { enabled: true, senders: { 'KIOSK-2': { maxTier: 3, wholeSite: true } } } },
+        },
+      };
+
+      const { status } = await parseResponse(
+        await pollPOST(deferredPhrase('KIOSK-2', { replaceMachineId: 'KIOSK-2' })),
+      );
+
+      expect(status).toBe(200);
+    });
+
+    it('lets a code generated to reinstall any machine pair one that acts on no other', async () => {
+      mockSites = {
+        'site-1': {
+          owner: 'owner-1',
+          machines: { 'KIOSK-1': {}, 'KIOSK-2': {} },
+          settings: { fleet: { enabled: true, senders: { 'KIOSK-1': { maxTier: 3, wholeSite: true } } } },
+        },
+      };
+
+      const { status } = await parseResponse(
+        await pollPOST(deferredPhrase('KIOSK-2', { replaceAnyMachine: true })),
+      );
+
+      expect(status).toBe(200);
+    });
+
+    it('refuses another machine already on the site with a code generated to reinstall one', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'KIOSK-1': {}, 'KIOSK-2': {} } } };
+
+      const { status } = await parseResponse(
+        await pollPOST(deferredPhrase('KIOSK-2', { replaceMachineId: 'KIOSK-1' })),
+      );
+
+      expect(status).toBe(409);
+      expect(mockCreateCustomToken).not.toHaveBeenCalled();
+      expect(mockTransactionSet).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('POST /api/agent/auth/device-code/authorize', () => {
   const mockTransaction = {
-    get: mockTransactionGet,
+    get: mockTxGet,
     set: mockTransactionSet,
     update: mockTransactionUpdate,
     delete: mockTransactionDelete,
@@ -600,10 +1036,13 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // the pre-transaction read sees the same code the transaction does
+    mockDocGet.mockImplementation(() => mockTransactionGet());
     mockRequireSession.mockResolvedValue('user-123');
     mockAssertUserHasSiteAccess.mockResolvedValue({
       siteId: 'site-1',
       siteData: {},
+      machineIds: null,
     });
     mockRunTransaction.mockImplementation(async (fn: (tx: unknown) => unknown) =>
       fn(mockTransaction),
@@ -744,6 +1183,9 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
     expect(update.refreshToken).toBe('__DELETE__');
     expect(update.deviceCode).toBe('__DELETE__');
 
+    // pairedAt waits for the agent to collect the credentials at poll
+    expect(pairedAtWrite('site-1', 'test-machine')).toBeUndefined();
+
     // The machineId IS known on this path, so the audit binds it.
     expect(mockEmitMutation).toHaveBeenCalledTimes(1);
     const audit = mockEmitMutation.mock.calls[0]![0] as {
@@ -821,6 +1263,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
       deferredTokenMint: true,
     });
     expect(audit.attributes).not.toHaveProperty('machineId');
+    expect(audit.attributes).not.toHaveProperty('existingMachine');
   });
 
   it('emits no audit row when the phrase is already used', async () => {
@@ -868,5 +1311,292 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
     expect(mockTransactionSet).not.toHaveBeenCalled();
     expect(mockTransactionUpdate).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  /** an interactive code for `machineId`, authorised onto site-1, which owner-1 owns. */
+  function interactiveCode(machineId: string, extra: Record<string, unknown> = {}) {
+    mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' }, machineIds: null });
+    mockTransactionGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        status: 'pending',
+        machineId,
+        version: '4.1.7',
+        wrapVersion: 'v1',
+        deviceCode: 'a'.repeat(86),
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+      }),
+    });
+    return makeRequest('/api/agent/auth/device-code/authorize', {
+      pairPhrase: 'test-pair-phrase',
+      siteId: 'site-1',
+      ...extra,
+    });
+  }
+
+  /** a code generated from the dashboard: no machine until the agent polls. */
+  function generatedCode(extra: Record<string, unknown> = {}) {
+    mockTransactionGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        status: 'pending',
+        machineId: null,
+        wrapVersion: 'v1',
+        preauthorizedIntent: true,
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+      }),
+    });
+    return makeRequest('/api/agent/auth/device-code/authorize', {
+      pairPhrase: 'test-pair-phrase',
+      siteId: 'site-1',
+      ...extra,
+    });
+  }
+
+  /** nothing minted, nothing written, nothing audited. */
+  function expectNoMint() {
+    expect(mockTransactionUpdate).not.toHaveBeenCalled();
+    expect(mockTransactionSet).not.toHaveBeenCalled();
+    expect(mockCreateCustomToken).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  }
+
+  describe('the machine the phrase names', () => {
+    it('previews it, and that it is already on the site, changing nothing', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { preview: true })),
+      );
+
+      expect(status).toBe(200);
+      expect(body).toEqual({ machineId: 'test-machine', existing: true });
+      expectNoMint();
+    });
+
+    it('previews a machine new to the site', async () => {
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { preview: true })),
+      );
+
+      expect(status).toBe(200);
+      expect(body).toEqual({ machineId: 'test-machine', existing: false });
+      expectNoMint();
+    });
+
+    it('refuses to pair a machine already on the site without a confirmation that names it', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(409);
+      expect(body).toEqual({
+        error: expect.stringContaining('test-machine'),
+        code: 'machine_exists',
+        machineId: 'test-machine',
+      });
+      // the code stays pending, so the confirmation can still authorize it
+      expectNoMint();
+    });
+
+    it('refuses a confirmation that names a different machine', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { replaceMachineId: 'other-machine' })),
+      );
+
+      expect(status).toBe(409);
+      expect(body.code).toBe('machine_exists');
+      expectNoMint();
+    });
+
+    it('reinstalls a machine already on the site when the confirmation names it, and audits that', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { replaceMachineId: 'test-machine' })),
+      );
+
+      expect(status).toBe(200);
+      expect(body.machineId).toBe('test-machine');
+      expect(mockCreateCustomToken).toHaveBeenCalled();
+      expect(mockEmitMutation).toHaveBeenCalledTimes(1);
+      expect(mockEmitMutation.mock.calls[0]![0].attributes).toMatchObject({
+        verb: 'machine.pair',
+        machineId: 'test-machine',
+        existingMachine: true,
+      });
+    });
+
+    it('records the machine a generated code may reinstall', async () => {
+      const { status } = await parseResponse(await authorizePOST(generatedCode({ replaceMachineId: 'KIOSK-1' })));
+
+      expect(status).toBe(200);
+      expect(mockTransactionUpdate.mock.calls[0]![1]).toMatchObject({
+        status: 'authorized',
+        deferTokenMint: true,
+        replaceMachineId: 'KIOSK-1',
+      });
+    });
+
+    it('records nothing to reinstall for a generated code by default', async () => {
+      const { status } = await parseResponse(await authorizePOST(generatedCode()));
+
+      expect(status).toBe(200);
+      expect(mockTransactionUpdate.mock.calls[0]![1]).not.toHaveProperty('replaceMachineId');
+      expect(mockTransactionUpdate.mock.calls[0]![1]).not.toHaveProperty('replaceAnyMachine');
+    });
+
+    it('records a generated code that may reinstall any machine already on the site', async () => {
+      const { status } = await parseResponse(await authorizePOST(generatedCode({ replaceAnyMachine: true })));
+
+      expect(status).toBe(200);
+      const update = mockTransactionUpdate.mock.calls[0]![1] as Record<string, unknown>;
+      expect(update.replaceAnyMachine).toBe(true);
+      expect(update).not.toHaveProperty('replaceMachineId');
+    });
+
+    it('refuses a generated code that both names a machine and allows any', async () => {
+      const { status } = await parseResponse(
+        await authorizePOST(generatedCode({ replaceMachineId: 'KIOSK-1', replaceAnyMachine: true })),
+      );
+
+      expect(status).toBe(400);
+      expectNoMint();
+    });
+
+    it('does not take allowing any machine as the confirmation for an interactive code', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { replaceAnyMachine: true })),
+      );
+
+      expect(status).toBe(409);
+      expect(body.code).toBe('machine_exists');
+      expectNoMint();
+    });
+
+    it.each([
+      ['slash', 'KIOSK/1'],
+      ['empty', '   '],
+      ['not a string', 42],
+    ])('refuses a %s machine name', async (_case, value) => {
+      const { status } = await parseResponse(await authorizePOST(generatedCode({ replaceMachineId: value })));
+
+      expect(status).toBe(400);
+      expectNoMint();
+    });
+  });
+
+  it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+    const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+    expect(status).toBe(200);
+    expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_test_machine' });
+    expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('pairs as usual when the auth user already exists', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+    const { status, body } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(status).toBe(200);
+    expect(body.machineId).toBe('test-machine');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  describe('the machine limit', () => {
+    it('refuses a new machine past the limit with 402 and marks the code refused for the agent', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+
+      const { status, body } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(402);
+      expect(body).toEqual({ error: MACHINE_LIMIT_ERROR });
+      expect(mockTransactionUpdate).toHaveBeenCalledTimes(1);
+      expect(mockTransactionUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ collectionPath: 'device_codes', id: 'test-pair-phrase' }),
+        { status: 'refused', refusedReason: MACHINE_LIMIT_ERROR },
+      );
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
+      // the owner comes from the site data the access check already read
+      expect(mockPlanRead).not.toHaveBeenCalledWith('sites', 'site-1');
+      expect(mockCreateCustomToken).not.toHaveBeenCalled();
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockTransactionSet).not.toHaveBeenCalled();
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it('checks the plan before the transaction opens, never inside it', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+      let inTransaction = false;
+      let calledInside = false;
+      mockGetSiteEntitlements.mockImplementation(async () => {
+        calledInside ||= inTransaction;
+        return FREE;
+      });
+      mockRunTransaction.mockImplementation(async (fn: (tx: unknown) => unknown) => {
+        inTransaction = true;
+        try {
+          return await fn(mockTransaction);
+        } finally {
+          inTransaction = false;
+        }
+      });
+
+      const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(402);
+      expect(mockGetSiteEntitlements).toHaveBeenCalled();
+      expect(calledInside).toBe(false);
+    });
+
+    it('still answers an expired code with 404, not the limit', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+      const req = interactiveCode('test-machine');
+      mockTransactionGet.mockResolvedValue({
+        exists: true,
+        data: () => ({ status: 'pending', machineId: 'test-machine', expiresAt: { toMillis: () => Date.now() - 1000 } }),
+      });
+
+      const { status } = await parseResponse(await authorizePOST(req));
+
+      expect(status).toBe(404);
+      expect(mockTransactionUpdate).not.toHaveBeenCalled();
+    });
+
+    it("lets a machine already on the owner's sites re-pair", async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
+
+      const { status, body } = await parseResponse(
+        await authorizePOST(interactiveCode('test-machine', { replaceMachineId: 'test-machine' })),
+      );
+
+      expect(status).toBe(200);
+      expect(body.machineId).toBe('test-machine');
+      expect(mockCreateCustomToken).toHaveBeenCalled();
+    });
+
+    it('pairs past the limit with enforcement off, never reading the plan', async () => {
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+      mockGetSiteEntitlements.mockResolvedValue(FREE);
+
+      const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(200);
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+      expect(mockPlanRead).not.toHaveBeenCalled();
+    });
   });
 });

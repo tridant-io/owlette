@@ -9,7 +9,7 @@ These switches are not public API launch flags. They do not enable or disable ro
 | flag | normal value | when to disable |
 | --- | --- | --- |
 | `capability_enforcement` | `true` | A capability matrix or route capability bug is denying legitimate admin/superadmin traffic. |
-| `rate_limit_enforcement` | `true` | Rate limits are blocking legitimate Cortex/system bursts or other privileged traffic. |
+| `rate_limit_enforcement` | `true` | Rate limits are blocking legitimate hoot/system bursts or other privileged traffic. |
 
 Both flags live in Firestore at `global/security_config`. The web process reads the document through `securityConfig.read()` with a 5 second cache. If Firestore is unavailable, the reader falls back to `ENABLE_CAPABILITY_ENFORCEMENT` and `ENABLE_RATE_LIMIT_ENFORCEMENT`, defaulting to enabled.
 
@@ -27,12 +27,12 @@ Do not flip a switch for missing API-key scope, failed authentication, direct Fi
 
 ## Flip A Switch
 
-Use a superadmin session, ID token, or platform-capable API credential.
+Use a superadmin's dashboard session that has passed its second factor, or a superadmin's API key with the `user=*:admin` scope (`owk_…`, sent as the bearer below). A Firebase ID token for an account with a second factor is refused with `403 mfa_challenge_required`.
 
 Policy for W9 incidents: keep `expiresInMinutes <= 240` even though the route accepts longer values for exceptional manual recovery.
 
 ```powershell
-$token = '<superadmin token>'
+$token = '<superadmin api key, owk_...>'
 $body = @{
   flag = 'capability_enforcement'
   enabled = $false
@@ -62,7 +62,7 @@ Expired flags are treated as enabled by the reader even if the stored boolean st
 ## Re-Enable
 
 ```powershell
-$token = '<superadmin token>'
+$token = '<superadmin api key, owk_...>'
 $body = @{
   flag = 'capability_enforcement'
   enabled = $true

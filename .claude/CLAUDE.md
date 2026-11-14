@@ -1,8 +1,10 @@
 # Owlette - Cloud-Connected Process Management System
 
-Owlette is a cloud-connected Windows process management and remote deployment system for managing TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python Windows service (agent) + Next.js web dashboard (web) + Firebase/Firestore backend.
+Owlette is a cloud-connected process management and remote deployment system for Windows, macOS and Linux machines: TouchDesigner installations, digital signage, kiosks, and media servers. Monorepo: Python agent service (agent; a Windows service, a launchd daemon on macOS, a systemd unit on Linux) + Next.js web dashboard (web) + Firebase/Firestore backend.
 
-**Version**: 3.3.6 | **License**: FSL-1.1-Apache-2.0
+**Version**: 4.2.1 | **License**: FSL-1.1-Apache-2.0
+
+**Words and settled decisions:** use the terms in `GLOSSARY.md` (and none of the synonyms it lists under _Avoid_), and read the ADRs in `docs/adr/` for the area you touch. Output that contradicts an ADR says so and argues the reversal; it never overrides one quietly.
 
 ---
 
@@ -11,7 +13,7 @@ Owlette is a cloud-connected Windows process management and remote deployment sy
 **Files you must not touch:**
 - `firestore.rules` — don't modify without explicit request
 - `.tokens.enc` / credential files — never read, log, or commit
-- `owlette_installer.iss` — only modify if you understand the full build pipeline (see `.claude/skills/build-system.md`)
+- `owlette_installer.iss` — only modify if you understand the full build pipeline (see the build-system skill)
 
 **Agent landmines:**
 - **Never import `firebase_admin`** — we use a custom REST client
@@ -29,29 +31,24 @@ Owlette is a cloud-connected Windows process management and remote deployment sy
 
 **Workflow:**
 - **Don't push to `main` directly** — all work through `dev`, then PR
-- **Don't create new `docs/*.md` files** without being asked
+- **A fix for a live security hole stays off GitHub until its ship day.** The repo is public and dev.owlette.app serves its changelog, so a branch name, PR, commit message, changelog line or installer that describes the hole publishes it. Work in a local worktree, push nothing, and tell the owner.
+- **Keep the main checkout on `dev`, fast-forward only; branch work goes in a worktree.** Every session on this machine starts in the main checkout and takes its CLAUDE.md, skills and hooks from whatever branch is checked out there, so a branch switch changes the rules for all of them.
+- **Don't create new `docs/*.md` files** without being asked, except an ADR in `docs/adr/` for a decision that is hard to reverse, surprising without context, and the result of a real trade-off (one paragraph; format in `docs/adr/0001-*`)
 - **Don't install new npm/pip packages** without confirming first
 - **Don't modify `.claude/hooks/` or `.claude/settings.json`** without explicit request
 
 ---
 
-## In-Flight Major Initiative: roost (project distribution v2)
+## roost (project distribution)
 
-A multi-quarter rewrite of project distribution into a content-addressed sync platform (Cloudflare R2, immutable manifests, atomic deploy, rollback). Branded as "roost" (always lowercase). Plan + tasks live at `dev/active/project-distribution-v2/`. Memory: `project_roost.md`.
-
-**Key decisions** (do not relitigate):
-- No `/api/v2/` URL prefix — the new routes ARE the API (`/api/chunks/`, `/api/roosts/`).
-- No backwards compatibility with v1 agents — clean cutover, v3.0.0 agent is required to consume new uploads.
-- No header-based version negotiation (no `Accept: application/vnd.owlette.v2+json`).
-- v3-deferred (do NOT rebuild in v2): bidirectional sync, LAN swarm, Ed25519 manifest signing, FastCDC. (Public CLI was originally on this list but shipped via the api-sprint + roost-public-api waves — now `@owlette/cli` v1.0.0-rc.0; see `project_npm_packages.md`.)
-- Nav label `projects` → `roost`. `verify_files` field dropped (manifest is authoritative).
+Content-addressed sync of project folders to machines: chunks on Cloudflare R2, immutable versions, atomic deploy, rollback. Always lowercase. Its settled decisions (no `/api/v2/` prefix, no header negotiation, no v1-agent compatibility, the v3-deferred list) are ADRs 0007 and 0008; don't relitigate them.
 
 ---
 
 ## Tech Stack
 
 - **Web** (`web/`): Next.js 16 (App Router, React 19), TypeScript, Tailwind CSS 4, shadcn/ui, Firebase Auth + Firestore
-- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.10 — Pillow 12.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
+- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.11 — Pillow 13.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), as a launchd daemon on macOS and a systemd unit on Linux, Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
 - **Database**: Cloud Firestore (real-time NoSQL), Firebase Auth (Email/Password, Google OAuth, Passkey/WebAuthn)
 - **Package Managers**: Web: npm (not pnpm/yarn) | Agent: pip
 
@@ -69,7 +66,7 @@ cd web && npm run lint                   # Lint
 
 # Agent
 powershell -File scripts/bootstrap-windows.ps1 -InstallAgentDeps   # agent/.venv (Python 3.11) + requirements*.txt
-agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the commit hook runs)
+agent/.venv/Scripts/python -m pytest agent/tests/                  # Agent tests (what the Claude commit gate runs)
 cd agent/src && ../.venv/Scripts/python owlette_runner.py --debug  # Debug mode (requires admin)
 cd agent && build_installer_full.bat              # Full build (~5-10 min)
 cd agent && build_installer_quick.bat             # Quick build (~30 sec)
@@ -88,7 +85,7 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 
 **Two-Branch Model**: `dev` (deploys to dev.owlette.app) → `main` (deploys to owlette.app)
 
-**Commit Messages**: Conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`)
+**Commit Messages**: Conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, and `release: X.Y.Z` for the version bump)
 
 **Pre-Commit Code Review**: Before every commit, perform a thorough code review of all staged changes. Every line must meet production quality standards — no duct-tape fixes, no "good enough for now" shortcuts, no patchy logic. Specifically:
 - Verify correctness: no off-by-one errors, race conditions, resource leaks, or missed edge cases
@@ -99,11 +96,12 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 
 **Lint as you go — don't let errors accumulate.** After editing any web file, run `npx eslint <file>` on that file (or `npm run lint` for a broader change) and fix every error and warning you introduced before moving on. Never commit new lint errors, and never rationalise them as "pre-existing" if your edit touched the same file. The repo has historical lint debt — your job is to not add to it, and to clean up any issues in lines you modified. Same principle for TypeScript: if `tsc` / IDE diagnostics flag your change, fix it before the next edit, not at commit time.
 
-**Security alerts are a release gate, not a notification.** Run `node scripts/check-security-alerts.mjs` before any release build and as part of `/preflight`. It resolves every open GitHub alert against *this branch's* lockfiles, because Dependabot files security alerts and PRs against `main` (`target-branch` does not apply to them) and `main` trails `dev` — so the raw alert list mixes live vulnerabilities with ones fixed on `dev` weeks ago. Exit 1 means a vulnerable version is still pinned here: fix it, dismiss it on GitHub with a written reason, or get explicit user acceptance and re-run with `--ack "<key>=<why>"` — every ack needs a written reason, `verify:*` keys are refused outright (a check that could not run must be fixed, not waived), and acked items go in the release commit body so the decision is on record. Never ack on your own judgment. The `security preflight` workflow runs the same check daily and on every push to `dev`/`main`. Security PRs land on `dev` by hand; a Dependabot PR open past 30 days is itself a blocker.
+**Security alerts are a release gate, not a notification.** Run `node scripts/check-security-alerts.mjs` before any release build and as part of `/preflight`. It resolves every open GitHub alert against *this branch's* lockfiles, because Dependabot files security alerts and PRs against `main` (`target-branch` does not apply to them) and `main` trails `dev` — so the raw alert list mixes live vulnerabilities with ones fixed on `dev` weeks ago. Exit 1 means a vulnerable version is still pinned here: fix it, dismiss it on GitHub with a written reason, or get explicit user acceptance and re-run with `--ack "<key>=<why>"` — every ack needs a written reason, `verify:*` keys are refused outright (a check that could not run must be fixed, not waived), and acked items go in the release commit body so the decision is on record. Never ack on your own judgment. The `security preflight` workflow runs the same check daily and on every push to `dev`/`main`. Security PRs land on `dev` by hand; a Dependabot PR open past 30 days blocks only when its title names a package with an alert this branch cannot show is safe (live, unresolved or unproven); otherwise it warns.
 
-**E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `firestore.rules`, or `firebase.json`.
-- **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI, ~45s steady-state). Fix reds locally; don't ship them to a branch that auto-deploys.
-- **Reactive (safety net):** after a `git push` to `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status` (run it in the background). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
+**E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `functions/**`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, or `firebase.json`.
+- **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI; about 5 minutes cold, 2–3 warm, against about 27 minutes on the hosted runner). Fix reds locally; don't ship them to a branch that auto-deploys.
+- **Reactive (safety net):** after a `git push` or `gh pr merge` lands on `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status --interval 60` (run it in the background; the default 3-second poll drains the API limit every session on this machine shares, and a watcher's 403 then reads like a red run). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
+- **A merge queue shares one run.** When several PRs merge into `dev` back to back, wait only on the e2e run of the last merge, which covers them all. Skip the hook's reminders for the earlier ones, and don't hold a merge or a deploy for an earlier run. If the last run is red, tell from its failing specs which merge broke it.
 
 ---
 
@@ -131,20 +129,20 @@ Agents authenticate via a device code flow — no browser login on the target ma
 
 ## Deployment
 
-**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`theexperiential/owlette`) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
+**Web**: Push to `dev`/`main` triggers Railway auto-deploy. A Vercel project (`owlette` in the `tridant-7931a9aa` team; the Experiential scope it lived in until 2026-09-24 is blocked) is configured as a failover origin for owlette.app behind Cloudflare Load Balancing.
 
-**Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: `.claude/skills/env-management.md`.
+**Env vars** (Railway dev/prod + Vercel prod): managed via `scripts/env-manifest.json` (canonical key registry — keys + metadata, never values) and `node scripts/sync-env.mjs` (`status` / `check` / `diff` / `sync <target>`). Full workflow + the `must-match` secret rules + the Vercel read-back caveat: the env-management skill.
 
-**Failover load balancer**: `owlette.app` is fronted by a Cloudflare LB (Railway primary, Vercel standby) defined as Terraform in `infra/cloudflare/`. Health probe is `/api/health`. Apply workflow, token scope, and the origin-hostname gotchas: `.claude/skills/cf-load-balancing.md`.
+**Failover load balancer**: `owlette.app` is fronted by a Cloudflare LB (Railway primary, Vercel standby) defined as Terraform in `infra/cloudflare/`. Health probe is `/api/health`. Apply workflow, token scope, and the origin-hostname gotchas: the cf-load-balancing skill.
 
 **Confirm live state against the API — don't infer it from the repo.** When the question is what is actually deployed or true on dev/prod (is this route shipped, what version is the latest installer, is a machine online, does this key carry that scope), query the running API. Keys are in `.claude/.env.local`: `OWLETTE_API_KEY` (dev — broad scopes) against `$OWLETTE_DEV_API_URL`, `OWLETTE_API_KEY_PROD` (**installer-scoped only** — 403 `scope_insufficient` on site/machine routes) against `$OWLETTE_PROD_API_URL`. Auth header is `x-api-key`. Use `curl`, not python `urllib` — Cloudflare bot-blocks the latter with `error code: 1010`. No-auth reads: `GET /api/health`, `GET /api/openapi` (interactive reference at `/docs/api`). Status codes alone settle "is it deployed": 401 = deployed and gated, 403 = authed but wrong scope, 404 = not deployed.
 
 - **Read-only by default.** GETs and other non-mutating calls need no approval — prefer one over asking the user to check for you.
 - **Mutating calls need an explicit ask.** Installer finalize / `setAsLatest`, remote commands to agents, config pushes, key revocation, deletes — never fire these off to confirm something. Get the user's go-ahead first, prod especially.
 
-**IMPORTANT — installer release order (do not reorder):** bump the version (`node scripts/sync-versions.js X.Y.Z`) **and** add the `## [X.Y.Z] - YYYY-MM-DD` entry to `docs/changelog.md`, then commit — *before* building. `build_installer_full.bat` bakes the version into the exe filename and binary, and an installer must never ship without a matching changelog entry.
+**IMPORTANT — installer release order (do not reorder):** bump the version (`node scripts/sync-versions.js X.Y.Z`) **and** add the `## [X.Y.Z] - YYYY-MM-DD` entry to `docs/changelog.md`, then commit — *before* building. `build_installer_full.bat` bakes the version into the exe filename and binary, and an installer must never ship without a matching changelog entry. Then build before anything is pushed: nothing goes to GitHub (no push, PR merge or tag) until all three installers are built, uploaded to dev and their downloads verified, because a pushed bump with no installer behind it is a release that does not exist yet.
 
-**Full release recipe** — the non-interactive build invocation (the `pause`-hang gotcha) plus the 3-step signed-URL upload → finalize API flow — lives in `.claude/skills/build-system.md` → "Agent Installer Release". That skill auto-activates on installer/release/version work.
+**Full release recipe** — the non-interactive build invocation (the `pause`-hang gotcha) plus the 3-step signed-URL upload → finalize API flow — lives in the build-system skill (`.claude/skills/build-system/SKILL.md`) → "Agent Installer Release". Its description triggers it on installer, release and version work.
 
 ---
 
@@ -207,7 +205,7 @@ passes every test and fails on a real machine the first time someone opens a hoo
 ### Review Discipline (code review, security review, audits)
 Reviews are judged on calibration, not volume. Three accurate findings are more valuable than twenty marginal ones, and inflated severities devalue every subsequent review on this codebase. Apply the following standard on every pass.
 
-- **Establish current state before reviewing.** Read the last ~10 commits — particularly anything tagged `feat(security)`, `fix(security)`, or part of a hardening pass — and the diff for the branch under review. An issue already resolved upstream is not a finding; surfacing it as one signals that the review wasn't grounded in the current code.
+- **Establish current state before reviewing.** Read the last ~10 commits — particularly anything that is part of a hardening pass, which this public repo does not label as security — and the diff for the branch under review. An issue already resolved upstream is not a finding; surfacing it as one signals that the review wasn't grounded in the current code.
 - **Severity is a claim that must be substantiated.** A "critical" finding requires a written exploit path in three parts: the actor (unauthenticated attacker, authenticated user, insider with role X), the mechanism (specific request, payload, or sequence), and the outcome (RCE, data exfiltration, auth bypass, privilege escalation, integrity violation). If the path cannot be stated plainly, the finding is not critical — reclassify it.
 - **Use the full severity ladder.** *Critical*: exploitable now with material impact. *High*: exploitable under realistic conditions or with a credible chain. *Medium*: defense-in-depth gap with no direct exploit. *Low*: hardening, style, or best-practice deviation. When uncertain between two rungs, choose the lower one and explain the uncertainty.
 - **A clean review is a valid result.** When the change is sound, state that and stop. Padding a report with speculative or low-value findings to demonstrate effort is a quality failure, not thoroughness.
@@ -219,7 +217,9 @@ Reviews are judged on calibration, not volume. Three accurate findings are more 
 
 ## Agent Dev Testing Workflow
 
-The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. Service files (`owlette_service.py`, `shared_utils.py`, `firebase_client.py`, `connection_manager.py`, `auth_manager.py`) require a restart. **Do this automatically** — don't wait for the user to ask.
+The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. It then restarts the service itself, which every mirrored file needs since 3.0.0.
+
+The hook fires for an Edit or Write under `agent/src/` in **any** worktree, not only the main checkout, and copies by file name. In a worktree that must not reach the installed agent (a release branch, an audit, anything not at the installed version), change `agent/src/*.py` with a script run from the shell instead, and say that you did.
 
 The hook copies unelevated, so after each agent install it needs `powershell -File scripts/bootstrap-windows.ps1 -DevGrant` from an elevated prompt (the installer resets `agent\src`), which grants only the developer's own account Modify on `agent\src` and `app` (`-RemoveDevGrant` reverts it). While the grant is in place, the service logs a DevMode warning at every start.
 
@@ -244,12 +244,12 @@ For non-trivial features, use the wave-based planning and execution system. Each
 - `/next` — Execute the next single task in the current context (for smaller features or when you want to review each step)
 
 ### Verification & Lifecycle
-- `/verify` — Check completed work against plan's success criteria + build check
+- `/verify` — Checks, then a standards reviewer and a spec reviewer in parallel on the diff, plus evidence from where the owner looks
 - `/save` — Save progress to dev docs before context compaction
 - `/resume` — Restore context in a new session from dev docs
 
 ### Debugging
-- `/debug` — Scientific method debugging: observe → hypothesize → test → diagnose → fix → verify
+- `/debug` — A command that reproduces the bug red comes first, then hypotheses, a regression test, the fix, and proof where the owner saw it
 
 ### Build
 - `/build-and-fix` — Build web + agent, fix all errors, repeat until clean
@@ -272,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-09-21
+**Last Updated**: 2026-11-14

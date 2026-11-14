@@ -28,6 +28,14 @@
 //! [`crate::session::pick_codec`] reads it. A codec field on this ceiling would
 //! be a second, later, contradicting statement of the same choice.
 //!
+//! # The ladder spends frame rate, never resolution
+//!
+//! A congested path costs frames a second and bits, never pixels: every rung
+//! is at the ceiling's own resolution. Below native a 4K desktop's small text
+//! is unreadable however clean the motion, and a person who would rather have
+//! motion than text on a bad path picks 1080p or 720p in the menu, which
+//! [`ResolutionCap`] still applies at once.
+//!
 //! # The bottom rung is not the floor frame rate
 //!
 //! [`MIN_LADDER_FPS`] is the least *motion* this ladder will trade down to.
@@ -40,16 +48,40 @@ use crate::gpu::scale::Limits;
 
 /// The bandwidth rungs the menu offers. A viewer may ask for a number between
 /// them — these are what the ui puts in front of a person, not a whitelist.
-pub const BITRATE_CAPS_BPS: [u32; 5] = [
+pub const BITRATE_CAPS_BPS: [u32; 7] = [
     5_000_000,
     10_000_000,
     20_000_000,
     30_000_000,
     50_000_000,
+    80_000_000,
+    100_000_000,
 ];
 
 /// `auto`: 20 Mbps is what the bake-off measured arm B at end to end.
 pub const DEFAULT_BITRATE_BPS: u32 = 20_000_000;
+
+/// A source above this many pixels takes [`LARGE_SOURCE_AUTO_BPS`] for `auto`:
+/// a 4K panel, or a Retina Mac's, is four times the picture 20 Mbps was
+/// measured for, and at gate M1 (2026-10-01) that rate smeared on every window
+/// move. A relayed path pays nothing new: the governor descends on loss from
+/// any ceiling.
+pub const LARGE_SOURCE_PIXELS: u32 = 2_500_000;
+
+/// 80 Mbps gives a 3420x2214 picture the bits per pixel a 1080p one gets at
+/// 20, and a little over. Measured at gate M1 (2026-10-02): at 50 Mbps the
+/// Mac still smeared on fast window moves, through five minutes with no
+/// delay-rise cut, so the path had room and the picture did not.
+pub const LARGE_SOURCE_AUTO_BPS: u32 = 80_000_000;
+
+/// The rate `auto` means for a source of `size`.
+pub fn auto_bitrate_bps(size: (u32, u32)) -> u32 {
+    if size.0.saturating_mul(size.1) > LARGE_SOURCE_PIXELS {
+        LARGE_SOURCE_AUTO_BPS
+    } else {
+        DEFAULT_BITRATE_BPS
+    }
+}
 
 /// The frame-rate rungs the menu offers, and `auto` is the first of them.
 pub const FPS_CAPS: [u32; 2] = [60, 30];
@@ -79,8 +111,7 @@ pub enum ResolutionCap {
 }
 
 impl ResolutionCap {
-    /// Richest first. This is the order the governor descends in and the order
-    /// the menu lists.
+    /// Richest first, the order the menu lists.
     pub const LADDER: [ResolutionCap; 4] = [
         ResolutionCap::Native,
         ResolutionCap::P1440,
@@ -129,12 +160,6 @@ impl ResolutionCap {
             },
         }
     }
-
-    /// The next cap down, or `None` at the bottom.
-    fn next_down(self) -> Option<ResolutionCap> {
-        let at = ResolutionCap::LADDER.iter().position(|&cap| cap == self)?;
-        ResolutionCap::LADDER.get(at + 1).copied()
-    }
 }
 
 /// One viewer's ceiling, on every axis at once.
@@ -161,8 +186,19 @@ impl Ceiling {
     /// and takes the default rather than a ceiling of nothing — a viewer can
     /// ask for less, but it cannot ask for a session that will not run.
     pub fn from_quality(preset: &str, max_bitrate_kbps: u32, max_fps: u32) -> Self {
+        Self::from_quality_with_auto(preset, max_bitrate_kbps, max_fps, DEFAULT_BITRATE_BPS)
+    }
+
+    /// As [`Self::from_quality`], with `auto_bps` for an unstated rate: what
+    /// [`auto_bitrate_bps`] says for the source the session captures.
+    pub fn from_quality_with_auto(
+        preset: &str,
+        max_bitrate_kbps: u32,
+        max_fps: u32,
+        auto_bps: u32,
+    ) -> Self {
         let bitrate_bps = match max_bitrate_kbps {
-            0 => DEFAULT_BITRATE_BPS,
+            0 => auto_bps,
             kbps => kbps
                 .saturating_mul(1_000)
                 .clamp(BITRATE_CAPS_BPS[0], BITRATE_CAPS_BPS[BITRATE_CAPS_BPS.len() - 1]),
@@ -197,37 +233,25 @@ impl Ceiling {
         self.resolution.narrow(limits)
     }
 
-    /// The ladder the governor descends, richest first, always starting at this
-    /// ceiling itself.
+    /// The ladder the governor descends, richest first: this ceiling's own
+    /// frame rate, then each lower [`FPS_CAPS`] entry, then
+    /// [`MIN_LADDER_FPS`], every rung at this ceiling's resolution.
     ///
-    /// Frame rate is spent before resolution because that is the cheaper thing
-    /// to give up and the easier one to give back, and the two are one sequence
-    /// rather than two so recovery can only ever retrace the descent. A single
-    /// index over a single ladder cannot oscillate between axes, which two
-    /// independent counters very much can.
+    /// Frame rate is the only axis it spends (the module head says why), and
+    /// one index over one sequence means recovery can only ever retrace the
+    /// descent.
     pub fn rungs(&self) -> Vec<QualityRung> {
-        let mut rungs = Vec::new();
-        let mut fps_steps = vec![self.fps];
+        let mut rungs = vec![QualityRung {
+            fps: self.fps,
+            resolution: self.resolution,
+        }];
         for fps in FPS_CAPS.into_iter().chain([MIN_LADDER_FPS]) {
-            if fps < *fps_steps.last().expect("seeded with the ceiling") {
-                fps_steps.push(fps);
+            if fps < rungs.last().expect("seeded with the ceiling").fps {
+                rungs.push(QualityRung {
+                    fps,
+                    resolution: self.resolution,
+                });
             }
-        }
-        for fps in &fps_steps {
-            rungs.push(QualityRung {
-                fps: *fps,
-                resolution: self.resolution,
-            });
-        }
-
-        let slowest = *fps_steps.last().expect("seeded with the ceiling");
-        let mut resolution = self.resolution;
-        while let Some(next) = resolution.next_down() {
-            resolution = next;
-            rungs.push(QualityRung {
-                fps: slowest,
-                resolution,
-            });
         }
         rungs
     }
@@ -264,10 +288,10 @@ mod tests {
     #[test]
     fn the_numbers_are_clamped_into_the_menus_range() {
         let ceiling = Ceiling::from_quality("720p", 500_000, 240);
-        assert_eq!(ceiling.bitrate_bps, 50_000_000, "clamped at the top rung");
+        assert_eq!(ceiling.bitrate_bps, 100_000_000, "clamped at the top rung");
         assert_eq!(ceiling.fps, DEFAULT_FPS);
         assert_eq!(ceiling.resolution, ResolutionCap::P720);
-        assert_eq!(ceiling.label(), "50mbps/720p/60fps");
+        assert_eq!(ceiling.label(), "100mbps/720p/60fps");
 
         let low = Ceiling::from_quality("native", 1, 1);
         assert_eq!(low.bitrate_bps, BITRATE_CAPS_BPS[0]);
@@ -318,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ladder_spends_frame_rate_before_it_spends_pixels() {
+    fn the_ladder_spends_frame_rate_and_never_pixels() {
         let rungs = Ceiling::default().rungs();
         assert_eq!(
             rungs,
@@ -335,18 +359,6 @@ mod tests {
                     fps: 15,
                     resolution: ResolutionCap::Native
                 },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P720
-                },
             ]
         );
     }
@@ -358,25 +370,20 @@ mod tests {
             fps: 30,
             resolution: ResolutionCap::P1080,
         };
-        let rungs = ceiling.rungs();
-        assert_eq!(rungs[0], QualityRung {
-            fps: 30,
-            resolution: ResolutionCap::P1080
-        });
-        assert!(
-            rungs.iter().all(|rung| rung.fps <= 30),
-            "a 30 fps preset never produces a 60 fps rung"
+        assert_eq!(
+            ceiling.rungs(),
+            vec![
+                QualityRung {
+                    fps: 30,
+                    resolution: ResolutionCap::P1080
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1080
+                },
+            ],
+            "no 60 fps rung above a 30 fps preset, and no other resolution at all"
         );
-        assert!(
-            !rungs
-                .iter()
-                .any(|rung| matches!(rung.resolution, ResolutionCap::Native | ResolutionCap::P1440)),
-            "a 1080p preset never produces a rung above 1080p"
-        );
-        assert_eq!(rungs.last().expect("non-empty"), &QualityRung {
-            fps: 15,
-            resolution: ResolutionCap::P720
-        });
     }
 
     #[test]
@@ -387,5 +394,18 @@ mod tests {
             resolution: ResolutionCap::P720,
         };
         assert_eq!(ceiling.rungs().len(), 1, "nothing left to trade");
+    }
+
+    #[test]
+    fn auto_is_the_top_rate_for_a_large_source_and_the_default_below() {
+        assert_eq!(auto_bitrate_bps((1920, 1080)), DEFAULT_BITRATE_BPS);
+        assert_eq!(auto_bitrate_bps((2560, 1440)), 80_000_000);
+        assert_eq!(auto_bitrate_bps((3420, 2214)), 80_000_000);
+        assert_eq!(auto_bitrate_bps((3840, 2160)), 80_000_000);
+        let auto = Ceiling::from_quality_with_auto("native", 0, 0, 50_000_000);
+        assert_eq!(auto.bitrate_bps, 50_000_000);
+        // a stated rate is the viewer's, whatever the source
+        let asked = Ceiling::from_quality_with_auto("native", 10_000, 0, 50_000_000);
+        assert_eq!(asked.bitrate_bps, 10_000_000);
     }
 }

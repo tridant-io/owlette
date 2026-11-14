@@ -59,6 +59,13 @@ jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
+jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+
+// plans are covered in CreateSiteDialog.plan.test.tsx; here the account plan never loads.
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => ({ plan: undefined, refresh: jest.fn() }),
+}));
+
 async function openDialog() {
   const user = userEvent.setup();
   const onCreateSite = jest.fn().mockResolvedValue('new-site');
@@ -118,9 +125,10 @@ describe('what the create writes', () => {
       expect(onCreateSite).toHaveBeenCalledWith(
         expect.any(String),
         'NYC Office',
-        'creator-uid',
         'America/New_York',
         true,
+        // a plain create: the account plan is not loaded here, so no plan step ran
+        undefined,
       ),
     );
   });
@@ -143,9 +151,9 @@ describe('what the create writes', () => {
       expect(onCreateSite).toHaveBeenCalledWith(
         expect.any(String),
         'NYC Office',
-        'creator-uid',
         'Europe/Berlin',
         true,
+        undefined,
       ),
     );
   });
@@ -159,7 +167,7 @@ describe('what the create writes', () => {
     await submit(user);
 
     await waitFor(() => expect(onCreateSite).toHaveBeenCalled());
-    const [, , , timezone, flag] = onCreateSite.mock.calls[0];
+    const [, , timezone, flag] = onCreateSite.mock.calls[0];
     expect(timezone).toBeUndefined();
     // `undefined`, never `false`: a site nobody asked must stay askable.
     expect(flag).toBeUndefined();

@@ -57,6 +57,16 @@ class OSAdapter(Protocol):
     def launch_managed_process(self, spec: dict) -> int | None:
         """Start a configured managed process; returns its pid, None on failure."""
 
+    def watch_exit(self, pid: int) -> None:
+        """Keep what it takes to read `pid`'s exit code once it ends."""
+
+    def exit_code(self, pid: int) -> int | None:
+        """How a watched or spawned process ended, read once.
+
+        Its exit code, or on POSIX the negative signal that ended it; None
+        while it runs, or when how it ended cannot be known.
+        """
+
     def stable_machine_id(self) -> str:
         """An identifier that survives reboots, renames and hardware churn."""
 
@@ -68,6 +78,14 @@ class OSAdapter(Protocol):
 
     def pending_reboot(self) -> dict:
         """Whether the OS is waiting on a reboot, and what is asking for it."""
+
+    def active_hours(self) -> dict | None:
+        """The hours the OS holds its own restarts off: `{start, end, source}`.
+
+        Whole hours on the machine's clock, the start inclusive and the end
+        exclusive, wrapping past midnight when the start is the later one;
+        None on a platform that keeps no such window.
+        """
 
     def reboot(self, delay: int, message: str | None = None) -> None:
         """Reboot in `delay` seconds; cancellable until it fires."""
@@ -141,6 +159,19 @@ def resolve_data_root(default: str, sub: str | None = None) -> str:
     in one place and an arm only has to know where its OS keeps the tree.
     """
     return _under(os.environ.get(DATA_ROOT_ENV) or default, sub)
+
+
+# How many unread exit codes an arm keeps. A kill the service asked for itself
+# never reads its exit back, so without a bound they pile up for the daemon's life.
+EXIT_CODES_KEPT = 64
+
+
+def keep_exit_code(codes: dict, pid: int, code: int) -> None:
+    """Record `pid`'s exit code in `codes`, dropping the oldest past the bound."""
+    codes.pop(pid, None)
+    codes[pid] = code
+    while len(codes) > EXIT_CODES_KEPT:
+        del codes[next(iter(codes))]
 
 
 def data_root(sub: str | None = None) -> str:

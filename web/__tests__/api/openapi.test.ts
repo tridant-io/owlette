@@ -17,6 +17,25 @@ function findOperation(spec: Record<string, unknown>, method: string, path: stri
   )?.operation;
 }
 
+interface Schema {
+  $ref?: string;
+  properties?: Record<string, Schema>;
+  required?: string[];
+  additionalProperties?: unknown;
+  enum?: unknown[];
+}
+
+function bodyProperties(operation: Record<string, unknown> | undefined): Record<string, Schema> {
+  const body = operation?.requestBody as { content: Record<string, { schema: Schema }> } | undefined;
+  return body?.content['application/json'].schema.properties ?? {};
+}
+
+function resolveSchema(spec: Record<string, unknown>, schema: Schema): Schema {
+  const name = schema.$ref?.replace('#/components/schemas/', '');
+  if (!name) return schema;
+  return (spec.components as { schemas: Record<string, Schema> }).schemas[name];
+}
+
 describe('/api/openapi', () => {
   it('serves the rendered API reference with examples and auth/scope notes', async () => {
     const response = await GET();
@@ -66,9 +85,33 @@ describe('/api/openapi', () => {
     expect(commandSample).toContain('/api/sites/$SITE_ID/machines/$MACHINE_ID/commands');
     expect(commandSample).not.toContain('{siteId}');
 
+    // active-hours guard: the override and the deferral are public contract.
+    const commandParams = bodyProperties(commandOperation).params.properties as Record<string, Schema>;
+    const commandOverride = resolveSchema(spec, commandParams.active_hours_override);
+    expect(commandOverride.required).toEqual(['reason']);
+    expect(commandOverride.additionalProperties).toBe(false);
+    expect(commandParams.when.enum).toEqual(['now', 'after_active_hours']);
+    expect(commandOperation?.description).toContain('Error: active_hours:');
+    for (const path of ['/api/sites/{siteId}/deployments', '/api/sites/{siteId}/deployments/{deploymentId}/retry']) {
+      const operation = findOperation(spec, 'post', path);
+      expect(resolveSchema(spec, bodyProperties(operation).active_hours_override)).toBe(commandOverride);
+      expect(operation?.description).toContain('Error: active_hours:');
+    }
+
     expect(findOperation(spec, 'post', '/api/hoot/conversations')?.['x-required-scopes'])
       .toContain('chat=<siteId>:write');
     expect(findOperation(spec, 'post', '/api/installer/upload')?.['x-required-scopes'])
       .toContain('installer=*:write');
+
+    expect(findOperation(spec, 'get', '/api/admin/issues')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'patch', '/api/admin/issues/{id}')?.['x-required-scopes'])
+      .toEqual(['issue=*:write']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}/logs')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}/files/{n}')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
   });
 });

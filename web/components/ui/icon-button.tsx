@@ -1,0 +1,28 @@
+import * as React from "react"
+
+import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+
+type IconButtonProps = Omit<React.ComponentProps<typeof Button>, "aria-label"> & {
+  // required: an icon has no text, and a radix tooltip only describes, never names
+  label: string
+  tooltip?: boolean
+}
+
+// type defaults to "button": an icon control inside a form (cancel, remove,
+// close) must not submit it; a save icon opts in with type="submit". a link
+// (asChild around an <a>) takes no button type
+function IconButton({ label, tooltip = true, size = "icon", type, asChild, ...props }: IconButtonProps) {
+  const button = (
+    <Button aria-label={label} size={size} type={asChild ? type : (type ?? "button")} asChild={asChild} {...props} />
+  )
+  if (!tooltip) return button
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+export { IconButton }

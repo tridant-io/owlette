@@ -10,6 +10,7 @@ type TestUserActor = {
   userId: string;
   role: 'member' | 'admin' | 'superadmin';
   siteRoles: Record<string, 'owner' | 'admin' | 'member'>;
+  machineScopes: Record<string, readonly string[] | null>;
 };
 
 const SUPERADMIN: TestUserActor = {
@@ -17,10 +18,14 @@ const SUPERADMIN: TestUserActor = {
   userId: 'test-admin',
   role: 'superadmin',
   siteRoles: {},
+  machineScopes: {},
 };
 
 let tokenDocs: TokenDoc[] = [];
 const deletedIds: string[] = [];
+// Every doc-level set, by path: the revoke route's `unpair` commands land in
+// `sites/{siteId}/machines/{machineId}/commands/pending`.
+const docWrites: Array<{ path: string; data: Record<string, unknown>; options?: unknown }> = [];
 // Swapped per-test to exercise the capability each route declares.
 let mockActor: TestUserActor = SUPERADMIN;
 
@@ -63,7 +68,7 @@ jest.mock('@/lib/authorizedHandler.server', () => {
 jest.mock('@/lib/firebase-admin', () => ({
   adminDb: {
     value: {
-      collection: () => tokenCollection(),
+      collection: (name: string) => tokenCollection([], name),
       batch: () => ({
         delete: (ref: { id: string }) => deletedIds.push(ref.id),
         commit: jest.fn(async () => undefined),
@@ -82,15 +87,30 @@ jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: (...args: unknown[]) => mockEmitMutation(...args),
 }));
 
-function tokenCollection(filters: Array<[string, unknown]> = []) {
+// the collection fake below answers every query with token docs, so the real
+// session store would delete those; the route's calls to it are what is pinned.
+const mockRevokeFleetSessions = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/fleet/session.server', () => ({
+  revokeFleetSessions: (...a: unknown[]) => mockRevokeFleetSessions(...a),
+}));
+
+// One fake for every collection: token docs answer every query (the route only
+// queries `agent_refresh_tokens`), and `path` makes the nested command write
+// addressable.
+function tokenCollection(filters: Array<[string, unknown]> = [], path = 'agent_refresh_tokens') {
   return {
-    where: (field: string, _op: string, value: unknown) => tokenCollection([...filters, [field, value]]),
+    where: (field: string, _op: string, value: unknown) =>
+      tokenCollection([...filters, [field, value]], path),
     doc: (id: string) => ({
       get: async () => {
         const data = tokenDocs.find((doc) => doc.id === id);
         return { exists: !!data, data: () => data };
       },
       delete: async () => deletedIds.push(id),
+      collection: (name: string) => tokenCollection([], `${path}/${id}/${name}`),
+      set: async (data: Record<string, unknown>, options?: unknown) => {
+        docWrites.push({ path: `${path}/${id}`, data, options });
+      },
     }),
     get: async () => ({
       docs: tokenDocs
@@ -116,9 +136,22 @@ import { POST } from '@/app/api/sites/[siteId]/agent-tokens/revoke/route';
 beforeEach(() => {
   tokenDocs = [];
   deletedIds.length = 0;
+  docWrites.length = 0;
   mockActor = SUPERADMIN;
   mockEmitMutation.mockClear();
 });
+
+/** The `unpair` commands a revoke queued, as [machineId, command] pairs. */
+function unpairCommands(): Array<[string, Record<string, unknown>]> {
+  return docWrites.flatMap(({ path, data }) => {
+    const match = /^sites\/[^/]+\/machines\/([^/]+)\/commands\/pending$/.exec(path);
+    if (!match) return [];
+    return Object.values(data)
+      .filter((cmd): cmd is Record<string, unknown> => typeof cmd === 'object' && cmd !== null)
+      .filter((cmd) => cmd.type === 'unpair')
+      .map((cmd): [string, Record<string, unknown>] => [match[1], cmd]);
+  });
+}
 
 describe('/api/sites/{siteId}/agent-tokens', () => {
   it('lists site tokens sorted newest first', async () => {
@@ -167,7 +200,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   // on site-scoped AGENT_TOKEN_REVOKE, so a site admin could revoke a token they
   // could not list. These three cases fail if that split ever comes back.
   it('lets a site admin list tokens for a site they are assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
     tokenDocs = [
       { id: 'live', siteId: 'site-a', machineId: 'm1', createdAt: timestamp('2026-02-01T00:00:00Z') },
     ];
@@ -182,7 +215,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a site admin listing tokens for a site they are NOT assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-b/agent-tokens'),
@@ -193,7 +226,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a member listing tokens on their own site', async () => {
-    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' } };
+    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-a/agent-tokens'),
@@ -224,6 +257,149 @@ describe('/api/sites/{siteId}/agent-tokens/revoke', () => {
     const json = await res.json();
     expect(json.revokedCount).toBe(1);
     expect(deletedIds).toEqual(['delete-me']);
+  });
+
+  // #327: deleting the token doc alone left the agent syncing on its one-hour
+  // access token, online with live metrics. Every revoke that removed a live
+  // credential now also queues `unpair` on that machine, merged into the
+  // pending map the agent already polls.
+  it('queues an unpair command on the machine whose tokens it revoked', async () => {
+    tokenDocs = [{ id: 'delete-me', siteId: 'site-a', machineId: 'm1' }];
+
+    const res = await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineId: 'm1' }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(res.status).toBe(200);
+    const [write] = docWrites;
+    expect(write.path).toBe('sites/site-a/machines/m1/commands/pending');
+    expect(write.options).toEqual({ merge: true });
+    expect(unpairCommands()).toEqual([
+      ['m1', expect.objectContaining({
+        type: 'unpair',
+        siteId: 'site-a',
+        status: 'pending',
+        queuedBy: 'user:test-admin',
+        auditCorrelationId: 'corr-test',
+      })],
+    ]);
+    // the agent's stale-command sweep reads `timestamp`, not `createdAt`
+    expect(unpairCommands()[0][1]).toHaveProperty('timestamp');
+  });
+
+  it('latestOnly queues unpair for the machine whose current token went', async () => {
+    const now = Date.now();
+    tokenDocs = [
+      { id: 'fresh', siteId: 'site-a', machineId: 'm1', lastUsed: lifecycleTs(now) },
+      { id: 'other-machine', siteId: 'site-a', machineId: 'm2', lastUsed: lifecycleTs(now) },
+    ];
+
+    await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineId: 'm1', latestOnly: true }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(unpairCommands().map(([machineId]) => machineId)).toEqual(['m1']);
+  });
+
+  it('queues nothing when no live token was revoked', async () => {
+    const now = Date.now();
+    tokenDocs = [
+      { id: 'dead', siteId: 'site-a', machineId: 'm1', supersededAt: now - 600_000, retiresAt: lifecycleTs(now - 300_000) },
+    ];
+
+    await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineId: 'm1', latestOnly: true }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(docWrites).toEqual([]);
+  });
+
+  it('machineId mode queues nothing when every deleted token was already dead', async () => {
+    const now = Date.now();
+    tokenDocs = [
+      { id: 'retired', siteId: 'site-a', machineId: 'm1', supersededAt: now - 600_000, retiresAt: lifecycleTs(now - 300_000) },
+      { id: 'expired', siteId: 'site-a', machineId: 'm1', expiresAt: lifecycleTs(now - 1000) },
+    ];
+
+    const res = await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ machineId: 'm1' }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect((await res.json()).revokedCount).toBe(2);
+    expect(docWrites).toEqual([]);
+  });
+
+  it('tokenId queues unpair on the machine the token belonged to', async () => {
+    tokenDocs = [{ id: 'delete-me', siteId: 'site-a', machineId: 'm7' }];
+
+    await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tokenId: 'delete-me' }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(unpairCommands().map(([machineId]) => machineId)).toEqual(['m7']);
+  });
+
+  it('revoke all queues one unpair per distinct machine on the site', async () => {
+    tokenDocs = [
+      { id: 't1', siteId: 'site-a', machineId: 'm1' },
+      { id: 't2', siteId: 'site-a', machineId: 'm1' },
+      { id: 't3', siteId: 'site-a', machineId: 'm2' },
+      { id: 'elsewhere', siteId: 'site-b', machineId: 'm3' },
+    ];
+
+    await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(unpairCommands().map(([machineId]) => machineId).sort()).toEqual(['m1', 'm2']);
+  });
+
+  it('prune queues nothing: dead tokens have no agent behind them', async () => {
+    const now = Date.now();
+    tokenDocs = [
+      { id: 'expired', siteId: 'site-a', machineId: 'm1', expiresAt: lifecycleTs(now - 1000) },
+    ];
+
+    await POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prune: true }),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(docWrites).toEqual([]);
   });
 
   it('machineId + latestOnly revokes ONLY the most-recently-used live token (preserves siblings)', async () => {
@@ -410,5 +586,92 @@ describe('/api/sites/{siteId}/agent-tokens/revoke', () => {
 
     expect(res.status).toBe(200);
     expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+});
+
+// ADR 0017: a fleet session outlives the refresh token that minted it by up to
+// 15 minutes and no fleet route re-checks pairing, so a revoke ends it.
+describe('/api/sites/{siteId}/agent-tokens/revoke: fleet sessions', () => {
+  const revoke = (body: Record<string, unknown>) =>
+    POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+  const dead = () => ({ supersededAt: Date.now() - 600_000, retiresAt: lifecycleTs(Date.now() - 300_000) });
+
+  beforeEach(() => {
+    mockRevokeFleetSessions.mockClear();
+  });
+
+  it("machineId mode ends that machine's sessions on the path site, and no other's", async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm1' }];
+
+    await revoke({ machineId: 'm1' });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm1' }]);
+  });
+
+  it('all ends every session on the site in one call that names no machine', async () => {
+    tokenDocs = [
+      { id: 't1', siteId: 'site-a', machineId: 'm1' },
+      { id: 't2', siteId: 'site-a', machineId: 'm2' },
+    ];
+
+    await revoke({ all: true });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a' }]);
+  });
+
+  it('tokenId ends the sessions of the machine a live token belonged to', async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm7' }];
+
+    await revoke({ tokenId: 't1' });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm7' }]);
+  });
+
+  it('tokenId on a dead token, or one with no machine, ends none: never the whole site', async () => {
+    tokenDocs = [
+      { id: 'dead', siteId: 'site-a', machineId: 'm7', ...dead() },
+      { id: 'no-machine', siteId: 'site-a' },
+    ];
+
+    await revoke({ tokenId: 'dead' });
+    await revoke({ tokenId: 'no-machine' });
+
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+  });
+
+  it('latestOnly ends them only when a live token went', async () => {
+    tokenDocs = [{ id: 'dead', siteId: 'site-a', machineId: 'm1', ...dead() }];
+    await revoke({ machineId: 'm1', latestOnly: true });
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+
+    tokenDocs = [{ id: 'fresh', siteId: 'site-a', machineId: 'm1', lastUsed: lifecycleTs(Date.now()) }];
+    await revoke({ machineId: 'm1', latestOnly: true });
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm1' }]);
+  });
+
+  it('prune ends none: it removes no live credential', async () => {
+    tokenDocs = [{ id: 'dead', siteId: 'site-a', machineId: 'm1', ...dead() }];
+
+    await revoke({ prune: true });
+
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+  });
+
+  it('a failed end is not fatal: the tokens are revoked and the unpair is still queued', async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm1' }];
+    mockRevokeFleetSessions.mockRejectedValueOnce(new Error('unavailable'));
+
+    const res = await revoke({ machineId: 'm1' });
+
+    expect(res.status).toBe(200);
+    expect(deletedIds).toEqual(['t1']);
+    expect(unpairCommands().map(([machineId]) => machineId)).toEqual(['m1']);
   });
 });

@@ -14,7 +14,7 @@
  */
 import type { Firestore } from 'firebase-admin/firestore';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
-import { getSiteAlertRecipients } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, recipientWantsMachine } from '@/lib/adminUtils.server';
 import {
   ExecuteMachineCommandError,
 } from '@/lib/actions/executeMachineCommand.server';
@@ -147,10 +147,15 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
   const failures: string[] = [];
 
   for (const recipient of recipients) {
-    // A machine-scoped run honors per-recipient machine mutes. A site-level run
-    // has no single machine to mute against, so mutes do not apply to it.
-    if (ctx.machineId && recipient.mutedMachines.includes(ctx.machineId)) {
-      muted += 1;
+    // A machine-scoped run honors per-recipient machine mutes and machine scope.
+    // A site-level run has no single machine to mute against, so mutes do not
+    // apply to it, but a scoped member holds nothing site-wide and gets no email.
+    if (ctx.machineId) {
+      if (!recipientWantsMachine(recipient, ctx.machineId)) {
+        muted += 1;
+        continue;
+      }
+    } else if (recipient.machineIds !== null) {
       continue;
     }
 
@@ -307,6 +312,7 @@ async function executeWebhookOutput(
         'Roost-Signature': signPayload(body, secret, ctx.now.getTime()),
       },
       body,
+      redirect: 'manual',
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });
 

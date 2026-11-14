@@ -8,6 +8,7 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 import {
+  STUN_ONLY,
   TURN_MAX_TTL_SECONDS,
   mintTurnCredentials,
   revokeTurnCredentials,
@@ -87,6 +88,13 @@ describe('mintTurnCredentials', () => {
       ok: false,
       reason: 'malformed_response',
     });
+  });
+});
+
+describe('STUN_ONLY', () => {
+  it('is one stun url and nothing else', () => {
+    // every fielded streamer parses bundle entries with deny_unknown_fields.
+    expect(STUN_ONLY).toEqual([{ urls: ['stun:stun.cloudflare.com:3478'] }]);
   });
 });
 

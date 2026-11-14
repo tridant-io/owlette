@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "owlette",
-  "version": "3.3.6",
+  "version": "4.2.1",
   "identifier": "app.owlette.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -22,27 +22,34 @@
         "decorations": false,
         "visible": false,
         "center": true,
-        "theme": "Dark",
         "backgroundColor": "#020B16",
         "dragDropEnabled": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'"
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "app",
+      "deb"
+    ],
+    "category": "Utility",
+    "shortDescription": "keep your installation running",
+    "longDescription": "the owlette app: the machine's processes, their launch modes and schedules, and the service's state, beside the dashboard at owlette.app.",
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "15.0"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "android": {
-      "debugApplicationIdSuffix": ".debug"
-    }
+    ]
   }
 }

@@ -51,7 +51,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TIMEOUT_MS = 120_000;
 
-/** A Dependabot PR left open longer than this is itself a blocker. */
+/** past this, a dependabot PR blocks only if its title names a package with an alert this branch cannot show is safe; otherwise it warns. */
 const DEFAULT_STALE_DAYS = 30;
 
 /** Alert severities that block even when only reachable in a dev dependency. */
@@ -279,10 +279,10 @@ const ECOSYSTEM_MANIFESTS = {
     'infra/swoop-signal/package-lock.json'],
   // Both keys carry the same list: dependabot.yml names the ecosystem `cargo`,
   // the alert feed reports it as `rust`, and an alert arrives under either.
-  rust: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'agent/swoop/Cargo.lock'],
-  cargo: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'agent/swoop/Cargo.lock'],
+  rust: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'desktop/viewer/Cargo.lock', 'agent/swoop/Cargo.lock'],
+  cargo: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'desktop/viewer/Cargo.lock', 'agent/swoop/Cargo.lock'],
   pip: ['agent/requirements.txt', 'agent/requirements-dev.txt', 'sdks/python/pyproject.toml',
-    'test/integration/requirements.txt', 'test/infra/agent-runner/requirements.txt'],
+    'test/infra/agent-runner/requirements.txt'],
 };
 
 /**
@@ -411,14 +411,33 @@ function checkDependabotAlerts(repo, findings, alertedPackages) {
   }
 }
 
-function checkScanningAlerts(repo, findings, branch, gitRef) {
+/**
+ * the ref the code-scanning feed is asked about. the runner sets GITHUB_REF and a
+ * step's env cannot override it, so a scheduled run says main while dev is checked
+ * out. a detached checkout (PR merge ref, tag) has no branch, and only the env
+ * knows. GATE_REF is for a tag gate: a tag has no analysis of its own.
+ */
+export function resolveGradedRef({ headBranch, envRef, envRefName, gateRef } = {}) {
+  if (gateRef) return gateRef;
+  if (headBranch && headBranch !== 'HEAD') return `refs/heads/${headBranch}`;
+  if (envRef) return envRef;
+  return envRefName ? `refs/heads/${envRefName}` : '';
+}
+
+function checkScanningAlerts(repo, findings, gitRef) {
   for (const kind of ['code-scanning', 'secret-scanning']) {
+    if (kind === 'code-scanning' && !gitRef) {
+      findings.push(finding('block', 'verify:code-scanning-ref',
+        'no branch checked out and no ref in the environment, so code scanning cannot be graded here. '
+        + 'Check out a branch or set GATE_REF=refs/heads/<branch>.'));
+      continue;
+    }
     let alerts;
     // Code scanning is per-ref and DEFAULTS TO THE DEFAULT BRANCH. Asking
     // without `ref` returned main's alerts on every branch, so 14 open CodeQL
     // alerts on dev (10 of them high) were invisible to this gate entirely.
     // Secret scanning is repo-wide and takes no ref.
-    const refParam = kind === 'code-scanning' && gitRef ? `&ref=${encodeURIComponent(gitRef)}` : '';
+    const refParam = kind === 'code-scanning' ? `&ref=${encodeURIComponent(gitRef)}` : '';
     try {
       alerts = ghJson(['api', '--paginate', `repos/${repo}/${kind}/alerts?state=open&per_page=100${refParam}`]);
     } catch (err) {
@@ -445,7 +464,7 @@ function checkScanningAlerts(repo, findings, branch, gitRef) {
     // ref. A branch CodeQL has never scanned answers identically to one with
     // nothing wrong — which is the precise confusion this whole script exists
     // to remove, so say which it is.
-    if (kind === 'code-scanning' && alerts.length === 0 && gitRef) {
+    if (kind === 'code-scanning' && alerts.length === 0) {
       let analyses = null;
       try {
         analyses = ghJson(['api', `repos/${repo}/code-scanning/analyses?ref=${encodeURIComponent(gitRef)}&per_page=1`]);
@@ -719,6 +738,32 @@ function selfTest() {
     resolveElsewhere(orphanAlert, siblingTree('1.6.1')).live.length > 0, true);
   check('orphan patched elsewhere is not a blocker',
     resolveElsewhere(orphanAlert, siblingTree('1.8.0')).live.length, 0);
+  for (const ecosystem of ['rust', 'cargo']) {
+    check(`orphan ${ecosystem} alert reaches the viewer lockfile`, resolveElsewhere({
+      dependency: { manifest_path: 'gone/Cargo.lock', package: { name: 'glib', ecosystem } },
+      security_vulnerability: { vulnerable_version_range: '< 0.20.0' },
+    }, {
+      root: '/fake',
+      exists: (p) => String(p).replaceAll('\\', '/').endsWith('desktop/viewer/Cargo.lock'),
+      readFile: () => cargoLock,
+    }).live.length, 1);
+  }
+
+  // each case is the env the runner really sets for that event.
+  const onMain = { envRef: 'refs/heads/main', envRefName: 'main' };
+  const tag = { envRef: 'refs/tags/v4.1.24', envRefName: 'v4.1.24' };
+  check('schedule: checked-out dev beats the env main',
+    resolveGradedRef({ headBranch: 'dev', ...onMain }), 'refs/heads/dev');
+  check('negative control: same env, detached, stays main',
+    resolveGradedRef({ headBranch: 'HEAD', ...onMain }), 'refs/heads/main');
+  check('PR: detached merge checkout gives the pull ref',
+    resolveGradedRef({ headBranch: 'HEAD', envRef: 'refs/pull/7/merge', envRefName: '7/merge' }), 'refs/pull/7/merge');
+  check('tag: detached tag checkout gives the tag', resolveGradedRef({ headBranch: 'HEAD', ...tag }), 'refs/tags/v4.1.24');
+  check('tag gate: GATE_REF beats the tag', resolveGradedRef({ headBranch: 'HEAD', ...tag, gateRef: 'refs/heads/dev' }), 'refs/heads/dev');
+  check('GATE_REF beats a checked-out branch', resolveGradedRef({ headBranch: 'feat/x', gateRef: 'refs/heads/dev' }), 'refs/heads/dev');
+  check('GITHUB_REF_NAME alone is a branch', resolveGradedRef({ headBranch: 'HEAD', envRefName: 'dev' }), 'refs/heads/dev');
+  check('detached with no env gives no ref', resolveGradedRef({ headBranch: 'HEAD' }), '');
+  check('no git and no env gives no ref', resolveGradedRef({ headBranch: '' }), '');
 
   if (failures.length > 0) {
     console.error(`self-test FAILED (${failures.length}):`);
@@ -810,25 +855,21 @@ function main(argv) {
     }
   }
 
-  // Resolve the branch first: code-scanning findings are graded against it.
-  // In Actions a PR checkout is detached, so prefer the ref the workflow gives us.
-  let branch = process.env.GITHUB_REF_NAME ?? '';
-  if (!branch) {
-    try {
-      branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
-    } catch { /* a detached or absent git is not itself a security finding */ }
-  }
-  if (!branch || branch === 'HEAD') branch = '';
-
-  // The ref the code-scanning feed must be asked about. GITHUB_REF is exact in
-  // Actions (refs/pull/N/merge on a PR, where GITHUB_REF_NAME is "N/merge" and
-  // matches no branch); fall back to this checkout's branch.
-  const gitRef = process.env.GITHUB_REF || (branch ? `refs/heads/${branch}` : '');
+  let headBranch = '';
+  try {
+    headBranch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  } catch { /* a detached or absent git is not itself a security finding */ }
+  const gitRef = resolveGradedRef({
+    headBranch,
+    envRef: process.env.GITHUB_REF,
+    envRefName: process.env.GITHUB_REF_NAME,
+    gateRef: process.env.GATE_REF,
+  });
 
   const findings = [];
   const alertedPackages = new Set();
   checkDependabotAlerts(repo, findings, alertedPackages);
-  checkScanningAlerts(repo, findings, branch, gitRef);
+  checkScanningAlerts(repo, findings, gitRef);
   checkAdvisories(repo, findings);
   checkDependabotPrs(repo, findings, staleDays, alertedPackages);
   if (!args.includes('--no-audit')) checkNpmAudit(findings);
@@ -846,7 +887,7 @@ function main(argv) {
     return openBlockers.length > 0 ? 1 : 0;
   }
 
-  console.log(`owlette security preflight: ${repo} (resolved against ${branch || 'this checkout'})`);
+  console.log(`owlette security preflight: ${repo} (lockfiles from this checkout, code scanning on ${gitRef || 'no ref'})`);
   console.log(`BLOCKING (${blockers.length})`);
   for (const f of blockers) console.log(`  ${acks.has(f.key) ? 'ACKED ' : ''}[${f.key}] ${f.text}`);
 
@@ -870,12 +911,12 @@ function main(argv) {
   // delete a waiver on that basis is the opposite of the truth. All ten
   // code-scanning acks read as "the finding is gone" on a feature branch while
   // being open on the repo. Say UNKNOWN when the coverage probe already said so.
-  const sastUnscanned = findings.some((f) => f.key === 'verify:code-scanning-coverage');
+  const sastUnscanned = findings.some((f) => f.key === 'verify:code-scanning-coverage' || f.key === 'verify:code-scanning-ref');
   for (const [key, why] of acks) {
     if (findings.some((f) => f.key === key)) {
       console.log(`ACKED ${key} — ${why}`);
     } else if (sastUnscanned && key.startsWith('alert:code-scanning:')) {
-      console.log(`NOTE: ack ${key} could not be graded — SAST has not run on this ref, so this is `
+      console.log(`NOTE: ack ${key} could not be graded — no SAST result for this ref, so this is `
         + 'UNKNOWN, not gone. Do NOT remove it on this evidence; re-check on a scanned branch (dev/main).');
     } else {
       console.log(`NOTE: ack ${key} matched nothing; the finding is gone — remove the entry`);

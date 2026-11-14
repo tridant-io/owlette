@@ -5,9 +5,12 @@
  * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs;
  * member-only sites are left intact; owned-but-shared sites refuse with `needs_successor`
  * — ownership must be transferred first (mirrors the admin cascade's `orphan_sites` guard).
+ * Each deleted site's billing is stopped first, as `deleteSite` does, and once the user doc
+ * is gone the account is unlinked from its tridant organization, as the admin cascade does
+ * (ADR 0018).
  *
  * Also drained so a self-deleted user leaves no residue: users/{uid}/{passkeys,
- * trustedDevices,api_keys}, top-level api_keys lookups, mfa_pending/{uid},
+ * trustedDevices,verified_networks,api_keys}, top-level api_keys lookups, mfa_pending/{uid},
  * agent_refresh_tokens by createdBy, chats by userId, and Storage users/{uid}/*.
  * The Firebase Auth user is revoked + deleted server-side afterwards; the client's own
  * post-response deleteUser() raced that and should be dropped.
@@ -25,6 +28,8 @@ import type { Auth } from 'firebase-admin/auth';
 import type { Storage } from 'firebase-admin/storage';
 import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
+import { unlinkTridantAccount } from '@/lib/userDeleteCascade.server';
 
 /** Hard cap per Firestore batch — well under the 500-write limit. */
 export const BATCH_SIZE = 100;
@@ -87,6 +92,7 @@ export type DeleteOwnAccountResult =
         memberSitesRemoved: number;
         passkeys: number;
         trustedDevices: number;
+        verifiedNetworks: number;
         apiKeys: number;
         apiKeyLookups: number;
         mfaPending: number;
@@ -131,6 +137,7 @@ function emptyDeletedCounts() {
     memberSitesRemoved: 0,
     passkeys: 0,
     trustedDevices: 0,
+    verifiedNetworks: 0,
     apiKeys: 0,
     apiKeyLookups: 0,
     mfaPending: 0,
@@ -614,6 +621,7 @@ export async function deleteOwnAccount(
             memberSitesRemoved: numberOr0(counts.memberSitesRemoved),
             passkeys: numberOr0(counts.passkeys),
             trustedDevices: numberOr0(counts.trustedDevices),
+            verifiedNetworks: numberOr0(counts.verifiedNetworks),
             apiKeys: numberOr0(counts.apiKeys),
             apiKeyLookups: numberOr0(counts.apiKeyLookups),
             mfaPending: numberOr0(counts.mfaPending),
@@ -711,6 +719,8 @@ export async function deleteOwnAccount(
       continue;
     }
     const siteRef = db.collection('sites').doc(entry.siteId);
+    // before anything of the site is destroyed, as deleteSite does. best effort.
+    if (!dryRun) await stopBillingBeforeDelete(entry.siteId, (await siteRef.get()).data());
     for (const sub of SITE_SUBCOLLECTIONS) {
       const n = await drainSiteSubcollection(
         db,
@@ -748,6 +758,8 @@ export async function deleteOwnAccount(
   // Drain device-trust records too, else a stale trust cookie could skip MFA for a later
   // account re-created under the same uid.
   const trustedDevices = await drainUserSubcollection(ctx, 'trustedDevices');
+  // the networks swoop control was verified from: asn and timestamps, nothing to keep
+  const verifiedNetworks = await drainUserSubcollection(ctx, 'verified_networks');
   const { apiKeys, apiKeyLookups } = await drainApiKeys(ctx);
   const mfaPending = await deleteMfaPending(ctx);
   const agentTokens = await drainQueryWhereEqualsUser(
@@ -764,6 +776,8 @@ export async function deleteOwnAccount(
   let usersDeleted = 0;
   if (!dryRun) {
     await userRef.delete();
+    // after the delete, so an account whose delete failed keeps its link.
+    await unlinkTridantAccount(input.userId);
   }
   deletedPaths.push(`users/${input.userId}`);
   usersDeleted = 1;
@@ -783,6 +797,7 @@ export async function deleteOwnAccount(
     memberSitesRemoved,
     passkeys,
     trustedDevices,
+    verifiedNetworks,
     apiKeys,
     apiKeyLookups,
     mfaPending,
