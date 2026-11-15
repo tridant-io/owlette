@@ -22,7 +22,6 @@ import { FormError } from '@/components/ui/form-error';
 import { useFieldError } from '@/hooks/useFieldError';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
-import { CopyButton } from '@/components/CopyButton';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useHeightTransition } from '@/hooks/useHeightTransition';
 import { AVAILABLE_MODELS, preselectedModel } from '@/lib/llmModels';
@@ -37,18 +36,6 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ElementType }[
   { id: 'security', label: 'security', icon: Shield },
   { id: 'api', label: 'api', icon: Code },
   { id: 'danger', label: 'danger zone', icon: Trash2 },
-];
-
-// the install paths are fixed per platform (docs/agent/hoot-mcp.mdx)
-const HOOT_MCP_COMMANDS = [
-  {
-    os: 'Windows',
-    command: 'claude mcp add hoot -- "C:\\ProgramData\\Owlette\\python\\python.exe" "C:\\ProgramData\\Owlette\\agent\\src\\fleet_mcp.py"',
-  },
-  {
-    os: 'macOS',
-    command: "claude mcp add hoot -- '/Library/Application Support/Owlette/runtime/python/bin/python3' '/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py'",
-  },
 ];
 
 interface AccountSettingsDialogProps {
@@ -995,36 +982,24 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                     <ol className="list-decimal space-y-3 rounded-md border border-border bg-card/50 py-4 pl-8 pr-4 text-xs text-muted-foreground">
                       <li>
-                        a site owner or admin turns it on: in the admin panel, open{' '}
-                        <span className="text-foreground">hoot</span> under fleet, turn on{' '}
-                        <span className="text-foreground">let machines act on other machines</span>, then turn on
-                        that machine and set how far it may go and on which machines.
-                      </li>
-                      <li className="space-y-2">
-                        <p>
-                          on that machine, add the server to Claude Code. the owlette desktop app&apos;s menu
-                          shows the same command under <span className="text-foreground">connect an ai agent</span>.
-                        </p>
-                        {HOOT_MCP_COMMANDS.map(({ os, command }) => (
-                          <div key={os} className="space-y-1">
-                            <p>{os}</p>
-                            <div className="flex items-center gap-2">
-                              <code className="block min-w-0 flex-1 break-all rounded border border-border bg-background px-2 py-1.5 font-mono text-[11px] text-foreground">
-                                {command}
-                              </code>
-                              <CopyButton value={command} tooltipLabel={`copy the ${os} command`} className="h-8 shrink-0" />
-                            </div>
-                          </div>
-                        ))}
+                        on that machine, open the owlette app&apos;s menu, choose{' '}
+                        <span className="text-foreground">settings</span>, then{' '}
+                        <span className="text-foreground">hoot mcp</span>, and turn it on. it opens the admin
+                        panel at that machine.
                       </li>
                       <li>
-                        ask the agent to run <code className="font-mono text-foreground">fleet_status</code>: it
-                        names the site and the machine, or says why it can&apos;t act.
+                        a site owner or admin allows it there and sets how far it may go and on which machines.
+                      </li>
+                      <li>
+                        within about a minute the app adds hoot to the AI tools it finds on that machine, such
+                        as Claude Code, Cursor and VS Code. restart the tool, then ask its agent to run{' '}
+                        <code className="font-mono text-foreground">fleet_status</code>: it names the site and the
+                        machine, or says why it can&apos;t act.
                       </li>
                     </ol>
 
                     <p className="text-[11px] text-muted-foreground">
-                      runs on Windows and macOS, with owlette 4.2.0 or later. other MCP clients, and what each
+                      runs on Windows and macOS, with owlette 4.2.2 or later. other MCP clients, and what each
                       machine may do:{' '}
                       <a
                         href="/docs/agent/hoot-mcp"
