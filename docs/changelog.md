@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.2.2] - 2026-11-14
+
 ### changed — hoot mcp is turned on from the machine's settings
 
 The desktop app has a settings window: appearance and start on login move into it from the menu, and **connect an ai agent** is replaced by a **hoot mcp** switch (not on Linux; macOS also gets a permissions page). Turning it on asks a site admin, whose admin panel opens at that machine with a card that allows it. Once allowed, the app adds hoot to the AI tools it finds for the signed-in user (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex) within about a minute, each one untickable, and removes it when an admin or the machine turns it off. A different `hoot` entry or a config file it cannot parse is reported, never overwritten. The Windows installer has an optional "AI tools" page that offers "allow it to use hoot" after pairing. A machine can drop its own grant, never raise it (`DELETE /api/agent/fleet/grant`, audited as `fleet_grant_dropped`).
