@@ -16,6 +16,10 @@ sign-ins are now recorded: who signed in and with what (a password, Google or a 
 
 a check runs every five minutes and flags what looks wrong. flagged at once and emailed: a user made a superadmin, 2fa turned off or force-reset for a user, a site deleted, five failed sign-in or second-factor attempts for one user within 15 minutes, five destructive changes by one actor within 15 minutes, and a superadmin signing in from a network they have not used before. flagged and sent in a daily digest from 16:00 UTC: a site's ownership transferred, a user deleted, 20 refusals for one actor within 15 minutes, and a site owner or admin signing in from a new network. a new network only counts for someone who has signed in before. finding emails and the daily digest go to `ACTIVITY_EMAIL`, or to the admin address when it is not set. the check needs the `activity-watch` scheduled job; without it nothing is flagged and nobody is mailed.
 
+### fixed — settings > hoot describes the hoot mcp switch
+
+The hoot mcp steps under **settings** > **hoot** in the dashboard pointed to a desktop menu item 4.2.2 removed and gave a command to paste. They now describe the switch in the owlette app's settings and the admin's allow, and link to the guide for other MCP clients.
+
 ## [4.2.2] - 2026-11-14
 
 ### changed — hoot mcp is turned on from the machine's settings

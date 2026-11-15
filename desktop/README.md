@@ -720,7 +720,7 @@ the network.
 
 ### Appearance
 
-The operator picks system, dark or light from `appearance` in the app menu. It is
+The operator picks system, dark or light from `appearance` under settings → general. It is
 stored in `layout.json` in the per-user app data directory
 (`%APPDATA%\app.owlette.desktop` on Windows) as `{"appearance": {"theme": "system"}}`
 (`system` when absent), and it is the **window** theme, set from Rust; the

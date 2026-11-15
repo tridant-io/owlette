@@ -68,7 +68,7 @@ test('the saved key is not offered for showing, and hoot mcp sits under hoot api
   await page.getByRole('button', { name: 'show key' }).click();
   await expect(key).toHaveAttribute('type', 'text');
 
-  await expect(page.getByRole('button', { name: 'copy the Windows command' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'copy the macOS command' })).toBeVisible();
+  await expect(page.getByText(/open the owlette app's menu/)).toBeVisible();
+  await expect(page.getByRole('button', { name: /^copy the .* command$/ })).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'the hoot mcp guide' })).toHaveAttribute('href', '/docs/agent/hoot-mcp');
 });
