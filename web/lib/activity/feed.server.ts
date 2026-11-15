@@ -1,9 +1,11 @@
 import { Timestamp } from 'firebase-admin/firestore';
+import logger from '@/lib/logger';
 import { fromChangeDoc, fromDecisionDoc, fromFindingDoc } from './rows';
 import {
   ACTIVITY_FINDINGS_COLLECTION,
   AUTH_CAPABILITIES,
   MUTATION_KINDS,
+  ROUTINE_ACTIONS,
   type ActivityRow,
   type ActivityView,
 } from './types';
@@ -37,6 +39,8 @@ interface Source {
   map: (doc: Snap) => ActivityRow;
   // present = the query cannot filter this, so docs are read in batches and filtered here
   keep?: (row: ActivityRow, data: Data) => boolean;
+  // keep drops few rows, so the first batch is only as big as the page needs
+  sparse?: boolean;
 }
 
 interface Cursor {
@@ -85,6 +89,7 @@ async function loadActors(db: Db, userId: string): Promise<string[]> {
 
 const isMutation = (data: Data) => (MUTATION_KINDS as readonly string[]).includes(data.event?.kind);
 const isRefused = (data: Data) => REFUSED.includes(data.outcome);
+const notRoutine = (row: ActivityRow) => !ROUTINE_ACTIONS.has(row.action);
 const isAuth = (data: Data) => (AUTH_CAPABILITIES as readonly string[]).includes(data.capability);
 
 function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null): Source[] {
@@ -99,18 +104,22 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
       sources.push({
         build: (u) => byMs(db.collection('sites').doc(siteId).collection('audit_log'), 'recordedAt', u),
         map: fromChangeDoc,
-        keep: (_r, d) => isMutation(d) && (!actors || actors.includes(d.event?.actor)),
+        sparse: true,
+        keep: (r, d) => notRoutine(r) && isMutation(d) && (!actors || actors.includes(d.event?.actor)),
       });
     } else if (actors) {
       sources.push({
         build: (u) => byMs(group.where('event.actor', 'in', actors), 'recordedAt', u),
         map: fromChangeDoc,
-        keep: (_r, d) => isMutation(d),
+        keep: (r, d) => notRoutine(r) && isMutation(d),
+        sparse: true,
       });
     } else {
       sources.push({
         build: (u) => byMs(group.where('event.kind', 'in', MUTATION_KINDS), 'recordedAt', u),
         map: fromChangeDoc,
+        keep: notRoutine,
+        sparse: true,
       });
     }
   }
@@ -193,7 +202,8 @@ async function readSource(source: Source, upper: number | null, need: number, sk
   let last: Snap | null = null;
   let lastAt = 0;
   while (scanned < SCAN_CAP) {
-    let query = source.build(upper).limit(SCAN_BATCH);
+    const batch = source.sparse && scanned === 0 ? Math.min(need, SCAN_BATCH) : SCAN_BATCH;
+    let query = source.build(upper).limit(batch);
     if (last) query = query.startAfter(last);
     const { docs } = await query.get();
     for (const doc of docs) {
@@ -203,10 +213,44 @@ async function readSource(source: Source, upper: number | null, need: number, sk
       if (rows.length >= need) return { rows, truncated: true, horizon: null };
     }
     scanned += docs.length;
-    if (docs.length < SCAN_BATCH) return { rows, truncated: false, horizon: null };
+    if (docs.length < batch) return { rows, truncated: false, horizon: null };
     last = docs[docs.length - 1];
   }
   return { rows, truncated: true, horizon: lastAt };
+}
+
+// a swoop host reports a refusal and knows only the viewer id; the person is on that
+// session's start row in the same site's audit log. one equality, so no index
+export async function attachSubjects(db: Db, rows: ActivityRow[]): Promise<void> {
+  const wanted = new Map<string, ActivityRow[]>();
+  for (const row of rows) {
+    const viewerId = row.details.viewerId;
+    if (row.subject || row.actor.type === 'user' || !row.siteId || typeof viewerId !== 'string' || !viewerId) continue;
+    const key = JSON.stringify([row.siteId, viewerId]);
+    wanted.set(key, [...(wanted.get(key) ?? []), row]);
+  }
+  if (wanted.size === 0) return;
+
+  let failed = 0;
+  await Promise.all(
+    [...wanted].map(async ([key, group]) => {
+      const [siteId, viewerId] = JSON.parse(key) as [string, string];
+      try {
+        const snap = await db
+          .collection('sites')
+          .doc(siteId)
+          .collection('audit_log')
+          .where('metadata.viewerId', '==', viewerId)
+          .limit(10)
+          .get();
+        const start = snap.docs.map((d) => d.data()?.actor).find((a) => a?.type === 'user' && a.userId);
+        if (start) for (const row of group) row.subject = { type: 'user', id: String(start.userId) };
+      } catch {
+        failed += 1;
+      }
+    }),
+  );
+  if (failed) logger.warn('[activity] could not name the viewer of some rows', { context: 'activity', data: { failed } });
 }
 
 const newestFirst = (a: ActivityRow, b: ActivityRow) => b.at - a.at || (a.id < b.id ? 1 : -1);
@@ -240,6 +284,7 @@ export async function loadActivityPage(
     .filter((r) => horizon === null || r.at > horizon)
     .sort(newestFirst);
   const rows = merged.slice(0, opts.pageSize);
+  await attachSubjects(db, rows);
 
   const overflow = merged.length > opts.pageSize;
   if (!overflow && !truncated) return { rows, nextPageToken: '' };

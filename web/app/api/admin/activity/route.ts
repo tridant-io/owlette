@@ -64,13 +64,9 @@ export async function GET(request: NextRequest) {
       pageToken,
     });
 
-    const labels = await loadUserLabels(
-      db,
-      page.rows.filter((r) => r.actor.type === 'user').map((r) => r.actor.id),
-    );
-    for (const row of page.rows) {
-      if (row.actor.type === 'user') row.actor.label = labels[row.actor.id];
-    }
+    const people = page.rows.flatMap((r) => [r.actor, ...(r.subject ? [r.subject] : [])]).filter((a) => a.type === 'user');
+    const labels = await loadUserLabels(db, people.map((a) => a.id));
+    for (const person of people) person.label = labels[person.id];
 
     return applyAuthDeprecations(
       NextResponse.json(withPaginationFields({ rows: page.rows }, page.nextPageToken)),

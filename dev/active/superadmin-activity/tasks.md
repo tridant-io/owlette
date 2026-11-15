@@ -467,3 +467,5 @@ jest files and report the output. Do not commit or push.
   findings roll into the next).
 - NOT verified anywhere yet: real indexes (the emulator enforces none), real mail
   delivery and the recipient, the live dev site, the ASN header on dev and prod.
+- 2026-11-15: owner on dev asked why a swoop host refusal named no user; fixed by resolving the viewer from the session's start row (`subject` on the row, `attachSubjects`, machine named from `target.machineId`).
+- 2026-11-15: owner ruling, hide routine fleet session rows: `ROUTINE_ACTIONS` is dropped from the changes source in memory (scan cap and horizon); `loadActivitySince` still reads them.

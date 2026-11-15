@@ -14,6 +14,7 @@ export interface ActivityRow {
   kind: ActivityKind;
   at: number;            // epoch ms
   actor: ActivityActor;
+  subject?: ActivityActor; // the person a row is about when its actor is only the reporter
   siteId: string | null; // null = platform
   action: string;        // 'user_mutated:promoted', 'MACHINE_REMOVE', 'sign_in', a rule id
   outcome: 'allow' | 'deny' | 'error' | null;
@@ -62,5 +63,8 @@ export const MUTATION_KINDS: readonly MutationKind[] = [
   'billing_mutated',
   'talon_mutated',
 ];
+
+// a keep-alive, not something a person or machine did to anything
+export const ROUTINE_ACTIONS: ReadonlySet<string> = new Set(['site_mutated:fleet_session_minted']);
 
 export const AUTH_CAPABILITIES = ['AUTH_SIGN_IN', 'AUTH_SECOND_FACTOR'] as const;

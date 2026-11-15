@@ -150,6 +150,17 @@ const ROWS: ActivityRow[] = [
     details: { route: '/api/sites/x/machines/y', method: 'DELETE' },
   }),
   row({
+    id: 'decision:host',
+    kind: 'refused',
+    actor: { type: 'system', id: 'swoop_host' },
+    subject: { type: 'user', id: 'uid-viv', label: 'viv@lumenevents.example' },
+    action: 'MACHINE_REMOTE_CONTROL',
+    outcome: 'deny',
+    reason: 'input_not_permitted',
+    target: { kind: 'swoop_session', id: 'b646bb7d', machineId: 'TEC-B4A' },
+    details: { event: 'input_not_permitted', sid: 'b646bb7d', viewerId: 'abf1c8d7', target: { kind: 'swoop_session', id: 'b646bb7d', machineId: 'TEC-B4A' } },
+  }),
+  row({
     id: 'platform:signin',
     kind: 'sign_in',
     actor: { type: 'user', id: 'uid-ana', label: 'ana@tridant.example' },
@@ -282,6 +293,30 @@ describe('activity page rows', () => {
 
 describe('an opened row', () => {
   beforeEach(() => fetchMock.mockResolvedValue(jsonResponse({ rows: ROWS })));
+
+  it('leads a host refusal with the person and the machine, and says who reported it', async () => {
+    renderPage();
+    const host = await item('viv@lumenevents.example');
+    expect(host).toHaveTextContent('viv@lumenevents.example was refused: input not permitted on TEC-B4A');
+    expect(host).toHaveTextContent('lumen events · reported by owlette · swoop host');
+    expect(host).not.toHaveTextContent('input not permitted ·');
+  });
+
+  it('shows the viewer, the machine and a readable target, and filters by the subject', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await item('viv@lumenevents.example'));
+
+    const facts = Object.fromEntries(
+      [...document.querySelectorAll('dt')].map((t) => [t.textContent, t.nextElementSibling?.textContent]),
+    );
+    expect(facts.viewer).toBe('viv@lumenevents.example');
+    expect(facts.machine).toBe('TEC-B4A');
+    expect(facts.target).toBe('swoop session b646bb7d');
+
+    await user.click(screen.getByRole('button', { name: 'everything from this actor' }));
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-viv', { scroll: false });
+  });
 
   it('shows its details and sets the user filter from "everything from this actor"', async () => {
     const user = userEvent.setup();

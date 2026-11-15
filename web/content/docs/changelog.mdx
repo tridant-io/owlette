@@ -16,6 +16,14 @@ sign-ins are now recorded: who signed in and with what (a password, Google or a 
 
 a check runs every five minutes and flags what looks wrong. flagged at once and emailed: a user made a superadmin, 2fa turned off or force-reset for a user, a site deleted, five failed sign-in or second-factor attempts for one user within 15 minutes, five destructive changes by one actor within 15 minutes, and a superadmin signing in from a network they have not used before. flagged and sent in a daily digest from 16:00 UTC: a site's ownership transferred, a user deleted, 20 refusals for one actor within 15 minutes, and a site owner or admin signing in from a new network. a new network only counts for someone who has signed in before. finding emails and the daily digest go to `ACTIVITY_EMAIL`, or to the admin address when it is not set. the check needs the `activity-watch` scheduled job; without it nothing is flagged and nobody is mailed.
 
+### changed — the activity page leaves out a machine's routine fleet session renewals
+
+a machine that may act on others renews its fleet session every ten minutes, and each renewal filled the feed with a `fleet session minted` row. the all and changes views now leave those rows out, so what people and machines did to something is on the first screen. the audit trail still keeps them.
+
+### fixed — the activity page names the person a swoop host's refusal was about
+
+when a swoop host refused a viewer, for example for input it was not allowed to send, the activity page showed only the host as the actor and the session id, so you could not tell who it was or which machine. a refused row now leads with the person, works it out from the session's start, and names the machine: `sam@example.com was refused: input not permitted on LOBBY-01`, with `reported by owlette · swoop host` under it. opening the row shows the viewer and the machine, and **everything from this actor** filters by that person. the user filter itself still skips these rows, because the host is their actor.
+
 ### fixed — settings > hoot describes the hoot mcp switch
 
 The hoot mcp steps under **settings** > **hoot** in the dashboard pointed to a desktop menu item 4.2.2 removed and gave a command to paste. They now describe the switch in the owlette app's settings and the admin's allow, and link to the guide for other MCP clients.

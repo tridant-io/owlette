@@ -69,6 +69,7 @@ function ActivityItem({
   onToggle: () => void;
   onFilter: (next: { userId?: string; siteId?: string }) => void;
 }) {
+  const person = row.subject ?? row.actor;
   return (
     <li>
       <button
@@ -104,8 +105,8 @@ function ActivityItem({
             ))}
           </dl>
           <div className="flex flex-wrap gap-2">
-            {row.actor.type === 'user' && row.actor.id && (
-              <Button variant="outline" size="sm" onClick={() => onFilter({ userId: row.actor.id })}>
+            {person.type === 'user' && person.id && (
+              <Button variant="outline" size="sm" onClick={() => onFilter({ userId: person.id })}>
                 everything from this actor
               </Button>
             )}

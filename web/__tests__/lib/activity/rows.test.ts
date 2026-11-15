@@ -94,6 +94,14 @@ describe('fromDecisionDoc', () => {
     expect(actor({ type: 'system', name: 'swoop_host' })).toEqual({ type: 'system', id: 'swoop_host' });
   });
 
+  it('names the person a system row is about when the host supplied a uid', () => {
+    const host = { ...base, actor: { type: 'system', name: 'swoop_host' }, metadata: { event: 'input_not_permitted', uid: 'u7' } };
+    expect(fromDecisionDoc(doc('d', host), 'decision', 'site-a').subject).toEqual({ type: 'user', id: 'u7' });
+    expect(fromDecisionDoc(doc('d', { ...host, metadata: {} }), 'decision', 'site-a').subject).toBeUndefined();
+    const user = { ...base, metadata: { uid: 'u7' } };
+    expect(fromDecisionDoc(doc('d', user), 'decision', 'site-a').subject).toBeUndefined();
+  });
+
   it('maps a sign-in row with its network', () => {
     const row = fromDecisionDoc(
       doc('s1', {
