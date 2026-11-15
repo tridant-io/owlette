@@ -18,6 +18,7 @@ const mockAssertActiveUser = jest.fn();
 const mockMarkSessionMfaVerified = jest.fn();
 const mockMintDeviceTrustToken = jest.fn();
 const mockCreateTrustedDevice = jest.fn();
+const mockSpendMfaAttempt = jest.fn();
 
 /** Keep in sync with the real DEVICE_TRUST_COOKIE constant. */
 const TRUST_COOKIE = 'owlette_device_trust';
@@ -29,7 +30,10 @@ jest.mock('@sentry/nextjs', () => ({
 
 jest.mock('@/lib/withRateLimit', () => ({
   withRateLimit: (h: unknown) => h,
+  rateLimitedResponse: () => new Response(null, { status: 429 }),
 }));
+
+jest.mock('@/lib/authEvents.server');
 
 jest.mock('@/lib/apiAuth.server', () => {
   class ApiAuthError extends Error {
@@ -53,7 +57,7 @@ jest.mock('@/lib/totp', () => ({
 
 // the attempt budget and the spent-step record are covered in code-attempts.test.ts
 jest.mock('@/lib/mfaAttempts.server', () => ({
-  spendMfaAttempt: async () => ({ success: true }),
+  spendMfaAttempt: async () => mockSpendMfaAttempt(),
   consumeTotpCode: async (_uid: string, code: string, secret: string) => mockVerifyTOTP(code, secret),
 }));
 
@@ -147,6 +151,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 import { POST } from '@/app/api/mfa/verify-login/route';
 import { createMockRequest } from '../helpers/utils';
+import { recordAuthFailure, recordSecondFactorPassed } from '@/lib/authEvents.server';
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -161,6 +166,7 @@ beforeEach(() => {
   };
   txOpsLog = [];
 
+  mockSpendMfaAttempt.mockResolvedValue({ success: true });
   mockRequireSessionUser.mockResolvedValue('user-1');
   mockAssertActiveUser.mockImplementation(async () => {
     if (!docState.exists) {
@@ -227,6 +233,61 @@ describe('POST /api/mfa/verify-login — backup code single-use under concurrenc
     const r2 = await POST(verifyReq());
     expect(r2.status).toBe(400);
     expect(docState.data.backupCodes).toEqual(['hash-bk-2']);
+  });
+});
+
+describe('POST /api/mfa/verify-login — failures are recorded for the activity feed', () => {
+  const failure = (reason: string, method: string) => ({
+    userId: 'user-1',
+    capability: 'AUTH_SECOND_FACTOR',
+    event: 'second_factor_failed',
+    reason,
+    method,
+    role: undefined,
+  });
+
+  it('records a backup code that matches nothing', async () => {
+    mockVerifyBackupCode.mockReturnValue(false);
+    const res = await POST(verifyReq());
+    expect(res.status).toBe(400);
+    expect(recordAuthFailure).toHaveBeenCalledWith(expect.anything(), failure('invalid_backup_code', 'backup_code'));
+  });
+
+  it('records a wrong TOTP code', async () => {
+    docState.data.mfaSecret = 'PLAINSECRET';
+    mockVerifyTOTP.mockReturnValue(false);
+    const res = await POST(
+      createMockRequest('http://localhost/api/mfa/verify-login', {
+        method: 'POST',
+        body: { userId: 'user-1', code: '123456' },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(recordAuthFailure).toHaveBeenCalledWith(expect.anything(), failure('invalid_totp_code', 'totp'));
+  });
+
+  it('records an exhausted attempt budget', async () => {
+    mockSpendMfaAttempt.mockResolvedValue({ success: false });
+    const res = await POST(verifyReq());
+    expect(res.status).toBe(429);
+    expect(recordAuthFailure).toHaveBeenCalledWith(expect.anything(), failure('attempts_exceeded', 'backup_code'));
+  });
+
+  it('records no failure on success, but the passed second factor', async () => {
+    const res = await POST(verifyReq());
+    expect(res.status).toBe(200);
+    expect(recordAuthFailure).not.toHaveBeenCalled();
+    expect(recordSecondFactorPassed).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      method: 'backup_code',
+      role: undefined,
+    });
+  });
+
+  it('does not record a passed second factor for a failure', async () => {
+    mockVerifyBackupCode.mockReturnValue(false);
+    await POST(verifyReq());
+    expect(recordSecondFactorPassed).not.toHaveBeenCalled();
   });
 });
 

@@ -33,6 +33,7 @@ const PLATFORM_ROUTES = [
   '/admin/installers',
   '/admin/email',
   '/admin/presets',
+  '/admin/activity',
 ];
 
 const ADMIN_ROUTES = [...SITE_SCOPED_ROUTES, ...PLATFORM_ROUTES];

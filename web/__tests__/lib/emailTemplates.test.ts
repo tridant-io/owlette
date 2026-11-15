@@ -19,11 +19,14 @@ import {
   safeEmailSubject,
   emailDataTable,
   wrapEmailLayout,
+  buildActivityFindingEmail,
+  buildActivityDigestEmail,
   buildDisplayDigestEmail,
   buildEmailVerificationEmail,
   buildIssueEmail,
   buildMfaFactorNoticeEmail,
   buildPasswordResetEmail,
+  type ActivityEmailFinding,
   type IssueEmailInput,
   type PendingDisplayAlert,
 } from '@/lib/emailTemplates.server';
@@ -41,6 +44,16 @@ const issueInput = (over: Partial<IssueEmailInput> = {}): IssueEmailInput => ({
   envLabel: 'DEVELOPMENT',
   attachments: { screenshots: 3, videos: 1, logs: true },
   issueUrl: 'https://dev.owlette.app/admin/issues/42',
+  ...over,
+});
+
+const finding = (over: Partial<ActivityEmailFinding> = {}): ActivityEmailFinding => ({
+  title: 'second factor burst',
+  severity: 'high',
+  summary: 'dana failed 6 second-factor checks in 4 minutes.',
+  subject: 'dana@studio.example',
+  facts: [['user', 'dana@studio.example'], ['attempts', '6']],
+  at: Date.UTC(2026, 10, 15, 14, 32),
   ...over,
 });
 
@@ -232,6 +245,94 @@ describe('buildIssueEmail', () => {
     expect(html).not.toContain('>machine<');
     expect(html).not.toContain('>site<');
     expect(html).toContain('dashboard · 4.1.13');
+  });
+});
+
+describe('buildActivityFindingEmail', () => {
+  const build = (f = finding()) =>
+    buildActivityFindingEmail({ envLabel: 'DEVELOPMENT', finding: f, activityUrl: 'https://dev.owlette.app/admin/activity?x=1&y=2' });
+
+  it('puts the env, title and subject in the subject', () => {
+    expect(build().subject).toBe('[DEVELOPMENT] owlette activity · second factor burst — dana@studio.example');
+  });
+
+  it('keeps a header-injection title on one line', () => {
+    const { subject } = build(finding({ title: 'burst\r\nBcc: evil@x' }));
+    expect(subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('escapes a hostile summary and fact', () => {
+    const { html } = build(
+      finding({ summary: '<img src=x onerror=1>', facts: [['user', '<b>x</b>']] }),
+    );
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<b>x</b>');
+    expect(html).toContain('&lt;img src=x');
+  });
+
+  it('shows the severity, one button and the escaped link fallback', () => {
+    const { html } = build();
+    expect(html).toContain('>high<');
+    expect(html.match(/open in activity/g)).toHaveLength(1);
+    expect(html).toContain('admin/activity?x=1&amp;y=2');
+  });
+
+  it('is platform mail: no unsubscribe or manage-alerts link', () => {
+    const { html } = build();
+    expect(html).not.toContain('unsubscribe');
+    expect(html).not.toContain('manage alerts');
+  });
+});
+
+describe('buildActivityDigestEmail', () => {
+  const build = (over: { findings?: ActivityEmailFinding[]; alreadyEmailed?: ActivityEmailFinding[] } = {}) =>
+    buildActivityDigestEmail({
+      envLabel: 'DEVELOPMENT',
+      findings: [finding({ severity: 'digest', title: 'refusal burst' }), finding({ severity: 'digest', title: 'user deleted' })],
+      alreadyEmailed: [],
+      periodEnd: Date.UTC(2026, 10, 15, 14, 0),
+      activityUrl: 'https://dev.owlette.app/admin/activity?view=flagged',
+      ...over,
+    });
+
+  it('counts the findings in the subject and the pill', () => {
+    const { subject, html } = build();
+    expect(subject).toBe('[DEVELOPMENT] owlette activity · daily digest — 2 to review');
+    expect(html).toContain('2 to review');
+  });
+
+  it('states the period and the empty-day line', () => {
+    const { html } = build();
+    expect(html).toContain('to 14:00 utc on 2026-11-15');
+    expect(html).toContain('14:32 utc');
+    expect(html).toContain('no digest is sent on a day with nothing to review');
+    expect(html).toContain('open flagged activity');
+  });
+
+  it('without alreadyEmailed: no list and no "listed at the end"', () => {
+    const { html } = build();
+    expect(html).not.toContain('already emailed in this period');
+    expect(html).not.toContain('listed at the end');
+  });
+
+  it('with alreadyEmailed: lists them as "title · subject"', () => {
+    const { html } = build({ alreadyEmailed: [finding({ title: 'mfa removed', subject: 'sam' })] });
+    expect(html).toContain('already emailed in this period');
+    expect(html).toContain('listed at the end');
+    expect(html).toContain('mfa removed · sam');
+  });
+
+  it('escapes hostile titles and keeps a header-injection title out of the subject', () => {
+    const { html, subject } = build({ findings: [finding({ title: '<i>x</i>\r\nBcc: e', summary: '<u>y</u>' })] });
+    expect(html).not.toContain('<i>x');
+    expect(html).not.toContain('<u>y');
+    expect(subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('is platform mail: no unsubscribe or manage-alerts link', () => {
+    const { html } = build();
+    expect(html).not.toContain('unsubscribe');
+    expect(html).not.toContain('manage alerts');
   });
 });
 

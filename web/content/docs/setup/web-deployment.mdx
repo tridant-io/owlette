@@ -156,7 +156,7 @@ add the Vercel domain, and any custom domain, to Firebase **Authentication** →
 
 ### step 5: scheduled endpoints
 
-Vercel Cron sends no custom headers, and nine of the ten scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
+Vercel Cron sends no custom headers, and ten of the eleven scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
 
 ---
 
@@ -279,6 +279,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
+| `/api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret` | flags risky activity (a new superadmin, removed 2fa, a deleted site, bursts of failures), emails each high finding, and sends a daily digest |
 | `/api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer` | the autonomous hoot escalation backstop |
 
 `/api/cron/plan-trials` takes `X-Cron-Secret` too but is never scheduled: it starts the trial for existing accounts, run by hand once per environment before plans are switched on. it is a dry run unless called with `?apply=1`, and each call covers 100 accounts; repeat it with the `nextPageToken` it returns, as `?pageToken=`, until that is null.
@@ -397,6 +398,21 @@ X-Cron-Secret: <CRON_SECRET value>
 
 `usersNotified` counts owners with at least one key due a notice; `emailsSent` is how many of those Resend accepted. recipients who turned off **api key expiry** in account settings account for any gap. each rung is stamped on the key *before* the email goes out, so a duplicate schedule or a scheduler retry never sends the same notice twice.
 
+### activity watch
+
+scans platform activity every five minutes, stores what the detection rules flag, and emails each high finding. from 16:00 utc it also sends one daily digest of the findings nobody has been mailed about. mail goes to `ACTIVITY_EMAIL`, or to `ADMIN_EMAIL_PROD` / `ADMIN_EMAIL_DEV` when that is unset. without the job nothing is flagged and nobody is mailed:
+
+```text
+GET https://<your-app>/api/cron/activity-watch
+X-Cron-Secret: <CRON_SECRET value>
+```
+
+```json
+{"ok":true,"rowsScanned":42,"findingsCreated":1,"emailsSent":1}
+```
+
+each finding email and the daily digest are claimed before they are sent, so a duplicate schedule or a retry never sends the same email twice. a missed run is covered by the next, up to 24 hours back.
+
 ### public status-page ping
 
 ```text
@@ -468,7 +484,7 @@ requirements:
 - [ ] install command `npm ci --legacy-peer-deps`, build command `npm run build`, start command `npm start` where the host asks for one
 - [ ] `CRON_SECRET` configured
 - [ ] every route in [scheduled endpoints](#scheduled-endpoints) registered, in **each** environment
-- [ ] the `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>`; the other nine take `X-Cron-Secret`
+- [ ] the `/api/hoot/escalation` job sends `Authorization: Bearer <CRON_SECRET>`; the other ten take `X-Cron-Secret`
 
 ### after deploying
 

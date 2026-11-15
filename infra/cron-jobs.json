@@ -198,6 +198,30 @@
       "note": "Any hour works — the ladder is measured in whole days from expiresAt, not against wall-clock time. Each rung is stamped before its email is sent, so a duplicate registration or a scheduler retry cannot re-send a rung; the accepted cost is that a send failing after the stamp loses that one notice, and the next rung down still fires."
     },
     {
+      "id": "cron-activity-watch",
+      "path": "/api/cron/activity-watch",
+      "method": "GET",
+      "authHeader": "X-Cron-Secret",
+      "authScheme": "raw",
+      "authEnvVar": "CRON_SECRET",
+      "schedule": "*/5 * * * *",
+      "cadenceLabel": "every 5 minutes",
+      "minTimeoutSeconds": 60,
+      "environments": ["dev", "prod"],
+      "urls": {
+        "dev": "https://dev.owlette.app/api/cron/activity-watch",
+        "prod": "https://owlette.app/api/cron/activity-watch"
+      },
+      "purpose": "Scans the platform's activity since the last pass (changes, refusals, sign-ins, site deletions) with the detection rules, stores each new finding under global/activity_watch/findings, emails every new high finding to ACTIVITY_EMAIL (else the admin address), and from 16:00 UTC once a day emails a digest of the findings not yet reviewed. Scans from the older of the last scanned time and 20 minutes ago, never more than 24 hours back, so a missed run is covered by the next.",
+      "failureMode": {
+        "silent": true,
+        "description": "Nothing watches the platform. A superadmin promotion, a removed second factor, a deleted site or a burst of failed sign-ins is still recorded in the audit log but nobody is mailed and nothing is flagged on the activity page, so the first sign is whatever the attacker did next."
+      },
+      "detectedBy": "nothing — no status component covers this route. Read the response body: rowsScanned is non-zero on any busy platform, and global/activity_watch.scannedThrough should be within a few minutes of now. A scannedThrough older than 24 hours means the job stopped and the next run can only look back a day.",
+      "sourceFile": "web/app/api/cron/activity-watch/route.ts",
+      "note": "Safe to run twice or late: findings have deterministic ids, and each finding email and the daily digest is claimed before it is sent, so a retry never mails the same finding twice; the accepted cost is that a send failing after the claim loses that one email. ACTIVITY_EMAIL is optional."
+    },
+    {
       "id": "cron-talons",
       "path": "/api/cron/talons",
       "method": "GET",

@@ -22,6 +22,7 @@ import { createSession } from '@/lib/sessionManager.server';
 import { SESSION_LIFETIME_DAYS } from '@/lib/sessionCutoff.server';
 import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import { apiError } from '@/lib/apiErrorResponse';
+import { recordAuthFailure } from '@/lib/authEvents.server';
 import { ApiAuthError, assertActiveUser } from '@/lib/apiAuth.server';
 import {
   getRpId,
@@ -104,6 +105,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     });
 
     if (!verification.verified) {
+      recordAuthFailure(request, {
+        userId,
+        capability: 'AUTH_SIGN_IN',
+        event: 'sign_in_failed',
+        reason: 'passkey_assertion_failed',
+        method: 'passkey',
+      });
       return NextResponse.json(
         { error: 'Authentication verification failed' },
         { status: 400 }

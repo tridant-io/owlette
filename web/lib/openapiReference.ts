@@ -221,6 +221,10 @@ function inferAuthScopeNotes(path: string, method: string, operation: JsonRecord
     return protectedNotes([`installer=*:${permission}`], 'Requires superadmin installer access.');
   }
 
+  if (path === '/api/admin/activity') {
+    return protectedNotes(['user=*:read'], 'Requires superadmin user-management access; the activity feed is visible only to owlette support.');
+  }
+
   if (path.startsWith('/api/admin/issues')) {
     return protectedNotes([`issue=*:${permission}`], 'Requires superadmin issue access; issues are visible only to owlette support.');
   }
