@@ -29,7 +29,7 @@ Every shot is taken twice, once per Playwright project, against the same window.
 capture opens dark: `snapshotLayout` pins `appearance.theme` to `dark` in the layout file,
 because with nothing stored the window follows the os and a machine in light mode would
 otherwise photograph the dark set light. The `light` project then switches the live window
-the way the app menu does, through the `set_appearance_theme` command, waits for `<html>`
+the way the settings window does, through the `set_appearance_theme` command, waits for `<html>`
 to carry `light`, and writes `agent-*-light.png` beside each dark file.
 
 - **The binary must know the command.** An app built before light mode has no

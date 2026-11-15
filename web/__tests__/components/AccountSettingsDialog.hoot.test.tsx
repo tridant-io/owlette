@@ -106,21 +106,15 @@ describe('settings > hoot: hoot api and hoot mcp', () => {
     expect(screen.getByRole('heading', { name: /^hoot mcp/ })).toBeInTheDocument();
   });
 
-  it('gives developers the commands that register the local MCP server, and the guide', () => {
+  it('walks developers through the desktop switch, with no command to paste, and links the guide', () => {
     mockSavedKey(false);
     renderHoot();
 
     expect(screen.getByText(/for developers/)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'claude mcp add hoot -- "C:\\ProgramData\\Owlette\\python\\python.exe" "C:\\ProgramData\\Owlette\\agent\\src\\fleet_mcp.py"',
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "claude mcp add hoot -- '/Library/Application Support/Owlette/runtime/python/bin/python3' '/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py'",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/open the owlette app's menu/)).toBeInTheDocument();
+    expect(screen.getByText(/allows it there/)).toBeInTheDocument();
+    expect(screen.queryByText(/claude mcp add/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/connect an ai agent/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /hoot mcp guide/ })).toHaveAttribute('href', '/docs/agent/hoot-mcp');
   });
 });

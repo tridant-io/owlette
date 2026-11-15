@@ -39,7 +39,7 @@ download the file for the machine's platform, run it with administrator rights, 
 2. click the download button in the header bar.
 3. save the Windows installer (the `.exe` above) to the target machine.
 4. right-click the installer and select **Run as administrator**.
-5. follow the installer wizard.
+5. follow the installer wizard. its optional **AI tools** page, unticked, asks to add hoot to the AI tools on this computer once a site admin allows it — see [hoot mcp](/docs/agent/hoot-mcp#from-the-installer).
 6. the owlette window opens on **join a site**, showing the pairing phrase, the authorization link for the server you installed against, and the environment it belongs to. the agent starts polling immediately. there is no console.
 7. authorize the machine: click **open owlette.app/add** in that window to pair from this machine — the button names `dev.owlette.app` on a `/SERVER=dev` install — or visit the displayed link from your phone or another computer and enter the phrase. pairing completes within seconds of approval.
 8. meanwhile the installer registers and starts the Windows service. this is unconditional — a machine that is never paired still ends up with a running service, it simply has no site to talk to yet.
