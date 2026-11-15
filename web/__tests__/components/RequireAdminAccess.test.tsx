@@ -227,6 +227,7 @@ describe('visibleNavItems', () => {
       'template library',
       'webhooks',
       'issues',
+      'activity',
       'email',
     ]);
   });
@@ -240,7 +241,7 @@ describe('visibleNavItems', () => {
       'people: users',
       'fleet: sites, installers, agent tokens, swoop, hoot',
       'configuration: alerts, schedules, template library, webhooks',
-      'support: issues, email',
+      'support: issues, activity, email',
     ]);
     // a site admin has no people section: users is a superadmin's alone
     expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([

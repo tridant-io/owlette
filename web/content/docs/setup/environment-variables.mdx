@@ -97,6 +97,7 @@ in production, a missing `TURNSTILE_SECRET` refuses every sign-up and password r
 | `ADMIN_EMAIL_PROD` | fallback admin address in production |
 | `ADMIN_EMAIL_DEV` | fallback admin address in development |
 | `ISSUE_EMAIL` | optional. where issue reports are mailed; unset, they go to `ADMIN_EMAIL_PROD` or `ADMIN_EMAIL_DEV` |
+| `ACTIVITY_EMAIL` | optional. where finding emails and the daily digest are mailed; unset, they go to `ADMIN_EMAIL_PROD` or `ADMIN_EMAIL_DEV` |
 | `SEND_WELCOME_EMAIL` | optional. only the exact string `true` sends a welcome email to new users; anything else, or unset, sends none |
 
 ---
@@ -188,7 +189,7 @@ set it on every origin Cloudflare fronts. unset, every request's network reads a
 
 | variable | what it does |
 |----------|-------------|
-| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the ten `/api/cron/*` routes (`api-key-expiry`, `display-alerts`, `health-check`, `plan-daily`, `plan-trials`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
+| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the eleven `/api/cron/*` routes (`activity-watch`, `api-key-expiry`, `display-alerts`, `health-check`, `plan-daily`, `plan-trials`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
 
 `CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent. it has no default: without it an alert email to a person is not sent, since its unsubscribe link cannot be signed, and every unsubscribe link is refused.
 

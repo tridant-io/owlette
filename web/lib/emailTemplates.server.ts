@@ -18,7 +18,9 @@ export const EMAIL_COLORS = {
   text: '#f5f6fa',
   cyan: '#00bcd4',
   amber: '#d4a017',
+  amberText: '#f0c75a',
   red: '#e53935',
+  redText: '#ff9d94',
   blue: '#42a5f5',
 } as const;
 
@@ -567,14 +569,6 @@ export function buildIssueEmail(issue: IssueEmailInput): { subject: string; html
     ...(via ? [['via', via] as [string, string]] : []),
     ...(attached ? [['attached', attached] as [string, string]] : []),
   ];
-  // the span keeps clients from restyling auto-linked addresses and hostnames
-  const factRows = facts
-    .map(
-      ([k, v]) =>
-        `<tr><td valign="top" style="width:76px;padding:7px 12px 7px 0;border-bottom:1px solid ${C.border};color:${C.muted};font-size:13px;line-height:20px;white-space:nowrap;">${k}</td><td valign="top" style="padding:7px 0;border-bottom:1px solid ${C.border};color:${C.text};font-size:13px;line-height:20px;word-break:break-word;"><span style="color:${C.text};text-decoration:none;">${escapeHtml(v)}</span></td></tr>`,
-    )
-    .join('');
-
   const bodyHtml = escapeHtml(excerpt).replace(/\n/g, '<br>');
 
   const content =
@@ -586,7 +580,7 @@ export function buildIssueEmail(issue: IssueEmailInput): { subject: string; html
     `<p style="margin:0 0 8px;font-size:16px;line-height:24px;font-weight:600;color:${C.text};word-break:break-word;">${escapeHtml(issue.title)}</p>` +
     `<p style="margin:0;font-size:14px;line-height:22px;color:${C.text};word-break:break-word;">${bodyHtml}</p>` +
     `</td></tr></table>` +
-    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:20px 0 0;border-collapse:collapse;border-top:1px solid ${C.border};">${factRows}</table>` +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:20px 0 0;border-collapse:collapse;border-top:1px solid ${C.border};">${emailFactRows(facts)}</table>` +
     emailCtaButton(escapeHtml(issue.issueUrl), `open ${label}`);
 
   return { subject, html: wrapEmailLayout(content, { preheader }) };
@@ -650,4 +644,117 @@ export function buildMfaFactorNoticeEmail(args: MfaFactorNotice & { at: Date }):
     <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">if this wasn't you, change your password, remove any factor you don't recognise under account settings &#8594; security, and email support@tridant.io if you can't get back in.</p>
   `;
   return { subject, html: wrapEmailLayout(content, { preheader: subject }) };
+}
+
+// activity emails
+
+export interface ActivityEmailFinding {
+  title: string;
+  severity: 'high' | 'digest';
+  summary: string;
+  /** who or what it is about, for the subject */
+  subject: string;
+  facts: [string, string][];
+  /** epoch ms */
+  at: number;
+}
+
+const utcClock = (ms: number) => `${new Date(ms).toISOString().slice(11, 16)} utc`;
+
+// the span keeps clients from restyling auto-linked addresses and hostnames
+function emailFactRows(facts: [string, string][]): string {
+  const C = EMAIL_COLORS;
+  return facts
+    .map(
+      ([k, v]) =>
+        `<tr><td valign="top" style="width:76px;padding:7px 12px 7px 0;border-bottom:1px solid ${C.border};color:${C.muted};font-size:13px;line-height:20px;white-space:nowrap;">${escapeHtml(k)}</td><td valign="top" style="padding:7px 0;border-bottom:1px solid ${C.border};color:${C.text};font-size:13px;line-height:20px;word-break:break-word;"><span style="color:${C.text};text-decoration:none;">${escapeHtml(v)}</span></td></tr>`,
+    )
+    .join('');
+}
+
+function activityPill(label: string, accent: string, text: string): string {
+  const C = EMAIL_COLORS;
+  return `<span style="display:inline-block;margin:0 0 0 10px;padding:3px 10px;border:1px solid ${accent};border-radius:999px;background-color:${C.altRow};color:${text};font-size:12px;line-height:16px;font-weight:600;letter-spacing:0;vertical-align:4px;">${label}</span>`;
+}
+
+function activityHeading(title: string, pill: string): string {
+  return `<table width="100%" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="padding:0 0 20px;"><h1 style="margin:0;font-size:22px;line-height:30px;font-weight:700;color:${EMAIL_COLORS.text};letter-spacing:-0.2px;">${escapeHtml(title)}${pill}</h1></td></tr></table>`;
+}
+
+/**
+ * The email a superadmin gets the moment a high finding is detected. Platform mail: no
+ * unsubscribe and no manage-alerts link, because the recipient is not a site user.
+ */
+export function buildActivityFindingEmail(args: {
+  envLabel: string;
+  finding: ActivityEmailFinding;
+  activityUrl: string;
+}): { subject: string; html: string } {
+  const C = EMAIL_COLORS;
+  const { finding: f } = args;
+  const subject = safeEmailSubject(`[${args.envLabel}] owlette activity · ${f.title} — ${f.subject}`);
+  const url = escapeHtml(args.activityUrl);
+
+  const content =
+    activityHeading(f.title, activityPill(f.severity, C.red, C.redText)) +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:separate;"><tr><td bgcolor="${C.bodyBg}" style="padding:18px 20px;background-color:${C.bodyBg};border:1px solid ${C.border};border-radius:8px;">` +
+    `<p style="margin:0;font-size:16px;line-height:24px;font-weight:600;color:${C.text};word-break:break-word;">${escapeHtml(f.summary)}</p>` +
+    `</td></tr></table>` +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:20px 0 0;border-collapse:collapse;border-top:1px solid ${C.border};">${emailFactRows(f.facts)}</table>` +
+    emailCtaButton(url, 'open in activity') +
+    emailLinkFallback(url);
+
+  return { subject, html: wrapEmailLayout(content, { preheader: f.summary }) };
+}
+
+/**
+ * The daily email of what was flagged but not urgent. `alreadyEmailed` holds the high
+ * findings of the same period, listed so the digest is the whole picture. Platform mail,
+ * like the finding email.
+ */
+export function buildActivityDigestEmail(args: {
+  envLabel: string;
+  findings: ActivityEmailFinding[];
+  alreadyEmailed: ActivityEmailFinding[];
+  periodEnd: number;
+  activityUrl: string;
+}): { subject: string; html: string } {
+  const C = EMAIL_COLORS;
+  const n = args.findings.length;
+  const subject = safeEmailSubject(`[${args.envLabel}] owlette activity · daily digest — ${n} to review`);
+  const url = escapeHtml(args.activityUrl);
+  const periodLine =
+    `the last 24 hours, to ${utcClock(args.periodEnd)} on ${new Date(args.periodEnd).toISOString().slice(0, 10)}. ` +
+    `anything high was emailed when it happened${args.alreadyEmailed.length ? ' and is listed at the end' : ''}.`;
+
+  const blocks = args.findings
+    .map(
+      (f, i) =>
+        `<tr><td style="padding:12px 16px;${i % 2 === 1 ? `background-color:${C.altRow};` : ''}${i > 0 ? `border-top:1px solid ${C.border};` : ''}">` +
+        `<p style="margin:0;font-size:14px;line-height:22px;font-weight:600;color:${C.text};word-break:break-word;">${escapeHtml(f.title)}</p>` +
+        `<p style="margin:0;font-size:13px;line-height:20px;color:${C.text};word-break:break-word;">${escapeHtml(f.summary)}</p>` +
+        `<p style="margin:2px 0 0;font-size:12px;line-height:18px;color:${C.muted};">${utcClock(f.at)}</p>` +
+        `</td></tr>`,
+    )
+    .join('');
+
+  const emailed = args.alreadyEmailed.length
+    ? `<p style="margin:20px 0 6px;font-size:12px;line-height:18px;font-weight:600;color:${C.muted};">already emailed in this period</p>` +
+      `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;border-top:1px solid ${C.border};">${args.alreadyEmailed
+        .map(
+          (f) =>
+            `<tr><td valign="top" style="width:76px;padding:7px 12px 7px 0;border-bottom:1px solid ${C.border};color:${C.muted};font-size:13px;line-height:20px;white-space:nowrap;">${utcClock(f.at)}</td><td valign="top" style="padding:7px 0;border-bottom:1px solid ${C.border};color:${C.text};font-size:13px;line-height:20px;word-break:break-word;">${escapeHtml(f.title)} · ${escapeHtml(f.subject)}</td></tr>`,
+        )
+        .join('')}</table>`
+    : '';
+
+  const content =
+    activityHeading('daily digest', activityPill(`${n} to review`, C.amber, C.amberText)) +
+    `<p style="margin:0 0 16px;font-size:13px;line-height:20px;color:${C.muted};">${periodLine}</p>` +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:separate;border:1px solid ${C.border};border-radius:8px;overflow:hidden;">${blocks}</table>` +
+    emailed +
+    emailCtaButton(url, 'open flagged activity') +
+    `<p style="margin:0;font-size:12px;line-height:18px;color:${C.muted};">no digest is sent on a day with nothing to review</p>`;
+
+  return { subject, html: wrapEmailLayout(content, { preheader: `${n} to review` }) };
 }

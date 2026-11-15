@@ -103,6 +103,8 @@ describe('/api/openapi', () => {
     expect(findOperation(spec, 'post', '/api/installer/upload')?.['x-required-scopes'])
       .toContain('installer=*:write');
 
+    expect(findOperation(spec, 'get', '/api/admin/activity')?.['x-required-scopes'])
+      .toEqual(['user=*:read']);
     expect(findOperation(spec, 'get', '/api/admin/issues')?.['x-required-scopes'])
       .toEqual(['issue=*:read']);
     expect(findOperation(spec, 'get', '/api/admin/issues/{id}')?.['x-required-scopes'])

@@ -16,6 +16,7 @@ import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/m
 import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { recordAuthFailure, recordSecondFactorPassed } from '@/lib/authEvents.server';
 import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   createTrustedDevice,
@@ -63,8 +64,19 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       );
     }
 
+    const failed = (reason: string) =>
+      recordAuthFailure(request, {
+        userId,
+        capability: 'AUTH_SECOND_FACTOR',
+        event: 'second_factor_failed',
+        reason,
+        method: isBackupCode ? 'backup_code' : 'totp',
+        role: userData.role,
+      });
+
     const attempt = await spendMfaAttempt(userId);
     if (!attempt.success) {
+      failed('attempts_exceeded');
       return rateLimitedResponse(attempt, 'endpoint-rate', MFA_ATTEMPTS_EXCEEDED);
     }
 
@@ -103,6 +115,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
           );
         }
 
+        failed('invalid_backup_code');
         return NextResponse.json(
           { error: 'Invalid verification code' },
           { status: 400 }
@@ -141,6 +154,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     }
 
     if (!isValid) {
+      failed('invalid_totp_code');
       return NextResponse.json(
         { error: 'Invalid verification code' },
         { status: 400 }
@@ -151,6 +165,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // flag used to live in client sessionStorage and was settable without any
     // server check.
     await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
+    recordSecondFactorPassed(request, { userId, method: isBackupCode ? 'backup_code' : 'totp', role: userData.role });
 
     // "Trust this device for 30 days": mint an opaque token, store only its
     // SHA-256 hash, return the raw token in an HTTPOnly cookie that a later

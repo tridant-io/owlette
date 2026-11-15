@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import { defineConfig, devices } from '@playwright/test';
 
+import { E2E_CRON_SECRET } from './e2e/helpers/cron';
 import { E2E_EDGE_SECRET, E2E_ENFORCE_PORT } from './e2e/helpers/edgeNetwork';
 import { E2E_SESSION_SECRET } from './e2e/helpers/signInCeremony';
 import {
@@ -224,6 +225,8 @@ const webServer = {
     // pinned so a developer's .env.local cannot change what the suite sees.
     EDGE_SHARED_SECRET: E2E_EDGE_SECRET,
     SWOOP_NETWORK_BINDING: 'log',
+    // the secret specs send as x-cron-secret to the cron routes
+    CRON_SECRET: E2E_CRON_SECRET,
   },
 };
 

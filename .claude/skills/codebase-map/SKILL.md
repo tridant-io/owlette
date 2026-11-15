@@ -16,7 +16,7 @@ areas and the landmarks; the directories are the full list (`ls web/hooks`,
 - **Public**: `/`, `/demo` (backed by `web/contexts/DemoContext.tsx`), `/for-ai`, `/privacy`, `/terms`, `/legal/dmca`, `/unsubscribe`, `/share/[token]` (public chat share). Route handlers, not pages: `/download`, `/llms.txt`, `/for-ai.json`.
 - **Auth**: `/login`, `/register`, `/forgot-password`, `/reset-password`, `/setup-2fa`, `/verify-2fa`, `/cli/authorize`, `/add` (machine pairing; `/setup` only redirects here).
 - **App**: `/dashboard`, `/deployments`, `/roosts`, `/logs`, `/talons`, `/hoot`, `/hoot/[chatId]`, `/swoop/[siteId]/[machineId]`, `/settings/alerts`, `/settings/api-keys`, `/settings/webhooks`.
-- **Admin**: `/admin/alerts`, `/admin/email`, `/admin/installers`, `/admin/presets`, `/admin/schedules`, `/admin/sites`, `/admin/sites/[siteId]`, `/admin/swoop`, `/admin/tokens` (per-site agent tokens, not API keys), `/admin/users`, `/admin/webhooks`.
+- **Admin**: `/admin/activity`, `/admin/alerts`, `/admin/email`, `/admin/hoot`, `/admin/installers`, `/admin/issues`, `/admin/presets`, `/admin/schedules`, `/admin/sites`, `/admin/sites/[siteId]`, `/admin/swoop`, `/admin/tokens` (per-site agent tokens, not API keys), `/admin/users`, `/admin/webhooks`.
 - **Docs**: `/docs/[[...slug]]` (MDX in `web/content/docs`), `/docs/api` (API reference).
 
 Redirects: `web/next.config.ts` sends `/cortex` → `/hoot` and `/owlette/*` → `/docs/*`;
@@ -29,7 +29,7 @@ Redirects: `web/next.config.ts` sends `/cortex` → `/hoot` and `/owlette/*` →
 The contract is `web/openapi.yaml`, served at `GET /api/openapi` and rendered at
 `/docs/api` — read it rather than walking the tree. The shape:
 
-- **Site-scoped resources** live under `/api/sites/[siteId]/...`: machines, machine detail, commands, logs, agent tokens. There is no `/api/admin/*` any more (removed in 644c57f2).
+- **Site-scoped resources** live under `/api/sites/[siteId]/...`: machines, machine detail, commands, logs, agent tokens. The superadmin-only pages have `/api/admin/*` routes of their own: `/api/admin/activity` (the activity feed) and `/api/admin/issues` (submit-issue triage).
 - **API keys**: `/api/keys` (per user), `/api/account/api-keys` (superadmin account keys). **Webhooks**: `/api/webhooks`, `/api/webhooks/[webhookId]`, `/api/webhooks/test`, `/api/webhooks/probe`.
 - **Auth**: `/api/auth/session` (iron-session), `/api/mfa/*`, `/api/passkeys/*`.
 - **Products**: roost `/api/roosts/*` + `/api/chunks/*`; hoot `/api/hoot/*` + `/api/cortex/*`; installers `/api/installer/*`.

@@ -278,6 +278,7 @@ customer doc does not. Update all three in the same commit.
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/swoop-retention` | `30 4 * * *` (or any quiet time apart from retention) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
+| `GET /api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 
 `/api/cron/plan-trials` is in the registry too, but is never scheduled: it is run by hand once per
 environment just before plans are switched on ([plans-and-billing.md](plans-and-billing.md)).

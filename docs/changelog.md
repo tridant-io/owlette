@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — an activity page that flags risky changes and sign-ins
+
+**admin** → **activity** (superadmins only, under support) is one timeline of what people, API keys and machines did across every site, newest first. its views are **all**, **flagged**, **changes**, **refused** and **sign-ins**, and it can be narrowed to one user (their API keys included) or one site. changes made through hoot are shown under the user they were made for. opening a row shows its details.
+
+sign-ins are now recorded: who signed in and with what (a password, Google or a passkey), who passed a second factor, and who failed one. each row keeps the network the request came from (the internet provider) and a shortened address: its /24 range for IPv4 or /64 range for IPv6, so the full address is never stored. a failed password is not shown, because Firebase handles passwords and never tells owlette; a failed sign-in here means a failed second factor, a failed passkey or a rejected session. routine reads that were allowed are not shown either.
+
+a check runs every five minutes and flags what looks wrong. flagged at once and emailed: a user made a superadmin, 2fa turned off or force-reset for a user, a site deleted, five failed sign-in or second-factor attempts for one user within 15 minutes, five destructive changes by one actor within 15 minutes, and a superadmin signing in from a network they have not used before. flagged and sent in a daily digest from 16:00 UTC: a site's ownership transferred, a user deleted, 20 refusals for one actor within 15 minutes, and a site owner or admin signing in from a new network. a new network only counts for someone who has signed in before. finding emails and the daily digest go to `ACTIVITY_EMAIL`, or to the admin address when it is not set. the check needs the `activity-watch` scheduled job; without it nothing is flagged and nobody is mailed.
+
 ## [4.2.2] - 2026-11-14
 
 ### changed — hoot mcp is turned on from the machine's settings

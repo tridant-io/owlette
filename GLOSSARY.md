@@ -114,6 +114,14 @@ _Avoid_: full member (it reads as the site role `member`), unscoped member
 The only global role that grants anything: owlette's own operators, who run platform-wide pages such as `/admin/installers`.
 _Avoid_: "admin" without saying site admin or superadmin
 
+**Activity**:
+The cross-site timeline a superadmin reads at `/admin/activity`: changes, refusals and sign-ins from every site and the platform, newest first, with each finding shown among them. It is not a site's own activity log (`/logs`), which holds what its machines did. A failed password is not in it, because Firebase never reports one; a failed sign-in is a failed second factor, passkey or session.
+_Avoid_: audit log (the stored records behind it), audit trail, event feed, the site's activity log
+
+**Finding**:
+What a detection rule raises when activity looks risky, such as a new superadmin, removed 2fa, a deleted site or a burst of failures. It is `high` (emailed at once) or `digest` (sent once a day) and is stored under `global/activity_watch/findings`.
+_Avoid_: alert (that is a site's alert rule or alert email), incident, anomaly, detection
+
 **API key**:
 A scoped, expiring `owk_live_` key whose scopes each name a resource, an ID and exact permissions. A key never grants more than its owner holds. Its `maxToolTier` caps the tool tier it can run through the commands route; missing means 1.
 _Avoid_: token, secret, credential

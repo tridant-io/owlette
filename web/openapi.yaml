@@ -417,6 +417,73 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/admin/activity:
+    get:
+      operationId: listActivity
+      tags: [Users]
+      summary: list platform activity (superadmin only)
+      description: |
+        Returns the superadmin activity feed, newest first: changes people and
+        api keys made, refused requests, sign-ins, and flagged findings. Reads
+        are not in the feed, and reading it writes no audit row.
+
+        A page can come back with no rows and a non-empty `next_page_token`
+        when the server stopped scanning early; keep following the token until
+        it is empty.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role, rechecked on every request; an API key additionally needs the
+        superadmin-only `user=*:read`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - name: view
+          in: query
+          required: false
+          description: Which rows to list.
+          schema:
+            type: string
+            enum: [all, flagged, changes, refused, sign-ins]
+            default: all
+        - name: user
+          in: query
+          required: false
+          description: Only this user's activity, including what their api keys did.
+          schema: { type: string }
+        - name: site
+          in: query
+          required: false
+          description: Only activity in this site.
+          schema: { type: string }
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+          description: Maximum rows per page.
+        - $ref: '#/components/parameters/PageTokenQuery'
+      responses:
+        '200':
+          description: A page of activity rows.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityList' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin (`code: forbidden`) or the API key lacks `user=*:read` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/admin/issues:
     get:
       operationId: listIssues
@@ -13292,6 +13359,51 @@ components:
         issues:
           type: array
           items: { $ref: '#/components/schemas/Issue' }
+        next_page_token:
+          type: string
+        nextPageToken:
+          type: string
+          deprecated: true
+    ActivityRow:
+      type: object
+      required: [id, kind, at, actor, siteId, action, outcome, details]
+      properties:
+        id: { type: string, description: 'Source and document id, e.g. `change:<hash>`.' }
+        kind: { type: string, enum: [change, refused, sign_in, flagged] }
+        at: { type: integer, description: Epoch milliseconds. }
+        actor:
+          type: object
+          required: [type, id]
+          properties:
+            type: { type: string, enum: [user, api_key, machine, system, unknown] }
+            id: { type: string }
+            label: { type: string, description: The user's email, else display name. User actors only. }
+        siteId: { type: string, nullable: true, description: Null for platform-level rows. }
+        action: { type: string }
+        outcome: { type: string, nullable: true, enum: [allow, deny, error, null] }
+        reason: { type: string }
+        target:
+          type: object
+          required: [id]
+          properties:
+            kind: { type: string }
+            id: { type: string }
+            machineId: { type: string }
+        network:
+          type: object
+          required: [key, prefix]
+          properties:
+            key: { type: string }
+            prefix: { type: string, nullable: true }
+        severity: { type: string, enum: [high, digest], description: Flagged rows only. }
+        details: { type: object, additionalProperties: true }
+    ActivityList:
+      type: object
+      required: [rows, next_page_token]
+      properties:
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/ActivityRow' }
         next_page_token:
           type: string
         nextPageToken:

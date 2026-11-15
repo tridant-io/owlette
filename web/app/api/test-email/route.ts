@@ -8,6 +8,9 @@ import {
   emailTimestamp,
   buildApiKeyExpiryEmail,
   buildIssueEmail,
+  buildActivityFindingEmail,
+  buildActivityDigestEmail,
+  type ActivityEmailFinding,
   EMAIL_COLORS,
   SEVERITY_COLORS,
   METRIC_LABELS,
@@ -29,6 +32,8 @@ export const EMAIL_TEMPLATES = [
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
   { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
+  { id: 'activity_finding', label: 'activity finding', description: 'superadmin notified of a high-severity finding' },
+  { id: 'activity_digest', label: 'activity digest', description: 'daily superadmin digest of flagged activity' },
   { id: 'welcome', label: 'welcome email', description: 'sent to new users on signup' },
   { id: 'user_signup', label: 'admin signup notification', description: 'admin notified of new user registration' },
 ] as const;
@@ -235,6 +240,45 @@ function buildTemplateEmail(templateId: string): { subject: string; html: string
         envLabel: ENV_LABEL,
         attachments: { screenshots: 3, videos: 1, logs: true },
         issueUrl: `${trustedBaseUrl()}/admin/issues/42`,
+      });
+    }
+
+    case 'activity_finding':
+    case 'activity_digest': {
+      // the real builders, so the preview cannot drift from what the cron sends
+      const high: ActivityEmailFinding = {
+        title: 'second factor burst',
+        severity: 'high',
+        summary: 'dana@studio.example failed 6 second-factor checks in 4 minutes.',
+        subject: 'dana@studio.example',
+        facts: [
+          ['user', 'dana@studio.example'],
+          ['attempts', '6 in 4 minutes'],
+          ['network', 'AS7922 comcast'],
+        ],
+        at: Date.now() - 20 * 60 * 1000,
+      };
+      const activityUrl = `${trustedBaseUrl()}/admin/activity`;
+      if (templateId === 'activity_finding') {
+        return buildActivityFindingEmail({ envLabel: ENV_LABEL, finding: high, activityUrl });
+      }
+      const digestItem = (title: string, subject: string, summary: string, hoursAgo: number): ActivityEmailFinding => ({
+        title,
+        severity: 'digest',
+        summary,
+        subject,
+        facts: [],
+        at: Date.now() - hoursAgo * 60 * 60 * 1000,
+      });
+      return buildActivityDigestEmail({
+        envLabel: ENV_LABEL,
+        findings: [
+          digestItem('new network sign in', 'dana@studio.example', 'first sign in from AS7922 comcast.', 3),
+          digestItem('refusal burst', 'key owk_live_9f2c1ab', '12 refused calls in 10 minutes.', 7),
+        ],
+        alreadyEmailed: [high],
+        periodEnd: Date.now(),
+        activityUrl: `${activityUrl}?view=flagged`,
       });
     }
 

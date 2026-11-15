@@ -17,6 +17,7 @@ import {
   Bell,
   MonitorPlay,
   Inbox,
+  Activity,
 } from 'lucide-react';
 import type { ElementType } from 'react';
 import { HootIcon } from '@/components/icons/HootIcon';
@@ -129,6 +130,14 @@ const NAV_ITEMS: AdminNavItem[] = [
     href: '/admin/issues',
     icon: Inbox,
     description: 'read and triage what users sent',
+    minRole: 'superadmin',
+    group: 'support',
+  },
+  {
+    name: 'activity',
+    href: '/admin/activity',
+    icon: Activity,
+    description: 'everything done across every site, and what was flagged',
     minRole: 'superadmin',
     group: 'support',
   },
