@@ -28,7 +28,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 const EVENT_AGENT_CLI = 'owlette://agent-cli'
 
 /** Mirrors `agent_cli::MODES`. */
-export type AgentMode = 'join' | 'leave' | 'report-issue' | 'reboot-now' | 'dismiss-reboot'
+export type AgentMode = 'join' | 'leave' | 'report-issue' | 'reboot-now' | 'dismiss-reboot' | 'hoot-off'
 
 export interface PairPhrase {
   pairPhrase: string
@@ -141,7 +141,7 @@ export interface AgentRunOutcome {
 }
 
 export interface AgentRunOptions {
-  /** `report-issue` only; every other mode takes none. */
+  /** `report-issue` takes the report; `join` takes `{wantsHoot: true}` or nothing; every other mode none. */
   payload?: unknown
   /** 'join' only: which owlette server to pair against. Omitted = the config's environment. */
   server?: 'dev' | 'prod'

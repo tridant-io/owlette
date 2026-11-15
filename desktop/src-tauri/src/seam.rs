@@ -52,6 +52,7 @@ pub enum Verb {
   Reboot,
   Leave,
   DismissReboot,
+  HootOff,
   ReportIssue,
 }
 
@@ -64,13 +65,14 @@ impl Verb {
       Verb::Reboot => "reboot",
       Verb::Leave => "leave",
       Verb::DismissReboot => "dismiss_reboot",
+      Verb::HootOff => "hoot_off",
       Verb::ReportIssue => "report_issue",
     }
   }
 
   /// How long a started answer may take to reach its terminal event. A pairing
   /// polls for ten minutes; a leave waits out the daemon's cloud client (60 s)
-  /// and one Firestore delete; a dismissal starts an interpreter and makes one
+  /// and one Firestore delete; a dismissal or a hoot drop starts an interpreter and makes one
   /// write; a report starts one, collects the logs and posts them. The rest
   /// answer at once.
   pub fn budget(self) -> Duration {
@@ -80,7 +82,7 @@ impl Verb {
       Verb::ReportIssue => Duration::from_secs(1800),
       Verb::Leave => Duration::from_secs(180),
       Verb::DismissReboot => Duration::from_secs(90),
-      Verb::CancelPair | Verb::Restart | Verb::Reboot => Duration::from_secs(30),
+      Verb::CancelPair | Verb::Restart | Verb::Reboot | Verb::HootOff => Duration::from_secs(30),
     }
   }
 }
@@ -585,6 +587,7 @@ mod tests {
       Verb::Reboot,
       Verb::Leave,
       Verb::DismissReboot,
+      Verb::HootOff,
       Verb::ReportIssue,
     ]
     .iter()
@@ -592,7 +595,7 @@ mod tests {
     .collect();
     assert_eq!(
       names,
-      ["pair", "cancel_pair", "restart", "reboot", "leave", "dismiss_reboot", "report_issue"]
+      ["pair", "cancel_pair", "restart", "reboot", "leave", "dismiss_reboot", "hoot_off", "report_issue"]
     );
   }
 }

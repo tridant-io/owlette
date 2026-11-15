@@ -157,7 +157,7 @@ the model is offered every tool on every machine, and the agent refuses what its
 
 `run_python`, and `run_command` with `user_session: true`, are refused too. the read tools, process control, files, `run_command` with its own allow-list, service control through `systemctl` and `launchctl`, and the system log through `journalctl` and `log show` all work. with nobody signed in, hoot still works, because its tools run in the service; only the tools the owlette app carries out — `show_notification`, and `capture_screenshot` on a Mac — need someone's session. the [hoot tools reference](/docs/reference/hoot-tools#platforms) has the per-tool detail.
 
-**[hoot mcp](/docs/agent/hoot-mcp)**, which lets an AI agent on one machine use hoot's tools on the site's other machines, runs on the acting machine on Windows and macOS. a Linux machine cannot act through it yet, and the desktop app there has no **connect an ai agent** item, but it can be one of the machines acted on.
+**[hoot mcp](/docs/agent/hoot-mcp)**, which lets an AI agent on one machine use hoot's tools on the site's other machines, runs on the acting machine on Windows and macOS. a Linux machine cannot act through it yet, and the desktop app there has no **hoot mcp** page in **settings**, but it can be one of the machines acted on.
 
 ---
 

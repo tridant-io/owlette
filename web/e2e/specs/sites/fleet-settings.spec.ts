@@ -150,6 +150,34 @@ test.describe('owner of site-C, with no second factor', () => {
   });
 });
 
+test.describe('owner of site-C, opening the link a machine asks with', () => {
+  test.use(roleState('owner'));
+
+  test('allows the machine at read in one save, with the site switch off, and keeps the row across a reload', async ({ page }) => {
+    await fleetDoc().delete();
+    await page.goto(`/admin/hoot?site=${SITE_ID}&machine=${SENDER}`);
+
+    const card = page.getByTestId('allow-machine-card');
+    await expect(card.getByText(`allow ${SENDER} to act on other machines`)).toBeVisible();
+    await expect(card.getByRole('combobox', { name: 'how far' })).toHaveText('read');
+    await expect(card.getByRole('combobox', { name: 'on which machines' })).toHaveText('chosen machines');
+    await expect(card.getByText(/this also turns on "let machines act on other machines" for /)).toBeVisible();
+    await card.getByRole('button', { name: 'allow' }).click();
+
+    await expect
+      .poll(async () => (await fleetDoc().get()).data())
+      .toMatchObject({ enabled: true, senders: { [SENDER]: { maxTier: 1 } } });
+    await expect(card).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByTestId('allow-machine-card')).toHaveCount(0);
+    await expect(page.getByTestId(`fleet-sender-${SENDER}`)).toBeVisible();
+    await expect(
+      page.getByTestId(`fleet-sender-${SENDER}`).getByRole('combobox', { name: `${SENDER} how far` }),
+    ).toHaveText('read');
+  });
+});
+
 test.describe('member of site-A', () => {
   test.use(roleState('member'));
 

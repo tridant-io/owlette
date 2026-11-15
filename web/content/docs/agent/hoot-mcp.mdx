@@ -1,7 +1,7 @@
 ---
 title: "hoot mcp"
 description: "hoot mcp lets an AI agent running on one of your machines act on the other machines of its site, with hoot's tools. the owlette agent already installed there is the MCP server, and the machine's pairing is the credential: no API key, no CLI."
-keywords: ["mcp", "model context protocol", "claude code", "ai agent", "mac", "macos", "let machines act on other machines", "machine to machine", "sender", "fleet", "ask_hoot", "list_machines", "fleet_status", "claude mcp add", "no api key", "tool not allowed", "machine not granted"]
+keywords: ["mcp", "model context protocol", "claude code", "ai agent", "mac", "macos", "let machines act on other machines", "machine to machine", "sender", "fleet", "ask_hoot", "list_machines", "fleet_status", "settings", "ai tools", "no api key", "tool not allowed", "machine not granted"]
 ---
 
 an AI agent on a paired machine (Claude Code, or any client that speaks [MCP](https://modelcontextprotocol.io)) connects to the owlette agent installed beside it and gets tools that act on other machines in the same site: read a machine's state, restart a process, change a setting, hand [hoot](/docs/dashboard/hoot) a task.
@@ -16,14 +16,25 @@ the machine the AI agent runs on must be on Windows or macOS, on owlette 4.2.0 o
 
 ## turn it on
 
-you need to own the site or be one of its admins, with the whole site in reach. the site's plan must include hoot.
+turn it on from the machine; a site admin allows it. the site's plan must include hoot.
 
-1. open the **admin panel** and choose **hoot** under **fleet** in the sidebar. with more than one site, pick the site at the top.
-2. turn on **let machines act on other machines**.
-3. in the list of machines under it, turn on the machine the AI agent runs on. it starts out able to read and reaching no machine.
-4. set **how far** it may go and **on which machines**.
+1. in the owlette desktop app on the machine, open the menu, choose **settings**, then **hoot mcp**, and turn the switch on. confirm. on Windows you can instead tick **AI tools** in the installer, see [from the installer](#from-the-installer). hoot mcp is not offered on Linux.
+2. the admin panel opens at this machine, on **hoot** under **fleet**. you need to own the site or be one of its admins. the card **allow &lt;machine&gt; to act on other machines** sets **how far** (read to start) and **on which machines** (chosen machines, none picked to start; the whole site only if you choose it). allowing it also turns on the site's **let machines act on other machines**.
+3. within about a minute, the app adds hoot to the AI tools it finds on the machine. restart a tool that was open.
 
-every change saves as you make it and takes effect within seconds. the agent on a machine you just turned on picks its permission up on its own; nothing is restarted.
+every change saves as you make it and takes effect within seconds. you can also allow a machine yourself from the list under **let machines act on other machines**, without the app: the machine follows the admin panel either way.
+
+<Callout type="info" title="the admin panel decides">
+the app only asks. a machine acts on others when a site admin has allowed it, and stops when one removes it. raising how far a machine may go still needs your second factor.
+</Callout>
+
+### from the installer
+
+on Windows, the installer has an optional **AI tools** page, unticked: **Add hoot to the AI tools on this computer**. it is skipped on silent installs, `/ADD=` installs and upgrades of a paired machine. ticked, once the machine is paired the browser's "machine authorized" screen offers **allow it to use hoot** to a site admin, which opens the same card. ticking it grants nothing by itself.
+
+### turn it off
+
+turn the switch off in the app, or turn the machine off in the admin panel. the app's switch drops this machine's own grant on the server, so the admin panel shows it off, and removes hoot from the AI tools at once. an admin turning it off removes hoot from them within about a minute. a machine can lower its own grant this way, never raise it.
 
 ### how far
 
@@ -61,36 +72,24 @@ anything the signed-in user of that machine runs can use what you gave the machi
 
 ---
 
-## connect an AI agent
+## the AI tools
 
 the MCP server is a script that ships with the owlette agent. it talks to the client over stdio and is started by the client, so there is no port and no service to run.
 
-the owlette desktop app on the machine shows the command below, ready to copy: open its menu and choose **connect an ai agent**.
+once the machine is allowed, the app adds hoot to the AI tools it finds for the signed-in user: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex. the **hoot mcp** page in **settings** shows how far and on which machines, with a **change in the admin panel** link, and a tickbox for each tool found; untick one to leave it out. restart a tool after a change.
 
-### Claude Code
+the app only touches an entry named `hoot` that points at owlette's `fleet_mcp.py`. a different `hoot` is reported and never overwritten, and a config file it cannot parse (VS Code's `mcp.json` with comments, for example) is left alone and reported.
 
-on a Windows machine, in a terminal:
-
-```powershell
-claude mcp add hoot -- "C:\ProgramData\Owlette\python\python.exe" "C:\ProgramData\Owlette\agent\src\fleet_mcp.py"
-```
-
-on a Mac, in Terminal:
-
-```bash
-claude mcp add hoot -- '/Library/Application Support/Owlette/runtime/python/bin/python3' '/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py'
-```
-
-then ask Claude to run `fleet_status`. it answers with the site, the machine and when its session expires, or says why it has none.
+then ask the tool to run `fleet_status`. it answers with the site, the machine and when its session expires, or says why it has none.
 
 ### any other MCP client
 
-register a stdio server with this command and these arguments:
+the page has a copy command for tools the app does not know: register a stdio server with this command and these arguments:
 
 | | Windows | macOS |
 |---|---|---|
 | command | `C:\ProgramData\Owlette\python\python.exe` | `/Library/Application Support/Owlette/runtime/python/bin/python3` |
-| arguments | `C:\ProgramData\Owlette\agent\src\fleet_mcp.py` | `/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py` |
+| arguments | `C:\ProgramData\Owlettegent\srcleet_mcp.py` | `/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py` |
 
 it needs no environment variables and no key.
 
@@ -180,6 +179,7 @@ sequenceDiagram
 ```
 
 - the service asks the server for a **fleet session** with the machine's pairing, and renews it every ten minutes while the machine is allowed. the session lasts 15 minutes and works on these calls only: it cannot do anything else the agent can.
+- the service also writes `ipc/fleet/state.json` beside it, with no secret: whether the machine is allowed, how far, on which machines and the admin link. the app reads it to follow the admin panel.
 - the service keeps the session in `C:\ProgramData\Owlette\ipc\fleet\session.json`, which the signed-in user can read and cannot change. on a Mac it is `/Library/Application Support/Owlette/ipc/fleet/session.json`, readable by owlette's own group and nobody else. the script reads it for each call and never sees the agent's own tokens.
 - when the machine is turned off in the admin panel, unpaired or shut down, the service deletes the file. a machine turned off in the admin panel is told at once, so the file is gone within seconds.
 - a command reaches the other machine the way one sent from the dashboard does, so everything on the [remote commands](/docs/agent/remote-commands) page holds for it.

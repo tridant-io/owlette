@@ -13,7 +13,9 @@
  * its machine row must still exist. revoking its agent tokens and removing the
  * machine both delete those rows, so either stops new sessions at once.
  *
- * 200 `{ token, expiresAt, ttlSeconds }`, `expiresAt` in epoch seconds, no-store.
+ * 200 `{ token, expiresAt, ttlSeconds, grant }`, `expiresAt` in epoch seconds,
+ * no-store. `grant` is the machine's own `{ maxTier, wholeSite, machineIds }`:
+ * `machineIds` is empty when `wholeSite` is true or no machine is named.
  * 401 `unauthorized`: not an agent ID token. 429 `rate_limited` with
  * `Retry-After`: this machine's `fleetSessionRateLimit` is spent. 401
  * `pairing_revoked`: no live agent token or no machine row. 403
@@ -30,31 +32,16 @@
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
-import type { Firestore } from 'firebase-admin/firestore';
 import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import { agentClaims } from '@/lib/agentAuth.server';
-import { isTokenDead } from '@/lib/agentTokens';
 import { apiError } from '@/lib/apiErrorResponse';
 import { problem, problemUnauthorized, ProblemType } from '@/lib/apiErrors';
 import { emitMutation } from '@/lib/auditLogClient';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { fleetGrantFor, loadFleetSettings } from '@/lib/fleet/policy.server';
-import { FLEET_SESSION_TTL_MS, mintFleetSession } from '@/lib/fleet/session.server';
+import { FLEET_SESSION_TTL_MS, machinePairingIsLive, mintFleetSession } from '@/lib/fleet/session.server';
 import { checkRateLimit, fleetSessionRateLimit } from '@/lib/rateLimit';
 import { applyRateLimitCounters, rateLimitedResponse } from '@/lib/withRateLimit';
-
-async function pairingIsLive(db: Firestore, siteId: string, machineId: string): Promise<boolean> {
-  const [tokens, machine] = await Promise.all([
-    db.collection('agent_refresh_tokens')
-      .where('siteId', '==', siteId)
-      .where('machineId', '==', machineId)
-      .get(),
-    db.collection('sites').doc(siteId).collection('machines').doc(machineId).get(),
-  ]);
-  if (!machine.exists) return false;
-  const now = Date.now();
-  return tokens.docs.some((doc) => !isTokenDead(doc.data(), now));
-}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
@@ -70,7 +57,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const db = getAdminDb();
-    if (!(await pairingIsLive(db, siteId, machineId))) {
+    if (!(await machinePairingIsLive(db, siteId, machineId))) {
       return problem({
         type: ProblemType.Unauthorized,
         title: 'unauthorized',
@@ -81,7 +68,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const settings = await loadFleetSettings(siteId, { db });
-    if (!fleetGrantFor(settings, machineId)) {
+    const grant = fleetGrantFor(settings, machineId);
+    if (!grant) {
       return problem({
         type: ProblemType.Forbidden,
         title: 'forbidden',
@@ -113,6 +101,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           // floored, so the client never thinks a session outlives the stored one
           expiresAt: Math.floor(expiresAt / 1000),
           ttlSeconds: FLEET_SESSION_TTL_MS / 1000,
+          grant: { maxTier: grant.maxTier, wholeSite: grant.machineIds === null, machineIds: grant.machineIds ?? [] },
         },
         { headers: { 'Cache-Control': 'no-store' } },
       ),

@@ -14,10 +14,18 @@ const host = vi.hoisted(() => ({
   service: {} as unknown,
   start: vi.fn(),
   startOnLogin: null as boolean | null,
+  setStartupLink: vi.fn(),
+  fleet: null as unknown,
+  fleetError: null as Error | null,
+  tools: [] as unknown[],
+  holdOff: vi.fn(),
+  externalUrl: vi.fn(),
+  agentCli: vi.fn(),
+  synced: [] as ((event: { payload: unknown }) => void)[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: async (command: string, args: { path?: string; json?: unknown; allowElevation?: boolean } = {}) => {
+  invoke: async (command: string, args: { path?: string; json?: unknown; allowElevation?: boolean; enabled?: boolean; url?: string; mode?: string } = {}) => {
     switch (command) {
       case 'path_status':
         return host.status(args.path as string)
@@ -45,6 +53,21 @@ vi.mock('@tauri-apps/api/core', () => ({
         return host.startOnLogin
       case 'appearance_theme':
         return 'system'
+      case 'set_startup_link':
+        return host.setStartupLink(args.enabled)
+      case 'hoot_mcp_command':
+        return ['python.exe', 'fleet_mcp.py']
+      case 'fleet_state':
+        if (host.fleetError) throw host.fleetError
+        return host.fleet
+      case 'hoot_tools':
+        return host.tools
+      case 'hoot_hold_off':
+        return host.holdOff()
+      case 'open_external_url':
+        return host.externalUrl(args.url)
+      case 'agent_cli_start':
+        return host.agentCli(args.mode)
       default:
         return null
     }
@@ -54,6 +77,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: async (event: string, handler: (event: { payload: unknown }) => void) => {
     if (event === 'owlette://file-changed') host.fileChanged.push(handler)
+    if (event === 'hoot://tools-synced') host.synced.push(handler)
     return () => {}
   },
 }))
@@ -124,21 +148,30 @@ beforeEach(() => {
   host.service = { state: 'running', startType: 'auto', statusFile: { exists: false } }
   host.start.mockReset()
   host.startOnLogin = null
+  host.setStartupLink.mockReset().mockImplementation(async (enabled: boolean) => enabled)
+  host.fleet = null
+  host.fleetError = null
+  host.tools = []
+  host.holdOff.mockReset().mockResolvedValue(null)
+  host.externalUrl.mockReset().mockResolvedValue(null)
+  host.agentCli.mockReset().mockResolvedValue('run-1')
+  host.synced = []
 })
 
-describe('start on login in the window menu', () => {
-  /** the menu's checkbox, opened from the keyboard: jsdom has no PointerEvent. */
-  async function startOnLoginItem() {
-    fireEvent.keyDown(screen.getByTestId('app-menu-trigger'), { key: 'Enter' })
-    return screen.findByTestId('menu-start-on-login')
-  }
+/** the settings window, opened from the menu with the keyboard: jsdom has no PointerEvent. */
+async function openSettings() {
+  fireEvent.keyDown(screen.getByTestId('app-menu-trigger'), { key: 'Enter' })
+  fireEvent.click(await screen.findByTestId('menu-settings'))
+  return screen.findByTestId('settings-dialog')
+}
 
+describe('start on login in settings', () => {
   it('shows a change made from the tray once the window comes back', async () => {
     host.startOnLogin = false
     render(<App />)
-    expect((await startOnLoginItem()).getAttribute('aria-checked')).toBe('false')
-    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    await openSettings()
+    const row = () => screen.findByRole('switch', { name: 'start on login' })
+    expect((await row()).getAttribute('aria-checked')).toBe('false')
 
     // the tray rewrote the shortcut while the window was hidden, which does not unmount it
     host.startOnLogin = true
@@ -146,7 +179,151 @@ describe('start on login in the window menu', () => {
       window.dispatchEvent(new Event('focus'))
     })
 
-    expect((await startOnLoginItem()).getAttribute('aria-checked')).toBe('true')
+    await waitFor(async () => expect((await row()).getAttribute('aria-checked')).toBe('true'))
+  })
+
+  it('writes the change through the host', async () => {
+    host.startOnLogin = false
+    render(<App />)
+    await openSettings()
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'start on login' }))
+    await waitFor(() => expect(host.setStartupLink).toHaveBeenCalledWith(true))
+  })
+})
+
+describe('hoot mcp in settings', () => {
+  const GRANTED = { granted: true, maxTier: 1, wholeSite: true, machineIds: [], adminUrl: null }
+  const OFF = {
+    granted: false,
+    maxTier: null,
+    wholeSite: false,
+    machineIds: [],
+    adminUrl: 'https://owlette.app/admin/hoot?site=s&machine=m',
+  }
+
+  function pairedConfig() {
+    host.config = { processes: [PLAYER], firebase: { enabled: true, site_id: 'lab' } }
+  }
+
+  async function hootSwitch() {
+    await openSettings()
+    fireEvent.click(await screen.findByRole('button', { name: /hoot mcp/ }))
+    const toggle = await screen.findByRole('switch', { name: /act on other machines/ })
+    await waitFor(() => expect(toggle.hasAttribute('disabled')).toBe(false))
+    return toggle
+  }
+
+  it('confirms turning on, names the tools found, then opens the admin panel', async () => {
+    pairedConfig()
+    host.fleet = OFF
+    host.tools = [
+      { id: 'a', label: 'claude code', found: true, on: true, configured: false },
+      { id: 'b', label: 'cursor', found: true, on: true, configured: false },
+      { id: 'c', label: 'codex', found: false, on: true, configured: false },
+    ]
+    render(<App />)
+    fireEvent.click(await hootSwitch())
+
+    const confirm = await screen.findByText('turn on hoot mcp?')
+    const body = confirm.closest('[role="dialog"]')!.textContent
+    expect(body).toContain('(claude code and cursor)')
+    expect(body).toContain('machines in lab.')
+    expect(host.externalUrl).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'open admin panel' }))
+    await waitFor(() => expect(host.externalUrl).toHaveBeenCalledWith(OFF.adminUrl))
+    expect(await screen.findByText('waiting for a site admin to allow it.')).toBeTruthy()
+  })
+
+  it('says so when the server has not been heard from, and opens nothing', async () => {
+    pairedConfig()
+    host.fleet = { ...OFF, adminUrl: null }
+    render(<App />)
+    fireEvent.click(await hootSwitch())
+    fireEvent.click(await screen.findByRole('button', { name: 'open admin panel' }))
+
+    expect(await screen.findByText('could not open the admin panel')).toBeTruthy()
+    expect(screen.getByText('owlette has not heard from the server yet.')).toBeTruthy()
+    expect(host.externalUrl).not.toHaveBeenCalled()
+  })
+
+  it('toasts when the state cannot be read after the confirm', async () => {
+    pairedConfig()
+    host.fleet = OFF
+    render(<App />)
+    const toggle = await hootSwitch()
+    fireEvent.click(toggle)
+    const button = await screen.findByRole('button', { name: 'open admin panel' })
+    host.fleetError = new Error('ipc is down')
+    fireEvent.click(button)
+
+    expect(await screen.findByText('could not open the admin panel')).toBeTruthy()
+    expect(await screen.findByText('ipc is down')).toBeTruthy()
+    expect(host.externalUrl).not.toHaveBeenCalled()
+  })
+
+  it('confirms turning off, then holds it off locally and drops the grant', async () => {
+    pairedConfig()
+    host.fleet = GRANTED
+    render(<App />)
+    fireEvent.click(await hootSwitch())
+
+    const confirm = await screen.findByText('turn off hoot mcp?')
+    expect(confirm.closest('[role="dialog"]')!.textContent).toContain('TEST-BOX stops acting on other machines')
+    expect(host.holdOff).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'turn off' }))
+    await waitFor(() => expect(host.holdOff).toHaveBeenCalledOnce())
+    await waitFor(() => expect(host.agentCli).toHaveBeenCalledWith('hoot-off'))
+  })
+
+  it('tells the person when turning off failed', async () => {
+    pairedConfig()
+    host.fleet = GRANTED
+    host.holdOff.mockRejectedValue('the host could not write the hold')
+    render(<App />)
+    fireEvent.click(await hootSwitch())
+    fireEvent.click(await screen.findByRole('button', { name: 'turn off' }))
+
+    expect(await screen.findByText('could not turn off hoot mcp')).toBeTruthy()
+    expect(screen.getByText('the host could not write the hold')).toBeTruthy()
+  })
+
+  it('toasts what the host added when the grant lands, and what it could not', async () => {
+    render(<App />)
+    await waitFor(() => expect(host.synced.length).toBeGreaterThan(0))
+
+    act(() => {
+      for (const handler of host.synced) {
+        handler({
+          payload: {
+            granted: true,
+            added: ['claude code', 'cursor'],
+            removed: [],
+            failed: [{ label: 'vs code', error: 'mcp.json has comments' }],
+          },
+        })
+      }
+    })
+
+    expect(await screen.findByText('hoot mcp is on')).toBeTruthy()
+    expect(screen.getByText('added to claude code and cursor. restart them to use it.')).toBeTruthy()
+    expect(screen.getByText('could not add hoot to vs code')).toBeTruthy()
+    expect(screen.getByText('mcp.json has comments')).toBeTruthy()
+  })
+
+  it('names a failed removal as a removal', async () => {
+    render(<App />)
+    await waitFor(() => expect(host.synced.length).toBeGreaterThan(0))
+
+    act(() => {
+      for (const handler of host.synced) {
+        handler({ payload: { granted: false, added: [], removed: [], failed: [{ label: 'codex', error: 'busy' }] } })
+      }
+    })
+
+    expect(await screen.findByText('could not remove hoot from codex')).toBeTruthy()
   })
 })
 

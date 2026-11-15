@@ -212,21 +212,26 @@ class AuthManager:
         self._token_expiry = expiry_timestamp
         self._site_id = site_id
 
-    def request_device_code(self) -> dict:
+    def request_device_code(self, wants_hoot: bool = False) -> dict:
         """
         Request a new device code (pairing phrase).
+
+        `wants_hoot` asks the site admin, at /add, to allow hoot mcp for this machine.
 
         Returns: pairPhrase, deviceCode, verificationUri, pairingUrl, expiresIn, interval.
         Raises AuthenticationError on failure.
         """
         try:
             url = f"{self.api_base}/agent/auth/device-code"
+            body = {
+                'machineId': self.machine_id,
+                'version': shared_utils.APP_VERSION,
+            }
+            if wants_hoot:
+                body['wantsHoot'] = True
             response = requests.post(
                 url,
-                json={
-                    'machineId': self.machine_id,
-                    'version': shared_utils.APP_VERSION,
-                },
+                json=body,
                 timeout=30,
             )
 

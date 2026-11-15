@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — hoot mcp is turned on from the machine's settings
+
+The desktop app has a settings window: appearance and start on login move into it from the menu, and **connect an ai agent** is replaced by a **hoot mcp** switch (not on Linux; macOS also gets a permissions page). Turning it on asks a site admin, whose admin panel opens at that machine with a card that allows it. Once allowed, the app adds hoot to the AI tools it finds for the signed-in user (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex) within about a minute, each one untickable, and removes it when an admin or the machine turns it off. A different `hoot` entry or a config file it cannot parse is reported, never overwritten. The Windows installer has an optional "AI tools" page that offers "allow it to use hoot" after pairing. A machine can drop its own grant, never raise it (`DELETE /api/agent/fleet/grant`, audited as `fleet_grant_dropped`).
+
 ### fixed — a mac with a dot in its machine name can send logs and screenshots
 
 A Mac paired under a name with a dot in it, such as `Mac.localdomain`, was turned away by the server when it attached logs to submit issue or uploaded a screenshot, the API would not read back its commands or processes, and a site admin could not limit a member to it. The server now accepts a dot in a machine name.

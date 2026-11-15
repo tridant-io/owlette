@@ -29,11 +29,14 @@ import stat
 import sys
 import threading
 import time
+from urllib.parse import quote
 
 import acl_hardening
 import shared_utils
 
 SESSION_FILE = 'session.json'
+# what the desktop app reads to follow the grant: no secret in it
+STATE_FILE = 'state.json'
 
 # the route allows 30 calls an hour for one machine. the session lives 15
 # minutes and is asked for every 10; a failed refresh is tried again every 150
@@ -103,17 +106,16 @@ def _open_session_dir():
     return fd
 
 
-def _publish_session(session):
-    """Write the session to a new file that no one but the service and, off
-    Windows, its group can read at any moment, then move it over the old one."""
-    path = session_path()
+def _publish(name, payload):
+    """Write a file of ipc/fleet that no one but the service and, off Windows,
+    its group can read at any moment, then move it over the old one."""
+    path = os.path.join(os.path.dirname(session_path()), name)
     if sys.platform == 'win32':
         temp_path = f"{path}.tmp"
         with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(session, f)
+            json.dump(payload, f)
         os.replace(temp_path, path)
         return
-    name = os.path.basename(path)
     temp_name = f"{name}.tmp"
     dir_fd = _open_session_dir()
     try:
@@ -134,7 +136,7 @@ def _publish_session(session):
         with os.fdopen(file_fd, 'w', encoding='utf-8') as f:
             shared_utils.grant_data_group(f.fileno())
             os.fchmod(f.fileno(), 0o640)
-            json.dump(session, f)
+            json.dump(payload, f)
         os.replace(temp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     finally:
         os.close(dir_fd)
@@ -142,6 +144,30 @@ def _publish_session(session):
 
 def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _state_from(body, granted, api_base, client):
+    """The state file's content: whether this machine holds a grant, what the
+    server says it covers (an older server says nothing), and where an admin
+    allows it. `body` is a 200 answer's, or None for a refusal."""
+    grant = body.get('grant') if body else None
+    if not isinstance(grant, dict):
+        grant = {}
+    tier, ids = grant.get('maxTier'), grant.get('machineIds')
+    site_id = getattr(client, 'site_id', None)
+    machine_id = getattr(client, 'machine_id', None)
+    known = isinstance(site_id, str) and site_id and isinstance(machine_id, str) and machine_id
+    web_base = api_base[:-len('/api')] if api_base.endswith('/api') else api_base
+    return {
+        'granted': granted,
+        'maxTier': tier if isinstance(tier, int) and not isinstance(tier, bool) else None,
+        'wholeSite': grant.get('wholeSite') is True,
+        'machineIds': [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else [],
+        'adminUrl': (
+            f"{web_base}/admin/hoot?site={quote(site_id, safe='')}&machine={quote(machine_id, safe='')}"
+            if known else None
+        ),
+    }
 
 
 def _retry_after(response):
@@ -179,6 +205,9 @@ class FleetSessionKeeper:
         self._pending = None
         self._dir_ready = False
         self._said = None
+        # the state file's content as last written, so an unchanged answer
+        # is not a rewrite
+        self._state = None
 
     def tick(self):
         """Start a worker when there is work. Called on the 5-second loop, so it
@@ -207,9 +236,11 @@ class FleetSessionKeeper:
             self._asked = True
             self._due_at = min(self._due_at, self._soonest())
 
-    def withdraw(self):
+    def withdraw(self, forget=False):
         """Delete the session file: the machine left its site, or the service
-        is stopping. A refresh in flight is discarded."""
+        is stopping. A refresh in flight is discarded. `forget` is the machine
+        leaving its site: the state file then says no grant and no admin link,
+        where a stop leaves it as it is."""
         if not _SUPPORTED:
             return
         with self._lock:
@@ -217,6 +248,9 @@ class FleetSessionKeeper:
             self._pending = None
             self._due_at = 0.0
         self._remove_file()
+        if forget:
+            self._write_state({'granted': False, 'maxTier': None, 'wholeSite': False,
+                               'machineIds': [], 'adminUrl': None})
 
     def _soonest(self):
         """The earliest the server may be asked again. Call with the lock held."""
@@ -291,12 +325,14 @@ class FleetSessionKeeper:
                 self._keep_until_expiry(now, epoch, 'an answer that is no session')
                 return
             self._set_due(now + REFRESH_SECONDS, epoch)
+            self._write_state(_state_from(body, True, api_base, client), epoch)
             self._store(session, epoch)
             return
         refusal = _REFUSALS.get((status, body.get('code')))
         if refusal:
             self._set_due(now + NOT_GRANTED_SECONDS, epoch)
             self._remove_file()
+            self._write_state(_state_from(None, False, api_base, client), epoch)
             self._say(f"none ({refusal})", logging.INFO)
             return
         # a 429 waits as long as the server says; anything else is tried again sooner
@@ -332,7 +368,7 @@ class FleetSessionKeeper:
             if not self._dir_ready:
                 _ensure_session_dir()
                 self._dir_ready = True
-            _publish_session(session)
+            _publish(SESSION_FILE, session)
         except (acl_hardening.UntrustedDirectory, acl_hardening.AclApplyError) as e:
             # nothing a retry fixes: the folder is not the service's to write in
             self._set_due(self._clock() + NOT_GRANTED_SECONDS, epoch)
@@ -362,6 +398,36 @@ class FleetSessionKeeper:
         self._said = None
         if first:
             logging.info("fleet session: this machine holds a grant; session written")
+
+    def _write_state(self, state, epoch=None):
+        """Write the state file unless it already says this or a withdrawal
+        came since the request. A file that will not be written is tried again
+        with the next answer."""
+        with self._lock:
+            if (epoch is not None and epoch != self._epoch) or state == self._state:
+                return
+        try:
+            if not self._dir_ready:
+                _ensure_session_dir()
+                self._dir_ready = True
+            _publish(STATE_FILE, state)
+        except Exception as e:
+            self._dir_ready = False
+            self._discard(f"{os.path.join(os.path.dirname(session_path()), STATE_FILE)}.tmp")
+            self._say(f"could not write the state file ({type(e).__name__}: {e})")
+            return
+        with self._lock:
+            # a withdrawal that came during the write already wrote what the
+            # file should say, so put that back over this stale answer
+            withdrawn = epoch is not None and epoch != self._epoch
+            restore = self._state if withdrawn else None
+            if not withdrawn:
+                self._state = state
+        if restore is not None:
+            try:
+                _publish(STATE_FILE, restore)
+            except Exception as e:
+                self._say(f"could not restore the state file ({type(e).__name__}: {e})")
 
     def _keep_until_expiry(self, now, epoch, why, wait=RETRY_SECONDS):
         """A refresh that did not happen: the session in the file is still

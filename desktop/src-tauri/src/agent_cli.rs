@@ -97,6 +97,8 @@ const MODES: &[(&str, &str)] = &[
   ("reboot-now", "--reboot-now"),
   // Clear this machine's cloud `rebootPending` flag.
   ("dismiss-reboot", "--dismiss-reboot"),
+  // Drop this machine's own hoot mcp grant; ends with `done {dropped}`.
+  ("hoot-off", "--hoot-off"),
 ];
 
 /// The mode that carries a JSON payload rather than running bare.
@@ -150,6 +152,7 @@ fn seam_verb(mode: &str) -> Option<Verb> {
     MODE_REPORT_ISSUE => Some(Verb::ReportIssue),
     "reboot-now" => Some(Verb::Reboot),
     "dismiss-reboot" => Some(Verb::DismissReboot),
+    "hoot-off" => Some(Verb::HootOff),
     _ => None,
   }
 }
@@ -189,6 +192,7 @@ fn build_arguments(
   mode: &str,
   payload_path: Option<&Path>,
   server: Option<&str>,
+  wants_hoot: bool,
 ) -> Result<Vec<String>, String> {
   let mut arguments: Vec<String> = vec![script.to_string_lossy().into_owned(), flag.to_string()];
 
@@ -199,6 +203,10 @@ fn build_arguments(
   if let Some(server) = vetted_server(mode, server)? {
     arguments.push("--server".to_string());
     arguments.push(server.to_string());
+  }
+
+  if wants_hoot {
+    arguments.push("--wants-hoot".to_string());
   }
 
   Ok(arguments)
@@ -213,6 +221,20 @@ fn vetted_server<'a>(mode: &str, server: Option<&'a str>) -> Result<Option<&'a s
   }
 }
 
+/// The one thing a `join` payload may say: whether the pairing should offer to allow hoot mcp.
+/// A boolean and nothing else, so no webview string reaches the argv.
+fn vetted_wants_hoot(mode: &str, payload: Option<&Value>) -> Result<bool, String> {
+  match (mode == MODE_JOIN, payload) {
+    (_, None) => Ok(false),
+    (true, Some(payload)) => match payload.get("wantsHoot") {
+      Some(Value::Bool(wants)) if payload.as_object().is_some_and(|fields| fields.len() == 1) => Ok(*wants),
+      None if payload.as_object().is_some_and(|fields| fields.is_empty()) => Ok(false),
+      _ => Err("the join mode takes only a boolean wantsHoot".to_string()),
+    },
+    (false, Some(_)) => Ok(false),
+  }
+}
+
 /// Spawn one agent CLI run and start streaming it. Returns the run id.
 ///
 /// `server` names the cloud a `join` pairs against; every other mode refuses one.
@@ -224,6 +246,9 @@ pub fn start(
   server: Option<&str>,
 ) -> Result<String, String> {
   let flag = flag_for(mode)?;
+  let wants_hoot = vetted_wants_hoot(mode, payload.as_ref())?;
+  // vetted above; the posix pairing has no installer question to carry it.
+  let payload = if mode == MODE_JOIN { None } else { payload };
 
   #[cfg(unix)]
   if let Some(verb) = seam_verb(mode) {
@@ -268,7 +293,7 @@ pub fn start(
     (false, None) => None,
   };
 
-  let arguments = build_arguments(&script, flag, mode, staged.as_deref(), server)?;
+  let arguments = build_arguments(&script, flag, mode, staged.as_deref(), server, wants_hoot)?;
 
   let mut command = Command::new(&python);
   command
@@ -695,7 +720,7 @@ mod tests {
   #[test]
   fn join_carries_a_dev_server_through_to_the_argv() {
     let arguments =
-      build_arguments(script(), "--json-progress", MODE_JOIN, None, Some("dev")).expect("dev");
+      build_arguments(script(), "--json-progress", MODE_JOIN, None, Some("dev"), false).expect("dev");
     assert_eq!(
       arguments,
       vec![
@@ -710,7 +735,7 @@ mod tests {
   #[test]
   fn join_carries_a_prod_server_through_to_the_argv() {
     let arguments =
-      build_arguments(script(), "--json-progress", MODE_JOIN, None, Some("prod")).expect("prod");
+      build_arguments(script(), "--json-progress", MODE_JOIN, None, Some("prod"), false).expect("prod");
     assert_eq!(
       arguments,
       vec![
@@ -727,7 +752,7 @@ mod tests {
     // The tray's "join site" path: no server named, so the agent re-pairs
     // against whatever environment the config already carries.
     let flag = flag_for(MODE_JOIN).expect("join is a mode");
-    let arguments = build_arguments(script(), flag, MODE_JOIN, None, None).expect("bare join");
+    let arguments = build_arguments(script(), flag, MODE_JOIN, None, None, false).expect("bare join");
     assert_eq!(
       arguments,
       vec![
@@ -738,9 +763,36 @@ mod tests {
   }
 
   #[test]
+  fn join_appends_wants_hoot_only_when_asked() {
+    let arguments =
+      build_arguments(script(), "--json-progress", MODE_JOIN, None, None, true).expect("wants hoot");
+    assert_eq!(arguments.last().map(String::as_str), Some("--wants-hoot"));
+    let arguments =
+      build_arguments(script(), "--json-progress", MODE_JOIN, None, None, false).expect("bare");
+    assert!(!arguments.iter().any(|argument| argument == "--wants-hoot"));
+  }
+
+  #[test]
+  fn only_a_boolean_wants_hoot_on_join_is_accepted() {
+    let wants = |mode, payload: Option<Value>| vetted_wants_hoot(mode, payload.as_ref());
+    assert_eq!(wants(MODE_JOIN, None), Ok(false));
+    assert_eq!(wants(MODE_JOIN, Some(serde_json::json!({}))), Ok(false));
+    assert_eq!(wants(MODE_JOIN, Some(serde_json::json!({ "wantsHoot": true }))), Ok(true));
+    assert_eq!(wants(MODE_JOIN, Some(serde_json::json!({ "wantsHoot": false }))), Ok(false));
+    for bad in [
+      serde_json::json!({ "wantsHoot": "yes" }),
+      serde_json::json!({ "wantsHoot": true, "extra": "--leave" }),
+      serde_json::json!({ "other": 1 }),
+      serde_json::json!(true),
+    ] {
+      assert!(wants(MODE_JOIN, Some(bad.clone())).is_err(), "{bad} should be refused");
+    }
+  }
+
+  #[test]
   fn an_unvetted_server_never_becomes_an_argv_entry() {
     for attempt in ["staging", "", "dev prod", "--leave", "DEV", "dev;whoami"] {
-      let refused = build_arguments(script(), "--json-progress", MODE_JOIN, None, Some(attempt));
+      let refused = build_arguments(script(), "--json-progress", MODE_JOIN, None, Some(attempt), false);
       assert_eq!(
         refused,
         Err(format!("unknown server: {attempt}")),
@@ -756,7 +808,7 @@ mod tests {
         continue;
       }
       let payload = (*mode == MODE_REPORT_ISSUE).then(|| Path::new(r"C:\staged.json"));
-      let refused = build_arguments(script(), flag, mode, payload, Some("dev"));
+      let refused = build_arguments(script(), flag, mode, payload, Some("dev"), false);
       assert_eq!(
         refused,
         Err(format!("the {mode} mode takes no server")),
@@ -777,6 +829,7 @@ mod tests {
         ("report-issue", Some(Verb::ReportIssue)),
         ("reboot-now", Some(Verb::Reboot)),
         ("dismiss-reboot", Some(Verb::DismissReboot)),
+        ("hoot-off", Some(Verb::HootOff)),
       ]
     );
   }

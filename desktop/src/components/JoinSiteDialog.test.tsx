@@ -275,6 +275,18 @@ describe('JoinSiteDialog', () => {
     expect(startAgentRun).toHaveBeenCalledWith('join', expect.objectContaining({ server: 'dev' }))
   })
 
+  it('carries the installer hoot request in the join payload, and nothing otherwise', async () => {
+    fakeRun()
+    await open({ wantsHoot: true })
+    expect(startAgentRun).toHaveBeenCalledWith('join', expect.objectContaining({ payload: { wantsHoot: true } }))
+
+    startAgentRun.mockReset()
+    fakeRun()
+    await open()
+    const options = startAgentRun.mock.calls[0][1] as { payload?: unknown }
+    expect(options.payload).toBeUndefined()
+  })
+
   it('names no server when nothing asked for one — the config keeps its own', async () => {
     fakeRun()
     await open()

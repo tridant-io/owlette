@@ -9,7 +9,13 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => listen
 const {
   OWLETTE_FILES,
   appearanceTheme,
+  fleetState,
+  hootHoldOff,
+  hootTools,
+  hootFromArgs,
   isServiceDown,
+  onHootToolsSynced,
+  setHootTool,
   onOwletteFileChanged,
   onOwletteFileChangedFor,
   onSecondInstance,
@@ -275,6 +281,13 @@ describe('event subscriptions', () => {
   })
 })
 
+describe('hootFromArgs', () => {
+  it('is true only when the launch carried --hoot', () => {
+    expect(hootFromArgs(['--pair', '--server', 'dev', '--hoot'])).toBe(true)
+    expect(hootFromArgs(['--pair', '--server', 'dev'])).toBe(false)
+  })
+})
+
 describe('serverFromArgs', () => {
   it('reads the two-token dev form', () => {
     expect(serverFromArgs(['--server', 'dev'])).toBe('dev')
@@ -311,5 +324,30 @@ describe('serverFromArgs', () => {
   it('parses a real launch argv', () => {
     const argv = ['C:\\ProgramData\\Owlette\\app\\owlette-desktop.exe', '--pair', '--server', 'dev']
     expect(serverFromArgs(argv)).toBe('dev')
+  })
+})
+
+describe('hoot mcp', () => {
+  it('asks the host for the fleet state and the tools', async () => {
+    await fleetState()
+    await hootTools()
+    expect(invoke).toHaveBeenNthCalledWith(1, 'fleet_state')
+    expect(invoke).toHaveBeenNthCalledWith(2, 'hoot_tools')
+  })
+
+  it('ticks a tool and holds hoot off', async () => {
+    await setHootTool('cursor', false)
+    await hootHoldOff()
+    expect(invoke).toHaveBeenNthCalledWith(1, 'set_hoot_tool', { id: 'cursor', on: false })
+    expect(invoke).toHaveBeenNthCalledWith(2, 'hoot_hold_off')
+  })
+
+  it('hands over the payload of a tools-synced event', async () => {
+    const handler = vi.fn()
+    await onHootToolsSynced(handler)
+    const synced = { granted: true, added: ['cursor'], removed: [], failed: [] }
+    expect(listen).toHaveBeenCalledWith('hoot://tools-synced', expect.any(Function))
+    emit(synced)
+    expect(handler).toHaveBeenCalledWith(synced)
   })
 })

@@ -140,6 +140,26 @@ def leave_a_file(content='{"token": "left-by-a-dead-run"}'):
         f.write(content)
 
 
+def state():
+    """The state file's content, or None when there is no file."""
+    try:
+        with open(os.path.join(os.path.dirname(fleet_session.session_path()), fleet_session.STATE_FILE),
+                  encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+ADMIN_URL = 'https://dev.owlette.app/admin/hoot?site=site-1&machine=kiosk-1'
+NO_GRANT = {'granted': True, 'maxTier': None, 'wholeSite': False, 'machineIds': [], 'adminUrl': ADMIN_URL}
+
+
+def granted_with(grant):
+    response = granted('owf_first', START + 900)
+    response._body['grant'] = grant
+    return response
+
+
 def wait_for(predicate, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -418,7 +438,7 @@ def test_a_refused_write_is_finished_on_the_next_pass_without_asking_again(keepe
     refusals = [PermissionError(13, 'the script has it open')]
 
     def replace(src, dst, **kwargs):
-        if refusals:
+        if refusals and str(dst).endswith(fleet_session.SESSION_FILE):
             raise refusals.pop()
         real_replace(src, dst, **kwargs)
 
@@ -724,7 +744,7 @@ def test_on_macos_the_file_is_0640_granted_to_the_group_and_replaced_atomically(
     assert len(on_mac.handed) == 2 and on_mac.handed[1][1] == 0
     # a new file moved over the old one, not the old one rewritten
     assert os.stat(path).st_ino != first_inode
-    assert os.listdir(os.path.dirname(path)) == [fleet_session.SESSION_FILE]
+    assert sorted(os.listdir(os.path.dirname(path))) == [fleet_session.SESSION_FILE, fleet_session.STATE_FILE]
 
 
 @posix_only
@@ -896,6 +916,200 @@ def test_an_error_on_the_macos_write_path_names_no_token(on_mac, api, caplog, mo
     assert AGENT_TOKEN not in caplog.text
 
 
+# ----- the state file ---------------------------------------------------------------
+
+def test_a_200_with_no_grant_writes_granted_with_nothing_known(keeper, api):
+    api.answers = [granted('owf_first', START + 900)]
+
+    keeper.refresh_once()
+
+    assert state() == NO_GRANT
+
+
+def test_a_200_with_a_grant_writes_what_the_server_says_it_covers(keeper, api):
+    api.answers = [granted_with({'maxTier': 2, 'wholeSite': False, 'machineIds': ['a', 'b']})]
+
+    keeper.refresh_once()
+
+    assert state() == {
+        'granted': True, 'maxTier': 2, 'wholeSite': False, 'machineIds': ['a', 'b'],
+        'adminUrl': ADMIN_URL,
+    }
+
+
+def test_a_grant_of_the_wrong_shape_is_read_as_nothing(keeper, api):
+    api.answers = [granted_with({'maxTier': True, 'wholeSite': 'yes', 'machineIds': 'a'})]
+
+    keeper.refresh_once()
+
+    assert state() == NO_GRANT
+
+
+def test_the_admin_url_is_encoded(keeper, api, client):
+    client.site_id, client.machine_id = 'a site', 'k&1'
+    api.answers = [granted('owf_first', START + 900)]
+
+    keeper.refresh_once()
+
+    assert state()['adminUrl'] == 'https://dev.owlette.app/admin/hoot?site=a%20site&machine=k%261'
+
+
+@pytest.mark.parametrize('status, code', [(403, 'fleet_not_granted'), (401, 'pairing_revoked')])
+def test_a_refusal_writes_granted_false(keeper, api, status, code):
+    api.answers = [refused(status, code)]
+
+    keeper.refresh_once()
+
+    assert state() == {**NO_GRANT, 'granted': False}
+
+
+@pytest.mark.parametrize('answer', [
+    requests.ConnectionError('down'),
+    FakeResponse(429, {}, headers={'Retry-After': '120'}),
+    FakeResponse(500, {'code': 'boom'}),
+    FakeResponse(403, {'code': 'something_else'}),
+    FakeResponse(200, text='<html>'),
+    FakeResponse(200, {'token': 'owf_x'}),
+], ids=['network', '429', '500', 'other 403', 'not json', 'no session'])
+def test_an_answer_that_is_not_definite_keeps_the_state_it_had(keeper, api, clock, answer):
+    api.answers = [granted_with({'maxTier': 1, 'wholeSite': True, 'machineIds': []}), answer]
+    keeper.refresh_once()
+    before = state()
+    assert before['granted'] is True
+
+    clock.now = START + REFRESH_SECONDS
+    keeper.refresh_once()
+
+    assert len(api.calls) == 2
+    assert state() == before
+
+
+@pytest.mark.parametrize('answer', [requests.ConnectionError('down'), FakeResponse(429, {})])
+def test_an_answer_that_is_not_definite_writes_no_state_file_of_its_own(keeper, api, answer):
+    api.answers = [answer]
+
+    keeper.refresh_once()
+
+    assert state() is None
+
+
+def test_an_unpaired_machine_writes_no_state(keeper, api, client):
+    client.auth_manager.authenticated = False
+
+    keeper.refresh_once()
+
+    assert api.calls == []
+    assert state() is None
+
+
+def test_an_unchanged_answer_does_not_rewrite_the_file(keeper, api, clock, monkeypatch):
+    api.answers = [granted('owf_first', START + 900), granted('owf_second', START + 1500)]
+    written = []
+    real = fleet_session._publish
+    monkeypatch.setattr(fleet_session, '_publish', lambda name, payload: (written.append(name), real(name, payload)))
+    keeper.refresh_once()
+    clock.now = START + REFRESH_SECONDS
+
+    keeper.refresh_once()
+
+    assert written == [fleet_session.STATE_FILE, fleet_session.SESSION_FILE, fleet_session.SESSION_FILE]
+
+
+def test_a_changed_answer_rewrites_the_file(keeper, api, clock):
+    api.answers = [granted('owf_first', START + 900), refused(403, 'fleet_not_granted')]
+    keeper.refresh_once()
+    clock.now = START + REFRESH_SECONDS
+
+    keeper.refresh_once()
+
+    assert state()['granted'] is False
+
+
+def test_a_refresh_in_flight_cannot_put_the_state_back_after_a_withdrawal(keeper, api):
+    def answer():
+        keeper.withdraw(forget=True)
+        return granted('owf_first', START + 900)
+
+    api.answers = [answer]
+    keeper.refresh_once()
+
+    assert state() == {'granted': False, 'maxTier': None, 'wholeSite': False, 'machineIds': [], 'adminUrl': None}
+
+
+def test_a_withdrawal_landing_during_the_state_write_is_not_overwritten(keeper, api, monkeypatch):
+    api.answers = [granted('owf_first', START + 900), granted('owf_second', START + 900)]
+    keeper.refresh_once()
+    assert state()['granted'] is True
+    real = fleet_session._publish
+    calls = []
+
+    def publish_after_the_machine_left(name, payload):
+        calls.append(name)
+        if len(calls) == 1:
+            keeper.withdraw(forget=True)
+        real(name, payload)
+
+    monkeypatch.setattr(fleet_session, '_publish', publish_after_the_machine_left)
+    keeper._write_state({**NO_GRANT, 'maxTier': 3}, epoch=keeper._epoch)
+
+    assert state() == {'granted': False, 'maxTier': None, 'wholeSite': False, 'machineIds': [], 'adminUrl': None}
+    assert keeper._state == state()
+
+
+def test_forgetting_writes_no_grant_and_no_admin_link(keeper, api):
+    api.answers = [granted_with({'maxTier': 2, 'wholeSite': True, 'machineIds': ['a']})]
+    keeper.refresh_once()
+
+    keeper.withdraw(forget=True)
+
+    assert state() == {'granted': False, 'maxTier': None, 'wholeSite': False, 'machineIds': [], 'adminUrl': None}
+    assert stored() is None
+
+
+def test_a_plain_withdrawal_leaves_the_state_alone(keeper, api):
+    api.answers = [granted_with({'maxTier': 2, 'wholeSite': True, 'machineIds': ['a']})]
+    keeper.refresh_once()
+    before = state()
+
+    keeper.withdraw()
+
+    assert state() == before
+    assert stored() is None
+
+
+def test_on_linux_no_state_file_is_written_or_forgotten(keeper, monkeypatch):
+    monkeypatch.setattr(fleet_session, '_SUPPORTED', False)
+
+    keeper.withdraw(forget=True)
+
+    assert state() is None
+
+
+@posix_only
+def test_on_macos_the_state_file_is_0640_granted_to_the_group(on_mac, api):
+    api.answers = [granted('owf_first', START + 900)]
+
+    on_mac.keeper.refresh_once()
+
+    path = os.path.join(os.path.dirname(fleet_session.session_path()), fleet_session.STATE_FILE)
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+    # the state file and then the session file each take the group while empty
+    assert len(on_mac.handed) == 2 and all(h[1] == 0 and h[2] == 0o600 for h in on_mac.handed)
+    assert state() == NO_GRANT
+    assert not os.path.exists(path + '.tmp')
+
+
+@posix_only
+def test_on_macos_forgetting_writes_through_the_checked_folder(on_mac, api):
+    api.answers = [granted('owf_first', START + 900)]
+    on_mac.keeper.refresh_once()
+
+    on_mac.keeper.withdraw(forget=True)
+
+    assert state()['granted'] is False and state()['adminUrl'] is None
+    assert stored() is None
+
+
 # ----- the service's side ----------------------------------------------------------
 
 def test_the_service_makes_the_keeper_in_main_ticks_it_on_the_loop_and_withdraws_it():
@@ -908,5 +1122,5 @@ def test_the_service_makes_the_keeper_in_main_ticks_it_on_the_loop_and_withdraws
     main = inspect.getsource(OwletteService.main)
     assert 'self.fleet_session = fleet_session.FleetSessionKeeper(' in main
     assert 'self.fleet_session.tick()' in main
-    assert 'self.fleet_session.withdraw()' in inspect.getsource(OwletteService.unpair)
+    assert 'self.fleet_session.withdraw(forget=True)' in inspect.getsource(OwletteService.unpair)
     assert 'self.fleet_session.withdraw()' in inspect.getsource(OwletteService.graceful_shutdown)

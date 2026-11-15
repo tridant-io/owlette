@@ -17,6 +17,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::agent_cli::{self, Runs};
 use crate::issue_attachments::{self, Staged, StagedVideo};
+use crate::hoot_sync::{FleetState, HootSync, HootTool};
 use crate::json_io::{self, WriteOutcome};
 use crate::paths::{self, ISSUE_ATTACHMENTS_REL, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, RecordedIdentity, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
@@ -42,6 +43,37 @@ pub fn launch_args() -> Vec<String> {
 #[tauri::command(async)]
 pub fn hoot_mcp_command() -> Option<Vec<String>> {
   crate::agent_cli::hoot_mcp_command()
+}
+
+/// This machine's hoot mcp grant as the service last wrote it, with `granted` after a local
+/// turn-off that the server has not yet confirmed. None until the service has had a definite answer.
+#[tauri::command(async)]
+pub fn fleet_state(sync: State<'_, HootSync>) -> Option<FleetState> {
+  sync.state()
+}
+
+/// The AI tools hoot mcp can be added to, whether each is found here, whether it is ticked, and
+/// whether it already lists hoot.
+#[tauri::command(async)]
+pub fn hoot_tools(sync: State<'_, HootSync>) -> Vec<HootTool> {
+  sync.tools()
+}
+
+/// Tick or untick one tool, and bring it in step with the grant now.
+#[tauri::command(async)]
+pub fn set_hoot_tool(
+  app: AppHandle,
+  sync: State<'_, HootSync>,
+  id: String,
+  on: bool,
+) -> Result<(), String> {
+  sync.set_tool(&app, &id, on)
+}
+
+/// Remove hoot from the tools now and keep the grant off locally until the service agrees.
+#[tauri::command(async)]
+pub fn hoot_hold_off(app: AppHandle, sync: State<'_, HootSync>) {
+  sync.hold_off(&app);
 }
 
 /// This machine's name, as the fleet knows it (`COMPUTERNAME`).

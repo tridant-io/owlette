@@ -54,6 +54,8 @@ def _args(**overrides):
         'report_issue': None,
         'reboot_now': False,
         'dismiss_reboot': False,
+        'hoot_off': False,
+        'wants_hoot': False,
         'preseed': False,
     }
     defaults.update(overrides)
@@ -87,6 +89,7 @@ class TestFlagParsing:
         assert _parser_args(['--leave']).leave is True
         assert _parser_args(['--reboot-now']).reboot_now is True
         assert _parser_args(['--dismiss-reboot']).dismiss_reboot is True
+        assert _parser_args(['--hoot-off']).hoot_off is True
         assert _parser_args(['--preseed']).preseed is True
         assert _parser_args(['--report-issue', 'C:\\tmp\\p.json']).report_issue == 'C:\\tmp\\p.json'
 
@@ -116,7 +119,7 @@ class TestFlagParsing:
         args = _parser_args([])
         assert not any([
             args.json_progress, args.leave, args.reboot_now, args.dismiss_reboot,
-            args.preseed,
+            args.hoot_off, args.preseed, args.wants_hoot,
         ])
         assert args.report_issue is None
 
@@ -140,6 +143,7 @@ class TestFlagParsing:
             assert configure_site.main() == 0
         assert progress.call_args.kwargs == {
             'api_base': None, 'environment': 'development', 'restart_service': True,
+            'wants_hoot': False,
         }
 
     def test_server_prod_with_a_url_passes_both_through(self):
@@ -151,8 +155,35 @@ class TestFlagParsing:
         assert code == 0
         assert progress.call_args.kwargs == {
             'api_base': 'https://owlette.app/api', 'environment': 'production',
-            'restart_service': True,
+            'restart_service': True, 'wants_hoot': False,
         }
+
+    def test_wants_hoot_reaches_the_json_pairing_run_only_when_asked(self):
+        with patch.object(sys, 'argv', ['configure_site.py', '--json-progress', '--server', 'dev', '--wants-hoot']), \
+             patch.object(configure_site, 'run_json_progress', return_value=0) as progress:
+            assert configure_site.main() == 0
+        assert progress.call_args.kwargs['wants_hoot'] is True
+
+    def test_wants_hoot_reaches_the_console_pairing_flow(self, tmp_path):
+        with patch.object(sys, 'argv', ['configure_site.py', '--server', 'prod', '--wants-hoot']), \
+             patch.object(configure_site, 'run_pairing_flow', return_value=(True, 'ok', 's')) as flow, \
+             patch.object(configure_site.shared_utils, 'get_data_path',
+                          side_effect=lambda p: str(tmp_path / p)):
+            assert configure_site.main() == 0
+        assert flow.call_args.kwargs['wants_hoot'] is True
+
+    def test_the_console_pairing_flow_does_not_ask_for_hoot_by_default(self, tmp_path):
+        with patch.object(sys, 'argv', ['configure_site.py', '--server', 'prod']), \
+             patch.object(configure_site, 'run_pairing_flow', return_value=(True, 'ok', 's')) as flow, \
+             patch.object(configure_site.shared_utils, 'get_data_path',
+                          side_effect=lambda p: str(tmp_path / p)):
+            assert configure_site.main() == 0
+        assert flow.call_args.kwargs['wants_hoot'] is False
+
+    def test_json_progress_threads_wants_hoot_into_the_pairing_flow(self):
+        with patch.object(configure_site, 'run_pairing_flow', return_value=(False, 'no', None)) as flow:
+            configure_site.run_json_progress(wants_hoot=True)
+        assert flow.call_args.kwargs['wants_hoot'] is True
 
     def test_no_service_restart_reaches_the_pairing_run(self):
         with patch.object(configure_site, 'run_json_progress', return_value=0) as progress:
@@ -1414,6 +1445,75 @@ class TestRebootModes:
         assert 'not authenticated' in _events(capsys)[-1]['value']
 
 
+class TestHootOff:
+    def _answer(self, status=200, body=None, json_error=False):
+        response = MagicMock()
+        response.status_code = status
+        if json_error:
+            response.json.side_effect = ValueError('not json')
+        else:
+            response.json.return_value = body if body is not None else {}
+        return response
+
+    def _run(self, response=None, post_error=None):
+        with patch.object(configure_site, '_web_session',
+                          return_value=('https://dev.owlette.app', 'secret-token')), \
+             patch('requests.delete', return_value=response, side_effect=post_error) as delete:
+            code = configure_site.run_hoot_off()
+        return code, delete
+
+    @pytest.mark.parametrize('dropped', [True, False])
+    def test_it_deletes_the_grant_with_the_bearer_token_and_reports_the_outcome(
+            self, capsys, dropped):
+        code, delete = self._run(self._answer(body={'dropped': dropped}))
+
+        assert code == 0
+        delete.assert_called_once_with(
+            'https://dev.owlette.app/api/agent/fleet/grant',
+            headers={'Authorization': 'Bearer secret-token'},
+            timeout=15,
+        )
+        assert _events(capsys)[-1] == {'event': 'done', 'value': {'dropped': dropped}}
+
+    @pytest.mark.parametrize('status, text', [
+        (401, 'pair it again'), (429, 'too many'), (500, '500')])
+    def test_a_refusal_is_a_short_error_without_the_token(self, capsys, status, text):
+        code, _delete = self._run(self._answer(status=status))
+
+        assert code == 1
+        message = _events(capsys)[-1]
+        assert message['event'] == 'error'
+        assert text in message['value']
+        assert 'secret-token' not in message['value']
+
+    def test_an_unreadable_answer_is_an_error(self, capsys):
+        code, _delete = self._run(self._answer(json_error=True))
+
+        assert code == 1
+        assert _events(capsys)[-1]['event'] == 'error'
+
+    def test_a_network_failure_is_an_error(self, capsys):
+        import requests
+
+        code, _delete = self._run(post_error=requests.ConnectionError('boom'))
+
+        assert code == 1
+        assert _events(capsys)[-1]['value'] == 'could not reach the server: ConnectionError'
+
+    def test_an_unpaired_machine_is_an_error(self, capsys):
+        with patch.object(configure_site, '_web_session',
+                          side_effect=RuntimeError('owlette is not connected to a site')):
+            code = configure_site.run_hoot_off()
+
+        assert code == 1
+        assert 'not connected' in _events(capsys)[-1]['value']
+
+    def test_the_mode_dispatches_to_it(self):
+        with patch.object(configure_site, 'run_hoot_off', return_value=0) as run:
+            assert configure_site._run_headless_mode(_args(hoot_off=True)) == 0
+        run.assert_called_once_with()
+
+
 # the installer path is untouched
 
 
@@ -2036,6 +2136,26 @@ class TestRequestSeam:
             shared_utils.get_path('configure_site.py'), '--dismiss-reboot']
         assert self._events(seam) == ['done']
 
+    def test_a_hoot_off_request_runs_the_drop_into_the_answer(self, seam, monkeypatch):
+        spawned = {}
+
+        def fake_popen(argv, **kwargs):
+            spawned['argv'] = argv
+            os.write(kwargs['stdout'], b'{"event": "done", "value": {"dropped": true}}\n')
+            return MagicMock()
+
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', fake_popen)
+        self._request(seam, 'hoot_off', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert rows[0]['outcome'] == 'executed'
+        assert spawned['argv'][1:] == [
+            shared_utils.get_path('configure_site.py'), '--hoot-off']
+        assert self._events(seam) == ['done']
+
     def test_a_report_request_files_the_report_from_a_root_only_copy(
             self, seam, monkeypatch):
         # Building the report reads root's logs and posting it takes the
@@ -2521,7 +2641,7 @@ class TestRequestSeam:
         assert self._answer(seam)[-1]['value'].startswith('the cloud connection did not stop')
         assert self._ran(seam, paired) == []
 
-    @pytest.mark.parametrize('verb', ['leave', 'dismiss_reboot', 'cancel_pair'])
+    @pytest.mark.parametrize('verb', ['leave', 'dismiss_reboot', 'hoot_off', 'cancel_pair'])
     def test_the_new_verbs_answer_to_the_same_three_rules(
             self, seam, monkeypatch, verb):
         monkeypatch.setattr(configure_site, '_execute_request',
@@ -2975,7 +3095,7 @@ class TestSiteChangeNeedsAnAdministrator:
         assert self._run(verb)['outcome'] == 'executed'
         assert getattr(gate, ran)
 
-    @pytest.mark.parametrize('verb', ['restart', 'dismiss_reboot', 'cancel_pair'])
+    @pytest.mark.parametrize('verb', ['restart', 'dismiss_reboot', 'hoot_off', 'cancel_pair'])
     def test_the_other_verbs_are_not_this_gates_business(self, gate, monkeypatch, verb):
         monkeypatch.setattr(configure_site, '_service_control', lambda verb: True)
         monkeypatch.setattr(configure_site, '_seconds_since_last', lambda verb: None)
@@ -3040,7 +3160,7 @@ class TestRequestSeamVerbs:
         rather than a drift."""
         assert set(configure_site.REQUEST_VERBS) == {
             'pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
-            'report_issue'}
+            'hoot_off', 'report_issue'}
 
     @pytest.mark.skipif(sys.platform != 'win32',
                         reason='the Windows half of the seam gate')

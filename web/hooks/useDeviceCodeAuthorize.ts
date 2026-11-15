@@ -9,6 +9,7 @@ interface Review {
   siteId: string;
   machineId: string | null;
   existing: boolean;
+  wantsHoot: boolean;
 }
 
 /**
@@ -27,6 +28,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [authorizedMachineId, setAuthorizedMachineId] = useState<string | null>(null);
+  const [authorizedWantsHoot, setAuthorizedWantsHoot] = useState(false);
   const [lookedUp, setLookedUp] = useState<Review | null>(null);
   // editing the phrase or the site makes the operator look the machine up again.
   const review = lookedUp && lookedUp.phrase === phrase && lookedUp.siteId === siteId ? lookedUp : null;
@@ -52,7 +54,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
       if (!response.ok) {
         // joined the site since the preview: ask for the confirmation rather than fail.
         if (data.code === 'machine_exists' && typeof data.machineId === 'string') {
-          setLookedUp({ phrase, siteId, machineId: data.machineId, existing: true });
+          setLookedUp({ phrase, siteId, machineId: data.machineId, existing: true, wantsHoot: false });
           return;
         }
         // "not found" can mean the machine is pairing with a different owlette server;
@@ -71,12 +73,14 @@ export function useDeviceCodeAuthorize(siteId: string) {
           siteId,
           machineId: typeof data.machineId === 'string' ? data.machineId : null,
           existing: data.existing === true,
+          wantsHoot: data.wantsHoot === true,
         });
         return;
       }
 
       setLookedUp(null);
       setAuthorizedMachineId(typeof data.machineId === 'string' ? data.machineId : null);
+      setAuthorizedWantsHoot(data.wantsHoot === true);
       setSuccess(true);
       toast.success('machine authorized');
     } catch (error: unknown) {
@@ -101,6 +105,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
     setIsAuthorizing(false);
     setSuccess(false);
     setAuthorizedMachineId(null);
+    setAuthorizedWantsHoot(false);
     setLookedUp(null);
   }, []);
 
@@ -114,6 +119,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
     isAuthorizing,
     success,
     authorizedMachineId,
+    authorizedWantsHoot,
     reset,
   };
 }

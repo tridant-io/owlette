@@ -27,7 +27,7 @@ import {
  *
  * Body: `{ pairPhrase: string ("silver-compass-drift"), siteId: string,
  * preview?: true, replaceMachineId?: string, replaceAnyMachine?: true }`
- * - `preview` answers `{ machineId: string | null, existing: boolean }` and changes
+ * - `preview` answers `{ machineId: string | null, existing: boolean, wantsHoot: boolean }` and changes
  *   nothing, so the page can show which machine it is about to authorize.
  * - `replaceMachineId` names the machine already on the site that this pairing may
  *   reinstall. An interactive code for such a machine needs it; a generated code
@@ -36,7 +36,7 @@ import {
  *   machine already on the site. An admin's deliberate choice, off unless sent, and
  *   not combinable with `replaceMachineId`. It never confirms an interactive code.
  *
- * 200: `{ success: true, machineId: string | null }`
+ * 200: `{ success: true, machineId: string | null, wantsHoot: boolean }`
  * 400 bad fields/phrase · 401 unauthenticated · 402 machine limit (the code is marked
  * `refused`, so the agent's poll gets the same message) · 403 no site access · 404
  * unknown or expired phrase · 409 already authorized, or `{ error, code:
@@ -129,7 +129,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       if (preview) {
         const machineId = typeof data.machineId === 'string' ? data.machineId : null;
         const existing = machineId ? await machineOnSite(transaction, siteId, machineId) : false;
-        return { preview: { machineId, existing } } as const;
+        return { preview: { machineId, existing, wantsHoot: data.wantsHoot === true } } as const;
       }
 
       // Pre-authorized (dashboard "generate code") doc: the target hostname is
@@ -291,7 +291,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
           `by=${userId}, wrap=${DEVICE_CODE_WRAP_VERSION}`,
       );
 
-      return { success: true, machineId: data.machineId || null, deferred: false, existingMachine } as const;
+      return {
+        success: true,
+        machineId: data.machineId || null,
+        deferred: false,
+        existingMachine,
+        wantsHoot: data.wantsHoot === true,
+      } as const;
     });
 
     if ('error' in result) {
@@ -330,6 +336,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     return NextResponse.json({
       success: true,
       machineId: result.machineId,
+      wantsHoot: 'wantsHoot' in result && result.wantsHoot,
     });
   } catch (error: unknown) {
     if (error instanceof ApiAuthError) {

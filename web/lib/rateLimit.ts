@@ -183,6 +183,18 @@ export const fleetSessionRateLimit = redis
     })
   : null;
 
+/** a machine dropping its own fleet grant, per machine: a click, never a loop. */
+export const FLEET_GRANT_RATE_LIMIT_PER_MINUTE = 10;
+
+export const fleetGrantRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(FLEET_GRANT_RATE_LIMIT_PER_MINUTE, '1 m'),
+      prefix: 'fleet-grant',
+      analytics: true,
+    })
+  : null;
+
 /**
  * Web issue upload urls: 20/hr per user. One call signs a whole issue's
  * screenshots and videos (up to 100 MB), so twenty covers retries and still

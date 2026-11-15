@@ -124,6 +124,8 @@ Remove-MpPreference -ExclusionPath '{app}\python\python.sys'   # ...and the othe
 
 `ShouldConfigureSite()` is true when `/ADD=` was passed, config.json is missing or unreadable, it lacks a non-empty `site_id` with `"enabled": true`, or an explicit `/SERVER=` conflicts with the config's `environment` (or the environment can't be determined). Interactive mode alone does not trigger pairing. Flags tracked: `PairingSucceeded` (log only), `AppOpenedByHandoff`, `InstallSucceeded`, `ServiceWasStopped`.
 
+**AI tools page** (`HootPage`, created in `InitializeWizard` after the directory page): one unticked checkbox, "Add hoot to the AI tools on this computer". `ShouldSkipPage` hides it when silent, when `/ADD=` is set, or when `not ShouldConfigureSite()` (an upgrade of a paired machine: no pairing follows to carry the answer), so a skipped page is always unticked. `ShouldConfigureSite()` only reads config.json, so it is safe at wizard time. Ticked, `RunPairingHandoff` appends ` --hoot` to the desktop `--pair` handoff and ` --wants-hoot` to the console fallback (not the `/ADD=` branch), and the ready page lists it. The page never changes whether or how pairing runs.
+
 ### Upgrades
 
 There is no config backup/restore. `[Files]` never touches `config\config.json` or `.tokens.enc`, so an upgrade leaves them in place; the `InitializeSetup` stop/kill/unlock sequence above is what makes overwriting the runtime safe.

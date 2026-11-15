@@ -3194,7 +3194,7 @@ class OwletteService:
         """
         configure_site.unpair(reason)
         self._stop_swoop()
-        self.fleet_session.withdraw()
+        self.fleet_session.withdraw(forget=True)
         if self._is_cortex_alive():
             try:
                 psutil.Process(self.cortex_pid).terminate()

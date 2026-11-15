@@ -186,13 +186,44 @@ describe('POST /api/agent/fleet/session', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
     const body = await res.json();
-    expect(Object.keys(body).sort()).toEqual(['expiresAt', 'token', 'ttlSeconds']);
+    expect(Object.keys(body).sort()).toEqual(['expiresAt', 'grant', 'token', 'ttlSeconds']);
     expect(body.token).toMatch(/^owf_[A-Za-z0-9_-]{43}$/);
     expect(body.expiresAt).toBe(Math.floor((T0 + FLEET_SESSION_TTL_MS) / 1000));
     expect(body.ttlSeconds).toBe(900);
     await expect(verifyFleetSession(getAdminDb(), body.token)).resolves.toEqual({
       siteId: SITE,
       machineId: MACHINE,
+    });
+  });
+
+  describe('answers with the machine own grant', () => {
+    async function grantAnswer(entry: Data) {
+      agentToken();
+      paired();
+      grant({ enabled: true, senders: { [MACHINE]: entry } });
+      const res = await POST(request());
+      expect(res.status).toBe(200);
+      return (await res.json()).grant;
+    }
+
+    it('a whole-site grant, with no machines listed', async () => {
+      await expect(grantAnswer({ maxTier: 2, wholeSite: true })).resolves.toEqual({
+        maxTier: 2,
+        wholeSite: true,
+        machineIds: [],
+      });
+    });
+
+    it('a grant over named machines', async () => {
+      await expect(grantAnswer({ maxTier: 3, machineIds: ['m-2', 'm-3'] })).resolves.toEqual({
+        maxTier: 3,
+        wholeSite: false,
+        machineIds: ['m-2', 'm-3'],
+      });
+    });
+
+    it('a grant that names no machine', async () => {
+      await expect(grantAnswer({ maxTier: 1 })).resolves.toEqual({ maxTier: 1, wholeSite: false, machineIds: [] });
     });
   });
 

@@ -321,7 +321,7 @@ desktop/
 │  ├─ assets/fonts/      # self-hosted Geist / Geist Mono (variable woff2)
 │  ├─ components/        # the process list and detail, schedule editor, join/leave site, drop confirm,
 │  │                     #   missing path, restart countdown, permission banner (macOS), submit issue,
-│  │                     #   connect an ai agent, status footer
+│  │                     #   settings, status footer
 │  ├─ components/ui/     # 14 shadcn primitives, copied from web/ (see "Design system")
 │  ├─ hooks/             # config, app states, file watch, service health, file drop, launch flags
 │  ├─ lib/ipc.ts         # typed wrappers for every host command + event
@@ -385,13 +385,15 @@ the daemon refuses a flag the console user wrote, and the request seam has no
 kill verb. `exit` stops the service and quits; the stop needs administrator
 rights, so it raises one UAC prompt, as `restart service` on a stopped service
 and the footer's `start service` can; nothing elevates without a click. The
-window's menu (`AppMenu`) is `swoop`, `docs`, `connect an ai agent`,
-`submit issue`, `config`, `logs`, `appearance`, `start on login`,
-`restart service`, `reload window`, and the site action last.
-`connect an ai agent` shows the command that connects an AI agent on this
-machine to hoot mcp (`ConnectAgentDialog`), and is there only on Windows and
-macOS with the agent's `fleet_mcp.py` installed (`hoot_mcp_command` in
-`src/agent_cli.rs`). Both `swoop` entries
+window's menu (`AppMenu`) is `swoop`, `docs`, `submit issue`, `config`, `logs`,
+`settings`, `restart service`, `reload window`, and the site action last.
+`settings` opens `SettingsDialog`: `general` (appearance, start on login), `hoot mcp`
+and, on macOS, `permissions`. The `hoot mcp` page is there only on Windows and macOS with
+the agent's `fleet_mcp.py` installed (`hoot_mcp_command` in `src/agent_cli.rs`); its switch
+asks a site admin to allow the machine (the app opens the admin panel at it) or, turned off,
+drops the machine's own grant (`hoot-off`). `App.tsx` owns those confirms and the toasts
+for `hoot://tools-synced`. The installer's `--hoot` flag reaches `JoinSiteDialog` as
+`wantsHoot`. Both `swoop` entries
 open owlette swoop, the viewer app, on `<dashboard>/swoop` (`src/viewer_launch.rs`):
 the dashboard is the one `config.json`'s `firebase.api_base` names, and the app
 is looked for beside this exe on Windows and Linux and at

@@ -1,35 +1,50 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Suspense, useMemo, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites } from '@/hooks/useFirestore';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { HootSiteSettings } from '@/components/admin/HootSiteSettings';
 
-export default function HootSettingsPage() {
+function HootSettings() {
   const { user, isSuperadmin, userSites, lastSiteId, updateLastSite, isSiteAdmin } = useAuth();
   const { sites: allSites, loading } = useSites(user?.uid, userSites, isSuperadmin);
   // these settings need the whole site, so a site the person only belongs to,
   // or reaches some machines of, is not on offer
   const sites = useMemo(() => allSites.filter((site) => isSiteAdmin(site.id)), [allSites, isSiteAdmin]);
   const [userSelectedSiteId, setUserSelectedSiteId] = useState<string>('');
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // a link from a machine's request (the app, the installer): ?site=&machine=
+  const linkedSiteId = searchParams.get('site');
+  const machineId = searchParams.get('machine') ?? undefined;
 
-  // the person's pick, else the site they last worked on, else the first: derived,
-  // so nothing has to sync once the sites arrive
+  // the person's pick, else the linked site, else the site they last worked on, else
+  // the first: derived, so nothing has to sync once the sites arrive
   const selectedSiteId = useMemo(() => {
     if (userSelectedSiteId) return userSelectedSiteId;
     if (sites.length === 0) return '';
+    if (linkedSiteId && sites.find((s) => s.id === linkedSiteId)) return linkedSiteId;
     const savedSite =
       lastSiteId ||
       (typeof window !== 'undefined' ? localStorage.getItem('owlette_current_site') : null);
     if (savedSite && sites.find((s) => s.id === savedSite)) return savedSite;
     return sites[0].id;
-  }, [userSelectedSiteId, sites, lastSiteId]);
+  }, [userSelectedSiteId, sites, linkedSiteId, lastSiteId]);
 
   const handleSiteChange = (siteId: string) => {
     setUserSelectedSiteId(siteId);
     updateLastSite(siteId);
+  };
+
+  const dropMachine = () => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete('machine');
+    const query = next.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname);
   };
 
   return (
@@ -58,7 +73,15 @@ export default function HootSettingsPage() {
         />
 
         {/* keyed on the site, so a write in flight never lands on the next one picked */}
-        {selectedSiteId && <HootSiteSettings key={selectedSiteId} siteId={selectedSiteId} />}
+        {selectedSiteId && (
+          <HootSiteSettings
+            key={selectedSiteId}
+            siteId={selectedSiteId}
+            siteName={sites.find((s) => s.id === selectedSiteId)?.name ?? selectedSiteId}
+            machineId={selectedSiteId === linkedSiteId ? machineId : undefined}
+            onCancelAllow={dropMachine}
+          />
+        )}
         {!loading && sites.length === 0 && (
           <p className="text-sm text-muted-foreground">
             these settings need a site you own or administer whole.
@@ -66,5 +89,13 @@ export default function HootSettingsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function HootSettingsPage() {
+  return (
+    <Suspense>
+      <HootSettings />
+    </Suspense>
   );
 }
