@@ -1,6 +1,8 @@
 mod agent_cli;
+mod ai_tools;
 mod awake;
 mod commands;
+mod hoot_sync;
 mod issue_attachments;
 #[cfg(unix)]
 mod jobrunner;
@@ -117,6 +119,10 @@ pub fn run() {
       commands::swoop_viewer_installed,
       commands::open_swoop_viewer,
       commands::hoot_mcp_command,
+      commands::fleet_state,
+      commands::hoot_tools,
+      commands::set_hoot_tool,
+      commands::hoot_hold_off,
       commands::log_event,
       commands::sidebar_width,
       commands::set_sidebar_width,
@@ -177,6 +183,9 @@ pub fn run() {
       // The session's half of keep screens awake: the service asks through its
       // status file, and this holds the idle lock and screensaver it cannot.
       awake::spawn(&root);
+
+      // Keeps the AI tools in step with this machine's hoot mcp grant.
+      hoot_sync::spawn(app.handle());
 
       // Publish our PID so the service stops spawning trays at us. Process-lifetime;
       // `tmp/gui.pid` exists only while the window is up.

@@ -82,7 +82,7 @@ def machine(tmp_path, monkeypatch):
     svc = SimpleNamespace(
         cortex_pid=None,
         _stop_swoop=lambda: None,
-        fleet_session=SimpleNamespace(withdraw=lambda: None),
+        fleet_session=SimpleNamespace(withdraw=lambda forget=False: None),
     )
     svc._is_cortex_alive = owlette_service.OwletteService._is_cortex_alive.__get__(svc)
     svc.unpair = owlette_service.OwletteService.unpair.__get__(svc)

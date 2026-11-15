@@ -145,7 +145,7 @@ def _service_double(hoot_pid=None):
     calls = []
     double = SimpleNamespace(
         _stop_swoop=lambda: calls.append('stop_swoop'),
-        fleet_session=SimpleNamespace(withdraw=lambda: calls.append('withdraw_fleet_session')),
+        fleet_session=SimpleNamespace(withdraw=lambda forget=False: calls.append('withdraw_fleet_session')),
         _is_cortex_alive=lambda: hoot_pid is not None,
         cortex_pid=hoot_pid,
     )

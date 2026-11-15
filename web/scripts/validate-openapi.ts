@@ -46,6 +46,7 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/screenshot',
   // a granted machine's own routes (ADR 0017): the agent and its local script call them, never an api key.
   '/api/agent/fleet/session',
+  '/api/agent/fleet/grant',
   '/api/agent/fleet/tools',
   '/api/agent/fleet/call',
   '/api/agent/fleet/calls/{callId}',

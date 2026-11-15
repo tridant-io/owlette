@@ -30,6 +30,7 @@ else, and never touches the console/clipboard UI above:
     --report-issue FILE  Submit the feedback payload in FILE to `bug_reports`.
     --reboot-now         Record an owlette-initiated reboot and restart the machine.
     --dismiss-reboot     Clear the cloud rebootPending flag for this machine.
+    --hoot-off           Drop this machine's own hoot mcp grant on the server.
     --preseed            Pair from the preseed a POSIX package left in the tree.
 """
 
@@ -207,7 +208,8 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
                      show_prompts: bool = True,
                      on_phrase: Optional[Callable[[dict], None]] = None,
                      should_cancel: Optional[Callable[[], bool]] = None,
-                     copy_clipboard: bool = True):
+                     copy_clipboard: bool = True,
+                     wants_hoot: bool = False):
     """
     Run device code pairing flow to configure site authentication.
 
@@ -240,6 +242,8 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
             it into owlette.app/add. The desktop app owns its own clipboard
             affordance and passes False so a background subprocess never steals
             the operator's clipboard.
+        wants_hoot: Carry "allow hoot mcp" in the device code, so /add offers
+            the site admin the allow card. Never sent on the /ADD= path.
 
     Returns:
         tuple: (success: bool, message: str, site_id: Optional[str])
@@ -375,7 +379,7 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
                 print(f"  {DIM}requesting pairing code from server...{RESET}")
                 print()
 
-            device_data = auth_manager.request_device_code()
+            device_data = auth_manager.request_device_code(wants_hoot=wants_hoot)
 
             pair_phrase = device_data['pairPhrase']
             device_code = device_data['deviceCode']
@@ -590,7 +594,8 @@ def _machine_document(project_id: str, api_base: str, site_id: str):
 
 def run_json_progress(api_base: str = None, environment: str = None,
                       timeout_seconds: int = TIMEOUT_SECONDS,
-                      restart_service: bool = True) -> int:
+                      restart_service: bool = True,
+                      wants_hoot: bool = False) -> int:
     """Pair this machine, reporting progress as JSON lines.
 
     The same `run_pairing_flow` the installer runs, with the console and
@@ -635,6 +640,7 @@ def run_json_progress(api_base: str = None, environment: str = None,
         copy_clipboard=False,
         on_phrase=on_phrase,
         should_cancel=heartbeat,
+        wants_hoot=wants_hoot,
     )
 
     if not success:
@@ -1267,6 +1273,47 @@ def run_dismiss_reboot() -> int:
     return 0
 
 
+def run_hoot_off() -> int:
+    """Drop this machine's own hoot mcp grant.
+
+    Lowering only: the server removes this machine's sender row, revokes its
+    fleet sessions and refreshes its settings. Raising a grant stays an admin's.
+    """
+    import requests as http_requests
+
+    try:
+        web_base, token = _web_session()
+        response = http_requests.delete(
+            f"{web_base}/api/agent/fleet/grant",
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=15,
+        )
+    except http_requests.RequestException as e:
+        _emit('error', f"could not reach the server: {type(e).__name__}")
+        return 1
+    except RuntimeError as e:
+        _emit('error', str(e))
+        return 1
+
+    if response.status_code == 401:
+        _emit('error', 'this machine is not authorized, pair it again')
+        return 1
+    if response.status_code == 429:
+        _emit('error', 'too many requests, try again in a minute')
+        return 1
+    if response.status_code != 200:
+        _emit('error', f"the server refused ({response.status_code})")
+        return 1
+    try:
+        dropped = bool(response.json().get('dropped'))
+    except (ValueError, AttributeError):
+        _emit('error', 'the server answered with something unreadable')
+        return 1
+
+    _emit('done', {'dropped': dropped})
+    return 0
+
+
 def run_preseed() -> int:
     """Pair this machine from the preseed a POSIX package left in the tree.
 
@@ -1516,7 +1563,7 @@ REQUEST_RATE_LIMIT_SECONDS = 300
 
 # `report_issue` has no window of its own: the web route rate-limits reports.
 REQUEST_VERBS = ('pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
-                 'report_issue')
+                 'hoot_off', 'report_issue')
 _RATE_LIMITED_VERBS = frozenset({'restart', 'reboot'})
 # The verbs that move a machine between sites.
 _SITE_CHANGE_VERBS = ('pair', 'leave')
@@ -1867,6 +1914,8 @@ def _execute_request(request: dict, reply_path: str, uid: int, cloud_detached) -
             _write_reply(reply_path, ('done', {'rebooting': True}))
         elif verb == 'dismiss_reboot':
             _spawn_into_reply(reply_path, '--dismiss-reboot')
+        elif verb == 'hoot_off':
+            _spawn_into_reply(reply_path, '--hoot-off')
         elif verb == 'report_issue':
             staged = _stage_report(request['report'])
             try:
@@ -2232,6 +2281,7 @@ def _run_headless_mode(args) -> Optional[int]:
             ('--report-issue', args.report_issue is not None),
             ('--reboot-now', args.reboot_now),
             ('--dismiss-reboot', args.dismiss_reboot),
+            ('--hoot-off', args.hoot_off),
             ('--preseed', args.preseed),
         ) if chosen
     ]
@@ -2250,7 +2300,8 @@ def _run_headless_mode(args) -> Optional[int]:
                 _emit('error', "--url needs --server: re-run with --server dev or --server prod")
                 return 2
             return run_json_progress(api_base=args.url, environment=args.server,
-                                     restart_service=not args.no_service_restart)
+                                     restart_service=not args.no_service_restart,
+                                     wants_hoot=args.wants_hoot)
         if args.leave:
             return run_leave_site()
         if args.report_issue is not None:
@@ -2260,6 +2311,8 @@ def _run_headless_mode(args) -> Optional[int]:
             return run_reboot_now()
         if args.preseed:
             return run_preseed()
+        if args.hoot_off:
+            return run_hoot_off()
         return run_dismiss_reboot()
     except Exception as e:
         logging.exception("Headless mode failed")
@@ -2297,6 +2350,12 @@ def main():
                         help='Record an owlette-initiated reboot and restart the machine.')
     parser.add_argument('--dismiss-reboot', action='store_true',
                         help="Clear this machine's cloud rebootPending flag.")
+    parser.add_argument('--hoot-off', action='store_true',
+                        help="Drop this machine's own hoot mcp grant on the server.")
+    parser.add_argument('--wants-hoot', action='store_true',
+                        help='Ask the site admin to allow hoot mcp for this machine: '
+                             'carried in the device code of an interactive or '
+                             '--json-progress pairing.')
     parser.add_argument('--no-service-restart', action='store_true',
                         help='With --json-progress, leave the agent running once the '
                              'machine is paired rather than restarting it. The '
@@ -2348,6 +2407,7 @@ def main():
         environment=args.server,
         add_phrase=args.add,
         show_prompts=True,
+        wants_hoot=args.wants_hoot,
     )
 
     if success:

@@ -36,9 +36,18 @@ jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites, loading: false }),
 }));
 
+let search = '';
+const replace = jest.fn();
+jest.mock('next/navigation', () => ({
+  useRouter: () => ({ replace }),
+  usePathname: () => '/admin/hoot',
+  useSearchParams: () => new URLSearchParams(search),
+}));
+
 let fleetEnabled = false;
+let storedSenders: Record<string, { maxTier: 1 | 2 | 3; machineIds: string[] | null }> = {};
 const fleetSettingsFor = jest.fn((_siteId: string) => ({
-  settings: { enabled: fleetEnabled, senders: {} },
+  settings: { enabled: fleetEnabled, senders: storedSenders },
   loading: false,
 }));
 jest.mock('@/hooks/useFleetSettings', () => ({
@@ -48,11 +57,13 @@ let requireApproval = true;
 jest.mock('@/hooks/useHootApprovalSetting', () => ({
   useHootApprovalSetting: () => ({ requireApproval }),
 }));
+let siteMachines: { id: string; name: string }[] = [];
 jest.mock('@/hooks/useSiteMachines', () => ({
-  useSiteMachines: () => ({ machines: [], error: null, refresh: jest.fn() }),
+  useSiteMachines: () => ({ machines: siteMachines, error: null, refresh: jest.fn() }),
 }));
+const toastError = jest.fn();
 jest.mock('@/lib/toast', () => ({
-  toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
+  toast: { success: jest.fn(), error: (...args: unknown[]) => toastError(...args), info: jest.fn(), warning: jest.fn() },
 }));
 
 const fetchMock = jest.fn();
@@ -66,6 +77,11 @@ beforeEach(() => {
   administered = ['site-a', 'site-b'];
   lastSiteId = null;
   fleetEnabled = false;
+  storedSenders = {};
+  siteMachines = [];
+  search = '';
+  replace.mockReset();
+  toastError.mockReset();
   requireApproval = true;
   updateLastSite.mockReset();
   fleetSettingsFor.mockClear();
@@ -118,6 +134,164 @@ describe('which site it shows', () => {
 
     expect(screen.queryByRole('switch')).not.toBeInTheDocument();
     expect(screen.getByText('these settings need a site you own or administer whole.')).toBeInTheDocument();
+  });
+});
+
+describe('a link from a machine (?site=&machine=)', () => {
+  it('opens on the linked site ahead of the last one worked on', () => {
+    lastSiteId = 'site-a';
+    search = 'site=site-b';
+    render(<HootSettingsPage />);
+
+    expect(theSwitch()).toHaveAttribute('id', 'fleet-site-b');
+  });
+
+  it('ignores a linked site the person does not administer', () => {
+    lastSiteId = 'site-a';
+    search = 'site=site-c';
+    render(<HootSettingsPage />);
+
+    expect(theSwitch()).toHaveAttribute('id', 'fleet-site-a');
+  });
+});
+
+describe('the allow card', () => {
+  const card = () => screen.queryByTestId('allow-machine-card');
+
+  beforeEach(() => {
+    siteMachines = [
+      { id: 'm1', name: 'Kiosk One' },
+      { id: 'm2', name: 'Kiosk Two' },
+    ];
+    search = 'site=site-b&machine=m1';
+  });
+
+  it('shows for a machine of the site with no sender row', () => {
+    render(<HootSettingsPage />);
+
+    expect(card()).toBeInTheDocument();
+    expect(screen.getByText('allow Kiosk One to act on other machines')).toBeInTheDocument();
+    expect(screen.getByText("ai tools on Kiosk One get hoot's tools for the machines you pick.")).toBeInTheDocument();
+    expect(screen.getByText('this also turns on "let machines act on other machines" for Site B.')).toBeInTheDocument();
+  });
+
+  it('leaves out the switch note when the switch is already on', () => {
+    fleetEnabled = true;
+    render(<HootSettingsPage />);
+
+    expect(card()).toBeInTheDocument();
+    expect(screen.queryByText(/this also turns on/)).not.toBeInTheDocument();
+  });
+
+  it('is absent with no machine in the link', () => {
+    search = 'site=site-b';
+    render(<HootSettingsPage />);
+
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it('is absent when the linked site is not the one shown', () => {
+    search = 'site=site-c&machine=m1';
+    render(<HootSettingsPage />);
+
+    expect(theSwitch()).toHaveAttribute('id', 'fleet-site-a');
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it('is absent for a machine the site does not have', () => {
+    search = 'site=site-b&machine=nope';
+    render(<HootSettingsPage />);
+
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it('is absent for a machine that already has a row while the site switch is on', () => {
+    fleetEnabled = true;
+    storedSenders = { m1: { maxTier: 1, machineIds: [] } };
+    render(<HootSettingsPage />);
+
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it('shows prefilled from the stored row when the machine has one but the site switch is off', async () => {
+    const user = userEvent.setup();
+    storedSenders = { m1: { maxTier: 2, machineIds: ['m2'] }, m2: { maxTier: 1, machineIds: [] } };
+    render(<HootSettingsPage />);
+
+    expect(card()).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'how far' })).toHaveTextContent('bounded changes');
+    expect(screen.getByText('this also turns on "let machines act on other machines" for Site B.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'allow' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      enabled: true,
+      senders: { m1: { maxTier: 2, machineIds: ['m2'] }, m2: { maxTier: 1 } },
+    });
+  });
+
+  it('allows with one PATCH: the site switch on and the stored senders carried', async () => {
+    const user = userEvent.setup();
+    storedSenders = { m2: { maxTier: 2, machineIds: ['m1'] } };
+    render(<HootSettingsPage />);
+
+    await user.click(screen.getByRole('button', { name: 'allow' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/sites/site-b/fleet-settings');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({
+      enabled: true,
+      senders: { m2: { maxTier: 2, machineIds: ['m1'] }, m1: { maxTier: 1 } },
+    });
+  });
+
+  it('sends the chosen tier and machines', async () => {
+    const user = userEvent.setup();
+    render(<HootSettingsPage />);
+
+    await user.click(screen.getByRole('combobox', { name: 'how far' }));
+    await user.click(screen.getByRole('option', { name: 'bounded changes' }));
+    await user.click(screen.getByTestId('allow-machine-machines'));
+    await user.click(await screen.findByRole('checkbox', { name: 'Kiosk Two' }));
+    await user.keyboard('{Escape}');
+    await user.click(screen.getByRole('button', { name: 'allow' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      enabled: true,
+      senders: { m1: { maxTier: 2, machineIds: ['m2'] } },
+    });
+  });
+
+  it('shows the refusal in a toast and keeps the card', async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue({
+      ok: false,
+      json: async () => ({ detail: 'a second factor is needed' }),
+    });
+    render(<HootSettingsPage />);
+
+    await user.click(screen.getByRole('button', { name: 'allow' }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('could not change which machines may act on others', {
+        description: 'a second factor is needed',
+      }),
+    );
+    expect(card()).toBeInTheDocument();
+  });
+
+  it('cancel drops ?machine= and writes nothing', async () => {
+    const user = userEvent.setup();
+    render(<HootSettingsPage />);
+
+    await user.click(screen.getByRole('button', { name: 'cancel' }));
+
+    expect(replace).toHaveBeenCalledWith('/admin/hoot?site=site-b');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

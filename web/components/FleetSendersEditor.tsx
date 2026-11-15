@@ -7,6 +7,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useFleetSettings } from '@/hooks/useFleetSettings';
+import { useFleetSettingsWrite } from '@/hooks/useFleetSettingsWrite';
 import { useSiteMachines } from '@/hooks/useSiteMachines';
 import { storedFleetGrant, type FleetGrant, type StoredFleetGrant } from '@/lib/fleet/grant';
 import { toast } from '@/lib/toast';
@@ -29,6 +30,12 @@ export const FLEET_COPY = {
   reachesNothing: 'reaches no machines yet: pick them under on which machines.',
   loading: 'loading machines…',
   noMachines: 'this site has no machines yet.',
+  allowTitle: (machine: string) => `allow ${machine} to act on other machines`,
+  allowBody: (machine: string) => `ai tools on ${machine} get hoot's tools for the machines you pick.`,
+  allowTurnsOn: (site: string) => `this also turns on "let machines act on other machines" for ${site}.`,
+  allowCancel: 'cancel',
+  allowConfirm: 'allow',
+  writeFailed: 'could not change which machines may act on others',
 } as const;
 
 type Reach = keyof typeof FLEET_COPY.reaches;
@@ -50,6 +57,7 @@ function reachOf(grant: StoredFleetGrant, picking: boolean): Reach {
 export function FleetSendersEditor({ siteId }: { siteId: string }) {
   const { settings, loading } = useFleetSettings(siteId);
   const { machines, error } = useSiteMachines(siteId);
+  const writeSettings = useFleetSettingsWrite(siteId);
   const [draft, setDraft] = useState<Senders | null>(null);
   // machines whose reach is "chosen machines" with none picked yet, which stores the same as none
   const [picking, setPicking] = useState<ReadonlySet<string>>(new Set());
@@ -77,19 +85,11 @@ export function FleetSendersEditor({ siteId }: { siteId: string }) {
     queue.current = queue.current.then(async () => {
       let failed = false;
       try {
-        const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/fleet-settings`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ senders: next }),
-        });
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail || body?.title || 'try again in a moment.');
-        }
+        await writeSettings({ senders: next });
       } catch (err) {
         failed = true;
         console.error('Failed to update the machines that may act on others:', err);
-        toast.error('could not change which machines may act on others', {
+        toast.error(FLEET_COPY.writeFailed, {
           description: err instanceof Error ? err.message : String(err),
         });
       } finally {

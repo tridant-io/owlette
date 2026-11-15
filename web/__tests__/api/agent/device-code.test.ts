@@ -258,6 +258,27 @@ describe('POST /api/agent/auth/device-code (generate)', () => {
     expect(written.preauthorizedIntent).toBeUndefined();
   });
 
+  it('stores wantsHoot on an interactive start only when it is sent as true', async () => {
+    await generatePOST(makeRequest('/api/agent/auth/device-code', { machineId: 'test-machine', wantsHoot: true }));
+    expect((mockDocSet.mock.calls[0]![0] as Record<string, unknown>).wantsHoot).toBe(true);
+
+    mockDocSet.mockClear();
+    await generatePOST(makeRequest('/api/agent/auth/device-code', { machineId: 'test-machine', wantsHoot: false }));
+    expect((mockDocSet.mock.calls[0]![0] as Record<string, unknown>).wantsHoot).toBeUndefined();
+
+    mockDocSet.mockClear();
+    await generatePOST(makeRequest('/api/agent/auth/device-code', { machineId: 'test-machine' }));
+    expect((mockDocSet.mock.calls[0]![0] as Record<string, unknown>).wantsHoot).toBeUndefined();
+  });
+
+  it('does not store wantsHoot on a dashboard-originated code', async () => {
+    mockGetSession.mockResolvedValue({ userId: 'user-123', expiresAt: Date.now() + 60_000 });
+
+    await generatePOST(makeRequest('/api/agent/auth/device-code', { wantsHoot: true }));
+
+    expect((mockDocSet.mock.calls[0]![0] as Record<string, unknown>).wantsHoot).toBeUndefined();
+  });
+
   it('marks dashboard-originated codes as preauthorizedIntent and omits deviceCode', async () => {
     mockGetSession.mockResolvedValue({
       userId: 'user-123',
@@ -1371,7 +1392,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
       );
 
       expect(status).toBe(200);
-      expect(body).toEqual({ machineId: 'test-machine', existing: true });
+      expect(body).toEqual({ machineId: 'test-machine', existing: true, wantsHoot: false });
       expectNoMint();
     });
 
@@ -1381,8 +1402,43 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
       );
 
       expect(status).toBe(200);
-      expect(body).toEqual({ machineId: 'test-machine', existing: false });
+      expect(body).toEqual({ machineId: 'test-machine', existing: false, wantsHoot: false });
       expectNoMint();
+    });
+
+    it('previews and authorizes a code that asked for hoot, saying so both times', async () => {
+      mockTransactionGet.mockResolvedValue({
+        exists: true,
+        data: () => ({
+          status: 'pending',
+          machineId: 'test-machine',
+          version: '4.2.1',
+          wrapVersion: 'v1',
+          deviceCode: 'a'.repeat(86),
+          wantsHoot: true,
+          expiresAt: { toMillis: () => Date.now() + 600_000 },
+        }),
+      });
+      const send = (extra: Record<string, unknown>) =>
+        makeRequest('/api/agent/auth/device-code/authorize', {
+          pairPhrase: 'test-pair-phrase',
+          siteId: 'site-1',
+          ...extra,
+        });
+
+      const preview = await parseResponse(await authorizePOST(send({ preview: true })));
+      expect(preview.body.wantsHoot).toBe(true);
+
+      const authorized = await parseResponse(await authorizePOST(send({})));
+      expect(authorized.status).toBe(200);
+      expect(authorized.body.wantsHoot).toBe(true);
+    });
+
+    it('answers wantsHoot false when authorizing a code that did not ask', async () => {
+      const { status, body } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(200);
+      expect(body.wantsHoot).toBe(false);
     });
 
     it('refuses to pair a machine already on the site without a confirmation that names it', async () => {

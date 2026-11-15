@@ -242,3 +242,16 @@ def test_machine_id_uses_the_persisted_identity(monkeypatch):
     assert auth_manager.machine_id == sentinel
     assert firebase_client.machine_id == sentinel
     assert mock_post.call_args.kwargs["json"]["machineId"] == sentinel
+
+
+def test_the_installer_console_path_never_asks_for_hoot_unless_told(tmp_path):
+    _result, auth_manager, _save = _run_interactive_flow(tmp_path)
+    auth_manager.request_device_code.assert_called_once_with(wants_hoot=False)
+
+    _result, auth_manager, _save = _run_interactive_flow(tmp_path, wants_hoot=True)
+    auth_manager.request_device_code.assert_called_once_with(wants_hoot=True)
+
+
+def test_the_add_path_never_sends_wants_hoot():
+    _result, mock_post = _run_add_flow()
+    assert all("wantsHoot" not in call.kwargs["json"] for call in mock_post.call_args_list)

@@ -7,6 +7,7 @@
 
 import { createHash, randomBytes } from 'crypto';
 import type { DocumentReference, Firestore } from 'firebase-admin/firestore';
+import { isTokenDead } from '@/lib/agentTokens';
 import { toEpochMillis } from '@/lib/apiKeyTypes';
 import logger from '@/lib/logger';
 
@@ -25,6 +26,24 @@ const DELETE_BATCH_SIZE = 100;
 export interface FleetSessionSubject {
   siteId: string;
   machineId: string;
+}
+
+/**
+ * a valid agent ID token is not proof the machine is still paired: it must still
+ * hold an `agent_refresh_tokens` row the refresh route would accept and a
+ * machine row. revoking its agent tokens or removing the machine deletes those.
+ */
+export async function machinePairingIsLive(db: Firestore, siteId: string, machineId: string): Promise<boolean> {
+  const [tokens, machine] = await Promise.all([
+    db.collection('agent_refresh_tokens')
+      .where('siteId', '==', siteId)
+      .where('machineId', '==', machineId)
+      .get(),
+    db.collection('sites').doc(siteId).collection('machines').doc(machineId).get(),
+  ]);
+  if (!machine.exists) return false;
+  const now = Date.now();
+  return tokens.docs.some((doc) => !isTokenDead(doc.data(), now));
 }
 
 function hashFleetToken(token: string): string {

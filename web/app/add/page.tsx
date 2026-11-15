@@ -21,7 +21,7 @@ interface Site {
 }
 
 export default function AddMachinePage() {
-  const { user, loading: authLoading, isSuperadmin, userSites } = useAuth();
+  const { user, loading: authLoading, isSuperadmin, userSites, isSiteAdmin } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
@@ -36,6 +36,7 @@ export default function AddMachinePage() {
     isAuthorizing,
     success: isAuthorized,
     authorizedMachineId: machineId,
+    authorizedWantsHoot,
   } = useDeviceCodeAuthorize(selectedSiteId);
   /**
    * Whether the selection was auto-made (single-site convenience) rather than
@@ -159,6 +160,7 @@ export default function AddMachinePage() {
   if (!user) return null;
 
   if (isAuthorized) {
+    const offerHoot = authorizedWantsHoot && !!machineId && isSiteAdmin(selectedSiteId);
     return (
       /* Same shell as the form state — this used to be a third, narrower card
          geometry. */
@@ -180,12 +182,38 @@ export default function AddMachinePage() {
               'the machine will appear on your dashboard shortly.'
             )}
           </p>
-          <Button
-            onClick={() => router.push('/dashboard')}
-            className="w-full cursor-pointer"
-          >
-            go to dashboard
-          </Button>
+          {offerHoot ? (
+            <div className="space-y-3">
+              <p className="text-muted-foreground">
+                <span className="break-all text-foreground">{machineId}</span> asked to let
+                ai tools on it use hoot.
+              </p>
+              <Button
+                onClick={() =>
+                  router.push(
+                    `/admin/hoot?site=${encodeURIComponent(selectedSiteId)}&machine=${encodeURIComponent(machineId)}`
+                  )
+                }
+                className="w-full cursor-pointer"
+              >
+                allow it to use hoot
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => router.push('/dashboard')}
+                className="w-full cursor-pointer"
+              >
+                not now
+              </Button>
+            </div>
+          ) : (
+            <Button
+              onClick={() => router.push('/dashboard')}
+              className="w-full cursor-pointer"
+            >
+              go to dashboard
+            </Button>
+          )}
         </div>
       </AuthShell>
     );

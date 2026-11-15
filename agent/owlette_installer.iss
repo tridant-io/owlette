@@ -542,6 +542,8 @@ var
   // Set only by the GUI handoff, and read by ShouldOfferOpenApp to suppress
   // the finished page redundant "open owlette" checkbox.
   AppOpenedByHandoff: Boolean;
+  // Created in InitializeWizard; stays unticked when ShouldSkipPage hides it.
+  HootPage: TInputOptionWizardPage;
 
 // The only table in this script that produces user-facing hosts and configure_site
 // arguments. Everything that needs the server — the configure_site.py args, the GUI
@@ -566,6 +568,11 @@ begin
     Result := 'owlette.app';
 end;
 
+function HootTicked(): Boolean;
+begin
+  Result := (HootPage <> nil) and HootPage.Values[0];
+end;
+
 // The ready-to-install page is the last surface an operator reads BEFORE
 // committing, and it is the one place the wrong environment actually gets
 // chosen — the status caption only flashes for a few seconds and the MsgBox
@@ -582,6 +589,8 @@ begin
   if MemoGroupInfo <> '' then Result := Result + MemoGroupInfo + NewLine + NewLine;
   if MemoTasksInfo <> '' then Result := Result + MemoTasksInfo + NewLine + NewLine;
   Result := Result + 'Owlette server:' + NewLine + Space + GetWebHost();
+  if HootTicked() then
+    Result := Result + NewLine + NewLine + 'AI tools:' + NewLine + Space + 'Add hoot to the AI tools on this computer';
 end;
 
 function GetConfigureArgs(Param: String): String;
@@ -688,6 +697,26 @@ begin
 
   Log('Config has valid firebase section - skipping OAuth (upgrade)');
   Result := False;
+end;
+
+procedure InitializeWizard();
+begin
+  HootPage := CreateInputOptionPage(wpSelectDir, 'AI tools', 'Let AI tools on this computer use hoot?',
+    'Claude Code, Cursor, VS Code and other tools that support MCP get hoot''s tools to act on other machines in your site. ' +
+    'After pairing, a site admin chooses how far it may go. You can change this later in Owlette''s settings.',
+    False, False);
+  HootPage.Add('Add hoot to the AI tools on this computer');
+  HootPage.Values[0] := False;
+end;
+
+// Only a pairing carries the answer onward, so skip the page wherever none
+// follows a question: silent, /ADD= (console path), or an upgrade of a paired
+// machine. ShouldConfigureSite only reads config.json, so it is safe this early.
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if (HootPage <> nil) and (PageID = HootPage.ID) then
+    Result := WizardSilent() or (ExpandConstant('{param:ADD|}') <> '') or (not ShouldConfigureSite());
 end;
 
 // WebView2 Evergreen runtime, per Microsoft's documented detection contract:
@@ -912,7 +941,7 @@ function RunPairingHandoff(): Boolean;
 var
   ResultCode: Integer;
   ShowCmd: Integer;
-  AppExe, PythonExe, ConfigArgs, AddPhrase: String;
+  AppExe, PythonExe, ConfigArgs, AddPhrase, HootDesktopArg: String;
 begin
   Result := True;
   AddPhrase := ExpandConstant('{param:ADD|}');
@@ -943,7 +972,8 @@ begin
   begin
     WizardForm.StatusLabel.Caption := 'Opening owlette to finish pairing with ' + GetWebHost() + '...';
     try
-      if ExecAsOriginalUser(AppExe, '--pair --server ' + GetServerParam(), '', SW_SHOW, ewNoWait, ResultCode) then
+      if HootTicked() then HootDesktopArg := ' --hoot' else HootDesktopArg := '';
+      if ExecAsOriginalUser(AppExe, '--pair --server ' + GetServerParam() + HootDesktopArg, '', SW_SHOW, ewNoWait, ResultCode) then
       begin
         AppOpenedByHandoff := True;
         Log('Handed pairing to the desktop app');
@@ -961,6 +991,7 @@ begin
   // console. This is the only branch with an outcome to report.
   PythonExe := ExpandConstant('{app}\python\python.exe');
   ConfigArgs := '"' + ExpandConstant('{app}\agent\src\configure_site.py') + '" ' + GetConfigureArgs('');
+  if HootTicked() and (AddPhrase = '') then ConfigArgs := ConfigArgs + ' --wants-hoot';
   if WizardSilent() then ShowCmd := SW_HIDE else ShowCmd := SW_SHOW;
   if not WizardSilent() then
     WizardForm.StatusLabel.Caption := 'Pairing with ' + GetWebHost() + '...';

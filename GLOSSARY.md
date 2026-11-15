@@ -242,7 +242,7 @@ hoot's model loop running on the agent itself through the Claude CLI, close to t
 _Avoid_: agent hoot, offline hoot
 
 **hoot mcp**:
-hoot's tools offered to an AI agent on a paired machine, through the MCP server the owlette agent ships (`fleet_mcp.py`). The machine's pairing is the credential, and a site owner or site admin says per machine how far it goes and on which machines.
+hoot's tools offered to an AI agent on a paired machine, through the MCP server the owlette agent ships (`fleet_mcp.py`). The machine's pairing is the credential, and a site owner or site admin says per machine how far it goes and on which machines. The desktop app's settings has the switch that asks them, and adds hoot to the AI tools on the machine once they allow it.
 _Avoid_: relay (that is swoop's TURN relay), local hoot, fleet mcp (the working name, kept only in file, route and collection names)
 
 **Sender**:

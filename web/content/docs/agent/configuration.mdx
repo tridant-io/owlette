@@ -1,7 +1,7 @@
 ---
 title: "configuration"
 description: "configure the agent locally in the desktop app, remotely from the web dashboard, or by editing config.json directly. the file lives in the data root: C:\\ProgramData\\Owlette\\config\\config.json on Windows, /Library/Application Support/Owlette/config/config.json on macOS, /var/lib/owlette/config/config.json on Linux."
-keywords: ["settings", "config.json", "preferences", "app menu", "appearance", "dark mode", "light mode", "theme", "launch mode", "schedule", "leave site", "join site", "connect an ai agent", "removed from site"]
+keywords: ["settings", "config.json", "preferences", "app menu", "appearance", "dark mode", "light mode", "theme", "launch mode", "schedule", "leave site", "join site", "settings", "hoot mcp", "removed from site"]
 ---
 
 desktop app and dashboard writes apply immediately; the agent picks up config changes on a polling listener with a 2-10 second interval.
@@ -43,12 +43,22 @@ on macOS the window keeps the system's own window buttons at top left and shows 
 | **config** | open `config.json` |
 | **logs** | open the service's logs folder in the data root |
 | **docs** | open these docs |
-| **connect an ai agent** | Windows and macOS: show the command that connects an AI agent on this machine to [hoot mcp](/docs/agent/hoot-mcp), ready to copy. whether this machine may act on others is set in the dashboard |
+| **settings** | open the settings window, described in [settings](#settings) |
 | **submit issue** | send an issue, feature request or feedback, with the machine's metrics and the tail of `service.log` attached, and the machine's logs when you tick **attach logs** (see [sending logs to support](/docs/agent/troubleshooting#sending-logs-to-support)) |
-| **appearance** | `system`, `dark` or `light`. `system`, the default, follows the computer's own appearance; the other two pin the window's theme. it is this app's own setting, apart from the dashboard's |
-| **start on login** | whether the app starts with this account's session — the same setting as the tray's, described in [start on login](/docs/agent/system-tray#start-on-login) |
 | **restart service** | restart the service without an administrator prompt — described in [restart service](/docs/agent/system-tray#restart-service) |
 | **reload window** | rebuild the window from what is on disk |
+
+### settings
+
+the menu's **settings** opens a window with these pages:
+
+| page | what it holds |
+|------|---------------|
+| **general** | **appearance**: `system`, `dark` or `light`. `system`, the default, follows the computer's own appearance; the other two pin the window's theme. it is this app's own setting, apart from the dashboard's. **start on login**: whether the app starts with this account's session, the same setting as the tray's, described in [start on login](/docs/agent/system-tray#start-on-login) |
+| **hoot mcp** | a switch that asks a site admin to let this machine act on other machines, and the AI tools hoot is added to. see [hoot mcp](/docs/agent/hoot-mcp#turn-it-on). not offered on Linux |
+| **permissions** | macOS only: Screen Recording, Accessibility and clipboard sharing |
+
+the screenshots of the app menu on this page predate the settings window and need recapturing.
 
 ### what the footer's status word means
 

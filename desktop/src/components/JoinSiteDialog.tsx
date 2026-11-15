@@ -29,6 +29,8 @@ interface JoinSiteDialogProps {
    * to. The dev backdoor below overrides it for as long as the dialog is open.
    */
   server?: Server
+  /** The installer's box was ticked: the pairing page offers to allow hoot mcp for this machine. */
+  wantsHoot?: boolean
   /** Closes the dialog. Any run still in flight is cancelled first. */
   onClose: () => void
   /**
@@ -74,7 +76,14 @@ const DEV_SWITCH_WINDOW_MS = 2000
  * own run (`src-tauri/src/seam.rs`): cancel asks it to end the run, and the
  * service takes the new site up without a restart.
  */
-export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoined }: JoinSiteDialogProps) {
+export function JoinSiteDialog({
+  open,
+  server,
+  wantsHoot,
+  serviceConnected,
+  onClose,
+  onJoined,
+}: JoinSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('starting')
   const [phrase, setPhrase] = useState<PairPhrase | null>(null)
   const [status, setStatus] = useState('requesting a pairing phrase')
@@ -116,6 +125,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
 
     void startAgentRun('join', {
       server: requested,
+      payload: wantsHoot ? { wantsHoot: true } : undefined,
       onEvent: (event) => {
         if (disposed) return
         switch (event.event) {
@@ -176,7 +186,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
     }
     // `requested` restarts the run: a different cloud is a different phrase, so
     // reusing the one already in flight would pair against the wrong one.
-  }, [open, requested])
+  }, [open, requested, wantsHoot])
 
   useEffect(
     () => () => {

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { AppMenu } from '@/components/AppMenu'
-import { ConnectAgentDialog } from '@/components/ConnectAgentDialog'
 import { ConfirmDialog, type ConfirmRequest } from '@/components/ConfirmDialog'
 import { DropConfirm } from '@/components/DropConfirm'
 import { DropOverlay } from '@/components/DropOverlay'
@@ -13,10 +12,12 @@ import { ProcessDetail } from '@/components/ProcessDetail'
 import { ProcessList, type ProcessAction } from '@/components/ProcessList'
 import { ReportIssueDialog } from '@/components/ReportIssueDialog'
 import { RestartCountdown } from '@/components/RestartCountdown'
+import { SettingsDialog } from '@/components/settings/SettingsDialog'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
 import { PermissionBanner } from '@/components/PermissionBanner'
+import { openExternalUrl, runAgent } from '@/lib/agentCli'
 import { IS_LINUX, IS_MAC } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
@@ -48,7 +49,12 @@ import {
   ARG_PAIR,
   accessibilityGranted,
   clipboardSharing,
+  fleetState,
+  hootFromArgs,
+  hootHoldOff,
+  hootTools,
   hostname,
+  onHootToolsSynced,
   serverFromArgs,
   setStartupLink,
   openScreenRecordingSettings,
@@ -91,6 +97,14 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** "a", "a and b", "a, b and c" */
+function listOf(labels: string[]): string {
+  return labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`
+}
+
+/** how often to ask whether an admin has allowed hoot mcp yet, while waiting */
+const HOOT_PENDING_POLL_MS = 10_000
+
 /** The dropped file's own name, for a toast that has to fit on one line. */
 function fileNameOf(path: string): string {
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
@@ -115,7 +129,7 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const [dropped, setDropped] = useState<DropCard[]>([])
-  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | 'agent' | null>(null)
+  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | 'settings' | null>(null)
   const [host, setHost] = useState<string | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
   // Owned here, not in the pane: the pane remounts per process
@@ -140,6 +154,8 @@ function App() {
   }, [])
 
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
+  // hoot mcp was asked for in the admin panel and no grant has been seen yet
+  const [hootPending, setHootPending] = useState(false)
 
   // macOS Screen Recording and Accessibility, re-read whenever the window
   // comes back: Screen Recording takes effect on relaunch, but the banner
@@ -167,6 +183,53 @@ function App() {
     window.addEventListener('focus', read)
     return () => window.removeEventListener('focus', read)
   }, [readAccessibility, readClipboardSharing])
+
+  useEffect(() => {
+    if (!hootPending) return
+    const read = () => {
+      fleetState().then(
+        (state) => {
+          if (state?.granted) setHootPending(false)
+        },
+        () => {},
+      )
+    }
+    read()
+    window.addEventListener('focus', read)
+    const timer = setInterval(read, HOOT_PENDING_POLL_MS)
+    return () => {
+      window.removeEventListener('focus', read)
+      clearInterval(timer)
+    }
+  }, [hootPending])
+
+  // the host adds hoot to (or takes it from) the person's ai tools as the grant
+  // changes; this is where they hear about it
+  useEffect(() => {
+    let disposed = false
+    let stop: (() => void) | undefined
+    void onHootToolsSynced(({ granted, added, failed }) => {
+      if (granted && added.length) {
+        toast.success('hoot mcp is on', { description: `added to ${listOf(added)}. restart them to use it.` })
+      }
+      for (const { label, error } of failed) {
+        toast.error(`could not ${granted ? 'add hoot to' : 'remove hoot from'} ${label}`, {
+          description: error,
+        })
+      }
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten()
+        else stop = unlisten
+      })
+      .catch(() => {
+        // no bridge (browser dev run): nothing syncs
+      })
+    return () => {
+      disposed = true
+      stop?.()
+    }
+  }, [])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
   // this app. Suppressed in built apps except on editable fields; `tauri dev` keeps
@@ -199,6 +262,50 @@ function App() {
     // only lands with the restarted service's first status write.
     toast.success('this machine joined a site')
   }, [])
+
+  const handleTurnOnHoot = useCallback(async () => {
+    const found = (await hootTools().catch(() => [])).filter((tool) => tool.found).map((tool) => tool.label)
+    setConfirm({
+      title: 'turn on hoot mcp?',
+      description: `ai tools on this computer${found.length ? ` (${listOf(found)})` : ''} get hoot's tools and can act on other machines in ${siteLabel || 'your site'}. a site admin sets how far and on which machines. the admin panel opens at this machine for that.`,
+      confirmLabel: 'open admin panel',
+      onConfirm: () => {
+        void fleetState()
+          .then((state) => {
+            if (!state?.adminUrl) {
+              toast.error('could not open the admin panel', {
+                description: 'owlette has not heard from the server yet.',
+              })
+              return
+            }
+            setHootPending(true)
+            void openExternalUrl(state.adminUrl).catch((cause: unknown) =>
+              toast.error('could not open the admin panel', { description: message(cause) }),
+            )
+          })
+          .catch((cause: unknown) =>
+            toast.error('could not open the admin panel', { description: message(cause) }),
+          )
+      },
+    })
+  }, [siteLabel])
+
+  const handleTurnOffHoot = useCallback(() => {
+    setConfirm({
+      title: 'turn off hoot mcp?',
+      description: `ai tools on this computer lose hoot's tools, and ${host ?? 'this machine'} stops acting on other machines. a site admin can turn it back on.`,
+      confirmLabel: 'turn off',
+      destructive: true,
+      onConfirm: () => {
+        setHootPending(false)
+        void hootHoldOff()
+          .then(() => runAgent('hoot-off'))
+          .catch((cause: unknown) =>
+            toast.error('could not turn off hoot mcp', { description: message(cause) }),
+          )
+      },
+    })
+  }, [host])
 
   const handleLeft = useCallback(() => {
     toast.success('this machine left its site')
@@ -536,13 +643,7 @@ function App() {
             onJoinSite={() => setMenuDialog('join')}
             onLeaveSite={() => setMenuDialog('leave')}
             onReportIssue={() => setMenuDialog('report')}
-            onConnectAgent={() => setMenuDialog('agent')}
-            startOnLogin={startOnLogin}
-            onStartOnLoginChange={(next) => {
-              void setStartupLink(next).then(setStartOnLogin, (cause: unknown) =>
-                toast.error('could not change start on login', { description: message(cause) }),
-              )
-            }}
+            onOpenSettings={() => setMenuDialog('settings')}
             onRestartService={() => {
               // Windows: the service polls for this file each loop, exits 42, and
               // the host relaunches it. Off it the daemon ignores a flag it did
@@ -696,6 +797,7 @@ function App() {
           // the installer's argv forever, so a tray re-open hours later must not
           // inherit its server.
           server={pairLaunch.armed ? (serverFromArgs(pairLaunch.argv) ?? undefined) : undefined}
+          wantsHoot={pairLaunch.armed && hootFromArgs(pairLaunch.argv)}
           // The same flag the footer's "connected" branch reads, so the dialog
           // cannot claim a different service state than the window behind it.
           serviceConnected={health.statusFile?.firebase?.connected === true}
@@ -715,7 +817,21 @@ function App() {
           onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
-        <ConnectAgentDialog open={menuDialog === 'agent'} onClose={() => setMenuDialog(null)} />
+        <SettingsDialog
+          open={menuDialog === 'settings'}
+          onOpenChange={(open) => !open && setMenuDialog(null)}
+          paired={paired}
+          siteName={siteLabel || null}
+          pending={hootPending}
+          startOnLogin={startOnLogin}
+          onStartOnLoginChange={(next) => {
+            void setStartupLink(next).then(setStartOnLogin, (cause: unknown) =>
+              toast.error('could not change start on login', { description: message(cause) }),
+            )
+          }}
+          onTurnOn={() => void handleTurnOnHoot()}
+          onTurnOff={handleTurnOffHoot}
+        />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />
 
         <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />

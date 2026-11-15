@@ -154,6 +154,14 @@ export const ARG_RESTART_PROMPT = '--restart-prompt'
 /** Argument the installer passes to open this window straight on the pairing dialog. */
 export const ARG_PAIR = '--pair'
 
+/** Argument the installer adds when the person ticked "add hoot to the ai tools". */
+export const ARG_HOOT = '--hoot'
+
+/** True when the launch carried {@link ARG_HOOT}. */
+export function hootFromArgs(argv: readonly string[]): boolean {
+  return argv.includes(ARG_HOOT)
+}
+
 /**
  * Argument that names which owlette server to pair against; only meaningful
  * alongside {@link ARG_PAIR}.
@@ -432,6 +440,64 @@ const EVENT_APPEARANCE_RESOLVED = 'appearance-resolved'
 /** the theme to draw, each time a choice lands or the os changes theme under `system` */
 export function onResolvedAppearance(handler: (theme: ResolvedTheme) => void): Promise<UnlistenFn> {
   return listen<ResolvedTheme>(EVENT_APPEARANCE_RESOLVED, (event) => handler(event.payload))
+}
+
+/**
+ * What the service last learned from the server about this machine's hoot mcp
+ * grant (`ipc/fleet/state.json`, read by the host). `granted` already counts a
+ * local hold after hoot-off.
+ */
+export interface FleetState {
+  granted: boolean
+  maxTier: number | null
+  wholeSite: boolean
+  machineIds: string[]
+  adminUrl: string | null
+}
+
+/** null until the service has written the state file once */
+export function fleetState(): Promise<FleetState | null> {
+  return invoke<FleetState | null>('fleet_state')
+}
+
+/** One AI tool the app can add hoot to; every known tool is listed, found or not. */
+export interface HootTool {
+  id: string
+  label: string
+  found: boolean
+  /** the person's choice: hoot is added to this tool while granted */
+  on: boolean
+  /** hoot is in the tool's config right now */
+  configured: boolean
+}
+
+export function hootTools(): Promise<HootTool[]> {
+  return invoke<HootTool[]>('hoot_tools')
+}
+
+/** Tick or untick one tool; rejects with the reason when its config cannot be edited. */
+export function setHootTool(id: string, on: boolean): Promise<void> {
+  return invoke<void>('set_hoot_tool', { id, on })
+}
+
+/** Hold hoot off locally until the state file agrees, and take it out of the tools now. */
+export function hootHoldOff(): Promise<void> {
+  return invoke<void>('hoot_hold_off')
+}
+
+export interface HootToolsSynced {
+  granted: boolean
+  added: string[]
+  removed: string[]
+  failed: { label: string; error: string }[]
+}
+
+/** `hoot_sync.rs` */
+const EVENT_HOOT_TOOLS_SYNCED = 'hoot://tools-synced'
+
+/** each time the host changed the tools' configs to match the grant */
+export function onHootToolsSynced(handler: (synced: HootToolsSynced) => void): Promise<UnlistenFn> {
+  return listen<HootToolsSynced>(EVENT_HOOT_TOOLS_SYNCED, (event) => handler(event.payload))
 }
 
 /** Severity accepted by {@link logEvent}; anything else is recorded as info. */

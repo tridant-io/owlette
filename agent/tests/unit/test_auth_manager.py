@@ -270,6 +270,23 @@ class TestRefusedRefresh:
         storage.clear_tokens.assert_not_called()
 
 
+# TestRequestDeviceCode - the body the pairing phrase is asked with
+class TestRequestDeviceCode:
+    def _body(self, auth_manager, **kwargs):
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {"pairPhrase": "a-b-c"}
+        with patch("requests.post", return_value=response) as post:
+            auth_manager.request_device_code(**kwargs)
+        return post.call_args.kwargs["json"]
+
+    def test_the_body_omits_wants_hoot_by_default(self, auth_manager):
+        assert "wantsHoot" not in self._body(auth_manager)
+
+    def test_the_body_carries_wants_hoot_when_asked(self, auth_manager):
+        assert self._body(auth_manager, wants_hoot=True)["wantsHoot"] is True
+
+
 # TestApiBase — every token request goes to api_base
 class TestApiBase:
     @pytest.mark.parametrize("api_base", [
