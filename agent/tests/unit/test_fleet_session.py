@@ -731,9 +731,9 @@ def test_on_macos_the_file_is_0640_granted_to_the_group_and_replaced_atomically(
     on_mac.keeper.refresh_once()
     path = fleet_session.session_path()
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
-    assert len(on_mac.handed) == 1 and isinstance(on_mac.handed[0][0], int)
-    assert on_mac.handed[0][1] == 0
-    assert on_mac.handed[0][2] == 0o600
+    # the session file and the state file, each handed over empty and the service's alone
+    assert len(on_mac.handed) == 2
+    assert all(isinstance(fd, int) and size == 0 and mode == 0o600 for fd, size, mode in on_mac.handed)
     assert stored()['token'] == 'owf_first'
     first_inode = os.stat(path).st_ino
 
@@ -741,7 +741,8 @@ def test_on_macos_the_file_is_0640_granted_to_the_group_and_replaced_atomically(
     on_mac.keeper.refresh_once()
     assert stored()['token'] == 'owf_second'
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
-    assert len(on_mac.handed) == 2 and on_mac.handed[1][1] == 0
+    # the state did not change, so only the session file is written again
+    assert len(on_mac.handed) == 3 and on_mac.handed[2][1] == 0
     # a new file moved over the old one, not the old one rewritten
     assert os.stat(path).st_ino != first_inode
     assert sorted(os.listdir(os.path.dirname(path))) == [fleet_session.SESSION_FILE, fleet_session.STATE_FILE]
@@ -761,7 +762,8 @@ def test_on_macos_the_temp_file_is_never_wider_than_0640_while_it_is_written(on_
 
     on_mac.keeper.refresh_once()
 
-    assert seen == [0o640]
+    # the session file, then the state file
+    assert seen == [0o640, 0o640]
 
 
 @posix_only
@@ -841,7 +843,7 @@ def test_on_macos_a_folder_swapped_for_another_uids_is_refused_at_the_write(on_m
     on_mac.keeper.refresh_once()
 
     assert stored()['token'] == 'owf_first'
-    assert os.listdir(folder) == [fleet_session.SESSION_FILE]
+    assert sorted(os.listdir(folder)) == [fleet_session.SESSION_FILE, fleet_session.STATE_FILE]
 
 
 @posix_only
