@@ -146,7 +146,7 @@ describe('GET /api/cron/activity-watch', () => {
     store = new Map();
     state = { scannedThrough: null, lastDigestDay: null };
     feedRows = [];
-    email = { enabled: true, recipients: [] };
+    email = { enabled: true, recipients: ['watch@example.test'] };
     loadActivitySince.mockImplementation(async () => feedRows);
     getAll.mockResolvedValue([]);
     historyWheres.length = 0;
@@ -340,19 +340,6 @@ describe('GET /api/cron/activity-watch', () => {
     expect(state.scannedThrough).toBe(NOW - 30 * 1000);
   });
 
-  it('falls back to the admin address when ACTIVITY_EMAIL is unset', async () => {
-    delete process.env.ACTIVITY_EMAIL;
-    process.env.ADMIN_EMAIL_DEV = 'admin@example.test';
-    feedRows = [highRow()];
-    // the route reads the admin address when it loads, as bug-report does
-    let route: typeof import('@/app/api/cron/activity-watch/route') | undefined;
-    await jest.isolateModulesAsync(async () => {
-      route = await import('@/app/api/cron/activity-watch/route');
-    });
-    await route!.GET(request('cron-secret'));
-    expect(emailSend.mock.calls[0][0].to).toEqual(['admin@example.test']);
-  });
-
   describe('the email setting on admin → alerts', () => {
     it('sends one email to every stored address', async () => {
       email = { enabled: true, recipients: ['a@example.test', 'b@example.test'] };
@@ -364,10 +351,16 @@ describe('GET /api/cron/activity-watch', () => {
       expect(emailSend.mock.calls[0][0].to).toEqual(['a@example.test', 'b@example.test']);
     });
 
-    it('uses the fallback address when no address is stored', async () => {
+    // the list is who gets mail: an environment address no longer stands in for an emptied one
+    it('sends nothing and claims nothing to an empty list, and ignores ACTIVITY_EMAIL', async () => {
+      email = { enabled: true, recipients: [] };
       feedRows = [highRow()];
-      await GET(request('cron-secret'));
-      expect(emailSend.mock.calls[0][0].to).toEqual(['watch@example.test']);
+
+      const res = await GET(request('cron-secret'));
+
+      expect(await res.json()).toEqual({ ok: true, rowsScanned: 1, findingsCreated: 1, emailsSent: 0 });
+      expect(emailSend).not.toHaveBeenCalled();
+      expect(callOrder).toEqual([]);
     });
 
     it('sends nothing and claims nothing while off, but still stores the finding', async () => {

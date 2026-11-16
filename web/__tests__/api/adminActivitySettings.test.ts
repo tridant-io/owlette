@@ -109,25 +109,27 @@ afterAll(() => {
 });
 
 describe('GET /api/admin/activity/settings', () => {
-  it('reads on, no addresses and no fallback from an empty state', async () => {
+  it('reads on and no addresses from an empty state with no address configured', async () => {
     signIn('superadmin');
     const res = await get();
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ enabled: true, recipients: [], fallback: null });
+    expect(await res.json()).toEqual({ enabled: true, recipients: [] });
   });
 
-  it('reads the stored fields and the fallback address', async () => {
+  it('lists the configured address while nobody has saved a list', async () => {
     signIn('superadmin');
-    docs.set(STATE, { emailEnabled: false, emailRecipients: ['a@example.test'], scannedThrough: 5 });
     process.env.ADMIN_EMAIL_DEV = 'admin@example.test';
-    expect(await (await get()).json()).toEqual({
-      enabled: false,
-      recipients: ['a@example.test'],
-      fallback: 'admin@example.test',
-    });
+    expect(await (await get()).json()).toEqual({ enabled: true, recipients: ['admin@example.test'] });
+  });
 
-    process.env.ACTIVITY_EMAIL = 'watch@example.test';
-    expect((await (await get()).json()).fallback).toBe('watch@example.test');
+  it('reads the stored fields, an emptied list included', async () => {
+    signIn('superadmin');
+    process.env.ADMIN_EMAIL_DEV = 'admin@example.test';
+    docs.set(STATE, { emailEnabled: false, emailRecipients: ['a@example.test'], scannedThrough: 5 });
+    expect(await (await get()).json()).toEqual({ enabled: false, recipients: ['a@example.test'] });
+
+    docs.set(STATE, { emailEnabled: true, emailRecipients: [] });
+    expect(await (await get()).json()).toEqual({ enabled: true, recipients: [] });
   });
 
   it('serves a key with user=*:read', async () => {

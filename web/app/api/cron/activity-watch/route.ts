@@ -13,7 +13,6 @@ import { loadActivitySince } from '@/lib/activity/feed.server';
 import { evaluateRules, type RuleInput } from '@/lib/activity/rules';
 import { fromDecisionDoc } from '@/lib/activity/rows';
 import { loadUserLabels } from '@/lib/activity/labels.server';
-import { activityFallbackEmail } from '@/lib/activity/emailSettings.server';
 import {
   claimDigest,
   claimForEmail,
@@ -30,8 +29,8 @@ import { ACTIVITY_FINDINGS_COLLECTION, type ActivityRow, type Finding } from '@/
  * and, once a day from 16:00 utc, a digest of the findings nobody has been mailed about.
  * Auth: X-Cron-Secret must equal CRON_SECRET. Dedupe: findings have deterministic ids,
  * and `emailedAt` and the digest day are claimed BEFORE the send, so a retry cannot mail
- * twice. Mail goes to the addresses set on admin → alerts, else ACTIVITY_EMAIL, else the admin
- * address, as bug reports do; switched off there, nothing is mailed or claimed.
+ * twice. Mail goes to the addresses listed on admin → alerts (until a list is saved, the
+ * configured address); switched off there, or with the list emptied, nothing is mailed or claimed.
  *
  * Answers `{ ok, rowsScanned, findingsCreated, emailsSent }`.
  *
@@ -147,8 +146,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const { scannedThrough, email } = await readState(db);
-    const fallback = activityFallbackEmail();
-    to = email.recipients.length > 0 ? email.recipients : fallback ? [fallback] : [];
+    to = email.recipients;
     const start = Math.max(Math.min(scannedThrough ?? Infinity, now - OVERLAP_MS), now - MAX_LOOKBACK_MS);
 
     const rows = (await loadActivitySince(db, start)).filter((r) => r.at <= end);

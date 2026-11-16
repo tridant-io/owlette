@@ -8,12 +8,26 @@ export interface ActivityEmailSettings {
   recipients: string[];
 }
 
-/** reads the two fields off a state doc snapshot: absent means on, and no addresses. */
+/** ACTIVITY_EMAIL, else the admin address, as bug reports do. */
+function configuredAddress(): string | undefined {
+  return process.env.ACTIVITY_EMAIL || (isProduction ? process.env.ADMIN_EMAIL_PROD : process.env.ADMIN_EMAIL_DEV) || undefined;
+}
+
+/**
+ * reads the two fields off a state doc snapshot. absent means on. the list is who
+ * gets mail: until a superadmin saves one it starts as the configured address, and
+ * once saved it is used as it is, an emptied list meaning nobody.
+ */
 export function emailSettingsFrom(snap: { get(field: string): unknown }): ActivityEmailSettings {
-  const recipients = snap.get('emailRecipients');
+  const stored = snap.get('emailRecipients');
+  const initial = configuredAddress();
   return {
     enabled: snap.get('emailEnabled') !== false,
-    recipients: Array.isArray(recipients) ? recipients.filter((r): r is string => typeof r === 'string') : [],
+    recipients: Array.isArray(stored)
+      ? stored.filter((r): r is string => typeof r === 'string')
+      : initial
+        ? [initial.toLowerCase()]
+        : [],
   };
 }
 
@@ -24,9 +38,4 @@ export async function readActivityEmailSettings(db: Db): Promise<ActivityEmailSe
 // merge: the cron keeps its own fields on the same doc
 export async function writeActivityEmailSettings(db: Db, { enabled, recipients }: ActivityEmailSettings): Promise<void> {
   await db.doc(ACTIVITY_STATE_DOC).set({ emailEnabled: enabled, emailRecipients: recipients }, { merge: true });
-}
-
-/** where mail goes while no address is set: ACTIVITY_EMAIL, else the admin address, as bug reports do. */
-export function activityFallbackEmail(): string | null {
-  return process.env.ACTIVITY_EMAIL || (isProduction ? process.env.ADMIN_EMAIL_PROD : process.env.ADMIN_EMAIL_DEV) || null;
 }

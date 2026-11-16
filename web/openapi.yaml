@@ -491,8 +491,8 @@ paths:
       summary: get the activity email settings (superadmin only)
       description: |
         Returns whether the activity emails are on and the addresses they go
-        to. `fallback` is the address mail goes to while `recipients` is empty,
-        or `null` when none is configured and nothing is sent.
+        to. Until a list has been saved, `recipients` holds the configured
+        address (`ACTIVITY_EMAIL`, else the admin address), if there is one.
 
         ### Authentication and scopes
 
@@ -522,7 +522,7 @@ paths:
       summary: set the activity email settings (superadmin only)
       description: |
         Turns the activity emails on or off and sets who gets them. An empty
-        `recipients` list sends to the fallback address. Addresses are trimmed,
+        `recipients` list means nobody is mailed. Addresses are trimmed,
         lowercased and de-duplicated; at most 10. The change is audited.
 
         ### Authentication and scopes
@@ -13477,13 +13477,12 @@ components:
         details: { type: object, additionalProperties: true }
     ActivityEmailSettings:
       type: object
-      required: [enabled, recipients, fallback]
+      required: [enabled, recipients]
       properties:
         enabled: { type: boolean }
         recipients:
           type: array
           items: { type: string, format: email }
-        fallback: { type: string, nullable: true }
     ActivityList:
       type: object
       required: [rows, next_page_token]

@@ -121,7 +121,7 @@ New paths, all server-only (the rules' catch-all denies clients; no rules change
 
 15. **Routine rows stay out of the feed.** `ROUTINE_ACTIONS` (`site_mutated:fleet_session_minted`, a machine's 10-minute session renewal) is dropped in memory from the changes source, so a long run of them goes through the scan cap and horizon (decision 7), with a first batch of page size + 1 so the common page costs what it did. `loadActivitySince` reads them (owner, 2026-11-15).
 
-16. **Activity mail is a superadmin setting.** `emailEnabled` and `emailRecipients` (max 10) live on `global/activity_watch`, set on the `platform` section of `/admin/alerts` (owner, 2026-11-15); the cron reads them with its one `readState`, empty list falls back to `ACTIVITY_EMAIL` then the admin address, off sends and claims nothing.
+16. **Activity mail is a superadmin setting.** `emailEnabled` and `emailRecipients` (max 10) live on `global/activity_watch`, set on the `platform` section of `/admin/alerts` (owner, 2026-11-15); the cron reads them with its one `readState`, the list is who gets mail: absent, it starts as `ACTIVITY_EMAIL` else the admin address (shown as a normal entry); saved empty, nobody is mailed (owner, 2026-11-15: "why not just populate it"); off sends and claims nothing.
 
 ## Key files
 Create:
@@ -166,7 +166,7 @@ Copy from: `web/app/admin/issues/*`, `web/components/admin/issues/IssueList.tsx`
 1. Go to commit, then to push the branch and open the PR into dev.
 2. Go for `firebase deploy --only firestore:indexes --project dev`, then prod on #420's
    day, each before that environment's web. Wait for every index to read Enabled.
-3. `ACTIVITY_EMAIL=hey@tridant.io` on Railway dev, Railway prod and Vercel
+3. ~~`ACTIVITY_EMAIL` on Railway~~ not needed: superadmins list the addresses on admin → alerts
    (`node scripts/sync-env.mjs`; a go is needed, it mutates env).
 4. Register the job on cron-job.org twice: `GET https://dev.owlette.app/api/cron/activity-watch`
    and `GET https://owlette.app/api/cron/activity-watch`, every 5 minutes, header
