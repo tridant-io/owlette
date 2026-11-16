@@ -10,6 +10,7 @@ import {
   saveNewFindings,
   writeScannedThrough,
 } from '@/lib/activity/findings.server';
+import { writeActivityEmailSettings } from '@/lib/activity/emailSettings.server';
 import type { Finding } from '@/lib/activity/types';
 
 // a map-backed firestore: just the calls findings.server makes
@@ -136,12 +137,26 @@ describe('claimDigest', () => {
 });
 
 describe('state and digest marks', () => {
+  const email = { enabled: true, recipients: [] };
+
   it('reads an empty state, then what was written', async () => {
     const db = fakeDb();
-    expect(await readState(db)).toEqual({ scannedThrough: null, lastDigestDay: null });
+    expect(await readState(db)).toEqual({ scannedThrough: null, lastDigestDay: null, email });
     await writeScannedThrough(db, 900);
     await claimDigest(db, '2026-11-15');
-    expect(await readState(db)).toEqual({ scannedThrough: 900, lastDigestDay: '2026-11-15' });
+    expect(await readState(db)).toEqual({ scannedThrough: 900, lastDigestDay: '2026-11-15', email });
+  });
+
+  it('reads the email settings written beside the cron fields, without clobbering them', async () => {
+    const db = fakeDb();
+    await writeScannedThrough(db, 900);
+    await writeActivityEmailSettings(db, { enabled: false, recipients: ['a@example.test'] });
+    await writeScannedThrough(db, 1000);
+    expect(await readState(db)).toEqual({
+      scannedThrough: 1000,
+      lastDigestDay: null,
+      email: { enabled: false, recipients: ['a@example.test'] },
+    });
   });
 
   it('marks findings digested', async () => {

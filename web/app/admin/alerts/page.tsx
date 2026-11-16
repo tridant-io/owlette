@@ -31,6 +31,7 @@ import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-re
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { AlertEmailToggles } from '@/components/AlertEmailToggles';
+import { ActivityEmailSettings } from '@/components/admin/activity/ActivityEmailSettings';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
@@ -441,6 +442,16 @@ export default function AlertsPage() {
           </h2>
           <AlertEmailToggles />
         </section>
+
+        {/* activity mail is platform mail, not a person's preference (owner, 2026-11-15) */}
+        {isSuperadmin && (
+          <section aria-labelledby="alerts-platform" className="mb-6 md:mb-8">
+            <h2 id="alerts-platform" className="mb-3 text-sm font-medium text-foreground">
+              platform <span className="font-normal text-muted-foreground">· superadmins only</span>
+            </h2>
+            <ActivityEmailSettings />
+          </section>
+        )}
 
         <h2 className="mb-3 text-sm font-medium text-foreground">custom rules</h2>
 

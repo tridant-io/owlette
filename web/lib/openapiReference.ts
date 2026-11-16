@@ -225,6 +225,10 @@ function inferAuthScopeNotes(path: string, method: string, operation: JsonRecord
     return protectedNotes(['user=*:read'], 'Requires superadmin user-management access; the activity feed is visible only to owlette support.');
   }
 
+  if (path === '/api/admin/activity/settings') {
+    return protectedNotes([`user=*:${method === 'get' ? 'read' : 'admin'}`], 'Requires superadmin user-management access; the activity email settings are visible only to owlette support.');
+  }
+
   if (path.startsWith('/api/admin/issues')) {
     return protectedNotes([`issue=*:${permission}`], 'Requires superadmin issue access; issues are visible only to owlette support.');
   }

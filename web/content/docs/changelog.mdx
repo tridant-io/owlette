@@ -16,6 +16,10 @@ sign-ins are now recorded: who signed in and with what (a password, Google or a 
 
 a check runs every five minutes and flags what looks wrong. flagged at once and emailed: a user made a superadmin, 2fa turned off or force-reset for a user, a site deleted, five failed sign-in or second-factor attempts for one user within 15 minutes, five destructive changes by one actor within 15 minutes, and a superadmin signing in from a network they have not used before. flagged and sent in a daily digest from 16:00 UTC: a site's ownership transferred, a user deleted, 20 refusals for one actor within 15 minutes, and a site owner or admin signing in from a new network. a new network only counts for someone who has signed in before. finding emails and the daily digest go to `ACTIVITY_EMAIL`, or to the admin address when it is not set. the check needs the `activity-watch` scheduled job; without it nothing is flagged and nobody is mailed.
 
+### added — superadmins choose who gets the activity emails
+
+on **admin** → **alerts**, superadmins now see a **platform** section with a switch for the activity emails and a list of up to ten addresses to send them to. turned off, no finding email or daily digest goes out, and the high findings of the last day are mailed once it is turned back on. with no address listed, mail goes to `ACTIVITY_EMAIL`, or to the admin address when that is not set.
+
 ### changed — the activity page leaves out a machine's routine fleet session renewals
 
 a machine that may act on others renews its fleet session every ten minutes, and each renewal filled the feed with a `fleet session minted` row. the all and changes views now leave those rows out, so what people and machines did to something is on the first screen. the audit trail still keeps them.

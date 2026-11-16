@@ -17,6 +17,7 @@ type Stored = Finding & { detectedAt: number; emailedAt: number | null; digested
 let store: Map<string, Stored>;
 let state: { scannedThrough: number | null; lastDigestDay: string | null };
 let feedRows: ActivityRow[];
+let email: { enabled: boolean; recipients: string[] };
 const loadActivitySince = jest.fn();
 const getAll = jest.fn();
 const historyWheres: unknown[][] = [];
@@ -61,14 +62,14 @@ jest.mock('@/lib/resendClient.server', () => ({
   trustedBaseUrl: () => 'https://dev.owlette.app',
 }));
 
-jest.mock('@/lib/logger', () => ({ __esModule: true, default: { warn: jest.fn(), error: jest.fn() } }));
+jest.mock('@/lib/logger', () => ({ __esModule: true, default: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 jest.mock('@/lib/activity/feed.server', () => ({
   loadActivitySince: (...args: unknown[]) => loadActivitySince(...args),
 }));
 
 jest.mock('@/lib/activity/findings.server', () => ({
-  readState: async () => state,
+  readState: async () => ({ ...state, email }),
   writeScannedThrough: async (_db: unknown, at: number) => {
     state.scannedThrough = at;
   },
@@ -145,6 +146,7 @@ describe('GET /api/cron/activity-watch', () => {
     store = new Map();
     state = { scannedThrough: null, lastDigestDay: null };
     feedRows = [];
+    email = { enabled: true, recipients: [] };
     loadActivitySince.mockImplementation(async () => feedRows);
     getAll.mockResolvedValue([]);
     historyWheres.length = 0;
@@ -349,6 +351,54 @@ describe('GET /api/cron/activity-watch', () => {
     });
     await route!.GET(request('cron-secret'));
     expect(emailSend.mock.calls[0][0].to).toEqual(['admin@example.test']);
+  });
+
+  describe('the email setting on admin → alerts', () => {
+    it('sends one email to every stored address', async () => {
+      email = { enabled: true, recipients: ['a@example.test', 'b@example.test'] };
+      feedRows = [highRow()];
+
+      await GET(request('cron-secret'));
+
+      expect(emailSend).toHaveBeenCalledTimes(1);
+      expect(emailSend.mock.calls[0][0].to).toEqual(['a@example.test', 'b@example.test']);
+    });
+
+    it('uses the fallback address when no address is stored', async () => {
+      feedRows = [highRow()];
+      await GET(request('cron-secret'));
+      expect(emailSend.mock.calls[0][0].to).toEqual(['watch@example.test']);
+    });
+
+    it('sends nothing and claims nothing while off, but still stores the finding', async () => {
+      email = { enabled: false, recipients: ['a@example.test'] };
+      feedRows = [highRow(), digestRow()];
+
+      const res = await GET(request('cron-secret'));
+
+      expect(await res.json()).toEqual({ ok: true, rowsScanned: 2, findingsCreated: 2, emailsSent: 0 });
+      expect(emailSend).not.toHaveBeenCalled();
+      expect(callOrder).toEqual([]);
+      expect([...store.values()].every((f) => f.emailedAt === null && f.digestedAt === null)).toBe(true);
+      expect(state.lastDigestDay).toBeNull();
+      expect(state.scannedThrough).toBe(NOW - 30 * 1000);
+      expect(logger.info).toHaveBeenCalledTimes(1);
+    });
+
+    it('mails the pending high finding once when it is turned back on', async () => {
+      email = { enabled: false, recipients: [] };
+      feedRows = [highRow()];
+      await GET(request('cron-secret'));
+      expect(emailSend).not.toHaveBeenCalled();
+
+      email = { enabled: true, recipients: ['a@example.test'] };
+      const first = await (await GET(request('cron-secret'))).json();
+      const second = await (await GET(request('cron-secret'))).json();
+
+      expect(first.emailsSent).toBe(1);
+      expect(second.emailsSent).toBe(0);
+      expect(emailSend.mock.calls.filter((c) => c[0].subject.includes('2fa removed'))).toHaveLength(1);
+    });
   });
 
   describe('scan start', () => {

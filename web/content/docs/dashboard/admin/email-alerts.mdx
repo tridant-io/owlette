@@ -126,6 +126,16 @@ each person sets these for themselves in [account settings → alerts](/docs/das
 
 ---
 
+## activity emails
+
+the finding emails and the daily digest of the [activity page](/docs/dashboard/admin) are platform mail, not a person's preference, so they are not among your own switches. superadmins see them under **platform** on admin → alerts: a switch, **activity findings**, and a list of up to ten addresses. each change saves as it is made, through `GET` and `PUT /api/admin/activity/settings`.
+
+- with the switch off, nothing is mailed. findings are still recorded, and the high ones from the last day are mailed once the switch is back on
+- with no address listed, mail goes to `ACTIVITY_EMAIL`, or to the admin address when that is not set. the card shows which
+- one email goes to the whole list, so everyone on it sees the other addresses
+
+---
+
 ## setup
 
 the deployment needs these, described in [environment variables](/docs/setup/environment-variables#email-required-for-alerts):

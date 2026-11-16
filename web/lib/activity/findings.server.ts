@@ -1,3 +1,4 @@
+import { emailSettingsFrom, type ActivityEmailSettings } from './emailSettings.server';
 import { ACTIVITY_FINDINGS_COLLECTION, ACTIVITY_STATE_DOC, type Finding } from './types';
 
 type Db = FirebaseFirestore.Firestore;
@@ -7,6 +8,7 @@ const ALREADY_EXISTS = 6;
 export interface ActivityState {
   scannedThrough: number | null;
   lastDigestDay: string | null;
+  email: ActivityEmailSettings;
 }
 
 const findings = (db: Db) => db.collection(ACTIVITY_FINDINGS_COLLECTION);
@@ -60,6 +62,7 @@ export async function readState(db: Db): Promise<ActivityState> {
   return {
     scannedThrough: typeof snap.get('scannedThrough') === 'number' ? snap.get('scannedThrough') : null,
     lastDigestDay: snap.get('lastDigestDay') ?? null,
+    email: emailSettingsFrom(snap),
   };
 }
 

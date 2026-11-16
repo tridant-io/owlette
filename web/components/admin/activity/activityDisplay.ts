@@ -123,7 +123,7 @@ export function rowMeta(row: ActivityRow, siteNames: SiteNames = {}): string {
   if (row.kind === 'sign_in' && row.details.role === 'superadmin') parts.push('superadmin');
   if (row.network) parts.push(networkLabel(row.network));
   if (row.subject) parts.push(`reported by ${actorName(row.actor)}`);
-  if (row.kind === 'refused' && row.reason && words(row.reason) !== hostEvent(row)) parts.push(words(row.reason));
+  if (row.kind === 'refused' && !row.subject && row.reason && words(row.reason) !== hostEvent(row)) parts.push(words(row.reason));
   return parts.join(' · ');
 }
 
