@@ -238,6 +238,29 @@ describe('GET /api/admin/activity', () => {
     expect(labels).toEqual(['one@example.com', 'Two', 'one@example.com', undefined, undefined]);
   });
 
+  it('labels a subject in the same getAll as the actors', async () => {
+    signIn('staff-1', 'superadmin');
+    docs.set('users/u1', { email: 'one@example.com' });
+    docs.set('users/v1', { email: 'viewer@example.com' });
+    mockLoadActivityPage.mockResolvedValue({
+      rows: [
+        row('decision:a', { type: 'system', id: 'swoop_host' }, { subject: { type: 'user', id: 'v1' } }),
+        row('change:b', { type: 'user', id: 'u1' }),
+      ],
+      nextPageToken: '',
+    });
+
+    const { body } = await list();
+
+    expect(mockGetAll).toHaveBeenCalledTimes(1);
+    expect(mockGetAll).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'users/v1' }),
+      expect.objectContaining({ path: 'users/u1' }),
+    );
+    expect(body.rows[0].subject.label).toBe('viewer@example.com');
+    expect(body.rows[0].actor.label).toBeUndefined();
+  });
+
   it('skips getAll when the page has no user actors', async () => {
     signIn('staff-1', 'superadmin');
     mockLoadActivityPage.mockResolvedValue({

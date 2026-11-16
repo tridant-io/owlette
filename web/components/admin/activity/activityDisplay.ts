@@ -55,7 +55,12 @@ export function actorName(actor: ActivityActor): string {
 
 /** a flagged row leads with the rule's title; its summary already names the actor */
 export function rowWho(row: ActivityRow): string {
-  return row.kind === 'flagged' ? String(row.details.title ?? words(row.action)) : actorName(row.actor);
+  return row.kind === 'flagged' ? String(row.details.title ?? words(row.action)) : actorName(row.subject ?? row.actor);
+}
+
+/** the host's own event says more than the capability it was refused */
+function hostEvent(row: ActivityRow): string | null {
+  return row.actor.type === 'system' && typeof row.details.event === 'string' ? words(row.details.event) : null;
 }
 
 function changeWhat(row: ActivityRow): string {
@@ -87,7 +92,7 @@ export function rowWhat(row: ActivityRow): string {
     case 'change':
       return changeWhat(row);
     case 'refused':
-      return `was refused: ${words(row.action.toLowerCase())}${row.target?.id ? ` on ${row.target.id}` : ''}`;
+      return `was refused: ${hostEvent(row) ?? words(row.action.toLowerCase())}${row.target?.id ? ` on ${row.target.machineId ?? row.target.id}` : ''}`;
     default:
       return signInWhat(row);
   }
@@ -117,7 +122,8 @@ export function rowMeta(row: ActivityRow, siteNames: SiteNames = {}): string {
   if (row.kind === 'flagged') parts.push(mailState(row));
   if (row.kind === 'sign_in' && row.details.role === 'superadmin') parts.push('superadmin');
   if (row.network) parts.push(networkLabel(row.network));
-  if (row.kind === 'refused' && row.reason) parts.push(words(row.reason));
+  if (row.subject) parts.push(`reported by ${actorName(row.actor)}`);
+  if (row.kind === 'refused' && row.reason && words(row.reason) !== hostEvent(row)) parts.push(words(row.reason));
   return parts.join(' · ');
 }
 
@@ -149,7 +155,7 @@ function show(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value && typeof value === 'object' && 'id' in value) {
     const { kind, id } = value as { kind?: string; id: string };
-    return kind ? `${kind} ${id}` : String(id);
+    return kind ? `${words(kind)} ${id}` : String(id);
   }
   return typeof value === 'object' ? JSON.stringify(value) : String(value);
 }
@@ -172,6 +178,8 @@ export function rowFacts(row: ActivityRow, siteNames: SiteNames = {}): [string, 
     if (Array.isArray(rowIds)) facts.push(['rows', String(rowIds.length)]);
     return facts;
   }
+  if (row.subject) facts.push(['viewer', actorName(row.subject)]);
+  if (row.target?.machineId) facts.push(['machine', row.target.machineId]);
   facts.push(['action', row.action], ['site', siteLabel(row, siteNames)]);
   if (row.outcome) facts.push(['outcome', row.reason ? `${row.outcome} · ${words(row.reason)}` : row.outcome]);
   if (row.network) facts.push(['network', networkLabel(row.network)]);

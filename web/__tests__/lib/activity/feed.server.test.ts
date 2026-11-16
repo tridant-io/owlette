@@ -3,7 +3,7 @@
  */
 
 import { Timestamp } from 'firebase-admin/firestore';
-import { loadActivityPage, loadActivitySince, InvalidPageTokenError } from '@/lib/activity/feed.server';
+import { attachSubjects, loadActivityPage, loadActivitySince, InvalidPageTokenError } from '@/lib/activity/feed.server';
 import { AUTH_CAPABILITIES, MUTATION_KINDS, type ActivityRow } from '@/lib/activity/types';
 
 type Data = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -69,9 +69,9 @@ const db: any = { // eslint-disable-line @typescript-eslint/no-explicit-any
     makeQuery(`group:${name}`, (p) => p.split('/').slice(-2)[0] === name),
 };
 
-const change = (id: string, recordedAt: number, o: { siteId?: string; actor?: string; kind?: string } = {}) =>
+const change = (id: string, recordedAt: number, o: { siteId?: string; actor?: string; kind?: string; verb?: string } = {}) =>
   at(`sites/${o.siteId ?? 'site-a'}/audit_log/${id}`, {
-    event: { kind: o.kind ?? 'user_mutated', siteId: o.siteId ?? 'site-a', actor: o.actor ?? 'user:u1', occurredAt: recordedAt, attributes: { verb: 'promoted' } },
+    event: { kind: o.kind ?? 'user_mutated', siteId: o.siteId ?? 'site-a', actor: o.actor ?? 'user:u1', occurredAt: recordedAt, attributes: { verb: o.verb ?? 'promoted' } },
     recordedAt,
     hash: id,
   });
@@ -172,6 +172,74 @@ describe('loadActivityPage horizon', () => {
 
     expect(ids(second.rows)).toEqual(['platform:mid', 'decision:old']);
     expect(second.nextPageToken).toBe('');
+  });
+});
+
+const routine = (id: string, recordedAt: number, o: { siteId?: string; actor?: string } = {}) =>
+  change(id, recordedAt, { ...o, kind: 'site_mutated', verb: 'fleet_session_minted' });
+
+describe('loadActivityPage routine rows', () => {
+  it('omits routine fleet session rows from a mixed page and keeps the order', async () => {
+    change('c1', 5000);
+    routine('r1', 4500);
+    change('c2', 4000);
+    routine('r2', 3500);
+    change('c3', 3000, { kind: 'site_mutated', verb: 'renamed' });
+
+    for (const view of ['all', 'changes'] as const) {
+      const page = await loadActivityPage(db, { view, pageSize: 10 });
+      expect(ids(page.rows)).toEqual(['change:c1', 'change:c2', 'change:c3']);
+      expect(page.nextPageToken).toBe('');
+    }
+  });
+
+  it('hides them under the site filter and under the user filter', async () => {
+    change('c1', 5000, { actor: 'user:u1' });
+    routine('r1', 4500, { actor: 'machine:m1' });
+    routine('r2', 4400, { actor: 'user:u1' });
+
+    const site = await loadActivityPage(db, { view: 'all', siteId: 'site-a', pageSize: 10 });
+    const user = await loadActivityPage(db, { view: 'all', userId: 'u1', pageSize: 10 });
+
+    expect(ids(site.rows)).toEqual(['change:c1']);
+    expect(ids(user.rows)).toEqual(['change:c1']);
+  });
+
+  it('reaches every real row behind a long run of routine ones, none lost or repeated', async () => {
+    for (let ms = 1000; ms < 1350; ms++) routine(`r${ms}`, ms);
+    for (let n = 1; n <= 5; n++) change(`real${n}`, 100 + n);
+
+    const seen: string[] = [];
+    let token: string | null = null;
+    let pages = 0;
+    do {
+      const page: Awaited<ReturnType<typeof loadActivityPage>> = await loadActivityPage(db, { view: 'all', pageSize: 3, pageToken: token });
+      seen.push(...ids(page.rows));
+      token = page.nextPageToken || null;
+      pages += 1;
+    } while (token && pages < 10);
+
+    expect(seen).toEqual(['change:real5', 'change:real4', 'change:real3', 'change:real2', 'change:real1']);
+    expect(pages).toBeLessThanOrEqual(4);
+  });
+
+  it('answers a page that scanned only routine rows with no rows and a token', async () => {
+    for (let ms = 1000; ms < 1350; ms++) routine(`r${ms}`, ms);
+    change('real', 500);
+
+    const first = await loadActivityPage(db, { view: 'changes', pageSize: 5 });
+
+    // a probe of 6, then batches of 100 until the cap: 1349 down to 1044
+    expect(first.rows).toEqual([]);
+    expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1044, ids: [] });
+  });
+
+  it('costs one read of page size plus one when nothing is routine', async () => {
+    for (let n = 1; n <= 8; n++) change(`c${n}`, 1000 + n);
+
+    await loadActivityPage(db, { view: 'all', pageSize: 5 });
+
+    expect(queries.filter((q) => q.order === 'recordedAt')).toHaveLength(1);
   });
 });
 
@@ -282,5 +350,97 @@ describe('loadActivitySince', () => {
       expect(q.order === 'recordedAt' || q.order === 'timestamp').toBe(true);
       expect(q.where.some(([f, op]) => f === q.order && op === '>')).toBe(true);
     }
+  });
+});
+
+describe('loadActivitySince routine rows', () => {
+  it('still returns them', async () => {
+    change('c1', 2000);
+    routine('r1', 3000);
+
+    expect(ids(await loadActivitySince(db, 1000))).toEqual(['change:r1', 'change:c1']);
+  });
+});
+
+describe('attachSubjects', () => {
+  const started = (path: string, viewerId: string, actor: Data = { type: 'user', userId: 'u9', role: 'admin' }) =>
+    at(path, { actor, capability: 'MACHINE_REMOTE_CONTROL', outcome: 'allow', metadata: { event: 'session_started', viewerId }, timestamp: Timestamp.fromMillis(1000) });
+  const hostRow = (id: string, viewerId: unknown = 'v1', over: Partial<ActivityRow> = {}): ActivityRow => ({
+    id,
+    kind: 'refused',
+    at: 5000,
+    actor: { type: 'system', id: 'swoop_host' },
+    siteId: 'site-a',
+    action: 'MACHINE_REMOTE_CONTROL',
+    outcome: 'deny',
+    details: { viewerId },
+    ...over,
+  });
+  const lookups = () => queries.filter((q) => q.scope === 'sites/site-a/audit_log');
+
+  it('names the viewer from the session start row of the same site', async () => {
+    started('sites/site-a/audit_log/s1', 'v1');
+    started('sites/site-b/audit_log/s2', 'v1', { type: 'user', userId: 'other', role: 'admin' });
+    const rows = [hostRow('decision:h1')];
+
+    await attachSubjects(db, rows);
+
+    expect(rows[0].subject).toEqual({ type: 'user', id: 'u9' });
+    expect(lookups()[0].where).toEqual([['metadata.viewerId', '==', 'v1']]);
+    expect(lookups()[0].order).toBeUndefined();
+  });
+
+  it('costs one lookup for two rows of the same viewer', async () => {
+    started('sites/site-a/audit_log/s1', 'v1');
+    const rows = [hostRow('decision:h1'), hostRow('decision:h2')];
+
+    await attachSubjects(db, rows);
+
+    expect(lookups()).toHaveLength(1);
+    expect(rows.map((r) => r.subject?.id)).toEqual(['u9', 'u9']);
+  });
+
+  it('leaves a row alone when no user row names the viewer', async () => {
+    started('sites/site-a/audit_log/s1', 'v1', { type: 'system', name: 'swoop_host' });
+    const rows = [hostRow('decision:h1')];
+
+    await attachSubjects(db, rows);
+
+    expect(rows[0].subject).toBeUndefined();
+  });
+
+  it('does not fail the page when a lookup rejects', async () => {
+    const broken: any = { collection: () => ({ doc: () => ({ collection: () => ({ where: () => ({ limit: () => ({ get: () => Promise.reject(new Error('boom')) }) }) }) }) }) }; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const rows = [hostRow('decision:h1')];
+
+    await expect(attachSubjects(broken, rows)).resolves.toBeUndefined();
+
+    expect(rows[0].subject).toBeUndefined();
+  });
+
+  it('looks nothing up for a user actor, a row with a subject, no site or no viewer id', async () => {
+    const rows = [
+      hostRow('decision:a', 'v1', { actor: { type: 'user', id: 'u1' } }),
+      hostRow('decision:b', 'v1', { subject: { type: 'user', id: 'u2' } }),
+      hostRow('decision:c', 'v1', { siteId: null }),
+      hostRow('decision:d', null),
+      hostRow('decision:e', 7),
+    ];
+
+    await attachSubjects(db, rows);
+
+    expect(queries).toHaveLength(0);
+  });
+
+  it('runs for a page', async () => {
+    started('sites/site-a/audit_log/s1', 'v1');
+    decision('sites/site-a/audit_log/h1', 5000, {
+      actor: { type: 'system', name: 'swoop_host' },
+      metadata: { event: 'input_not_permitted', viewerId: 'v1' },
+    });
+
+    const page = await loadActivityPage(db, { view: 'refused', pageSize: 10 });
+
+    expect(page.rows[0].subject).toEqual({ type: 'user', id: 'u9' });
   });
 });

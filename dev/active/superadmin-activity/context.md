@@ -45,6 +45,7 @@ export interface ActivityRow {
   kind: ActivityKind;
   at: number;            // epoch ms
   actor: ActivityActor;
+  subject?: ActivityActor; // the person a row is about when its actor is only the reporter
   siteId: string | null; // null = platform
   action: string;        // 'user_mutated:promoted', 'MACHINE_REMOVE', 'sign_in', a rule id
   outcome: 'allow' | 'deny' | 'error' | null;
@@ -115,6 +116,10 @@ New paths, all server-only (the rules' catch-all denies clients; no rules change
     `capability == AUTH_SIGN_IN` itself (index `actor.userId, capability, timestamp`); a busy
     superadmin's older sign-ins must not fall outside the newest 200 rows. No single-field
     `audit_log` overrides: every collection-group query carries an equality or `in` filter.
+
+14. **A host-reported refusal is about a person the host cannot name.** Its actor is `system:swoop_host`; the viewer is on the same session's `session_started` row in the same site's `audit_log`. `attachSubjects` (page only, not the detection scan) finds it with one equality on `metadata.viewerId` per distinct (site, viewer), no index, and sets `subject`; `metadata.uid`, when the host has one, sets it directly. The user filter still matches the actor only.
+
+15. **Routine rows stay out of the feed.** `ROUTINE_ACTIONS` (`site_mutated:fleet_session_minted`, a machine's 10-minute session renewal) is dropped in memory from the changes source, so a long run of them goes through the scan cap and horizon (decision 7), with a first batch of page size + 1 so the common page costs what it did. `loadActivitySince` reads them (owner, 2026-11-15).
 
 ## Key files
 Create:

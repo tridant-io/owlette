@@ -49,6 +49,11 @@ const PLATFORM = `installer-${SUFFIX}`;
 const DENY = `mach-${SUFFIX}`;
 const SIGN_IN = `AS${ASN}`;
 const SECOND_FACTOR = `bad code ${SUFFIX}`;
+// a host-reported refusal: not in NEWEST_FIRST, so the order checks above ignore it
+const HOST_MACHINE = `tec-${SUFFIX}`;
+const VIEWER_ID = `viewer-${SUFFIX}`;
+// a machine's routine session renewals, which the feed leaves out
+const ROUTINE = `renewed-${SUFFIX}`;
 const NEWEST_FIRST = [HIGH, DIGEST, CHANGE, PLATFORM, DENY, SIGN_IN, SECOND_FACTOR];
 
 const ADMIN = 'admin@e2e.test';
@@ -128,6 +133,18 @@ test.beforeAll(async () => {
       verb: 'promoted',
     }),
   );
+  for (const n of [1, 2, 3]) {
+    const hash = crypto.createHash('sha256').update(`routine-${n}-${SUFFIX}`).digest('hex');
+    put(
+      siteLog('site-A').doc(hash),
+      changeRow('site-A', hash, ago(15 + n), {
+        kind: 'site_mutated',
+        actor: 'machine:tec-a4d',
+        target: ROUTINE,
+        verb: 'fleet_session_minted',
+      }),
+    );
+  }
   const platformHash = crypto.createHash('sha256').update(`platform-${SUFFIX}`).digest('hex');
   put(
     siteLog('_platform').doc(platformHash),
@@ -148,6 +165,26 @@ test.beforeAll(async () => {
     denyReason: 'not_site_owner',
     metadata: { route: '/api/machines/[id]', method: 'DELETE' },
     timestamp: Timestamp.fromMillis(ago(40)),
+  });
+  // the swoop host reports the refusal and knows only the viewer; the person is on the session's start row
+  put(siteLog('site-A').doc(`act-start-${SUFFIX}`), {
+    correlationId: `corr-start-${SUFFIX}`,
+    actor: { type: 'user', userId: 'admin-uid', role: 'admin' },
+    capability: 'MACHINE_REMOTE_CONTROL',
+    target: { kind: 'swoop_session', id: `sid-${SUFFIX}`, machineId: HOST_MACHINE },
+    outcome: 'allow',
+    metadata: { event: 'session_started', sid: `sid-${SUFFIX}`, viewerId: VIEWER_ID, ctl: true },
+    timestamp: Timestamp.fromMillis(ago(45)),
+  });
+  put(siteLog('site-A').doc(`act-host-${SUFFIX}`), {
+    correlationId: `corr-host-${SUFFIX}`,
+    actor: { type: 'system', name: 'swoop_host' },
+    capability: 'MACHINE_REMOTE_CONTROL',
+    target: { kind: 'swoop_session', id: `sid-${SUFFIX}`, machineId: HOST_MACHINE },
+    outcome: 'deny',
+    denyReason: 'input_not_permitted',
+    metadata: { event: 'input_not_permitted', sid: `sid-${SUFFIX}`, viewerId: VIEWER_ID },
+    timestamp: Timestamp.fromMillis(ago(45)),
   });
   put(entries.doc(`act-signin-${SUFFIX}`), {
     correlationId: `corr-signin-${SUFFIX}`,
@@ -241,6 +278,14 @@ test.describe('the page, as a superadmin', () => {
     await expect(item(page, SECOND_FACTOR)).toContainText('failed a second factor');
   });
 
+  for (const view of ['all', 'changes']) {
+    test(`the ${view} view leaves out routine fleet session rows`, async ({ page }) => {
+      await page.goto(`/admin/activity?view=${view}`);
+      await expect(item(page, CHANGE)).toBeVisible();
+      await expect(item(page, ROUTINE)).toHaveCount(0);
+    });
+  }
+
   // one test per view, so a view that shows a stray row fails alone. refused is
   // everything owlette said no to, so it holds the failed second factor, with its sign-in badge
   const VIEWS: [string, string[], string[]][] = [
@@ -262,6 +307,22 @@ test.describe('the page, as a superadmin', () => {
       expect(await badges(page)).toEqual(kinds);
     });
   }
+
+  test('a host-reported refusal names the person and the machine', async ({ page }) => {
+    await page.goto('/admin/activity?view=refused');
+    const row = item(page, HOST_MACHINE);
+    await expect(row).toBeVisible();
+    await expect(row).toContainText(`${ADMIN} was refused: input not permitted on ${HOST_MACHINE}`);
+    await expect(row).toContainText(`${SITE_A} · reported by owlette · swoop host`);
+
+    await row.getByRole('button').click();
+    await expect(row.locator('dt:text-is("viewer") + dd')).toHaveText(ADMIN);
+    await expect(row.locator('dt:text-is("machine") + dd')).toHaveText(HOST_MACHINE);
+    await expect(row.locator('dt:text-is("target") + dd')).toHaveText(`swoop session sid-${SUFFIX}`);
+
+    await row.getByRole('button', { name: 'everything from this actor' }).click();
+    await expect(page).toHaveURL(/user=admin-uid$/);
+  });
 
   test('the user filter narrows the list to that person', async ({ page }) => {
     await page.goto('/admin/activity');

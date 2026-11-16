@@ -70,11 +70,15 @@ export function fromDecisionDoc(
   const signIn = isAuthCapability(data.capability);
   const network = metadata.network as Data | undefined;
   const reason = data.denyReason ?? data.errorCode;
+  const actor = decisionActor(data.actor);
   return {
     id: `${source}:${doc.id}`,
     kind: signIn ? 'sign_in' : 'refused',
     at: timestampToMs(data.timestamp) ?? 0,
-    actor: decisionActor(data.actor),
+    actor,
+    ...(actor.type !== 'user' && typeof metadata.uid === 'string' && metadata.uid
+      ? { subject: { type: 'user' as const, id: metadata.uid } }
+      : {}),
     siteId,
     action: signIn
       ? data.capability === 'AUTH_SECOND_FACTOR' ? 'second_factor' : 'sign_in'
