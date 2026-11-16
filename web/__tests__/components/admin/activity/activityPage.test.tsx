@@ -156,7 +156,7 @@ const ROWS: ActivityRow[] = [
     subject: { type: 'user', id: 'uid-viv', label: 'viv@lumenevents.example' },
     action: 'MACHINE_REMOTE_CONTROL',
     outcome: 'deny',
-    reason: 'input_not_permitted',
+    reason: 'input',
     target: { kind: 'swoop_session', id: 'b646bb7d', machineId: 'TEC-B4A' },
     details: { event: 'input_not_permitted', sid: 'b646bb7d', viewerId: 'abf1c8d7', target: { kind: 'swoop_session', id: 'b646bb7d', machineId: 'TEC-B4A' } },
   }),
@@ -300,6 +300,8 @@ describe('an opened row', () => {
     expect(host).toHaveTextContent('viv@lumenevents.example was refused: input not permitted on TEC-B4A');
     expect(host).toHaveTextContent('lumen events · reported by owlette · swoop host');
     expect(host).not.toHaveTextContent('input not permitted ·');
+    // the host's short reason code repeats the line, so the meta does not carry it
+    expect(host).not.toHaveTextContent('swoop host · input');
   });
 
   it('shows the viewer, the machine and a readable target, and filters by the subject', async () => {

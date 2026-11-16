@@ -121,6 +121,8 @@ New paths, all server-only (the rules' catch-all denies clients; no rules change
 
 15. **Routine rows stay out of the feed.** `ROUTINE_ACTIONS` (`site_mutated:fleet_session_minted`, a machine's 10-minute session renewal) is dropped in memory from the changes source, so a long run of them goes through the scan cap and horizon (decision 7), with a first batch of page size + 1 so the common page costs what it did. `loadActivitySince` reads them (owner, 2026-11-15).
 
+16. **Activity mail is a superadmin setting.** `emailEnabled` and `emailRecipients` (max 10) live on `global/activity_watch`, set on the `platform` section of `/admin/alerts` (owner, 2026-11-15); the cron reads them with its one `readState`, empty list falls back to `ACTIVITY_EMAIL` then the admin address, off sends and claims nothing.
+
 ## Key files
 Create:
 - `web/lib/authEvents.server.ts`

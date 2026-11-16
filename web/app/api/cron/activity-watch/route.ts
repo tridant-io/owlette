@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getResend, FROM_EMAIL, ENV_LABEL, isProduction, trustedBaseUrl } from '@/lib/resendClient.server';
+import { getResend, FROM_EMAIL, ENV_LABEL, trustedBaseUrl } from '@/lib/resendClient.server';
 import {
   buildActivityFindingEmail,
   buildActivityDigestEmail,
@@ -13,6 +13,7 @@ import { loadActivitySince } from '@/lib/activity/feed.server';
 import { evaluateRules, type RuleInput } from '@/lib/activity/rules';
 import { fromDecisionDoc } from '@/lib/activity/rows';
 import { loadUserLabels } from '@/lib/activity/labels.server';
+import { activityFallbackEmail } from '@/lib/activity/emailSettings.server';
 import {
   claimDigest,
   claimForEmail,
@@ -29,7 +30,8 @@ import { ACTIVITY_FINDINGS_COLLECTION, type ActivityRow, type Finding } from '@/
  * and, once a day from 16:00 utc, a digest of the findings nobody has been mailed about.
  * Auth: X-Cron-Secret must equal CRON_SECRET. Dedupe: findings have deterministic ids,
  * and `emailedAt` and the digest day are claimed BEFORE the send, so a retry cannot mail
- * twice. Mail goes to ACTIVITY_EMAIL, else the admin address, as bug reports do.
+ * twice. Mail goes to the addresses set on admin → alerts, else ACTIVITY_EMAIL, else the admin
+ * address, as bug reports do; switched off there, nothing is mailed or claimed.
  *
  * Answers `{ ok, rowsScanned, findingsCreated, emailsSent }`.
  *
@@ -46,8 +48,6 @@ const SETTLE_MS = 30 * 1000;
 const MAX_LOOKBACK_MS = DAY_MS;
 const HISTORY_MS = 90 * DAY_MS;
 const DIGEST_HOUR_UTC = 16;
-
-const ADMIN_EMAIL = isProduction ? process.env.ADMIN_EMAIL_PROD : process.env.ADMIN_EMAIL_DEV;
 
 type Db = FirebaseFirestore.Firestore;
 type Role = 'owner' | 'admin' | 'member';
@@ -129,14 +129,15 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const end = now - SETTLE_MS;
   const resend = getResend();
-  const to = process.env.ACTIVITY_EMAIL || ADMIN_EMAIL;
   const activityUrl = `${trustedBaseUrl()}/admin/activity?view=flagged`;
   let emailsSent = 0;
+
+  let to: string[] = [];
 
   // one failed send is logged, never allowed to fail the run or hold back the next finding
   const send = async (message: { subject: string; html: string }, what: string) => {
     try {
-      const result = await resend!.emails.send({ from: FROM_EMAIL, to: [to!], ...message });
+      const result = await resend!.emails.send({ from: FROM_EMAIL, to, ...message });
       if (result.error) logger.error(`activity-watch: ${what} email failed`, { context: 'cron/activity-watch', data: { error: result.error } });
       else emailsSent++;
     } catch (error) {
@@ -145,15 +146,18 @@ export async function GET(request: NextRequest) {
   };
 
   try {
-    const { scannedThrough } = await readState(db);
+    const { scannedThrough, email } = await readState(db);
+    const fallback = activityFallbackEmail();
+    to = email.recipients.length > 0 ? email.recipients : fallback ? [fallback] : [];
     const start = Math.max(Math.min(scannedThrough ?? Infinity, now - OVERLAP_MS), now - MAX_LOOKBACK_MS);
 
     const rows = (await loadActivitySince(db, start)).filter((r) => r.at <= end);
     const [labels, signInContext] = await Promise.all([loadUserLabels(db, rowUids(rows)), loadSignInContext(db, rows, now)]);
     const created = await saveNewFindings(db, evaluateRules({ rows, labels, ...signInContext }), now);
 
-    const canMail = !!resend && !!to;
-    if (!canMail) logger.warn('activity-watch: Resend or a recipient is not configured, skipping email', { context: 'cron/activity-watch' });
+    const canMail = email.enabled && !!resend && to.length > 0;
+    if (!email.enabled) logger.info('activity-watch: activity emails are switched off, skipping email', { context: 'cron/activity-watch' });
+    else if (!canMail) logger.warn('activity-watch: Resend or a recipient is not configured, skipping email', { context: 'cron/activity-watch' });
 
     if (canMail) {
       const recent = (

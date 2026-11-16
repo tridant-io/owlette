@@ -484,6 +484,84 @@ paths:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '500': { $ref: '#/components/responses/Problem500' }
 
+  /api/admin/activity/settings:
+    get:
+      operationId: getActivityEmailSettings
+      tags: [Users]
+      summary: get the activity email settings (superadmin only)
+      description: |
+        Returns whether the activity emails are on and the addresses they go
+        to. `fallback` is the address mail goes to while `recipients` is empty,
+        or `null` when none is configured and nothing is sent.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role, rechecked on every request; an API key additionally needs the
+        superadmin-only `user=*:read`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The current settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityEmailSettings' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin (`code: forbidden`) or the API key lacks `user=*:read` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    put:
+      operationId: updateActivityEmailSettings
+      tags: [Users]
+      summary: set the activity email settings (superadmin only)
+      description: |
+        Turns the activity emails on or off and sets who gets them. An empty
+        `recipients` list sends to the fallback address. Addresses are trimmed,
+        lowercased and de-duplicated; at most 10. The change is audited.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role, rechecked on every request; an API key additionally needs the
+        superadmin-only `user=*:admin`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled, recipients]
+              properties:
+                enabled: { type: boolean }
+                recipients:
+                  type: array
+                  maxItems: 10
+                  items: { type: string, format: email }
+      responses:
+        '200':
+          description: The settings now in force.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ActivityEmailSettings' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin (`code: forbidden`) or the API key lacks `user=*:admin` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
   /api/admin/issues:
     get:
       operationId: listIssues
@@ -13397,6 +13475,15 @@ components:
             prefix: { type: string, nullable: true }
         severity: { type: string, enum: [high, digest], description: Flagged rows only. }
         details: { type: object, additionalProperties: true }
+    ActivityEmailSettings:
+      type: object
+      required: [enabled, recipients, fallback]
+      properties:
+        enabled: { type: boolean }
+        recipients:
+          type: array
+          items: { type: string, format: email }
+        fallback: { type: string, nullable: true }
     ActivityList:
       type: object
       required: [rows, next_page_token]
