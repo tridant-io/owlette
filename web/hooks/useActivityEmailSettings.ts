@@ -11,8 +11,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export interface ActivityEmailSettings {
   enabled: boolean;
   recipients: string[];
-  /** where mail goes while `recipients` is empty; null when nothing is configured */
-  fallback: string | null;
 }
 
 const SETTINGS_URL = '/api/admin/activity/settings';
@@ -59,7 +57,7 @@ export function useActivityEmailSettings() {
 
   /** resolves with the problem when the save failed, null when it landed */
   const save = useCallback(
-    async (next: Pick<ActivityEmailSettings, 'enabled' | 'recipients'>): Promise<string | null> => {
+    async (next: ActivityEmailSettings): Promise<string | null> => {
       if (busy.current) return null;
       busy.current = true;
       setSaving(true);

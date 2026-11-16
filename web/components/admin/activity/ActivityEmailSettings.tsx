@@ -89,11 +89,7 @@ export function ActivityEmailSettings() {
             ))}
           </ul>
         ) : (
-          <p className="text-xs text-muted-foreground">
-            {settings.fallback
-              ? `no addresses set: emails go to ${settings.fallback}`
-              : 'no addresses set and no fallback address: nothing is sent'}
-          </p>
+          <p className="text-xs text-muted-foreground">no addresses: nothing is sent</p>
         )}
 
         <form

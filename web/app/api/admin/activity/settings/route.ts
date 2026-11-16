@@ -1,7 +1,7 @@
 /**
  * GET and PUT /api/admin/activity/settings — whether the activity emails go out and
- * to whom. Returns `{ enabled, recipients, fallback }`; `fallback` is where mail goes
- * while `recipients` is empty.
+ * to whom. Returns `{ enabled, recipients }`: the addresses mail goes to, which start
+ * as the configured address until a list is saved.
  *
  * GET: superadmin session, or a `user=*:read` api key (as the feed beside it).
  * PUT `{ enabled: boolean, recipients: string[] }`: a platform mutation like the
@@ -14,11 +14,7 @@ import { problemFromError, problemValidation } from '@/lib/apiErrors';
 import { authorizedPlatformHandler } from '@/lib/authorizedHandler.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { MAX_RECIPIENTS, normaliseRecipients } from '@/lib/activity/emailRecipients';
-import {
-  activityFallbackEmail,
-  readActivityEmailSettings,
-  writeActivityEmailSettings,
-} from '@/lib/activity/emailSettings.server';
+import { readActivityEmailSettings, writeActivityEmailSettings } from '@/lib/activity/emailSettings.server';
 import { applyAuthDeprecations, requirePlatformAuthAndScope } from '@/app/api/_shared';
 
 export async function GET(request: NextRequest) {
@@ -27,10 +23,7 @@ export async function GET(request: NextRequest) {
     if (!auth.ok) return auth.response;
 
     const settings = await readActivityEmailSettings(getAdminDb());
-    return applyAuthDeprecations(
-      NextResponse.json({ ...settings, fallback: activityFallbackEmail() }),
-      auth.scopeCheck,
-    );
+    return applyAuthDeprecations(NextResponse.json(settings), auth.scopeCheck);
   } catch (err) {
     return problemFromError(err, 'admin/activity/settings:GET');
   }
@@ -63,5 +56,5 @@ export const PUT = authorizedPlatformHandler({
   const db = getAdminDb();
   const settings = { enabled, recipients: clean.recipients };
   await writeActivityEmailSettings(db, settings);
-  return NextResponse.json({ ...settings, fallback: activityFallbackEmail() });
+  return NextResponse.json(settings);
 });

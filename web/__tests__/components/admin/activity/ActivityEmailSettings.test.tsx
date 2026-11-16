@@ -32,7 +32,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const fetchMock = jest.fn();
 let originalFetch: typeof global.fetch;
-let stored: { enabled: boolean; recipients: string[]; fallback: string | null };
+let stored: { enabled: boolean; recipients: string[] };
 
 // answers GET with the stored settings and PUT by storing what it was sent
 function serve() {
@@ -57,7 +57,7 @@ beforeEach(() => {
   originalFetch = global.fetch;
   fetchMock.mockReset();
   global.fetch = fetchMock as unknown as typeof global.fetch;
-  stored = { enabled: true, recipients: [], fallback: 'admin@example.test' };
+  stored = { enabled: true, recipients: [] };
   serve();
   jest.spyOn(console, 'error').mockImplementation(() => {});
   (toast.error as jest.Mock).mockClear();
@@ -78,15 +78,10 @@ describe('ActivityEmailSettings', () => {
     expect(screen.getByRole('link', { name: 'see what was flagged' })).toHaveAttribute('href', '/admin/activity?view=flagged');
   });
 
-  it('says where mail goes when no address is set', async () => {
+  it('says nothing is sent while the list is empty, and names no other address', async () => {
     await renderCard();
-    expect(screen.getByText('no addresses set: emails go to admin@example.test')).toBeInTheDocument();
-  });
-
-  it('says nothing is sent when no address and no fallback', async () => {
-    stored.fallback = null;
-    await renderCard();
-    expect(screen.getByText('no addresses set and no fallback address: nothing is sent')).toBeInTheDocument();
+    expect(screen.getByText('no addresses: nothing is sent')).toBeInTheDocument();
+    expect(screen.queryByText(/emails go to/)).not.toBeInTheDocument();
   });
 
   it('lists the stored addresses as removable chips and drops the empty line', async () => {

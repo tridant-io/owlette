@@ -42,7 +42,7 @@ test.describe('as a superadmin', () => {
 
     await expect(page.getByRole('heading', { name: /^platform/ })).toContainText('superadmins only');
     await expect(page.getByRole('switch', { name: 'activity findings' })).toBeChecked();
-    await expect(page.getByText('no addresses set', { exact: false })).toBeVisible();
+    await expect(page.getByText('no addresses: nothing is sent')).toBeVisible();
     await expect(page.getByRole('link', { name: 'see what was flagged' })).toHaveAttribute('href', '/admin/activity?view=flagged');
 
     const y = async (name: string | RegExp) => (await page.getByRole('heading', { name }).boundingBox())!.y;

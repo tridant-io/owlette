@@ -14,7 +14,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status < 400, status, json: async () => body } as unknown as Response;
 }
 
-const SAVED = { enabled: true, recipients: ['a@example.test'], fallback: 'admin@example.test' };
+const SAVED = { enabled: true, recipients: ['a@example.test'] };
 
 const fetchMock = jest.fn();
 let originalFetch: typeof global.fetch;
@@ -69,7 +69,7 @@ describe('useActivityEmailSettings', () => {
     expect(result.current.settings).toMatchObject({ enabled: false, recipients: ['a@example.test', 'b@example.test'] });
 
     await act(async () => {
-      finish(jsonResponse({ enabled: false, recipients: ['a@example.test', 'b@example.test'], fallback: 'admin@example.test' }));
+      finish(jsonResponse({ enabled: false, recipients: ['a@example.test', 'b@example.test'] }));
       await outcome;
     });
 
@@ -78,7 +78,6 @@ describe('useActivityEmailSettings', () => {
     expect(result.current.settings).toEqual({
       enabled: false,
       recipients: ['a@example.test', 'b@example.test'],
-      fallback: 'admin@example.test',
     });
     const [url, init] = fetchMock.mock.calls[1];
     expect(url).toBe('/api/admin/activity/settings');
