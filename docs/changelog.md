@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.2.3] - 2026-11-17
+
 ### added — an activity page that flags risky changes and sign-ins
 
 **admin** → **activity** (superadmins only, under support) is one timeline of what people, API keys and machines did across every site, newest first. its views are **all**, **flagged**, **changes**, **refused** and **sign-ins**, and it can be narrowed to one user (their API keys included) or one site. changes made through hoot are shown under the user they were made for. opening a row shows its details.
