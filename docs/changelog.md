@@ -27,6 +27,10 @@ on **admin** → **alerts**, superadmins now see a **platform** section with a s
 
 a machine that may act on others renews its fleet session every ten minutes, and each renewal filled the feed with a `fleet session minted` row. the all and changes views now leave those rows out, so what people and machines did to something is on the first screen. the audit trail still keeps them.
 
+### changed — the sites page counts its sites in a line above the list
+
+the count of sites on **admin** → **sites** was a tall card beside the filter and **new site**. it is now a line above the list, `15 sites`, which reads `showing 3 of 15 sites` while the filter is on.
+
 ### fixed — the activity page names the person a swoop host's refusal was about
 
 when a swoop host refused a viewer, for example for input it was not allowed to send, the activity page showed only the host as the actor and the session id, so you could not tell who it was or which machine. a refused row now leads with the person, works it out from the session's start, and names the machine: `sam@example.com was refused: input not permitted on LOBBY-01`, with `reported by owlette · swoop host` under it. opening the row shows the viewer and the machine, and **everything from this actor** filters by that person. the user filter itself still skips these rows, because the host is their actor.
