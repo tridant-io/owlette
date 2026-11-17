@@ -11,7 +11,6 @@ import { useUserManagement } from '@/hooks/useUserManagement';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
-import { StatChip } from '@/components/admin/StatChip';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
@@ -171,40 +170,37 @@ export function SiteList() {
           description="the sites you belong to. a site's gear opens its settings."
           actions={<CompactButton icon={Plus} label="new site" onClick={() => setCreateOpen(true)} />}
           toolbar={
-            <>
-              {/* no autofocus: on a phone it would raise the keyboard */}
-              {sites.length > 1 && (
-                <div className="relative min-w-0 flex-1 md:w-64 md:flex-none">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    ref={filterInputRef}
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') setFilter('');
+            // no autofocus: on a phone it would raise the keyboard
+            sites.length > 1 && (
+              <div className="relative min-w-0 flex-1 md:w-64 md:flex-none">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  ref={filterInputRef}
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setFilter('');
+                  }}
+                  placeholder="filter sites…"
+                  aria-label="filter sites"
+                  autoComplete="off"
+                  className="border-border bg-card pl-9 pr-8 text-foreground"
+                />
+                {filter && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilter('');
+                      filterInputRef.current?.focus();
                     }}
-                    placeholder="filter sites…"
-                    aria-label="filter sites"
-                    autoComplete="off"
-                    className="border-border bg-card pl-9 pr-8 text-foreground"
-                  />
-                  {filter && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFilter('');
-                        filterInputRef.current?.focus();
-                      }}
-                      aria-label="clear filter"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  )}
-                </div>
-              )}
-              <StatChip icon={Building2} iconTone="bg-accent-cyan text-primary-foreground" count={sites.length} label="sites" />
-            </>
+                    aria-label="clear filter"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            )
           }
         />
 
@@ -214,9 +210,11 @@ export function SiteList() {
           </div>
         )}
 
-        {query && (
+        {sites.length > 0 && (
           <p className="mb-2 text-xs text-muted-foreground">
-            showing {shownSites.length} of {sites.length} sites
+            {query
+              ? `showing ${shownSites.length} of ${sites.length} sites`
+              : `${sites.length} ${sites.length === 1 ? 'site' : 'sites'}`}
           </p>
         )}
 
