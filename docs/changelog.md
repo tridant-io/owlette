@@ -35,6 +35,10 @@ when a swoop host refused a viewer, for example for input it was not allowed to 
 
 The hoot mcp steps under **settings** > **hoot** in the dashboard pointed to a desktop menu item 4.2.2 removed and gave a command to paste. They now describe the switch in the owlette app's settings and the admin's allow, and link to the guide for other MCP clients.
 
+### security — next 16.4.6
+
+next in the web app moves to 16.4.6, which fixes an information disclosure across root params when a `use cache` function is called through `unstable_cache()` (GHSA-mfr8-8qww-v76h). owlette uses neither, so it was never exposed.
+
 ## [4.2.2] - 2026-11-14
 
 ### changed — hoot mcp is turned on from the machine's settings
