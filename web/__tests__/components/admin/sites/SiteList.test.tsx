@@ -134,9 +134,11 @@ describe('the header', () => {
     expect(screen.getByText("the sites you belong to. a site's gear opens its settings.")).toBeInTheDocument();
   });
 
-  it('counts the sites above the list', () => {
+  it('shows no count of sites until the filter is on', () => {
     renderList();
-    expect(screen.getByText('3 sites')).toBeInTheDocument();
+    expect(screen.queryByText(/\d+ sites?$/)).toBeNull();
+    // the old tally card put the number in its own element
+    expect(screen.queryByText('3')).toBeNull();
   });
 
   it('is what /admin/sites renders', () => {
@@ -350,14 +352,13 @@ describe('the filter', () => {
     expect(screen.queryByRole('button', { name: 'clear filter' })).toBeNull();
   });
 
-  it('is not offered with a single site, which the count names in the singular', () => {
+  it('is not offered with a single site', () => {
     mockSites.sites = [ALPHA];
     mockSites.currentSiteId = 'site-a';
     renderList();
 
     expect(screen.queryByRole('textbox', { name: 'filter sites' })).toBeNull();
     expect(rowIds()).toEqual(['site-a']);
-    expect(screen.getByText('1 site')).toBeInTheDocument();
   });
 });
 

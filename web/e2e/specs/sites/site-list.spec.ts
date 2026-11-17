@@ -88,7 +88,8 @@ test.describe('superadmin', () => {
     await page.goto('/admin/sites');
     const rows = siteRows(page);
     await expect(rows).toHaveCount(total);
-    await expect(page.getByText(`${total} sites`, { exact: true })).toBeVisible();
+    // no count of sites until the filter is on
+    await expect(page.getByText(/^\d+ sites?$/)).toHaveCount(0);
 
     const filter = page.getByRole('textbox', { name: 'filter sites', exact: true });
     await filter.fill('site-b');
@@ -102,7 +103,6 @@ test.describe('superadmin', () => {
     await expect(filter).toHaveValue('');
     await expect(rows).toHaveCount(total);
     await expect(page.getByText(/^showing \d+ of \d+ sites$/)).toHaveCount(0);
-    await expect(page.getByText(`${total} sites`, { exact: true })).toBeVisible();
   });
 
   test("the owner column shows site-C's owner", async ({ page }) => {
