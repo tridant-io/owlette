@@ -27,9 +27,9 @@ on **admin** → **alerts**, superadmins now see a **platform** section with a s
 
 a machine that may act on others renews its fleet session every ten minutes, and each renewal filled the feed with a `fleet session minted` row. the all and changes views now leave those rows out, so what people and machines did to something is on the first screen. the audit trail still keeps them.
 
-### changed — the sites page counts its sites in a line above the list
+### changed — the sites page drops its count card
 
-the count of sites on **admin** → **sites** was a tall card beside the filter and **new site**. it is now a line above the list, `15 sites`, which reads `showing 3 of 15 sites` while the filter is on.
+**admin** → **sites** showed the count of sites as a tall card beside the filter and **new site**. it is gone; while the filter is on, the list still says `showing 3 of 15 sites`.
 
 ### fixed — the activity page names the person a swoop host's refusal was about
 
