@@ -210,11 +210,9 @@ export function SiteList() {
           </div>
         )}
 
-        {sites.length > 0 && (
+        {query && (
           <p className="mb-2 text-xs text-muted-foreground">
-            {query
-              ? `showing ${shownSites.length} of ${sites.length} sites`
-              : `${sites.length} ${sites.length === 1 ? 'site' : 'sites'}`}
+            showing {shownSites.length} of {sites.length} sites
           </p>
         )}
 
