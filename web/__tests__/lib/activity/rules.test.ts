@@ -144,6 +144,22 @@ describe('destructive_burst', () => {
     expect(run(many(5, () => ({ action: 'process_mutated:deleted' }))).filter((f) => f.rule === 'destructive_burst')).toEqual([]);
   });
 
+  it("counts a machine moved out of a site once, not the move's request, mint or arrival rows", () => {
+    const burst = (verb: string) =>
+      run(many(DESTRUCTIVE_BURST, () => ({ action: `site_mutated:${verb}` }))).filter((f) => f.rule === 'destructive_burst');
+    expect(burst('machine.move_out')).toHaveLength(1);
+    for (const verb of [
+      'machine.move_request',
+      'machine.move_mint',
+      'machine.move_in',
+      'machine.move',
+      'machine.move_cancel',
+      'machine.move_refused',
+    ]) {
+      expect(burst(verb)).toEqual([]);
+    }
+  });
+
   it('stays quiet one under, and does not mix actors', () => {
     expect(run(many(DESTRUCTIVE_BURST - 1, kill))).toEqual([]);
     expect(run(many(DESTRUCTIVE_BURST, (i) => ({ ...kill(i), actor: { type: 'user', id: `u${i % 2}` } })))).toEqual([]);

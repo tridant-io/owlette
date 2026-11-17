@@ -691,6 +691,37 @@ describe('/api/sites/{siteId}', () => {
     expect(docStore['sites/site-a']?.data).toBeNull();
   });
 
+  it('refuses DELETE with 409 move_switching while a machine is switching into the site, and deletes nothing', async () => {
+    authedKey('admin-uid', 'superadmin', [siteScope('site-a', 'admin')]);
+    seedSite('site-a', { owner: 'admin-uid' });
+    const move = {
+      moveId: 'site-c:m1',
+      sourceSiteId: 'site-c',
+      targetSiteId: 'site-a',
+      machineId: 'm1',
+      status: 'switching',
+      requestedBy: 'admin-uid',
+      requestedAt: 1,
+      expiresAt: 2,
+    };
+    docStore['machine_moves/site-c:m1'] = { data: move };
+    syncCollection(['machine_moves', 'site-c:m1'], 'site-c:m1', move);
+
+    const res = await siteDELETE(
+      createMockRequest('http://localhost/api/sites/site-a', { method: 'DELETE' }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body).toMatchObject({
+      code: 'move_switching',
+      detail: 'a machine is moving into this site right now. try again in a minute.',
+    });
+    expect(docStore['sites/site-a']?.data).not.toBeNull();
+    expect(docStore['machine_moves/site-c:m1']?.data).toEqual(move);
+  });
+
   it('allows a superadmin to delete a site they do not own', async () => {
     authedKey('super-uid', 'superadmin', [siteScope('site-a', 'admin')]);
     seedSite('site-a', { owner: 'someone-else' });

@@ -223,6 +223,8 @@ on Windows, use the repair script only on a machine that already has the package
 
 to re-run pairing, open the owlette window on the machine and choose **join site** — from the app menu, or from the button in the status bar when the machine belongs to no site. a machine that still belongs to a site offers **leave site** in the app menu instead: leave first, then join. both run the same `configure_site.py` helper the installer does.
 
+to take a paired machine to another site, nobody needs to be at it, and nothing on it asks for approval: an owner or admin of both sites, or a superadmin, moves it from the admin panel, and its agent follows on its own. see [move machine](/docs/dashboard/machine-monitoring#move-machine). leaving and joining is still the way for a machine whose agent is older than 4.2.3, or when nobody administers both sites.
+
 leaving is not the mirror of joining, and it differs by platform:
 
 - **Windows:** the app stops `OwletteService` before anything is deregistered, and since it runs as the signed-in user, Windows raises an administrator prompt for that stop — decline it and the leave is cancelled with nothing on this machine changed, and the dialog offers **try again**. with the service down the machine is deregistered, then the service is started again; the dialog narrates each step and the whole sequence takes a few seconds. if the service does not come back, the dialog says so and **start service** appears in the status bar.

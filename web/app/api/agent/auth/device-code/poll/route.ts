@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
+import { mintAgentIdToken, newRefreshToken } from '@/lib/agentCredentials.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
@@ -276,54 +277,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         version,
       };
 
-      const adminAuth = getAdminAuth();
-      await ensureAgentAuthUser(adminAuth, agentUid);
-      const customToken = await adminAuth.createCustomToken(agentUid, claims);
+      await ensureAgentAuthUser(getAdminAuth(), agentUid);
+      const idToken = await mintAgentIdToken(agentUid, claims);
 
-      const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-      if (!firebaseApiKey) {
-        throw new Error('Firebase API key not configured');
-      }
-
-      const authResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customToken, returnSecureToken: true }),
-        }
-      );
-
-      if (!authResponse.ok) {
-        const errorData = await authResponse.json();
-        throw new Error(`Failed to exchange custom token: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      authResponse.body?.cancel();
-
-      await adminAuth.setCustomUserClaims(agentUid, claims);
-
-      const customTokenWithClaims = await adminAuth.createCustomToken(agentUid, claims);
-      const refreshAuthResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customTokenWithClaims, returnSecureToken: true }),
-        }
-      );
-
-      if (!refreshAuthResponse.ok) {
-        const errorData = await refreshAuthResponse.json();
-        throw new Error(`Failed to refresh token with claims: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      const refreshAuthData = await refreshAuthResponse.json();
-      const idToken = refreshAuthData.idToken;
-
-      const crypto = await import('crypto');
-      const refreshToken = crypto.randomBytes(64).toString('base64url');
-      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const { refreshToken, refreshTokenHash } = newRefreshToken();
       const refreshTokenRef = adminDb.collection('agent_refresh_tokens').doc(refreshTokenHash);
 
       const done = await adminDb.runTransaction(async (transaction) => {

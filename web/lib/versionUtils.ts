@@ -189,3 +189,9 @@ export const LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION = '4.2.0';
  * from `/api/agent/hoot/key`. an older one reads the key from the command itself.
  */
 export const HOOT_KEY_FETCH_MIN_AGENT_VERSION = '4.2.0';
+
+/**
+ * the first agent that follows a move to another site. its `capabilities.siteMove`
+ * can't say so alone: a rollback leaves the 1 on the machine doc.
+ */
+export const SITE_MOVE_MIN_AGENT_VERSION = '4.2.3';

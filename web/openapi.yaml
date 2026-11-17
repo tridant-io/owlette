@@ -5090,6 +5090,11 @@ paths:
         document and every subcollection: machines and their history, roosts,
         talons, webhooks, settings and member rows.
 
+        While a machine is switching into or out of the site (a move whose agent
+        has fetched the new site's tokens), the delete is refused with `409`
+        `move_switching` and nothing is written; try again once it has arrived.
+        Moves still waiting are cancelled with the site.
+
         ### Authentication and scopes
 
         Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
@@ -5118,6 +5123,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
+        '409': { $ref: '#/components/responses/Problem409' }
         '422': { $ref: '#/components/responses/Problem422' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -5229,6 +5235,165 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+
+  /api/sites/{siteId}/machines/{machineId}/move:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+    post:
+      operationId: requestMachineMove
+      tags: [Machines]
+      summary: move a machine to another site
+      description: |
+        Asks for the machine to move to `targetSiteId`, with nobody at the
+        machine. The move is stored as `pending` and a `site_move` command is
+        queued for the machine; its agent fetches the target site's
+        credentials, switches, and confirms from the target, which deletes
+        the machine and its history on this site. A machine that is offline
+        follows when it comes back, for up to 7 days (`expiresAt`, epoch
+        milliseconds), after which the pending move lapses.
+
+        The caller needs MACHINE_REMOVE here and MACHINE_ENROLL on the target:
+        superadmins, and anyone who is admin or owner of both sites. Asking
+        again for the same target answers `200` with the move already
+        pending, and writes nothing. Shares MACHINE_REMOVE's 5/min per caller.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequiredIdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetSiteId]
+              properties:
+                targetSiteId:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: The site the machine moves to.
+      responses:
+        '200':
+          description: The machine already has a move pending to this site; nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MachineMoveResponse' }
+        '202':
+          description: Move requested.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MachineMoveResponse' }
+        '400':
+          description: |
+            `code`: `validation_failed` (`targetSiteId` missing or not a site
+            id), `same_site` (the machine is already on that site), or
+            `idempotency_key_required`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '402':
+          description: |
+            `code: plan_required`, `entitlement: owlette.machines`: the target
+            site's plan has no room for another machine.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `forbidden` (no
+            MACHINE_REMOVE here, or no MACHINE_ENROLL on the target), or
+            `api_key_not_permitted` (an api key called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: |
+            `code: machine_not_found` when the machine is not on this site;
+            `not_found` when this site or the target site does not exist, or
+            the caller has no access to this site.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '409':
+          description: |
+            `code`, in check order: `machine_exists` (the target already has a
+            machine with this id), `move_pending` (the machine is moving to
+            another site; cancel that first), `machine_busy` (an install,
+            uninstall, update or roost sync is queued, or a deployment naming
+            it is in flight), or `agent_too_old` (its agent does not report it
+            can follow a move, or is older than 4.2.3).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '422': { $ref: '#/components/responses/Problem422' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+    delete:
+      operationId: cancelMachineMove
+      tags: [Machines]
+      summary: cancel a pending machine move
+      description: |
+        Cancels the machine's move while it is `pending`: the move and its
+        `site_move` command are deleted. Once the agent has fetched the
+        target's credentials the move is `switching` and cannot be
+        cancelled; removing the machine ends it.
+
+        Same callers as the `POST`: MACHINE_REMOVE here. Shares MACHINE_REMOVE's
+        5/min per caller.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      parameters:
+        - $ref: '#/components/parameters/RequiredIdempotencyKeyHeader'
+      responses:
+        '200':
+          description: Move cancelled.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, data]
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    required: [moveId, status, targetSiteId]
+                    properties:
+                      moveId: { type: string }
+                      status: { type: string, enum: [cancelled] }
+                      targetSiteId: { type: string }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `forbidden` (no
+            MACHINE_REMOVE here), or `api_key_not_permitted` (an api key
+            called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: '`code: not_found`: the machine has no move, or the site does not exist or the caller has no access to it.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '409':
+          description: '`code: move_switching`: the agent is already switching sites; remove the machine to end the move.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '422': { $ref: '#/components/responses/Problem422' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -14578,6 +14743,24 @@ components:
           description: |
             List route only. The machine's IANA timezone, the clock
             `activeHours` is read on. Null when the agent could not name it.
+        pendingMove:
+          type: object
+          nullable: true
+          description: |
+            List route only. The machine's move out of this site, or null. A
+            `pending` move waits for the agent and lapses at `expiresAt`; a
+            `switching` move never lapses (the agent already holds the target's
+            credentials). `targetSiteName` falls back to the id when the target
+            site has no name.
+          required: [targetSiteId, targetSiteName, status, expiresAt]
+          properties:
+            targetSiteId: { type: string }
+            targetSiteName: { type: string }
+            status: { type: string, enum: [pending, switching] }
+            expiresAt:
+              type: integer
+              format: int64
+              description: Epoch milliseconds. Meaningful only while `pending`.
         currentRoosts:
           type: array
           description: List route only.
@@ -14668,6 +14851,28 @@ components:
             config: { type: string }
             pendingCommands: { type: string }
             completedCommands: { type: string }
+
+    MachineMoveResponse:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: { type: boolean }
+        data:
+          type: object
+          required: [moveId, status, targetSiteId, expiresAt]
+          properties:
+            moveId:
+              type: string
+              description: '`{siteId}:{machineId}`, the source site and the machine.'
+            status:
+              type: string
+              enum: [pending, switching]
+              description: '`switching` once the agent has fetched the target site''s credentials; it can no longer be cancelled.'
+            targetSiteId: { type: string }
+            expiresAt:
+              type: integer
+              format: int64
+              description: Epoch milliseconds when a pending move lapses. A switching move never does.
 
     # quotas
     Quota:

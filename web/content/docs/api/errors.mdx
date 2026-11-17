@@ -4,7 +4,7 @@ description: "API errors use application/problem+json with a stable code, a docs
 keywords: ["error codes", "problem+json", "rfc 7807", "status codes", "requestId", "troubleshooting", "402", "payment required"]
 ---
 
-**last updated**: 2026-11-12
+**last updated**: 2026-11-17
 
 ---
 
@@ -109,6 +109,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 
 | `entitlement` | refused |
 |---|---|
+| `owlette.machines` | moving a machine to a site whose plan has no room for another machine |
 | `owlette.sites` | creating a site once the caller's free site is taken, without `onPlan: true` from a signed-in session (an API key's is ignored), or at all while a further site of theirs is unpaid; or transferring a site on owlette free to an owner whose free site is taken. a create refusal carries `siteCreation` with the site to upgrade, and a blocked one points `upgradeUrl` at that site's billing section; see [adding a site](/docs/plans#adding-a-site) |
 | `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
 | `owlette.deployments` | creating, retrying and uninstalling deployments |
@@ -119,7 +120,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 | `owlette.webhooks` | creating a webhook subscription |
 | `owlette.api_keys` | every site request made with an API key, reads and deletes included |
 
-the plan of the site the request acts on decides, whoever makes it. `owlette.sites` is the exception: owlette free is counted per account, so it goes by the sites the caller, or the new owner, already owns. creating or rotating a key and signing in the CLI are never refused by a plan; a key is checked on each request, against the site it acts on. reads, deletes and cancellations are never refused on a session. a machine past the limit is refused at pairing, not here; see [plans](/docs/plans#adding-a-machine-past-the-limit). do not retry unchanged.
+the plan of the site the request acts on decides, whoever makes it. `owlette.sites` is the exception: owlette free is counted per account, so it goes by the sites the caller, or the new owner, already owns. creating or rotating a key and signing in the CLI are never refused by a plan; a key is checked on each request, against the site it acts on. reads, deletes and cancellations are never refused on a session. a machine past the limit is refused at pairing, not here, though a [move](/docs/dashboard/machine-monitoring#move-machine) to a site with no room for it answers `owlette.machines`; see [plans](/docs/plans#adding-a-machine-past-the-limit). do not retry unchanged.
 
 ### forbidden
 
@@ -150,7 +151,7 @@ the API key is valid but has no scope entry matching the operation. `required` n
 
 ### api_key_not_permitted
 
-the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, and a site's billing. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
+the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, a site's billing, and moving a machine to another site. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
 
 ### mfa_challenge_required
 
@@ -288,6 +289,19 @@ hoot could not start a reply: `503` when the pinned machine is offline or no mac
 | <span id="verified_session_required" />`verified_session_required` | 403 | creating, raising or rotating a key above tool tier 1, or raising a hoot mcp machine's tier, needs a dashboard session that passed a second factor |
 | <span id="hoot_disabled" />`hoot_disabled` | 423 | a tool call to a machine with hoot switched off; nothing was queued |
 | <span id="installer_not_published" />`installer_not_published` | 403 | `update_owlette` with a url and hash that no installer version publishes; nothing was queued |
+
+### moving a machine
+
+`POST` and `DELETE /api/sites/{siteId}/machines/{machineId}/move` [move a machine to another site](/docs/dashboard/machine-monitoring#move-machine) and cancel the move. besides the general codes, they answer these. a refusal writes nothing.
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="same_site" />`same_site` | 400 | `targetSiteId` is the site the machine is already on |
+| <span id="machine_exists" />`machine_exists` | 409 | the site the machine would move to already has a machine with this ID: remove it there first. authorizing a pairing phrase answers the same for a machine already on the site, unless the request names it to replace |
+| <span id="move_pending" />`move_pending` | 409 | the machine is already moving to another site: cancel that move first, or wait while it is switching. asking again for the same site answers `200` with the move |
+| <span id="machine_busy" />`machine_busy` | 409 | an install, uninstall, update or roost sync is queued for the machine, or a deployment naming it is running. try again when it finishes |
+| <span id="agent_too_old" />`agent_too_old` | 409 | the machine's agent can't follow a move: it is older than 4.2.3, or doesn't report `capabilities.siteMove`. update it first, or leave the site and join the other one at the machine |
+| <span id="move_switching" />`move_switching` | 409 | cancelling a move the machine is already carrying out: it has fetched the new site's tokens. remove the machine from the old site to end the move. [deleting a site](/docs/dashboard/admin/sites#danger-zone) answers the same, and deletes nothing, while a machine is switching into or out of it: try again once it has arrived |
 
 ---
 

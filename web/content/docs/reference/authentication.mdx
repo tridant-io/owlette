@@ -158,6 +158,40 @@ every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a 
 
 **rate limits**, per IP, with the shared Redis limiter configured: device-code and authorize share 60 requests an hour (200 on dev), polling counts against the general 300 an hour, and refresh allows 120 an hour. without Redis every endpoint falls back to 15 a minute per process.
 
+### moving to another site
+
+a [move](/docs/dashboard/machine-monitoring#move-machine) takes a paired machine to another site with no new phrase. the agent gets the new site's tokens itself, with the refresh token it holds for the old one, and the old site is cleaned only once it confirms from the new one:
+
+```
+1. the agent asks for the new site's tokens: POST /api/agent/auth/move
+   ├── body: refreshToken, machineId, moveId
+   ├── the refresh token is checked as refresh checks it, and only read: it
+   │     is not rotated, and keeps working until the move is confirmed
+   ├── the move must be the token's own, from its site and for its machine.
+   │     any other move answers 404, never 401 or 403, which an agent takes
+   │     for a revoked token
+   ├── 410 the pending move lapsed · 409 the new site already has a machine
+   │     with this ID · 402 the new site's plan has no room for it
+   └── 200 accessToken, refreshToken, expiresIn 3600, siteId: tokens for the
+         new site's agent user, the refresh token kept only as its hash. the
+         move turns switching. a retry mints anew and deletes the refresh
+         token the last call minted, so a move holds one
+
+2. the agent writes the new tokens and the move to .tokens.enc in one write,
+   points config.json at the new site, reconnects there, and confirms with
+   its new ID token: POST /api/agent/auth/move/confirm
+   ├── body: machineId, moveId. the token's site_id must be the move's new
+   │     site, and its machine_id the machine
+   ├── 200: the old site's copy is removed as remove machine removes it, its
+   │     refresh tokens included, the pairing is recorded on the new site, and
+   │     the move is deleted
+   ├── 404 move_not_found: no move to confirm. the agent takes it as done
+   └── 403 machine_mismatch or wrong_site, 409 move_not_switching: the agent
+         asks again on its next connect
+```
+
+both are rate limited as refresh is, per IP. `/api/agent/auth/move` refuses with a bare `{ error }`, the confirm with problem+json. a switch cut short between `.tokens.enc` and `config.json` is finished the next time the agent starts or rebuilds its connection, before it connects.
+
 ### fleet sessions
 
 a Windows machine or Mac that a site owner or admin made a [sender](/docs/agent/hoot-mcp) acts on the site's other machines with a **fleet session**, never with its agent token. the service posts its own ID token to `POST /api/agent/fleet/session` every 10 minutes; the site and machine come from the token's claims, never from the body. the answer is an `owf_` token that lasts 15 minutes, with `grant: {maxTier, wholeSite, machineIds}` beside it and works only on the `/api/agent/fleet/*` routes, and the server keeps only its SHA-256, in `fleet_sessions/{hash}`. a machine that is not a sender gets `403 fleet_not_granted`, and one with no live agent token or no machine document `401 pairing_revoked`. turning the machine off as a sender, removing it, re-pairing it or revoking its agent token deletes its sessions. a sender can drop its own settings with `DELETE /api/agent/fleet/grant` (agent ID token): it answers `200 {dropped}`, `401 unauthorized` or `pairing_revoked`, or `429`, and is audited as `fleet_grant_dropped` by `machine:<id>`. a machine can lower its own grant this way, never raise it. the session file the MCP script reads is described in [how hoot mcp works](/docs/agent/hoot-mcp#how-it-works).
@@ -177,7 +211,7 @@ the security rules read these to limit an agent to its own site and machine (`ag
 
 ### the token file
 
-the refresh token, the cached access token and its expiry, and the site ID are kept together in one encrypted file, `.tokens.enc`, in the agent's data root.
+the refresh token, the cached access token and its expiry, and the site ID are kept together in one encrypted file, `.tokens.enc`, in the agent's data root, and so is a [move](#moving-to-another-site) the agent has switched for until it is confirmed.
 
 | | Windows | macOS | Linux |
 |---|---|---|---|

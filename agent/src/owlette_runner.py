@@ -161,6 +161,10 @@ if __name__ == '__main__':
 
             if firebase_enabled:
                 try:
+                    # a switch cut short between the token store and
+                    # config.json, finished before the site is read
+                    import site_move_commands
+                    site_move_commands.reconcile()
                     site_id = shared_utils.read_config(['firebase', 'site_id'])
                     project_id = shared_utils.get_configured_project_id()
                     api_base = shared_utils.get_configured_api_base()

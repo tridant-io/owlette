@@ -4,13 +4,15 @@
  * currentVersionId, so "what is this machine running" reads at a glance.
  * a scoped member gets only the machines in their machine scope, each with its
  * `currentRoosts`: a roost that targets their machine is about their machine.
+ * each machine carries its `pendingMove` out of the site, or null.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { Timestamp } from 'firebase-admin/firestore';
+import { Timestamp, type Firestore } from 'firebase-admin/firestore';
 import { problemFromError } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { scopeCovers } from '@/lib/machineAccess';
+import { readMove, type MoveStatus } from '@/lib/machineMoves.server';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
@@ -25,6 +27,14 @@ interface RoostSummary {
   name: string;
   currentVersionId: string | null;
   versionCounter: number;
+}
+
+interface PendingMove {
+  targetSiteId: string;
+  targetSiteName: string;
+  status: MoveStatus;
+  /** epoch milliseconds, as the move store keeps it. */
+  expiresAt: number;
 }
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
@@ -62,7 +72,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const inMachineScope = machinesSnap.docs.filter((d) => scopeCovers(auth.machineIds, d.id));
-    const machines = inMachineScope.map((d) => {
+    const moves = await pendingMoves(db, siteId, inMachineScope.map((d) => d.id));
+    const machines = inMachineScope.map((d, i) => {
       const data = d.data();
       const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
       return {
@@ -95,6 +106,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         activeHours: data.activeHours ?? null,
         machineTimezone: data.machine_timezone_iana ?? null,
         currentRoosts: roostsByMachine.get(d.id) ?? [],
+        pendingMove: moves[i],
       };
     });
 
@@ -107,6 +119,33 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   } catch (err) {
     return problemFromError(err, 'v2/sites/[siteId]/machines:GET');
   }
+}
+
+/**
+ * each machine's move out of the site, in order, or null. the target is named
+ * for the row's tag, by its id when the site has no name or is gone. a lapsed
+ * pending move reads as none.
+ */
+async function pendingMoves(db: Firestore, siteId: string, machineIds: string[]): Promise<Array<PendingMove | null>> {
+  const moves = await Promise.all(machineIds.map((machineId) => readMove(db, siteId, machineId)));
+  const targetIds = [...new Set(moves.flatMap((move) => (move ? [move.targetSiteId] : [])))];
+  const targets = await Promise.all(targetIds.map((id) => db.collection('sites').doc(id).get()));
+  const names = new Map(
+    targetIds.map((id, i) => {
+      const name: unknown = targets[i].data()?.name;
+      return [id, typeof name === 'string' && name ? name : id];
+    }),
+  );
+  return moves.map((move) =>
+    move
+      ? {
+          targetSiteId: move.targetSiteId,
+          targetSiteName: names.get(move.targetSiteId) ?? move.targetSiteId,
+          status: move.status,
+          expiresAt: move.expiresAt,
+        }
+      : null,
+  );
 }
 
 function heartbeatToIso(v: unknown): string | null {

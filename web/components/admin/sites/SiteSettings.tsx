@@ -128,7 +128,13 @@ export function SiteSettings({
         <Panel id="site-section-machines" title="machines" description="add one from the dashboard's + button.">
           <div className="space-y-4">
             <KeepScreensAwakeSwitch siteId={site.id} />
-            <SiteMachinesList key={site.id} siteId={site.id} />
+            {/* a superadmin's sites are every site, and isSiteAdmin is true on each */}
+            <SiteMachinesList
+              key={site.id}
+              siteId={site.id}
+              siteName={site.name}
+              targetSites={sites.filter((s) => s.id !== site.id && isSiteAdmin(s.id)).map(({ id, name }) => ({ id, name }))}
+            />
           </div>
         </Panel>
       )}

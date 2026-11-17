@@ -15,6 +15,9 @@
  *
  * `keepAwake` is the inverse default: on unless `settings/display` says an
  * explicit `false`, so every case that never seeds that document expects `true`.
+ *
+ * `move` is the one machine-scoped field: the calling machine's move, as its id
+ * alone, so every case without one expects `null`.
  */
 
 import { createMockRequest } from '../helpers/utils';
@@ -26,6 +29,7 @@ const mockCollection = jest.fn();
 const mockSettingsCollection = jest.fn();
 const mockSettingsDoc = jest.fn();
 const mockDisplayGet = jest.fn();
+const mockReadMove = jest.fn();
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: () => ({
@@ -41,6 +45,9 @@ jest.mock('@/lib/withRateLimit', () => ({
 jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
   captureMessage: jest.fn(),
+}));
+jest.mock('@/lib/machineMoves.server', () => ({
+  readMove: (...args: unknown[]) => mockReadMove(...args),
 }));
 
 import { GET } from '@/app/api/agent/site/route';
@@ -61,6 +68,7 @@ beforeEach(() => {
     collection: (...args: unknown[]) => mockSettingsCollection(...args),
   });
   mockCollection.mockReturnValue({ doc: (...args: unknown[]) => mockDoc(...args) });
+  mockReadMove.mockResolvedValue(null);
 });
 
 describe('GET /api/agent/site', () => {
@@ -88,6 +96,7 @@ describe('GET /api/agent/site', () => {
       timezone: 'America/Los_Angeles',
       roostEnabled: null,
       keepAwake: true,
+      move: null,
     });
     // The site is the token's, not the caller's to choose.
     expect(mockCollection).toHaveBeenCalledWith('sites');
@@ -115,7 +124,7 @@ describe('GET /api/agent/site', () => {
           owner: 'user-1',
           billingState: 'active',
         }),
-      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
     });
 
     // NEGATIVE CONTROL — the touring escape hatch. An explicit decline is as
@@ -127,7 +136,7 @@ describe('GET /api/agent/site', () => {
           timezone: 'America/Los_Angeles',
           schedulesFollowSiteTime: false,
         }),
-      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
     });
 
     it('returns the timezone once the site opted in (flag true)', async () => {
@@ -142,19 +151,20 @@ describe('GET /api/agent/site', () => {
         timezone: 'America/Los_Angeles',
         roostEnabled: null,
         keepAwake: true,
+        move: null,
       });
     });
 
     it('returns timezone: null when the site opted in but has no timezone', async () => {
       expect(
         await bodyForSite({ name: 'TEC', schedulesFollowSiteTime: true }),
-      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
     });
 
     it('treats a blank timezone as no timezone rather than shipping an empty string', async () => {
       expect(
         await bodyForSite({ name: 'TEC', timezone: '   ', schedulesFollowSiteTime: true }),
-      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
     });
 
     it('trims surrounding whitespace off the opted-in timezone', async () => {
@@ -169,6 +179,7 @@ describe('GET /api/agent/site', () => {
         timezone: 'America/Los_Angeles',
         roostEnabled: null,
         keepAwake: true,
+        move: null,
       });
     });
 
@@ -181,7 +192,7 @@ describe('GET /api/agent/site', () => {
           timezone: 'America/Los_Angeles',
           schedulesFollowSiteTime: 'true',
         }),
-      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+      ).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
     });
   });
 
@@ -206,6 +217,7 @@ describe('GET /api/agent/site', () => {
         timezone: null,
         roostEnabled: false,
         keepAwake: true,
+        move: null,
       });
     });
 
@@ -215,6 +227,7 @@ describe('GET /api/agent/site', () => {
         timezone: null,
         roostEnabled: true,
         keepAwake: true,
+        move: null,
       });
     });
 
@@ -227,6 +240,7 @@ describe('GET /api/agent/site', () => {
         timezone: null,
         roostEnabled: null,
         keepAwake: true,
+        move: null,
       });
     });
 
@@ -236,6 +250,7 @@ describe('GET /api/agent/site', () => {
         timezone: null,
         roostEnabled: null,
         keepAwake: true,
+        move: null,
       });
     });
   });
@@ -298,6 +313,74 @@ describe('GET /api/agent/site', () => {
     });
   });
 
+  describe('the move projection', () => {
+    const MOVE = {
+      moveId: 'site-a:TEC-A4D',
+      sourceSiteId: 'site-a',
+      targetSiteId: 'site-b',
+      machineId: 'TEC-A4D',
+      status: 'pending',
+      requestedBy: 'admin-uid',
+      requestedAt: 1_700_000_000_000,
+      expiresAt: 1_700_604_800_000,
+    };
+
+    /** Answer one request from `token` against a plain named site. */
+    async function bodyFor(token: Record<string, unknown>) {
+      mockVerifyIdToken.mockResolvedValueOnce(token);
+      mockSiteGet.mockResolvedValueOnce({ exists: true, data: () => ({ name: 'TEC' }) });
+      const res = await GET(request({ Authorization: 'Bearer agent-token' }));
+      expect(res.status).toBe(200);
+      return res.json();
+    }
+
+    // the backstop for a machine that was offline when the command was queued,
+    // or whose command was swept: the agent learns of the move here.
+    it("projects the calling machine's move as its id alone", async () => {
+      mockReadMove.mockResolvedValueOnce(MOVE);
+
+      const body = await bodyFor({ role: 'agent', site_id: 'site-a', machine_id: 'TEC-A4D' });
+
+      // the agent fetches everything else with its own refresh token
+      expect(body.move).toEqual({ moveId: 'site-a:TEC-A4D' });
+      expect(mockReadMove).toHaveBeenCalledWith(expect.anything(), 'site-a', 'TEC-A4D');
+    });
+
+    // an agent that lost the credential fetch's answer fetches again
+    it('projects a switching move too', async () => {
+      mockReadMove.mockResolvedValueOnce({ ...MOVE, status: 'switching', mintedTokenHash: 'h' });
+
+      const body = await bodyFor({ role: 'agent', site_id: 'site-a', machine_id: 'TEC-A4D' });
+
+      expect(body.move).toEqual({ moveId: 'site-a:TEC-A4D' });
+    });
+
+    it('is null when the machine has no move', async () => {
+      const body = await bodyFor({ role: 'agent', site_id: 'site-a', machine_id: 'TEC-A4D' });
+
+      expect(body.move).toBeNull();
+      expect(mockReadMove).toHaveBeenCalledWith(expect.anything(), 'site-a', 'TEC-A4D');
+    });
+
+    it('is null without reading a move when the token names no machine', async () => {
+      const body = await bodyFor({ role: 'agent', site_id: 'site-a' });
+
+      expect(body.move).toBeNull();
+      expect(mockReadMove).not.toHaveBeenCalled();
+    });
+
+    // a failed read must not say "no move"; the agent keeps its last answer on a non-200.
+    it('fails the request when the move read throws', async () => {
+      mockVerifyIdToken.mockResolvedValueOnce({ role: 'agent', site_id: 'site-a', machine_id: 'TEC-A4D' });
+      mockSiteGet.mockResolvedValueOnce({ exists: true, data: () => ({ name: 'TEC' }) });
+      mockReadMove.mockRejectedValueOnce(new Error('backend unavailable'));
+
+      const res = await GET(request({ Authorization: 'Bearer agent-token' }));
+
+      expect(res.status).toBe(500);
+    });
+  });
+
   it('ignores a siteId supplied in the query string', async () => {
     mockVerifyIdToken.mockResolvedValueOnce({ role: 'agent', site_id: 'site-a' });
     mockSiteGet.mockResolvedValueOnce({ exists: true, data: () => ({ name: 'TEC' }) });
@@ -320,7 +403,7 @@ describe('GET /api/agent/site', () => {
     const res = await GET(request({ Authorization: 'Bearer agent-token' }));
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ name: null, timezone: null, roostEnabled: null, keepAwake: true });
+    expect(await res.json()).toEqual({ name: null, timezone: null, roostEnabled: null, keepAwake: true, move: null });
   });
 
   it('trims surrounding whitespace off the stored name', async () => {
@@ -329,7 +412,7 @@ describe('GET /api/agent/site', () => {
 
     const res = await GET(request({ Authorization: 'Bearer agent-token' }));
 
-    expect(await res.json()).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true });
+    expect(await res.json()).toEqual({ name: 'TEC', timezone: null, roostEnabled: null, keepAwake: true, move: null });
   });
 
   it('returns 401 when the Authorization header is missing', async () => {

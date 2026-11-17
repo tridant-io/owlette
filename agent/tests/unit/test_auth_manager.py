@@ -1,10 +1,14 @@
 """Tests for auth_manager.py — OAuth token exchange and refresh logic."""
 
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 import logging
 import time
 import json
+
+import osadapter
+import secure_storage
 
 try:
     # Patch secure_storage and shared_utils before importing auth_manager —
@@ -17,6 +21,7 @@ try:
     mock_storage.save_access_token.return_value = True
     mock_storage.save_refresh_token.return_value = True
     mock_storage.save_site_id.return_value = True
+    mock_storage.save_credentials.return_value = True
 
     with patch("secure_storage.get_storage", return_value=mock_storage), \
          patch("secure_storage.SecureStorage", return_value=mock_storage):
@@ -43,6 +48,7 @@ def storage():
     s.save_access_token.return_value = True
     s.save_refresh_token.return_value = True
     s.save_site_id.return_value = True
+    s.save_credentials.return_value = True
     return s
 
 
@@ -69,7 +75,98 @@ class TestDeviceCodeCredentials:
             with pytest.raises(AuthenticationError, match="missing tokens"):
                 auth_manager.poll_device_code("DEVICE-CODE", interval=0, timeout=5)
 
-        storage.save_refresh_token.assert_not_called()
+        storage.save_credentials.assert_not_called()
+
+
+# TestPersistCredentials — a pairing's credentials reach the store in one write
+class TestPersistCredentials:
+    def test_the_store_takes_a_pairing_in_one_write(self, tmp_path, monkeypatch):
+        # saved one at a time, a failure part way left one site's refresh
+        # token beside another site's id
+        monkeypatch.setattr(osadapter, "_adapter", SimpleNamespace(
+            key_material=lambda: b"dummy-machine-binding",
+            stable_machine_id=lambda: "dummy-machine-binding",
+        ))
+        store = secure_storage.SecureStorage(config_dir=tmp_path)
+        writes = []
+        real_write = secure_storage._write_token_file
+
+        def recording_write(path, blob):
+            writes.append(blob)
+            real_write(path, blob)
+
+        monkeypatch.setattr(secure_storage, "_write_token_file", recording_write)
+        am = AuthManager(api_base="https://owlette.app/api", machine_id="TEST-MACHINE", storage=store)
+
+        am._persist_credentials("dummy-access", "dummy-refresh", 3600, "site-a")
+
+        assert len(writes) == 1
+        assert json.loads(store._fernet.decrypt(writes[0])) == {
+            "refresh_token": "dummy-refresh",
+            "access_token": "dummy-access",
+            "token_expiry": am._token_expiry,
+            "site_id": "site-a",
+        }
+        assert store.get_move() is None
+        assert (am._access_token, am._site_id) == ("dummy-access", "site-a")
+
+    def test_a_failed_save_raises_and_caches_nothing(self, auth_manager, storage):
+        storage.save_credentials.return_value = False
+
+        with pytest.raises(AuthenticationError, match="Failed to save tokens"):
+            auth_manager._persist_credentials("dummy-access", "dummy-refresh", 3600, "site-a")
+
+        assert (auth_manager._access_token, auth_manager._token_expiry, auth_manager._site_id) == (None, None, None)
+
+
+# TestMoveCredentials — a site move's writes, serialised with the refreshes
+class TestMoveCredentials:
+    MOVE = {"moveId": "site-a:TEST-MACHINE", "phase": "switched", "source": "site-a", "target": "site-b"}
+
+    def test_adopting_saves_under_the_refresh_lock_and_caches_the_new_site(self, auth_manager, storage):
+        # a refresh in flight would save the old site's rotated refresh token
+        # over the new one
+        held = []
+        storage.save_credentials.side_effect = lambda *args, **kwargs: (
+            held.append(auth_manager._refresh_lock.locked()) or True)
+
+        assert auth_manager.adopt_move_credentials(
+            "dummy-refresh", "dummy-access", 1234.0, "site-b", self.MOVE) is True
+
+        storage.save_credentials.assert_called_once_with(
+            "dummy-refresh", "dummy-access", 1234.0, "site-b", move=self.MOVE)
+        assert held == [True]
+        assert not auth_manager._refresh_lock.locked()
+        assert (auth_manager._access_token, auth_manager._token_expiry, auth_manager.get_site_id()) == (
+            "dummy-access", 1234.0, "site-b")
+
+    def test_a_failed_adopt_keeps_the_cache(self, auth_manager, storage):
+        auth_manager._access_token, auth_manager._token_expiry, auth_manager._site_id = (
+            "dummy-old", 99.0, "site-a")
+        storage.save_credentials.return_value = False
+
+        assert auth_manager.adopt_move_credentials(
+            "dummy-refresh", "dummy-access", 1234.0, "site-b", self.MOVE) is False
+
+        assert (auth_manager._access_token, auth_manager._token_expiry, auth_manager._site_id) == (
+            "dummy-old", 99.0, "site-a")
+        assert not auth_manager._refresh_lock.locked()
+
+    def test_finishing_clears_the_move_under_the_refresh_lock(self, auth_manager, storage):
+        # the clear rewrites the whole store: a rotated refresh token saved
+        # between its read and its write would be lost
+        held = []
+        storage.clear_move.side_effect = lambda: held.append(auth_manager._refresh_lock.locked()) or True
+
+        assert auth_manager.finish_move() is True
+
+        assert held == [True]
+        assert not auth_manager._refresh_lock.locked()
+
+    def test_a_failed_finish_is_reported(self, auth_manager, storage):
+        storage.clear_move.return_value = False
+
+        assert auth_manager.finish_move() is False
 
 
 # TestTokenRefresh — caching and refresh logic

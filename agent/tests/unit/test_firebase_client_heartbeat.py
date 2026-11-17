@@ -241,6 +241,19 @@ def test_swoop_capability_is_zero_when_the_streamer_is_absent(monkeypatch):
     assert payload["capabilities.displayRemoteApply"] == 1
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_heartbeat_says_this_agent_follows_a_site_move(monkeypatch, platform):
+    # every platform follows a move, so unlike activeHoursGuard it is not gated;
+    # the server refuses to move a machine whose heartbeat lacks it
+    monkeypatch.setattr(sys, "platform", platform)
+    _stub_os_identity(monkeypatch)
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["capabilities.siteMove"] == 1
+    assert "capabilities" not in payload
+
+
 def _fake_display_manager(drift):
     mod = MagicMock()
     mod.compute_drift_count = MagicMock(return_value=drift)
@@ -298,3 +311,8 @@ def test_swoop_command_types_are_on_the_fast_lane():
     assert {"swoop_session_requested", "swoop_kill", "swoop_refresh"} <= fast
     # the pre-existing lane members must stay (OWL-06).
     assert {"mcp_tool_call", "capture_screenshot", "cancel_sync", "cancel_mcp_tool"} <= fast
+
+
+def test_site_move_is_on_the_fast_lane():
+    # like unpair: behind an in-flight install a move would wait minutes
+    assert "site_move" in FirebaseClient._FAST_COMMAND_TYPES

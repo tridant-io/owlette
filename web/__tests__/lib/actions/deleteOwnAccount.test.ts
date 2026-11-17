@@ -43,6 +43,11 @@ const mockUnlinkTridantAccount = jest.fn();
 jest.mock('@/lib/userDeleteCascade.server', () => ({
   unlinkTridantAccount: (uid: string) => mockUnlinkTridantAccount(uid),
 }));
+// the move store has its own suite; here it only matters that each deleted site's moves end
+const mockCancelMovesForSite = jest.fn();
+jest.mock('@/lib/machineMoves.server', () => ({
+  cancelMovesForSite: (...a: unknown[]) => mockCancelMovesForSite(...a),
+}));
 
 import {
   deleteOwnAccount,
@@ -392,6 +397,25 @@ describe('deleteOwnAccount — billing', () => {
 
     expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
     expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
+    expect(mockCancelMovesForSite).not.toHaveBeenCalled();
+  });
+
+  it("ends the moves into and out of each sole-owner site before the site is freed, as deleteSite does", async () => {
+    const userId = 'uid_alice';
+    const seedDocs = seedUser(userId, ['site-a', 'site-b']);
+    seedDocs['sites/site-b'] = { exists: true, data: { name: 'site-b', owner: 'uid_bob' } };
+    const fake = buildFakeDb({ seedDocs });
+    let siteStillThere = false;
+    mockCancelMovesForSite.mockImplementation(async () => {
+      siteStillThere = !fake.deleteCalls.includes('sites/site-a');
+    });
+
+    await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null });
+
+    // the member site and its moves are someone else's
+    expect(mockCancelMovesForSite).toHaveBeenCalledTimes(1);
+    expect(mockCancelMovesForSite).toHaveBeenCalledWith(fake.db, 'site-a');
+    expect(siteStillThere).toBe(true);
   });
 
   it('stops and unlinks nothing when it refuses for a shared site', async () => {

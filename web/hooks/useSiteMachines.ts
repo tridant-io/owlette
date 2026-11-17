@@ -13,9 +13,16 @@ export interface SiteMachine {
   displayAwake?: { held?: boolean } | null;
   /** what tells whether the agent would refuse a restart inside active hours; null where it reports none. */
   osFamily?: string | null;
-  capabilities?: { activeHoursGuard?: number } | null;
+  capabilities: { activeHoursGuard?: number; siteMove?: number } | null;
   activeHours?: unknown;
   machineTimezone?: string | null;
+  /** the move out of this site, while it is pending or switching; `expiresAt` is epoch ms. */
+  pendingMove: {
+    targetSiteId: string;
+    targetSiteName: string;
+    status: 'pending' | 'switching';
+    expiresAt: number;
+  } | null;
 }
 
 export interface UseSiteMachinesResult {

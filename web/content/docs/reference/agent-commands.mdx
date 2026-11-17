@@ -1,7 +1,7 @@
 ---
 title: "agent commands reference"
 description: "every command the agent takes from its Firestore queue: what queues it, its fields, what the agent does on Windows, macOS and Linux, and how the result is recorded."
-keywords: ["command queue", "remote command", "machine command", "command history", "command stuck pending", "command never ran", "job queue", "remote reboot", "remote restart", "api command", "mac commands", "linux commands", "error prefix", "active hours", "reboot refused", "daytime reboot", "restart after hours", "override", "unpair", "revoke token", "mosaic"]
+keywords: ["command queue", "remote command", "machine command", "command history", "command stuck pending", "command never ran", "job queue", "remote reboot", "remote restart", "api command", "mac commands", "linux commands", "error prefix", "active hours", "reboot refused", "daytime reboot", "restart after hours", "override", "unpair", "revoke token", "mosaic", "site_move", "move machine"]
 ---
 
 the agent takes its work from two Firestore documents per machine. this page lists every command type it accepts, what queues it, what it does on each platform, and how its result is recorded. for the operator's view, see [remote commands](/docs/agent/remote-commands); for everything else that differs by platform, see [platform support](/docs/reference/platform-support).
@@ -39,7 +39,7 @@ besides `type`, `status: "pending"` and the command's own fields, an entry carri
 
 ### lanes
 
-the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh`, `unpair`, `check_path` and, from agent 4.2.0, `cancel_installation`: on the worker it waited behind the install it was meant to stop.
+the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh`, `unpair`, `check_path`, from agent 4.2.3 `site_move` and, from agent 4.2.0, `cancel_installation`: on the worker it waited behind the install it was meant to stop.
 
 everything else goes through **one worker**, one command at a time, so installs, updates and roost syncs never overlap. that includes process control and reboots: a `restart_process` queued behind an install waits for it. the worker's queue holds 50 commands; one that arrives to a full queue is failed with `Command queue full — too many pending installs`.
 
@@ -225,6 +225,7 @@ see [deployments](/docs/dashboard/deployments) and [platform support](/docs/refe
 | `update_owlette` | `installer_url`, `checksum_sha256` (both required); `target_version` (read from the URL when absent); `deployment_id` | refuses a second update within 10 minutes of one in progress, downloads into a staging folder only the service can write, checks the file is at least 1 MB and is this platform's installer, verifies the checksum, then hands it to the OS: a one-time scheduled task running as SYSTEM, with a recovery task that restarts the service if it does not come back. the command completes with `Self-update initiated via Task Scheduler` | the download and handoff run on a thread of their own, which writes the result. macOS: a run-once launchd job, `app.owlette.update`, runs `/usr/sbin/installer -pkg … -target /`. Linux: `apt-get install --simulate` first, then a transient `owlette-update` unit runs `apt-get install -y --allow-downgrades`. a refusal is `Error: update_unsatisfiable`, `update_deferred` (another package operation holds the lock, or an earlier update is still installing) or `update_handoff_failed` |
 | `provision_cortex_key` | `key_id`, `provider` (default `anthropic`); an agent older than 4.2.0 gets `api_key` in place of `key_id` | fetches the key for `key_id` from `/api/agent/hoot/key` with its own token, encrypts it with the token store's machine-bound key into `config.cortex.apiKeyEncrypted`, and sets `provider` and `enabled: true` | same |
 | `unpair` | none | asks the server to refresh the machine's agent token. a refusal, or a refresh that could not be asked at all, unpairs the machine: it leaves its site, keeps its machine ID, and ends its swoop session, hoot and hoot mcp session. a refresh the server accepts leaves it as it is: the revoke was for another machine of the same name, or for a pairing this machine has since replaced. it never writes a terminal record: the entry stays in `commands/pending`, runs once per agent, and goes with the hourly sweep | same |
+| `site_move` | `moveId` | follows a [move to another site](/docs/dashboard/machine-monitoring#move-machine). posts its refresh token, machine ID and `moveId` to `/api/agent/auth/move` for the new site's tokens; a refusal, or a server it can't reach, is an `Error:` and changes nothing. then it ends hoot and its hoot mcp session, writes the new tokens and the move to `.tokens.enc` in one write and the new site to `config.json`, and reconnects on the new site, which confirms the move (see [moving to another site](/docs/reference/authentication#moving-to-another-site)). once switched it never writes a terminal record: the entry is on the old site, whose writes are no longer this machine's. the agent also learns of a waiting move from `move` on `GET /api/agent/site`, on every connect and every 15 minutes, so an entry the hourly sweep took loses nothing. queued only to a machine that reports `capabilities.siteMove: 1` on 4.2.3 or later | same, with no prompt |
 
 see [self-update](/docs/agent/self-update).
 
@@ -275,6 +276,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 | deployments, and uninstall from a machine's software list | `install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall` |
 | `POST /api/hoot/provision-key` | `provision_cortex_key` |
 | `POST /api/sites/{siteId}/agent-tokens/revoke`, to each machine that still held a live token | `unpair` |
+| `POST /api/sites/{siteId}/machines/{machineId}/move`, session only: it refuses API keys | `site_move` |
 | the roost fan-out and rollout functions, and the rollback route | `sync_pull` |
 | `requestSwoopSession` | `swoop_session_requested`, `swoop_kill`, `swoop_refresh` |
 | `PATCH /api/sites/{siteId}/display-settings`, and `PATCH /api/sites/{siteId}/fleet-settings` for the machines it turns on or cuts | `site_settings_refresh` |
@@ -318,6 +320,6 @@ the process routes, `POST /api/sites/{siteId}/machines/{machineId}/processes/{pr
 
 ## where the handlers live
 
-the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types), `site_commands.py` (`site_settings_refresh`), `pairing_commands.py` (`unpair`) and `path_commands.py` (`check_path`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
+the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types), `site_commands.py` (`site_settings_refresh`), `pairing_commands.py` (`unpair`), `site_move_commands.py` (`site_move`) and `path_commands.py` (`check_path`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
 
 a handler module that fails to import at service start leaves its types unregistered. `restart_process` then falls back to the chain's branch, shared with `start_process`; every other router type answers `Unknown command type`, recorded as completed.

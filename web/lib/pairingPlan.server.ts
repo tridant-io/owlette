@@ -17,9 +17,7 @@ import { FLEET_SETTINGS_DOC, parseFleetSettings } from '@/lib/fleet/policy.serve
 import logger from '@/lib/logger';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { machineSlotAvailable } from '@/lib/plan.server';
-
-export const MACHINE_LIMIT_ERROR =
-  'owlette free covers one machine. upgrade to add more, or remove a machine first.';
+import { MACHINE_LIMIT_ERROR } from '@/lib/planResponse';
 
 /** the refusal message when a free site's owner has no room for `machineId` on owlette free, else null. */
 export async function machineLimitRefusal(

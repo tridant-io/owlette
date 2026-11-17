@@ -148,7 +148,9 @@ def _service_double(hoot_pid=None):
         fleet_session=SimpleNamespace(withdraw=lambda forget=False: calls.append('withdraw_fleet_session')),
         _is_cortex_alive=lambda: hoot_pid is not None,
         cortex_pid=hoot_pid,
+        _cortex_last_launch_time=0.0,
     )
+    double.end_hoot = OwletteService.end_hoot.__get__(double)
     double.unpair = OwletteService.unpair.__get__(double)
     return double, calls
 
@@ -180,3 +182,5 @@ def test_service_unpair_ends_a_running_hoot():
 
     process.assert_called_once_with(4242)
     process.return_value.terminate.assert_called_once()
+    # a revoke does not wait on hoot; a removal asks for that (_on_removed_from_site)
+    process.return_value.wait.assert_not_called()

@@ -29,6 +29,7 @@ import { Capability, hasCapability } from '@/lib/capabilities';
 import { updateSite } from '@/lib/actions/updateSite.server';
 import { deleteSite } from '@/lib/actions/deleteSite.server';
 import { withIdempotency } from '@/lib/idempotency';
+import { SITE_DELETE_MOVING } from '@/lib/machineMove';
 
 type RouteParams = { siteId: string };
 
@@ -210,6 +211,15 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
 
         if (result.kind === 'not_found') {
           return problemNotFound(`site ${ctx.siteId} not found`);
+        }
+        if (result.kind === 'move_switching') {
+          return problem({
+            type: ProblemType.Conflict,
+            title: 'conflict',
+            status: 409,
+            code: 'move_switching',
+            detail: SITE_DELETE_MOVING(result.direction),
+          });
         }
 
         return applyAuthDeprecations(

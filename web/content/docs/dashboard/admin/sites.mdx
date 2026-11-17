@@ -1,7 +1,7 @@
 ---
 title: "sites"
 description: "every site you belong to, with a gear on each one you own or administer. a site's settings page holds its name and timezone, its members, its machines with the keep screens awake switch, its billing, and deleting it."
-keywords: ["site settings", "manage sites", "new site", "rename site", "delete site", "site timezone", "swoop settings", "keep screens awake", "site members", "site machines"]
+keywords: ["site settings", "manage sites", "new site", "rename site", "delete site", "site timezone", "swoop settings", "keep screens awake", "site members", "site machines", "move machine", "move to another site"]
 ---
 
 **location**: admin panel → sites (`/admin/sites`)
@@ -66,9 +66,10 @@ the people who can reach the site, with their site role and swoop mode. adding, 
 
 first, the **keep screens awake** switch, **on** by default: machines on this site never sleep, blank or lock. there is no save. see [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake).
 
-then each of the site's machines, with whether it is online or when it was last seen, its agent version (not on a phone), and **awake** while it holds keep screens awake. each row has two buttons:
+then each of the site's machines, with whether it is online or when it was last seen, its agent version (not on a phone), **awake** while it holds keep screens awake, and **moving to** with the site's name while a move waits (on a phone just **moving**: the site shows on a wider screen). each row has up to three buttons:
 
 - **restart** works while the machine is online. it asks you to confirm, then restarts the machine; inside the machine's active hours it asks first, as the dashboard does: see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours)
+- **move** (**move to another site**) sends the machine to another site with nobody at it: pick one under **move to** and click **move machine**. it is there when you are also owner or admin of the whole site on another site (owlette's superadmins: when there is any other site), and while a move waits. a waiting move's button cancels it (**cancel the move**); once the machine is switching, the button is greyed out. see [move machine](/docs/dashboard/machine-monitoring#move-machine)
 - **remove** takes the machine off the site for good, after a confirm that lists what goes with it
 
 add a machine from the dashboard's **+** button.
@@ -90,5 +91,7 @@ only the site's owner sees it, and owlette's superadmins. **delete site** asks o
 - its machines and their history, its roosts, talons and webhooks, and everyone's access to it are removed
 - its machines' agent tokens are revoked, so they stop reporting until someone pairs them to another site
 - its site ID is retired, and can't be used again
+
+while a machine is [moving](/docs/dashboard/machine-monitoring#move-machine) into or out of the site and has already fetched the new site's tokens, the delete is refused (*a machine is moving into this site right now*) and nothing is deleted: try again once it has arrived. a move that never arrives is ended by removing the machine from the site it is leaving. moves still waiting are cancelled with the site.
 
 the dialog stays open until the delete finishes, and says why if it fails. afterwards you land on **sites**, or on the dashboard when you no longer own or administer any site.

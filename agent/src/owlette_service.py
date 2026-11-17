@@ -20,6 +20,7 @@ import watchdog_state
 import config_sync
 import configure_site
 import fleet_session
+import site_move_commands
 from command_router import COMMAND_DEFERRED, CommandRouter
 from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
@@ -93,6 +94,12 @@ PROCESS_RESTARTING_STATUS = 'RESTARTING'
 # deliberately generous — it only suppresses duplicate prompts, and
 # _handle_dismiss_reboot_pending clears it on an admin dismiss.
 RESTART_PROMPT_ACTIVE_SECONDS = 300
+
+# How long end_hoot waits for hoot's exit when asked to: off Windows, terminate
+# is SIGTERM and hoot answers it with an `offline` write on its own token, which
+# must land before a removal deletes the machine row again, or before a site
+# move writes the new site's credentials.
+HOOT_EXIT_TIMEOUT_SECONDS = 5.0
 
 # Throttle for _write_service_status(). Main loop calls it every SLEEP_INTERVAL;
 # the GUI treats the file as stale after 120s, so a 30s refresh floor is safe
@@ -1391,6 +1398,13 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Failed to register path handlers: {e}")
 
+        # site_move: an admin moved this machine to another site.
+        try:
+            from site_move_commands import register_handlers as _register_site_move_handlers
+            _register_site_move_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register site move handlers: {e}")
+
         self.firebase_client = None
 
         # install-tree hardening: main() does the start-up repair and sets
@@ -1434,6 +1448,8 @@ class OwletteService:
                 logging.info("Firebase is disabled in config - skipping initialization")
                 return False
 
+            # a switch cut short between the token store and config.json
+            site_move_commands.reconcile()
             site_id = shared_utils.read_config(['firebase', 'site_id'])
             if not site_id:
                 logging.warning("No site_id configured - cannot initialize Firebase client")
@@ -1471,6 +1487,8 @@ class OwletteService:
             self.firebase_client.register_command_callback(self.handle_firebase_command)
             self.firebase_client.register_config_update_callback(self.handle_config_update)
             self.firebase_client.register_removed_callback(self._on_removed_from_site)
+            self.firebase_client.register_move_callback(
+                lambda move_id: site_move_commands.follow_in_background(self, move_id))
 
             # Sync config: pull from Firestore (source of truth), or seed if new machine
             sync_result = self.firebase_client.sync_config_on_startup()
@@ -1493,6 +1511,7 @@ class OwletteService:
 
             self.firebase_client.start()
             logging.info(f"[OK] Firebase client initialized and started for site: {site_id}")
+            site_move_commands.confirm_on_connect(self.firebase_client)
 
             # swoop mints and audits with this client's credentials: a manager
             # left on the stopped one served every session request after a
@@ -3176,7 +3195,7 @@ class OwletteService:
         self._swoop_shutdown = threading.Event()
         self._start_swoop()
 
-    def unpair(self, reason):
+    def unpair(self, reason, wait_for_hoot=False):
         """Leave the site because the server cut this machine off.
 
         Swoop is ended here because the cloud-client stop the main loop runs
@@ -3188,38 +3207,42 @@ class OwletteService:
         Hoot is ended for the same reason: it holds its own access token for
         up to an hour, and site members could keep chatting with and running
         tools on a revoked machine through it. A relaunch exits on its own
-        once the config carries no site.
+        once the config carries no site. With wait_for_hoot, unpair returns
+        only once hoot has exited (end_hoot).
         The fleet session file goes too: it is this machine's leave to act on
         the site's other machines, good for up to 15 minutes more.
         """
         configure_site.unpair(reason)
         self._stop_swoop()
         self.fleet_session.withdraw(forget=True)
-        if self._is_cortex_alive():
-            try:
-                psutil.Process(self.cortex_pid).terminate()
-                logging.info("Hoot process ended: this machine left its site")
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                logging.warning(f"Could not end the hoot process: {e}")
+        self.end_hoot("this machine left its site", wait=wait_for_hoot)
 
-    # How long a removal waits for hoot to exit before the cloud client deletes
-    # the machine row again: off Windows, terminate is SIGTERM and hoot answers
-    # it with an `offline` write of its own, which must land before that delete.
-    REMOVED_HOOT_EXIT_TIMEOUT_SECONDS = 5.0
+    def end_hoot(self, why, wait=False):
+        """End hoot, and hold off its relaunch for the launch cooldown.
 
-    def _on_removed_from_site(self, reason):
-        """The dashboard removed this machine (#326): leave the site, then wait
-        for hoot's exit so the cloud client's final delete is the last write."""
-        pid = self.cortex_pid if self._is_cortex_alive() else None
-        self.unpair(reason)
-        if pid is None:
+        The cooldown is stamped first, hoot running or not: the main loop must
+        not start a hoot that reads the site being left, and a site move names
+        the new site in config.json only after this. With wait, return once
+        hoot has exited, up to HOOT_EXIT_TIMEOUT_SECONDS.
+        """
+        self._cortex_last_launch_time = time.time()
+        if not self._is_cortex_alive():
             return
         try:
-            psutil.Process(pid).wait(timeout=self.REMOVED_HOOT_EXIT_TIMEOUT_SECONDS)
+            process = psutil.Process(self.cortex_pid)
+            process.terminate()
+            logging.info(f"Hoot process ended: {why}")
+            if wait:
+                process.wait(timeout=HOOT_EXIT_TIMEOUT_SECONDS)
         except psutil.TimeoutExpired:
-            logging.warning("Hoot did not exit in time; its last write may put the removed row back")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+            logging.warning("Hoot did not exit in time; its last write may land after what follows")
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            logging.warning(f"Could not end the hoot process: {e}")
+
+    def _on_removed_from_site(self, reason):
+        """The dashboard removed this machine (#326): leave the site, waiting
+        for hoot's exit so the cloud client's final delete is the last write."""
+        self.unpair(reason, wait_for_hoot=True)
 
     def _check_console_session(self):
         """Tell swoop when the active console session changes. Runs on the 5s tick.
@@ -9823,6 +9846,8 @@ class OwletteService:
 
                 self.firebase_client.register_config_update_callback(self.handle_config_update)
                 self.firebase_client.register_removed_callback(self._on_removed_from_site)
+                self.firebase_client.register_move_callback(
+                    lambda move_id: site_move_commands.follow_in_background(self, move_id))
 
                 # Before the config sync, which routinely takes 15s: until this
                 # runs the status file says disconnected and the tray shows a red
@@ -9848,6 +9873,7 @@ class OwletteService:
                 _t0 = time.time()
                 self.firebase_client.start()
                 logging.info(f"Firebase client started successfully  ({round(time.time() - _t0, 3)}s)")
+                site_move_commands.confirm_on_connect(self.firebase_client)
 
                 self._start_swoop()
 
@@ -10154,6 +10180,10 @@ class OwletteService:
                 firebase_check_counter += 1
                 if firebase_check_counter >= 2:
                     try:
+                        # a site move whose config.json write would not land:
+                        # finished first, so this pass sees the new site
+                        if site_move_commands.reconcile_due():
+                            site_move_commands.reconcile()
                         current_firebase_enabled = shared_utils.read_config(['firebase', 'enabled'])
                         current_site_id = shared_utils.read_config(['firebase', 'site_id'])
                         current_firebase_state = {
