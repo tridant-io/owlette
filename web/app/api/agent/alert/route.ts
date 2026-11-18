@@ -42,6 +42,26 @@ import { sanitizeForLog } from '@/lib/logSanitize';
 /** the `errorCode` the agent's reboot-pending check posts (`_check_and_alert_reboot_pending`). */
 const REBOOT_PENDING_NOTICE = 'reboot_pending';
 
+/** the email's wording: a pending reboot is a notice from a machine that is fine, not an agent error. */
+function alertEmailCopy(errorCode: string) {
+  return errorCode === REBOOT_PENDING_NOTICE
+    ? {
+        subject: '[owlette] reboot pending on',
+        color: EMAIL_COLORS.amber,
+        title: 'reboot pending',
+        intro: 'an owlette agent reports that its machine is waiting for a reboot.',
+        outro: 'nothing has failed. reboot the machine when it suits you.',
+        showErrorCode: false,
+      }
+    : {
+        subject: '[ALERT] owlette agent error on',
+        color: EMAIL_COLORS.red,
+        title: 'agent alert',
+        intro: 'an error was detected on an owlette agent.',
+        outro: 'please check the machine and service logs for more details.',
+        showErrorCode: true,
+      };
+}
 
 function buildAlertEmail(
   siteId: string,
@@ -52,19 +72,20 @@ function buildAlertEmail(
   unsubscribeUrl?: string,
   timezone?: string
 ): string {
+  const copy = alertEmailCopy(errorCode);
   const content = `
-    <h2 style="color:${EMAIL_COLORS.red};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">agent alert</h2>
-    <p style="margin:0 0 20px;color:${EMAIL_COLORS.muted};">an error was detected on an owlette agent.</p>
+    <h2 style="color:${copy.color};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">${copy.title}</h2>
+    <p style="margin:0 0 20px;color:${EMAIL_COLORS.muted};">${copy.intro}</p>
     ${emailDataTable([
       { label: 'site', value: siteId },
       { label: 'machine', value: machineId },
-      { label: 'error code', value: errorCode },
+      ...(copy.showErrorCode ? [{ label: 'error code', value: errorCode }] : []),
       { label: 'message', value: errorMessage },
       { label: 'agent version', value: agentVersion },
       { label: 'time', value: emailTimestamp(new Date(), timezone) },
       { label: 'environment', value: ENV_LABEL },
     ])}
-    <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">please check the machine and service logs for more details.</p>
+    <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">${copy.outro}</p>
   `;
   return wrapEmailLayout(content, { unsubscribeUrl });
 }
@@ -426,7 +447,7 @@ export const POST = withRateLimit(
         return NextResponse.json({ success: true, emailSent: false, reason: 'No recipients' });
       }
 
-      const subject = safeEmailSubject(`[ALERT] owlette agent error on ${machineId}`);
+      const subject = safeEmailSubject(`${alertEmailCopy(errorCode).subject} ${machineId}`);
       const baseUrl = publicOrigin(request);
       let emailsSent = 0;
 

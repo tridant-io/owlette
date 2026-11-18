@@ -8,6 +8,10 @@ tocDepth: 2
 
 ## [Unreleased]
 
+### fixed — a pending reboot no longer emails as an agent error
+
+the email sent when a machine is waiting for a reboot, an operating system update ready to install for example, now reads **reboot pending** in amber, with the subject `[owlette] reboot pending on {machine}` and no error code. it used to arrive as `[ALERT] owlette agent error`, though nothing had failed. the server writes the email, so this holds for every agent version.
+
 ## [4.2.3] - 2026-11-17
 
 ### added — an activity page that flags risky changes and sign-ins

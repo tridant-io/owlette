@@ -7,7 +7,7 @@
  * 3.0.0+ agent. These tests pin the asymmetry — display in, no tap; process in, tap.
  *
  * The last block pins the connection-failure branch's webhook: sent whatever the email settings
- * are, and never for a reboot-pending notice.
+ * are, and never for a reboot-pending notice, whose email reads as a notice, not an agent error.
  */
 
 import { createMockRequest } from '../helpers/utils';
@@ -254,6 +254,32 @@ describe('POST /api/agent/alert — connection failure webhook', () => {
       expect(await res.json()).toMatchObject({ success: true, emailSent: true, recipients: 1 });
       expect(send).toHaveBeenCalledTimes(1);
       expect(fireWebhooksMock).not.toHaveBeenCalled();
+    });
+
+    function sentEmail() {
+      const [email] = send.mock.calls[0] as unknown as [{ subject: string; html: string }];
+      return email;
+    }
+
+    it('words a reboot-pending notice as a notice, not an agent error', async () => {
+      await post({
+        errorCode: 'reboot_pending',
+        errorMessage: 'Reboot pending on LOBBY-01 (reasons: os_update_prepared)',
+      });
+
+      const { subject, html } = sentEmail();
+      expect(subject).toBe(`[owlette] reboot pending on ${MACHINE}`);
+      expect(html).toContain('reboot pending');
+      expect(html).not.toMatch(/error|agent alert/i);
+    });
+
+    it('keeps the agent-error wording for a connection failure', async () => {
+      await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+      const { subject, html } = sentEmail();
+      expect(subject).toBe(`[ALERT] owlette agent error on ${MACHINE}`);
+      expect(html).toContain('agent alert');
+      expect(html).toContain('error code');
     });
   });
 });
