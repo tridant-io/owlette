@@ -72,6 +72,48 @@
       "accepted_on": "2026-11-01",
       "expires": "2027-01-30",
       "revisit": "Retry the top-level overrides after jest 30 lands on web, and check the eslint plugins that call minimatch as a function. Drop this entry when they hold."
+    },
+    "audit:web:@rollup/plugin-commonjs": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:@rollup/pluginutils": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:@sentry/nextjs": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:fumadocs-core": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:fumadocs-mdx": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:picomatch": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
+    },
+    "audit:web:tinyglobby": {
+      "reason": "ASSESSED, owner-accepted. picomatch <= 4.0.7 (GHSA-fc5q-39xc-vjpf, high: ReDoS through single-branch repeated extglobs) has no patched release. In web it arrives only through build tooling: @sentry/nextjs's @rollup/plugin-commonjs and @rollup/pluginutils, fumadocs-mdx's MDX compiler, and fumadocs-core's tinyglobby, which glob owlette's own source and docs files; none takes a pattern from a request. Dev's web already ran these exact versions when the npm audit leg began flagging them on 2026-11-17, and 4.2.3 changes no web dependency; the agent installers carry none of them. Revisit when picomatch ships a fix.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-17",
+      "expires": "2027-02-17"
     }
   }
 }
