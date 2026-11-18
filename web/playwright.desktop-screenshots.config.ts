@@ -50,6 +50,8 @@ export default defineConfig({
     actionTimeout: 15_000,
   },
 
-  // the project name is the theme the spec switches the app to
-  projects: [{ name: 'dark' }, { name: 'light' }],
+  // the project name is the theme the spec switches the app to. light runs first so
+  // the run ends on dark: the last theme set outlives teardown's layout restore, and
+  // an operator's app left light was the complaint (one worker keeps this order)
+  projects: [{ name: 'light' }, { name: 'dark' }],
 });
