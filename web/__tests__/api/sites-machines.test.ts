@@ -407,6 +407,65 @@ describe('GET /api/sites/{siteId}/machines', () => {
     // null, never absent, for an agent that reports none of them
     expect(body.machines[1]).toMatchObject({ activeHours: null, capabilities: null, machineTimezone: null });
   });
+
+  // the row's `moving to {target}` tag and its cancel button read the move from here.
+  describe('a pending move', () => {
+    const EXPIRES = Date.now() + 60 * 60 * 1000;
+    const putMove = (machineId: string, data: Record<string, unknown>) =>
+      putDoc(`machine_moves/${SITE}:${machineId}`, {
+        sourceSiteId: SITE,
+        machineId,
+        requestedBy: 'admin-uid',
+        requestedAt: Date.now(),
+        expiresAt: EXPIRES,
+        ...data,
+      });
+    const listMachines = async () => {
+      const res = await listMachinesGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()).machines as Array<Record<string, unknown>>;
+    };
+
+    beforeEach(() => {
+      seedSite();
+      authedKey([siteScope('read')]);
+      seedMachine('mach-a', { name: 'Alpha' });
+      seedMachine('mach-b', { name: 'Beta' });
+    });
+
+    it('carries the target, its name, the status and the expiry', async () => {
+      seedSite('site-beta', { name: 'Beta Site' });
+      putMove('mach-a', { targetSiteId: 'site-beta', status: 'pending' });
+
+      const machines = await listMachines();
+
+      expect(machines[0].pendingMove).toEqual({
+        targetSiteId: 'site-beta',
+        targetSiteName: 'Beta Site',
+        status: 'pending',
+        expiresAt: EXPIRES,
+      });
+      // null, never absent, for a machine that is not moving
+      expect(machines[1].pendingMove).toBeNull();
+    });
+
+    it('names the target by its id when the site is gone, and carries a switching move', async () => {
+      putMove('mach-b', { targetSiteId: 'site-gone', status: 'switching' });
+
+      const machines = await listMachines();
+
+      expect(machines[0].pendingMove).toBeNull();
+      expect(machines[1].pendingMove).toEqual({
+        targetSiteId: 'site-gone',
+        targetSiteName: 'site-gone',
+        status: 'switching',
+        expiresAt: EXPIRES,
+      });
+    });
+  });
 });
 
 describe('GET /api/sites/{siteId}/machines/{machineId}', () => {

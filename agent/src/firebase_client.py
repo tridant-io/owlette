@@ -215,6 +215,7 @@ class FirebaseClient:
         self.config_update_callback: Optional[Callable] = None
         # Takes a reason; the service leaves the site with it. See _on_removed_from_site.
         self.removed_callback: Optional[Callable[[str], None]] = None
+        self.move_callback: Optional[Callable[[str], None]] = None
 
         self._check_path_answers: list = []
         self._check_path_answers_lock = threading.Lock()
@@ -416,6 +417,20 @@ class FirebaseClient:
         off, or the main loop could read a stopped client under an enabled
         config and build a fresh one, which cannot see the doc is gone.
         """
+        # a move writes the target into config.json before the source is
+        # cleaned, so an old site's client still polling sees its config doc
+        # go as the move finishes; unpairing would wipe the new credentials
+        try:
+            configured_site = shared_utils.read_config(['firebase', 'site_id'])
+        except Exception:
+            # the poller fires once per change: a guard that raised would
+            # lose a real removal for good
+            configured_site = None
+        if configured_site and configured_site != self.site_id:
+            self.logger.info(
+                f"This machine's config on site {self.site_id} is gone, but it now "
+                f"belongs to {configured_site} (a site move) - not leaving the site")
+            return
         if self._removed:
             return
         self._removed = True
@@ -538,10 +553,21 @@ class FirebaseClient:
             if keep_awake != self.site_keep_awake:
                 self.logger.info(f"Keep screens awake: {'on' if keep_awake else 'off'}")
             self.site_keep_awake = keep_awake
-            return True
         except Exception as e:
             self._warn_site_metadata_api_once(str(e))
             return False
+
+        # a move the server projects goes to the service: the backstop for a
+        # site_move command an offline machine never saw. outside the try, so
+        # a failing callback costs neither the metadata nor a firestore fallback
+        move = payload.get('move')
+        move_id = move.get('moveId') if isinstance(move, dict) else None
+        if isinstance(move_id, str) and move_id and self.move_callback is not None:
+            try:
+                self.move_callback(move_id)
+            except Exception as e:
+                self.logger.error(f"Site move callback failed: {e}")
+        return True
 
     def _apply_site_timezone(self, timezone: Optional[str]):
         """Assign the schedule timezone, logging only the transitions.
@@ -1584,6 +1610,9 @@ class FirebaseClient:
                 # local hoot here can't change what a machine launches, so the
                 # server may send it a conversation; an older one gets none
                 'capabilities.localHootLaunchGate': 1,
+                # this agent follows a site move; the server refuses to move
+                # a machine whose heartbeat lacks it
+                'capabilities.siteMove': 1,
                 'activeHours': self._active_hours_field(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
@@ -1626,8 +1655,8 @@ class FirebaseClient:
         'cancel_installation',
         'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
         'site_settings_refresh',
-        # a revoke must not wait behind an install
-        'unpair',
+        # a revoke or a move must not wait behind an install
+        'unpair', 'site_move',
         # read-only and bounded; the dashboard stops listening after seconds
         'check_path',
     })
@@ -2445,6 +2474,15 @@ class FirebaseClient:
         removed this machine. It takes the reason."""
         self.removed_callback = callback
         self.logger.debug("Removed callback registered")
+
+    def register_move_callback(self, callback: Callable[[str], None]):
+        """Register the function that follows a site move. It takes the move
+        id GET /api/agent/site projects and runs inline on whichever thread
+        fetched the site metadata (connect, the 900s refresh, a
+        site_settings_refresh), again on every fetch while the move is
+        pending, so it must hand the work off and return."""
+        self.move_callback = callback
+        self.logger.debug("Move callback registered")
 
     # Machine Flags (reboot, shutdown, reboot pending)
 

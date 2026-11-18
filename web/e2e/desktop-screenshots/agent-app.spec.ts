@@ -77,7 +77,8 @@ test.afterAll(async () => {
  * Put the window in this project's theme, the way the app menu does: the host
  * pins the window theme, the webview's `prefers-color-scheme` follows it, and
  * next-themes swaps the class, so the class is the proof. The capture opens dark
- * (`snapshotLayout`), so a dark run asks nothing of the binary; switching needs
+ * (`snapshotLayout`); the light project runs first and switches to light, then the
+ * dark project switches back, so the run ends on dark. Switching needs
  * `set_appearance_theme`, which an app built before light mode does not have.
  */
 async function useAppTheme(target: ShotTheme): Promise<void> {

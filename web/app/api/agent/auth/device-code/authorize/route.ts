@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
+import { mintAgentIdToken, newRefreshToken } from '@/lib/agentCredentials.server';
 import { ApiAuthError, assertUserHasSiteCapability, requireSession } from '@/lib/apiAuth.server';
 import { Capability } from '@/lib/capabilities';
 import { normalizePairPhrase } from '@/lib/pairPhrases';
@@ -180,71 +181,15 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       // Unique agent user ID (same pattern as the exchange endpoint)
       const agentUid = `agent_${siteId}_${machineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
 
-      const adminAuth = getAdminAuth();
-      await ensureAgentAuthUser(adminAuth, agentUid);
-      const customToken = await adminAuth.createCustomToken(agentUid, {
+      await ensureAgentAuthUser(getAdminAuth(), agentUid);
+      const finalIdToken = await mintAgentIdToken(agentUid, {
         role: 'agent',
         site_id: siteId,
         machine_id: machineId,
         version: data.version || 'unknown',
       });
 
-      // Exchange custom token for ID token via Firebase Auth REST API
-      const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-      if (!firebaseApiKey) {
-        throw new Error('Firebase API key not configured');
-      }
-
-      const authResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customToken, returnSecureToken: true }),
-        }
-      );
-
-      if (!authResponse.ok) {
-        const errorData = await authResponse.json();
-        throw new Error(`Failed to exchange custom token: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      // Custom claims must be set before the second token exchange.
-      await adminAuth.setCustomUserClaims(agentUid, {
-        role: 'agent',
-        site_id: siteId,
-        machine_id: machineId,
-        version: data.version || 'unknown',
-      });
-
-      // Re-mint and exchange again so the ID token carries the claims.
-      const customTokenWithClaims = await adminAuth.createCustomToken(agentUid, {
-        role: 'agent',
-        site_id: siteId,
-        machine_id: machineId,
-        version: data.version || 'unknown',
-      });
-
-      const refreshAuthResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customTokenWithClaims, returnSecureToken: true }),
-        }
-      );
-
-      if (!refreshAuthResponse.ok) {
-        const errorData = await refreshAuthResponse.json();
-        throw new Error(`Failed to refresh token with claims: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      const refreshAuthData = await refreshAuthResponse.json();
-      const finalIdToken = refreshAuthData.idToken;
-
-      const crypto = await import('crypto');
-      const refreshToken = crypto.randomBytes(64).toString('base64url');
-      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const { refreshToken, refreshTokenHash } = newRefreshToken();
 
       // Store the refresh token (same schema as the exchange endpoint); writes to other docs
       // inside the transaction are atomic.

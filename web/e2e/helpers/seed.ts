@@ -380,9 +380,16 @@ export interface SeedMachineOptions {
    */
   activeHoursGuard?: boolean;
   /**
-   * `agent_version` as the agent heartbeats it. Default 2.9.0, or 4.1.21 with
-   * `activeHoursGuard`; an older one beside the guard is a machine rolled back
-   * below 4.1.21, whose old agent never clears the capability.
+   * Writes `capabilities.siteMove: 1` and `agent_version` 4.2.3: an agent that
+   * can follow a move to another site. Without it the move dialog says the
+   * agent is too old.
+   */
+  siteMove?: boolean;
+  /**
+   * `agent_version` as the agent heartbeats it. Default 2.9.0, 4.2.3 with
+   * `siteMove`, or 4.1.21 with `activeHoursGuard`; an older one beside the
+   * guard is a machine rolled back below 4.1.21, whose old agent never clears
+   * the capability.
    */
   agentVersion?: string;
   /**
@@ -481,13 +488,14 @@ export async function seedMachine(
     .set({
       online: true,
       lastHeartbeat: heartbeat,
-      agent_version: opts.agentVersion ?? (opts.activeHoursGuard ? '4.1.21' : '2.9.0'),
+      agent_version: opts.agentVersion ?? (opts.siteMove ? '4.2.3' : opts.activeHoursGuard ? '4.1.21' : '2.9.0'),
       machine_timezone_iana: 'UTC',
       // Without the capability handshake the recall button stays disabled on an
       // "agent too old" tooltip, breaking every recall spec.
       capabilities: {
         displayRemoteApply: 1,
         ...(opts.activeHoursGuard ? { activeHoursGuard: 1 } : {}),
+        ...(opts.siteMove ? { siteMove: 1 } : {}),
       },
       metrics: {
         schemaVersion: 2,

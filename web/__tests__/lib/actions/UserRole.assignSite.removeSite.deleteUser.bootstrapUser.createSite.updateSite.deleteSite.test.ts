@@ -1272,6 +1272,95 @@ describe('site CRUD actions', () => {
     expect(order[order.length - 1]).toBe('site-deleted');
   });
 
+  it('deleteSite cancels every move into or out of the site, before it revokes credentials', async () => {
+    // a move left behind points its agent at a site that is gone, and a pending
+    // move into the site could mint it a credential after the revoke.
+    const db = new FakeDb();
+    db.seed('sites/site-a', { name: 'a' });
+    db.seed('agent_refresh_tokens/tok-1', { siteId: 'site-a' });
+    db.seed('machine_moves/site-a:m1', { sourceSiteId: 'site-a', targetSiteId: 'site-b', machineId: 'm1' });
+    db.seed('machine_moves/site-c:m2', { sourceSiteId: 'site-c', targetSiteId: 'site-a', machineId: 'm2' });
+    db.seed('machine_moves/site-c:m3', { sourceSiteId: 'site-c', targetSiteId: 'site-d', machineId: 'm3' });
+
+    const deleted: string[] = [];
+    const realBatch = db.batch.bind(db);
+    db.batch = () => {
+      const b = realBatch();
+      const realDelete = b.delete;
+      b.delete = (ref: FakeDoc) => {
+        deleted.push(ref.id);
+        return realDelete(ref);
+      };
+      return b;
+    };
+
+    await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+    expect(db.docs.get('machine_moves/site-a:m1')).toBeNull();
+    expect(db.docs.get('machine_moves/site-c:m2')).toBeNull();
+    expect(db.docs.get('machine_moves/site-c:m3')).toEqual({
+      sourceSiteId: 'site-c',
+      targetSiteId: 'site-d',
+      machineId: 'm3',
+    });
+    expect(deleted.indexOf('site-a:m1')).toBeGreaterThanOrEqual(0);
+    expect(deleted.indexOf('site-a:m1')).toBeLessThan(deleted.indexOf('tok-1'));
+    expect(deleted.indexOf('site-c:m2')).toBeLessThan(deleted.indexOf('tok-1'));
+  });
+
+  it.each([
+    ['into', 'site-c', 'site-a'],
+    ['out of', 'site-a', 'site-c'],
+  ] as const)(
+    'deleteSite refuses while a machine is switching %s the site, and writes nothing',
+    async (direction, sourceSiteId, targetSiteId) => {
+      // the agent already holds only the target's tokens: deleting either end strands it
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'a', owner: 'alice', billing: { tier: 'pro', payerUid: 'alice' } });
+      db.seed('sites/site-a/machines/m1', { online: true });
+      db.seed('agent_refresh_tokens/tok-1', { siteId: 'site-a' });
+      db.seed(`machine_moves/${sourceSiteId}:m1`, {
+        moveId: `${sourceSiteId}:m1`,
+        sourceSiteId,
+        targetSiteId,
+        machineId: 'm1',
+        status: 'switching',
+        requestedBy: 'alice',
+        requestedAt: 1,
+        expiresAt: 2,
+      });
+      const before = new Map(db.docs);
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'move_switching', direction });
+      expect(db.docs).toEqual(before);
+      expect(mockStopSite).not.toHaveBeenCalled();
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    },
+  );
+
+  it('deleteSite goes ahead past a switching move between two other sites', async () => {
+    const db = new FakeDb();
+    db.seed('sites/site-a', { name: 'a' });
+    db.seed('machine_moves/site-c:m1', {
+      moveId: 'site-c:m1',
+      sourceSiteId: 'site-c',
+      targetSiteId: 'site-d',
+      machineId: 'm1',
+      status: 'switching',
+      requestedBy: 'alice',
+      requestedAt: 1,
+      expiresAt: 2,
+    });
+
+    await expect(deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() })).resolves.toEqual({
+      kind: 'deleted',
+      siteId: 'site-a',
+    });
+    expect(db.docs.get('machine_moves/site-c:m1')).toMatchObject({ status: 'switching' });
+  });
+
   it('deleteSite removes config/{siteId} before the site, so a failure leaves a site to retry on', async () => {
     const db = new FakeDb();
     db.seed('sites/site-a', { name: 'a' });

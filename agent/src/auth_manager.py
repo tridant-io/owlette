@@ -201,11 +201,7 @@ class AuthManager:
 
         expiry_timestamp = time.time() + expires_in
 
-        success_refresh = self.storage.save_refresh_token(refresh_token)
-        success_access = self.storage.save_access_token(access_token, expiry_timestamp)
-        success_site = self.storage.save_site_id(site_id)
-
-        if not success_refresh or not success_access or not success_site:
+        if not self.storage.save_credentials(refresh_token, access_token, expiry_timestamp, site_id):
             raise AuthenticationError("Failed to save tokens to encrypted file")
 
         self._access_token = access_token
@@ -471,6 +467,33 @@ class AuthManager:
         TokenRefreshError when it could not be asked."""
         with self._refresh_lock:
             self.refresh_access_token()
+
+    def adopt_move_credentials(self, refresh_token: str, access_token: str, expiry: float,
+                               site_id: str, move: dict) -> bool:
+        """Take on the credentials a site move minted, with the move, in one write.
+
+        Serialised with the refreshes: one in flight would save the old site's
+        rotated refresh token over the new one. On success the cached token and
+        site are the new site's; on failure nothing changes. Returns False when
+        the store could not be written.
+        """
+        with self._refresh_lock:
+            if not self.storage.save_credentials(refresh_token, access_token, expiry, site_id, move=move):
+                return False
+            self._access_token = access_token
+            self._token_expiry = expiry
+            self._site_id = site_id
+            return True
+
+    def finish_move(self) -> bool:
+        """Forget the stored site move, keeping the credentials.
+
+        Serialised with the refreshes: the clear rewrites the whole store, and a
+        rotated refresh token saved between its read and its write would be
+        lost. Returns False when the move could not be cleared.
+        """
+        with self._refresh_lock:
+            return self.storage.clear_move()
 
     def get_valid_token(self) -> str:
         """

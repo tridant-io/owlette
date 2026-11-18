@@ -96,8 +96,17 @@ jest.mock('@/components/admin/sites/SiteGeneralSection', () => ({
 jest.mock('@/components/admin/sites/SiteMembersSection', () => ({
   SiteMembersSection: ({ siteId }: { siteId: string }) => <div data-testid="members-section" data-site={siteId} />,
 }));
+interface MachinesProps {
+  siteId: string;
+  siteName: string;
+  targetSites: { id: string; name: string }[];
+}
+let mockMachines: MachinesProps | undefined;
 jest.mock('@/components/SiteMachinesList', () => ({
-  SiteMachinesList: ({ siteId }: { siteId: string }) => <div data-testid="machines-section" data-site={siteId} />,
+  SiteMachinesList: (props: MachinesProps) => {
+    mockMachines = props;
+    return <div data-testid="machines-section" data-site={props.siteId} />;
+  },
 }));
 jest.mock('@/components/admin/sites/SiteSwitches', () => ({
   KeepScreensAwakeSwitch: ({ siteId }: { siteId: string }) => <div data-testid="keep-awake-switch" data-site={siteId} />,
@@ -138,6 +147,7 @@ beforeEach(() => {
   mockSearch = '';
   mockGeneral = undefined;
   mockDanger = undefined;
+  mockMachines = undefined;
 });
 
 function renderSettings(siteId: string, section: SiteSection = 'general') {
@@ -454,6 +464,32 @@ describe('sections', () => {
     expect(list).toHaveAttribute('data-site', 'site-a');
     expect(keepAwake.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByRole('region')).toHaveLength(1);
+  });
+
+  describe('the sites a machine can move to', () => {
+    it("are the other sites the caller administers, by name, so the list's move picks from them", () => {
+      renderSettings('site-a', 'machines');
+
+      expect(mockMachines?.siteName).toBe('Alpha');
+      expect(mockMachines?.targetSites).toEqual([{ id: 'site-c', name: 'Charlie' }]);
+    });
+
+    it('are none for an admin of this site alone, and leave out a scoped row', () => {
+      mockAuth = { isSuperadmin: false, adminOf: ['site-a', 'site-b'], ownerOf: [], scopes: { 'site-b': ['m1'] } };
+      renderSettings('site-a', 'machines');
+
+      expect(mockMachines?.targetSites).toEqual([]);
+    });
+
+    it('are every other site for a superadmin', () => {
+      mockAuth = { isSuperadmin: true, adminOf: [], ownerOf: [] };
+      renderSettings('site-b', 'machines');
+
+      expect(mockMachines?.targetSites).toEqual([
+        { id: 'site-a', name: 'Alpha' },
+        { id: 'site-c', name: 'Charlie' },
+      ]);
+    });
   });
 
   it.each(['general', 'members', 'danger'] as const)('has no keep screens awake in %s', (section) => {

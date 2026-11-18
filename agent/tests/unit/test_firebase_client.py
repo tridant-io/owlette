@@ -451,6 +451,69 @@ class TestSiteMetadataFromApi:
         keep_awake_lines = [c for c in logger.info.call_args_list if 'Keep screens awake' in c[0][0]]
         assert len(keep_awake_lines) == 1
 
+    # site move — the projection is the backstop for a site_move command an
+    # offline machine never saw
+
+    def _fetch_with(self, firebase_client, payload):
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=self._response(200, payload)):
+            firebase_client._fetch_site_metadata()
+
+    def test_a_projected_move_reaches_the_move_callback(self, firebase_client, mock_rest_client):
+        mock_rest_client.get_document.reset_mock()
+        heard = MagicMock()
+        firebase_client.register_move_callback(heard)
+
+        self._fetch_with(firebase_client, {'name': 'TEC', 'move': {'moveId': 'site-a:TEST-MACHINE'}})
+
+        heard.assert_called_once_with('site-a:TEST-MACHINE')
+        assert firebase_client.site_name == 'TEC'
+        mock_rest_client.get_document.assert_not_called()
+
+    @pytest.mark.parametrize('payload', [
+        {'name': 'TEC'},
+        {'name': 'TEC', 'move': None},
+        {'name': 'TEC', 'move': {}},
+        {'name': 'TEC', 'move': 'site-a:TEST-MACHINE'},
+    ])
+    def test_no_projected_move_no_callback(self, firebase_client, payload):
+        heard = MagicMock()
+        firebase_client.register_move_callback(heard)
+
+        self._fetch_with(firebase_client, payload)
+
+        heard.assert_not_called()
+        assert firebase_client.site_name == 'TEC'
+
+    def test_a_move_with_no_callback_registered_still_settles_the_metadata(
+        self, firebase_client, mock_rest_client
+    ):
+        mock_rest_client.get_document.reset_mock()
+
+        self._fetch_with(firebase_client, {'name': 'TEC', 'move': {'moveId': 'site-a:TEST-MACHINE'}})
+
+        assert firebase_client.site_name == 'TEC'
+        mock_rest_client.get_document.assert_not_called()
+
+    def test_a_failing_move_callback_costs_the_metadata_nothing(
+        self, firebase_client, mock_rest_client, caplog
+    ):
+        mock_rest_client.get_document.reset_mock()
+        firebase_client.register_move_callback(MagicMock(side_effect=RuntimeError('boom')))
+
+        with caplog.at_level(logging.ERROR):
+            self._fetch_with(firebase_client, {
+                'name': 'TEC', 'timezone': 'Asia/Tokyo',
+                'move': {'moveId': 'site-a:TEST-MACHINE'},
+            })
+
+        assert firebase_client.site_name == 'TEC'
+        assert firebase_client.site_timezone == 'Asia/Tokyo'
+        # the api answered: a callback failure is no reason to fall back
+        mock_rest_client.get_document.assert_not_called()
+        assert 'boom' in caplog.text
+
 
 # TestSiteMetadata — the sites/{siteId} read kept for a future rule grant
 class TestSiteMetadata:
@@ -1074,3 +1137,66 @@ class TestRemovedFromSite:
 
         assert client.connected is False
         assert 'No removal callback registered' in caplog.text
+
+    @staticmethod
+    def _configured_site(site_id):
+        """config.json naming `site_id`, as the one key the guard reads."""
+        return patch(
+            'firebase_client.shared_utils.read_config',
+            side_effect=lambda keys=None, **_: site_id if keys == ['firebase', 'site_id'] else None)
+
+    def test_a_stale_client_whose_config_names_another_site_does_not_unpair(
+        self, connected_client, mock_rest_client, caplog
+    ):
+        """A move writes the target into config.json before the source is
+        cleaned. An old site's client still polling when its config doc goes
+        is watching the move finish, not a removal: unpairing would wipe the
+        target credentials the agent just saved."""
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+        # the fixture's listener loop set its own event on the way out
+        client._command_listener_stop = threading.Event()
+        client._config_listener_stop = threading.Event()
+
+        with self._configured_site('target-site'), caplog.at_level(logging.INFO):
+            on_config_changed(None)
+
+        left.assert_not_called()
+        assert client._removed is False
+        assert client.connected is True
+        assert client.running is True
+        assert not client._command_listener_stop.is_set()
+        assert not client._config_listener_stop.is_set()
+        mock_rest_client.delete_document.assert_not_called()
+        lines = [r for r in caplog.records
+                 if r.levelno == logging.INFO and 'target-site' in r.getMessage()]
+        assert len(lines) == 1
+
+    @pytest.mark.parametrize('configured', ['test-site', None, ''])
+    def test_a_config_naming_no_other_site_is_still_a_removal(self, connected_client, configured):
+        # a missing or unreadable config.json reads as None: only a config that
+        # positively names another site holds a removal back
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        with self._configured_site(configured):
+            on_config_changed(None)
+
+        left.assert_called_once()
+        assert client._removed is True
+
+    def test_a_config_read_that_raises_is_still_a_removal(self, connected_client):
+        # the poller fires once per change: a guard that raised would lose the
+        # removal for good
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        with patch('firebase_client.shared_utils.read_config',
+                   side_effect=AttributeError("'str' object has no attribute 'get'")):
+            on_config_changed(None)
+
+        left.assert_called_once()
+        assert client._removed is True

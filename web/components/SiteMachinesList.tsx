@@ -1,31 +1,38 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Loader2, Monitor, RotateCw, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, Loader2, Monitor, RotateCw, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { formatRelativeTime } from '@/lib/timeUtils';
 import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
+import { useMachineMove } from '@/hooks/useMachineMove';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
+import { MoveMachineDialog } from '@/components/admin/sites/MoveMachineDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 
 interface SiteMachinesListProps {
   siteId: string;
+  siteName: string;
+  /** the other sites the caller administers; with none, a machine offers no move */
+  targetSites: { id: string; name: string }[];
 }
 
 /**
  * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
  */
-export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
+export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachinesListProps) {
   const { machines, error, refresh: fetchMachines } = useSiteMachines(siteId);
   // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<SiteMachine | null>(null);
+  const [moveTarget, setMoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
+  const { cancelMove, busy: moveBusy } = useMachineMove(siteId);
   const power = usePowerCommand(siteId);
 
   const handleConfirmRestart = async (options: PowerCommandOptions) => {
@@ -68,6 +75,18 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error('could not remove the machine', { description: message });
     }
+  };
+
+  const handleCancelMove = async (machine: SiteMachine) => {
+    try {
+      await cancelMove(machine.id);
+      toast.success('move cancelled');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error('could not cancel the move', { description: message });
+    }
+    // a refused cancel means the move changed under the row (it is switching, or gone), so it reloads too
+    await fetchMachines();
   };
 
   if (error) {
@@ -114,7 +133,7 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
         {machines.map((m) => (
           <li
             key={m.id}
-            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_64px]"
+            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_88px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_88px]"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span
@@ -128,6 +147,20 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
               {m.displayAwake?.held && (
                 <span className="shrink-0 text-[10px] text-muted-foreground">awake</span>
               )}
+              {/* a phone row has room for one word beside the name, as `awake` has; the site follows from sm up */}
+              {m.pendingMove && (
+                <>
+                  <span
+                    className="shrink-0 text-[10px] text-muted-foreground sm:hidden"
+                    title={`moving to ${m.pendingMove.targetSiteName}`}
+                  >
+                    moving
+                  </span>
+                  <span className="hidden min-w-0 max-w-[50%] truncate text-[10px] text-muted-foreground sm:inline">
+                    moving to {m.pendingMove.targetSiteName}
+                  </span>
+                </>
+              )}
             </span>
             <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
@@ -139,15 +172,14 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="row"
+                    size="icon-xs"
                     onClick={() => {
                       setRestartTarget(m);
                       setRestartOpen(true);
                     }}
                     disabled={!m.online}
                     aria-label={`restart ${m.name}`}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-accent-cyan cursor-pointer disabled:cursor-not-allowed"
                   >
                     <RotateCw className="h-3.5 w-3.5" />
                   </Button>
@@ -156,14 +188,41 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
                   <p>{m.online ? 'restart machine' : 'machine is offline'}</p>
                 </TooltipContent>
               </Tooltip>
+              {/* cancelling needs only this site, so a pending move keeps its button */}
+              {(targetSites.length > 0 || m.pendingMove) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="row"
+                      size="icon-xs"
+                      onClick={() => {
+                        if (m.pendingMove) void handleCancelMove(m);
+                        else setMoveTarget(m);
+                      }}
+                      disabled={m.pendingMove?.status === 'switching' || moveBusy}
+                      aria-label={m.pendingMove ? `cancel move of ${m.name}` : `move ${m.name}`}
+                    >
+                      {m.pendingMove ? <X className="h-3.5 w-3.5" /> : <ArrowRightLeft className="h-3.5 w-3.5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>
+                      {m.pendingMove?.status === 'switching'
+                        ? 'switching sites now'
+                        : m.pendingMove
+                          ? 'cancel the move'
+                          : 'move to another site'}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="ghost"
-                    size="sm"
+                    variant="row-destructive"
+                    size="icon-xs"
                     onClick={() => setRemoveTarget(m)}
                     aria-label={`remove ${m.name}`}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-danger cursor-pointer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -200,6 +259,17 @@ export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
           hasActiveDeployments={false}
           isRemoving={removing}
           onConfirmRemove={handleConfirmRemove}
+        />
+      )}
+
+      {moveTarget && (
+        <MoveMachineDialog
+          open={moveTarget !== null}
+          onOpenChange={(o) => !o && setMoveTarget(null)}
+          machine={moveTarget}
+          sourceSite={{ id: siteId, name: siteName }}
+          targetSites={targetSites}
+          onMoved={() => void fetchMachines()}
         />
       )}
     </>

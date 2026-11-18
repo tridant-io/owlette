@@ -41,6 +41,8 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/auth/device-code',
   '/api/agent/auth/device-code/authorize',
   '/api/agent/auth/device-code/poll',
+  '/api/agent/auth/move',
+  '/api/agent/auth/move/confirm',
   '/api/agent/alert',
   '/api/agent/hoot/key',
   '/api/agent/screenshot',

@@ -338,9 +338,9 @@ def run_pairing_flow(api_base: str = None, environment: str = None,
                             return (False, "Invalid response from server (missing tokens)", None)
 
                         expiry_timestamp = time.time() + expires_in
-                        auth_manager.storage.save_refresh_token(refresh_token)
-                        auth_manager.storage.save_access_token(access_token, expiry_timestamp)
-                        auth_manager.storage.save_site_id(site_id)
+                        # one write, which also ends a site move left in the store
+                        auth_manager.storage.save_credentials(
+                            refresh_token, access_token, expiry_timestamp, site_id)
 
                         _save_config(site_id, environment, api_base, project_id)
 

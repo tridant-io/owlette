@@ -34,6 +34,12 @@ const buttonVariants = cva(
         ghost: "btn-sweep hover:text-secondary-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground",
         // a quiet destructive action, for icon-only controls: red glyph, no fill.
         "ghost-destructive": "btn-sweep text-destructive hover:text-destructive",
+        // an icon action on a dense list row: a muted glyph that takes the accent
+        // on hover. unlike ghost it keeps a hover:bg-muted under the sweep, the
+        // look these row buttons had before they had a variant.
+        row: "btn-sweep text-muted-foreground hover:bg-muted hover:text-accent-cyan",
+        // the row's destructive action: the same, with a red glyph on hover.
+        "row-destructive": "btn-sweep text-muted-foreground hover:bg-muted hover:text-danger",
         // link opts out of the button sweep — .hl-link gives it the
         // glyph-accurate text highlight instead.
         link: "hl-link text-primary",
@@ -46,6 +52,7 @@ const buttonVariants = cva(
         lg: "h-10 rounded-md px-6 has-[>svg]:px-4",
         icon: "size-9",
         "icon-sm": "size-8",
+        "icon-xs": "size-7",
         "icon-lg": "size-10",
       },
     },

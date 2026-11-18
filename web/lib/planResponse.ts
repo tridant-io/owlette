@@ -112,6 +112,10 @@ export type AccountPlanSiteCreation =
   | { state: 'open'; unpaidSite: null }
   | { state: 'choose_plan' | 'blocked'; unpaidSite: AccountPlanNamedSite };
 
+/** why owlette free refuses another machine: pairing, a move, and the dashboard show it. */
+export const MACHINE_LIMIT_ERROR =
+  'owlette free covers one machine. upgrade to add more, or remove a machine first.';
+
 /** why no site can be created while `name` is a further site that isn't billed (`blocked`). */
 export const notBilledDetail = (name: string) =>
   `${name} isn't billed. upgrade it to core or pro, or delete it, before adding another site.`;

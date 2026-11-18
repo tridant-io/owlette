@@ -168,7 +168,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 import { POST as generatePOST } from '@/app/api/agent/auth/device-code/route';
 import { POST as pollPOST } from '@/app/api/agent/auth/device-code/poll/route';
 import { POST as authorizePOST } from '@/app/api/agent/auth/device-code/authorize/route';
-import { MACHINE_LIMIT_ERROR } from '@/lib/pairingPlan.server';
+import { MACHINE_LIMIT_ERROR } from '@/lib/planResponse';
 
 const FREE = {
   ok: true,

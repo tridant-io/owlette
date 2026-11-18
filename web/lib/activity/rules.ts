@@ -18,8 +18,10 @@ export interface RuleInput {
   labels?: Record<string, string>;
 }
 
+// a move writes three rows; only its source row, written when the source copy is deleted, counts
 const DESTRUCTIVE_VERBS = new Set([
   'machine.remove',
+  'machine.move_out',
   'uninstall',
   'uninstall_software',
   'member_removed',

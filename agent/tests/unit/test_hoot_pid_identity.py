@@ -81,10 +81,12 @@ def machine(tmp_path, monkeypatch):
 
     svc = SimpleNamespace(
         cortex_pid=None,
+        _cortex_last_launch_time=0.0,
         _stop_swoop=lambda: None,
         fleet_session=SimpleNamespace(withdraw=lambda forget=False: None),
     )
     svc._is_cortex_alive = owlette_service.OwletteService._is_cortex_alive.__get__(svc)
+    svc.end_hoot = owlette_service.OwletteService.end_hoot.__get__(svc)
     svc.unpair = owlette_service.OwletteService.unpair.__get__(svc)
     return SimpleNamespace(
         python=python, hoot=src / 'owlette_cortex.py', runner=src / 'owlette_runner.py',

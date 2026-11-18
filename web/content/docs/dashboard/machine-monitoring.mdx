@@ -1,7 +1,7 @@
 ---
 title: "machine monitoring"
 description: "the dashboard's live view of every machine: online state, metrics and history, processes, the machine menu, restarts, and what each machine reports about itself."
-keywords: ["machine menu", "three dots", "delete a machine", "decommission", "stop alerts for one machine", "os version", "operating system", "heartbeat", "offline", "cpu temperature", "metrics history", "active hours", "restart refused", "restart later", "restart after hours", "daytime restart"]
+keywords: ["machine menu", "three dots", "delete a machine", "decommission", "move a machine", "move to another site", "change site", "stop alerts for one machine", "os version", "operating system", "heartbeat", "offline", "cpu temperature", "metrics history", "active hours", "restart refused", "restart later", "restart after hours", "daytime restart"]
 ---
 
 ## machine status
@@ -233,6 +233,19 @@ removal is permanent: it deletes the machine's data, process configuration and c
 - **a machine with deployments in progress cannot be removed.** the dialog blocks confirmation until they finish.
 - **an online machine can be removed.** an agent on 4.1.8 or later notices within seconds, stops syncing, drops its credentials and offers **join site** in the app. an older agent keeps writing on its access token, so the machine comes back and stays until that token expires, within the hour; remove it again then, or update the agent first.
 - getting it back means pairing again from the app on that machine, or running the installer again, with a fresh three-word phrase.
+
+### move machine
+
+a machine moves to another site with nobody at it. it is not in the machine menu: open **admin panel** → **sites**, the site's gear, then **machines**, and click the arrows on the machine's row (**move to another site**). in the dialog, pick the site under **move to** and click **move machine**.
+
+- **who can.** owlette's superadmins, and anyone who is owner or admin of the whole site on both sites. the button shows only when you have another site to move the machine to, or while a move waits. an API key can't move a machine.
+- **what comes with it.** the machine keeps its name, and its processes come with it. its metrics history, screenshots and logs don't: they start fresh on the new site.
+- **what is deleted.** once the machine has arrived on the new site, its copy on the old site is removed as [remove machine](#remove-machine) removes it: its data there, its command history and its old agent token. members [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) on the old site lose it, and so does [hoot mcp](/docs/agent/hoot-mcp) there: a machine that acted on others has to be allowed again on the new site. talons on the old site that name it are left as they are, as remove machine leaves them.
+- **how it moves.** the agent asks for the new site's tokens with the one it holds, ends hoot, points itself at the new site and reconnects there, then tells the server it has arrived. it needs no prompt on any platform. until then the old site's token keeps working, so a move cut short leaves the machine where it was.
+- **an offline machine waits.** it follows when it comes back, for up to 7 days: the agent learns of the move each time it connects, and every 15 minutes after. after 7 days the move lapses and has to be asked for again. while a move waits, the row reads **moving to** and the new site's name.
+- **cancelling.** while the move waits, the same button cancels it (**cancel the move**). once the machine has fetched its new site's tokens the move is switching and can't be cancelled, and the button is greyed out; until it arrives, [neither site can be deleted](/docs/dashboard/admin/sites#danger-zone). a machine that never arrives is taken off the old site with **remove machine**, which ends the move.
+- **the agent needs owlette 4.2.3 or later.** for an older machine the dialog says which version it runs and the button stays greyed out: update it first, or [leave the site and join the other one](/docs/agent/installation#repairing-a-packaged-install) at the machine.
+- **refused** as well: while an install, uninstall, update or roost sync is queued for the machine or a deployment naming it is running (*try again when it finishes*), when the new site already has a machine of that name (*remove it there first*), and while the machine is already moving to another site. the codes are in [errors](/docs/api/errors#moving-a-machine). if the new site gains a machine of that name, or runs out of room on its plan, before the machine comes for its tokens, the move ends there: the row goes back to normal, the old site's audit log records it as refused, with the reason, and asking again says why at once.
 
 ---
 

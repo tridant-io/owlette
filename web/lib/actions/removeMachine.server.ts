@@ -3,7 +3,8 @@
  * pending/completed command maps, and every matching `agent_refresh_tokens`
  * row. Capability `MACHINE_REMOVE` (site-scoped).
  *
- * Atomicity: machine + config delete in one batch; command maps and tokens are
+ * Atomicity: machine + config + its move out of the site (`machine_moves`)
+ * delete in one batch; command maps and tokens are
  * best-effort follow-ups because they may not exist (a freshly-paired machine
  * has no commands subcollection). Firestore deletes are idempotent on absent
  * docs, so no existence pre-check. The machine's unended swoop sessions are
@@ -28,21 +29,25 @@ import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
 import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
+import { moveRef } from '@/lib/machineMoves.server';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
 import { endSwoopSession, listUnendedSwoopSessionsForMachine } from '@/lib/swoop/sessionStore.server';
 
 const AGENT_REFRESH_TOKEN_DELETE_BATCH_SIZE = 500;
 
-export interface RemoveMachineInput {
+export interface RemoveMachineDataInput {
   siteId: string;
   machineId: string;
-  /** Audit actor string ("user:<uid>" or "apiKey:<keyId>"). */
-  auditActor: string;
   /** Who removed it, for the audit row of each swoop session the removal ends. */
   actor: Actor;
   /** Inject a Firestore instance — tests pass a mock; production omits. */
   db?: Firestore;
+}
+
+export interface RemoveMachineInput extends RemoveMachineDataInput {
+  /** Audit actor string ("user:<uid>" or "apiKey:<keyId>"). */
+  auditActor: string;
 }
 
 export interface RemoveMachineResult {
@@ -89,8 +94,8 @@ async function endSwoopSessions(siteId: string, machineId: string, actor: Actor)
  * Throws if the underlying Firestore write fails. Callers (the route
  * shim) translate to RFC 7807 via `problemFromError`.
  */
-export async function removeMachine(
-  input: RemoveMachineInput,
+export async function removeMachineData(
+  input: RemoveMachineDataInput,
 ): Promise<RemoveMachineResult> {
   const { siteId, machineId } = input;
   if (!siteId) throw new Error('siteId is required');
@@ -111,10 +116,13 @@ export async function removeMachine(
   const pendingCommandsRef = machineRef.collection('commands').doc('pending');
   const completedCommandsRef = machineRef.collection('commands').doc('completed');
 
-  // Atomic: a failure leaves the machine visible and retryable.
+  // Atomic: a failure leaves the machine visible and retryable. the machine's
+  // move out of the site goes with it: removing is the way out of a stuck
+  // switch, and a move's confirm from its target is this same commit.
   const batch = db.batch();
   batch.delete(machineRef);
   batch.delete(configRef);
+  batch.delete(moveRef(db, siteId, machineId));
   await batch.commit();
 
   // after the batch, so a failed removal leaves its sessions running too.
@@ -216,6 +224,25 @@ export async function removeMachine(
     });
   }
 
+  return {
+    siteId,
+    machineId,
+    deleted: {
+      machine: `sites/${siteId}/machines/${machineId}`,
+      config: `config/${siteId}/machines/${machineId}`,
+      pendingCommands: `sites/${siteId}/machines/${machineId}/commands/pending`,
+      completedCommands: `sites/${siteId}/machines/${machineId}/commands/completed`,
+    },
+  };
+}
+
+/** a move cleans its source the same way but records its own rows, so only this one writes machine.remove. */
+export async function removeMachine(
+  input: RemoveMachineInput,
+): Promise<RemoveMachineResult> {
+  const { siteId, machineId } = input;
+  const result = await removeMachineData(input);
+
   emitMutation({
     kind: 'site_mutated',
     siteId,
@@ -229,14 +256,5 @@ export async function removeMachine(
     },
   });
 
-  return {
-    siteId,
-    machineId,
-    deleted: {
-      machine: `sites/${siteId}/machines/${machineId}`,
-      config: `config/${siteId}/machines/${machineId}`,
-      pendingCommands: `sites/${siteId}/machines/${machineId}/commands/pending`,
-      completedCommands: `sites/${siteId}/machines/${machineId}/commands/completed`,
-    },
-  };
+  return result;
 }

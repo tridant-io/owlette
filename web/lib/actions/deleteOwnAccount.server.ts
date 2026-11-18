@@ -28,6 +28,7 @@ import type { Auth } from 'firebase-admin/auth';
 import type { Storage } from 'firebase-admin/storage';
 import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import { cancelMovesForSite } from '@/lib/machineMoves.server';
 import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
 import { unlinkTridantAccount } from '@/lib/userDeleteCascade.server';
 
@@ -721,6 +722,8 @@ export async function deleteOwnAccount(
     const siteRef = db.collection('sites').doc(entry.siteId);
     // before anything of the site is destroyed, as deleteSite does. best effort.
     if (!dryRun) await stopBillingBeforeDelete(entry.siteId, (await siteRef.get()).data());
+    // a pending move into the site could otherwise mint it a token after it is gone
+    if (!dryRun) await cancelMovesForSite(db, entry.siteId);
     for (const sub of SITE_SUBCOLLECTIONS) {
       const n = await drainSiteSubcollection(
         db,

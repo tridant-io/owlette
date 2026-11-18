@@ -90,6 +90,10 @@ _Avoid_: pairing code, PIN, token
 A machine's own refresh token, which never expires but an admin can revoke, kept encrypted in `.tokens.enc` under a machine-bound key and used to mint one-hour access tokens.
 _Avoid_: service account, credentials file
 
+**Move**:
+Taking a paired machine from one site to another from the admin panel; its agent fetches the new site's tokens itself, and the old site's copy is deleted.
+_Avoid_: transfer (that is ownership), re-pair, migrate
+
 **Site role**:
 A person's standing on one site: `owner`, `admin` or `member`. Members read; admins and owners act. A swoop mode on the same row can widen or narrow swoop alone. A machine scope narrows which machines a role covers and takes away everything site-wide; it never widens what the role allows.
 _Avoid_: using the global role for anything on a site
