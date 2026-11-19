@@ -10,8 +10,11 @@ import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { DatePicker } from '@/components/ui/date-picker';
 import { IconButton } from '@/components/ui/icon-button';
+import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DATE_PRESETS, fromYMD, toYMD, type DatePreset } from '@/lib/dateRange';
 import {
   kindLabel,
   rowFacts,
@@ -29,6 +32,10 @@ export interface ActivityFilters {
   view: ActivityView;
   userId?: string;
   siteId?: string;
+  datePreset: DatePreset;
+  // yyyy-mm-dd, read only when datePreset is custom
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 // a select item cannot hold an empty value, so "no filter" is this
@@ -241,6 +248,54 @@ function FilterSelect({
   );
 }
 
+// the logs page's presets and custom range; each day picker keeps from at or before to
+function DateRangeFilter({ filters, onChange }: { filters: ActivityFilters; onChange: (next: ActivityFilters) => void }) {
+  const from = fromYMD(filters.dateFrom ?? '');
+  const to = fromYMD(filters.dateTo ?? '');
+  return (
+    <div className="flex w-full flex-wrap gap-2 md:w-auto md:flex-nowrap">
+      <Select value={filters.datePreset} onValueChange={(datePreset) => onChange({ ...filters, datePreset: datePreset as DatePreset })}>
+        <SelectTrigger aria-label="date range" className="min-w-0 w-full md:w-44">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {DATE_PRESETS.map((preset) => (
+            <SelectItem key={preset.value} value={preset.value}>
+              {preset.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {filters.datePreset === 'custom' && (
+        <div className="flex w-full gap-2 md:w-auto">
+          <Label htmlFor="activity-from" className="sr-only">
+            from
+          </Label>
+          <DatePicker
+            id="activity-from"
+            className="min-w-0 flex-1 md:w-40 md:flex-none"
+            value={from}
+            onChange={(d) => onChange({ ...filters, dateFrom: d ? toYMD(d) : undefined })}
+            placeholder="start date"
+            disabled={to ? (d) => d > to : undefined}
+          />
+          <Label htmlFor="activity-to" className="sr-only">
+            to
+          </Label>
+          <DatePicker
+            id="activity-to"
+            className="min-w-0 flex-1 md:w-40 md:flex-none"
+            value={to}
+            onChange={(d) => onChange({ ...filters, dateTo: d ? toYMD(d) : undefined })}
+            placeholder="end date"
+            disabled={from ? (d) => d < from : undefined}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The superadmin's feed of what was done and flagged, one view at a time, newest first. */
 export function ActivityList({
   filters,
@@ -282,7 +337,7 @@ export function ActivityList({
             </IconButton>
           }
         />
-        {/* a row of their own: five views and two pickers beside the title wrap the views at desktop widths */}
+        {/* a row of their own: five views and the pickers beside the title wrap the views at desktop widths */}
         <div className="mb-4 flex flex-wrap items-center gap-2 md:mb-6 md:gap-3">
           <SegmentedControl
             label="view"
@@ -306,9 +361,10 @@ export function ActivityList({
               onChange={(siteId) => onFiltersChange({ ...filters, siteId })}
             />
           </div>
+          <DateRangeFilter filters={filters} onChange={onFiltersChange} />
         </div>
         <ActivityResults
-          key={`${filters.view}:${filters.userId ?? ''}:${filters.siteId ?? ''}:${reloads}`}
+          key={`${filters.view}:${filters.userId ?? ''}:${filters.siteId ?? ''}:${filters.datePreset}:${filters.dateFrom ?? ''}:${filters.dateTo ?? ''}:${reloads}`}
           filters={filters}
           siteNames={siteNames}
           onFilter={onFiltersChange}

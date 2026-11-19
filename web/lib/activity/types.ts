@@ -64,7 +64,8 @@ export const MUTATION_KINDS: readonly MutationKind[] = [
   'talon_mutated',
 ];
 
-// a keep-alive, not something a person or machine did to anything
+// a keep-alive, not something a person or machine did to anything. no longer recorded,
+// but the rows written before that stay in the hash chains
 export const ROUTINE_ACTIONS: ReadonlySet<string> = new Set(['site_mutated:fleet_session_minted']);
 
 export const AUTH_CAPABILITIES = ['AUTH_SIGN_IN', 'AUTH_SECOND_FACTOR'] as const;

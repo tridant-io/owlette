@@ -12,6 +12,14 @@ tocDepth: 2
 
 the email sent when a machine is waiting for a reboot, an operating system update ready to install for example, now reads **reboot pending** in amber, with the subject `[owlette] reboot pending on {machine}` and no error code. it used to arrive as `[ALERT] owlette agent error`, though nothing had failed. the server writes the email, so this holds for every agent version.
 
+### changed — fleet session renewals are no longer recorded, and the activity page reads past old ones
+
+a [hoot mcp](/docs/agent/hoot-mcp) sender renews its fleet session every 10 minutes, and each renewal wrote a change row. with several senders those rows filled the activity page's reach, so it showed **nothing here** with only **load more** below it. renewals are no longer recorded: the grant that allows a session, a sender dropping its grant and every fleet call made with a session still are. the rows already written stay, hidden as before, and the page now reads on past a stretch of them by itself instead of showing it as empty.
+
+### added — a date range on the activity page
+
+**admin** → **activity** has the logs page's date range beside its user and site filters: all time, the last hour or 24 hours, today, yesterday, the last 7 or 30 days, this week, this month, last month, or a custom range of days. the range is kept in the address, so a shared link opens the same range, read from the moment it is opened. the API takes it as `since` and `until` on `GET /api/admin/activity`, unix milliseconds or ISO 8601, both included.
+
 ## [4.2.3] - 2026-11-17
 
 ### added — an activity page that flags risky changes and sign-ins

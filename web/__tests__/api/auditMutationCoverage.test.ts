@@ -36,6 +36,9 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/auth/device-code',
   // agent refresh-token rotation; authentication lifecycle, no operator actor.
   'agent/auth/refresh',
+  // agent renews its own fleet session every 10 minutes (agent bearer token); a credential renewal,
+  // not a change. The grant that allows it and every fleet call made with it are audited.
+  'agent/fleet/session',
   // agent collects the hoot key queued for it (agent bearer token) and the handoff is deleted on
   // read; the operator's provision is audited by hoot/provision-key, the fetch has no operator actor.
   'agent/hoot/key',

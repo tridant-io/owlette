@@ -29,6 +29,7 @@ import {
 } from '@/lib/actions/clearLogs.server';
 import { siteAuditActor } from '@/lib/actions/auditActor.server';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { parseTimestampQuery } from '@/lib/timestampQuery';
 import { timestampToIso, timestampToMs } from '@/lib/firestoreTime.server';
 import {
   collectFilteredPage,
@@ -112,24 +113,6 @@ function normalizeOptionalQueryString(
   return value;
 }
 
-function parseTimestampQuery(
-  searchParams: URLSearchParams,
-  field: 'since' | 'until',
-): number | undefined | NextResponse {
-  const raw = searchParams.get(field);
-  if (raw === null || raw.trim() === '') return undefined;
-
-  const asNumber = Number(raw);
-  if (Number.isFinite(asNumber) && asNumber >= 0) return asNumber;
-
-  const parsed = Date.parse(raw);
-  if (Number.isNaN(parsed)) {
-    return problemValidation(`${field} must be unix-ms or iso8601`, {
-      [`query.${field}`]: ['invalid date'],
-    });
-  }
-  return parsed;
-}
 
 /** Parse a `since`/`until` value from a JSON body — unix-ms number or ISO 8601 string. */
 function parseTimestampBody(

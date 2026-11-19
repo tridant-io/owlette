@@ -243,30 +243,15 @@ describe('POST /api/agent/fleet/session', () => {
     });
   });
 
-  it('audits the mint with the machine as actor and no token', async () => {
+  it('writes no audit row for a mint: it is a 10-minute renewal, not a change', async () => {
     agentToken();
     paired();
     grant();
 
     const res = await POST(request());
-    const { token } = await res.json();
 
-    expect(mockEmitMutation).toHaveBeenCalledTimes(1);
-    expect(mockEmitMutation).toHaveBeenCalledWith({
-      kind: 'site_mutated',
-      siteId: SITE,
-      actor: `machine:${MACHINE}`,
-      targetId: MACHINE,
-      attributes: {
-        verb: 'fleet_session_minted',
-        endpoint: 'agent/fleet/session',
-        method: 'POST',
-        machineId: MACHINE,
-      },
-    });
-    const audited = JSON.stringify(mockEmitMutation.mock.calls);
-    expect(audited).not.toContain(token);
-    expect(audited).not.toContain(hashOf(token));
+    expect(res.status).toBe(200);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 
   describe('the rate limit', () => {
@@ -297,7 +282,6 @@ describe('POST /api/agent/fleet/session', () => {
         expect((await POST(request())).status).toBe(200);
       }
       const minted = sessionDocs().length;
-      const audited = mockEmitMutation.mock.calls.length;
 
       const res = await POST(request());
 
@@ -305,7 +289,6 @@ describe('POST /api/agent/fleet/session', () => {
       expect(res.headers.get('retry-after')).toBe('120');
       expect((await res.json()).code).toBe('rate_limited');
       expect(sessionDocs().length).toBe(minted);
-      expect(mockEmitMutation.mock.calls.length).toBe(audited);
     });
 
     it('is per machine: another machine of the same site keeps its own', async () => {

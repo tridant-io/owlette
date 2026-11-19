@@ -7,8 +7,8 @@
  * platform change row under `sites/_platform/audit_log`, a sign-in and a failed
  * second factor in `global/audit_log/entries`, and a high and a digest finding in
  * `global/activity_watch/findings`. Fifty-five more change rows sit under a site
- * of their own so a view holds more than a page. Everything seeded is removed
- * afterwards.
+ * of their own so a view holds more than a page, and one change row sits on a
+ * fixed day in 2024 for the date range. Everything seeded is removed afterwards.
  *
  * The last describe runs the real detection path: five failed second factors for
  * one user, then `GET /api/cron/activity-watch` twice. No mail goes out (resend is
@@ -54,6 +54,9 @@ const HOST_MACHINE = `tec-${SUFFIX}`;
 const VIEWER_ID = `viewer-${SUFFIX}`;
 // a machine's routine session renewals, which the feed leaves out
 const ROUTINE = `renewed-${SUFFIX}`;
+// a change on a fixed past day, at noon utc so the browser's own zone keeps it on that day
+const OLD = `old-${SUFFIX}`;
+const OLD_DAY = '2024-03-06';
 const NEWEST_FIRST = [HIGH, DIGEST, CHANGE, PLATFORM, DENY, SIGN_IN, SECOND_FACTOR];
 
 const ADMIN = 'admin@e2e.test';
@@ -145,6 +148,16 @@ test.beforeAll(async () => {
       }),
     );
   }
+  const oldHash = crypto.createHash('sha256').update(`old-${SUFFIX}`).digest('hex');
+  put(
+    siteLog('site-A').doc(oldHash),
+    changeRow('site-A', oldHash, Date.parse(`${OLD_DAY}T12:00:00Z`), {
+      kind: 'user_mutated',
+      actor: 'user:admin-uid',
+      target: OLD,
+      verb: 'promoted',
+    }),
+  );
   const platformHash = crypto.createHash('sha256').update(`platform-${SUFFIX}`).digest('hex');
   put(
     siteLog('_platform').doc(platformHash),
@@ -381,6 +394,34 @@ test.describe('the page, as a superadmin', () => {
     await expect(finding.getByRole('button', { name: 'everything on this site' })).toHaveCount(0);
   });
 
+  test('the date range narrows the list and stays in the url', async ({ page }) => {
+    await page.goto('/admin/activity');
+    await expect(item(page, CHANGE)).toBeVisible();
+
+    await page.getByRole('combobox', { name: 'date range' }).click();
+    await page.getByRole('option', { name: 'custom range', exact: true }).click();
+    await expect(page).toHaveURL(/range=custom$/);
+    // each day is a navigation: let it land before the next, as a person picking two days does
+    for (const end of ['from', 'to']) {
+      await page.getByLabel(end, { exact: true }).fill(OLD_DAY);
+      await page.getByLabel(end, { exact: true }).press('Enter');
+      await expect(page).toHaveURL(new RegExp(`${end}=${OLD_DAY}`));
+    }
+    await expect(page).toHaveURL(new RegExp(`range=custom&from=${OLD_DAY}&to=${OLD_DAY}$`));
+    await expect(item(page, OLD)).toBeVisible();
+    await expect(item(page, CHANGE)).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByRole('combobox', { name: 'date range' })).toHaveText('custom range');
+    await expect(item(page, OLD)).toBeVisible();
+
+    await page.getByRole('combobox', { name: 'date range' }).click();
+    await page.getByRole('option', { name: 'last 24 hours', exact: true }).click();
+    await expect(page).toHaveURL(/range=last_24h$/);
+    await expect(item(page, CHANGE)).toBeVisible();
+    await expect(item(page, OLD)).toHaveCount(0);
+  });
+
   test('load more appears past a page and adds the rest', async ({ page }) => {
     await page.goto(`/admin/activity?view=changes&site=${FILL_SITE}`);
     const rows = feed(page).getByRole('listitem');
@@ -404,12 +445,18 @@ test.describe('the page at a phone width', () => {
     for (const button of await views.all()) await expectFullyWithinViewport(page, button, 'a view button');
     await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'user' }), 'the user filter');
     await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'site' }), 'the site filter');
+    await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'date range' }), 'the date range');
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
     const row = item(page, CHANGE);
     await row.getByRole('button').click();
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything from this actor' }), 'the actor shortcut');
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything on this site' }), 'the site shortcut');
+    await assertNoHorizontalOverflow(page);
+
+    await page.goto('/admin/activity?range=custom');
+    await expectFullyWithinViewport(page, page.getByLabel('from', { exact: true }), 'the from day');
+    await expectFullyWithinViewport(page, page.getByLabel('to', { exact: true }), 'the to day');
     await assertNoHorizontalOverflow(page);
   });
 });
