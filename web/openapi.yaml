@@ -459,6 +459,16 @@ paths:
           required: false
           description: Only activity in this site.
           schema: { type: string }
+        - name: since
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only activity at or after this time — unix milliseconds or an ISO 8601 timestamp. Must not be after `until`.
+        - name: until
+          in: query
+          required: false
+          schema: { type: string }
+          description: Only activity at or before this time — unix milliseconds or an ISO 8601 timestamp.
         - name: page_size
           in: query
           required: false

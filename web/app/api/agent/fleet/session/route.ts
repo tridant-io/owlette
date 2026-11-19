@@ -28,15 +28,15 @@
  * issue-log upload urls, an unauthenticated flood is bounded by the 401, which
  * only verifies a JWT and reads no document.
  *
- * the token is never logged, audited or put in an error.
+ * the token is never logged, audited or put in an error. a mint writes no audit
+ * row either: it is a renewal every 10 minutes, not a change, and the grant that
+ * allows it and every fleet call made with it are audited.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import { agentClaims } from '@/lib/agentAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { problem, problemUnauthorized, ProblemType } from '@/lib/apiErrors';
-import { emitMutation } from '@/lib/auditLogClient';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { fleetGrantFor, loadFleetSettings } from '@/lib/fleet/policy.server';
 import { FLEET_SESSION_TTL_MS, machinePairingIsLive, mintFleetSession } from '@/lib/fleet/session.server';
@@ -80,19 +80,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
 
     const { token, expiresAt } = await mintFleetSession(db, { siteId, machineId });
-
-    emitMutation({
-      kind: 'site_mutated',
-      siteId,
-      actor: machineAuditActor(machineId),
-      targetId: machineId,
-      attributes: {
-        verb: 'fleet_session_minted',
-        endpoint: 'agent/fleet/session',
-        method: 'POST',
-        machineId,
-      },
-    });
 
     return applyRateLimitCounters(
       NextResponse.json(

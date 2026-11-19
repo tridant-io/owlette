@@ -2,16 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ActivityRow, ActivityView } from '@/lib/activity/types';
+import { getDateRange, type DatePreset } from '@/lib/dateRange';
 
 /**
  * The activity feed for the superadmin page, through `/api/admin/activity` on
- * the signed-in session. A page can come back with no rows and a token, so
- * `hasMore` follows the token alone.
+ * the signed-in session. A page can come back with no rows and a token, so a
+ * load reads on past such pages and `hasMore` follows the token alone.
  */
 
 export type { ActivityRow, ActivityView };
 
 const PAGE_SIZE = 50;
+// a stretch of rows the feed hides comes back as pages with no rows (dev's old fleet
+// session renewals take about 9), so a load reads on until it has rows, up to this many pages
+const MAX_PAGES_PER_LOAD = 15;
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
   try {
@@ -26,8 +30,25 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-/** Lists activity newest first for one view, optionally one user and one site, a page at a time. */
-export function useActivity({ view, userId, siteId }: { view: ActivityView; userId?: string; siteId?: string }) {
+/**
+ * Lists activity newest first for one view, optionally one user, one site and a date range,
+ * a page at a time. The range is resolved per request, so the last hour stays the last hour.
+ */
+export function useActivity({
+  view,
+  userId,
+  siteId,
+  datePreset = 'all',
+  dateFrom,
+  dateTo,
+}: {
+  view: ActivityView;
+  userId?: string;
+  siteId?: string;
+  datePreset?: DatePreset;
+  dateFrom?: string;
+  dateTo?: string;
+}) {
   const [rows, setRows] = useState<ActivityRow[]>([]);
   const [nextPageToken, setNextPageToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -41,6 +62,9 @@ export function useActivity({ view, userId, siteId }: { view: ActivityView; user
       const params = new URLSearchParams({ view, page_size: String(PAGE_SIZE) });
       if (userId) params.set('user', userId);
       if (siteId) params.set('site', siteId);
+      const { from, to } = getDateRange(datePreset, dateFrom, dateTo);
+      if (from) params.set('since', String(from.getTime()));
+      if (to) params.set('until', String(to.getTime()));
       if (pageToken) params.set('page_token', pageToken);
       const response = await fetch(`/api/admin/activity?${params}`, { cache: 'no-store' });
       if (!response.ok) throw new Error(await readApiError(response, 'failed to load activity'));
@@ -50,14 +74,29 @@ export function useActivity({ view, userId, siteId }: { view: ActivityView; user
         nextPageToken: body.next_page_token ?? '',
       };
     },
-    [view, userId, siteId],
+    [view, userId, siteId, datePreset, dateFrom, dateTo],
+  );
+
+  const fetchRows = useCallback(
+    async (pageToken: string, request: number) => {
+      let page = await fetchPage(pageToken);
+      for (
+        let read = 1;
+        read < MAX_PAGES_PER_LOAD && page.rows.length === 0 && page.nextPageToken && request === generation.current;
+        read += 1
+      ) {
+        page = await fetchPage(page.nextPageToken);
+      }
+      return page;
+    },
+    [fetchPage],
   );
 
   const refresh = useCallback(async () => {
     const request = ++generation.current;
     setLoading(true);
     try {
-      const page = await fetchPage('');
+      const page = await fetchRows('', request);
       if (request !== generation.current) return;
       setRows(page.rows);
       setNextPageToken(page.nextPageToken);
@@ -69,7 +108,7 @@ export function useActivity({ view, userId, siteId }: { view: ActivityView; user
     } finally {
       if (request === generation.current) setLoading(false);
     }
-  }, [fetchPage]);
+  }, [fetchRows]);
 
   useEffect(() => {
     void refresh();
@@ -80,7 +119,7 @@ export function useActivity({ view, userId, siteId }: { view: ActivityView; user
     const request = generation.current;
     setLoadingMore(true);
     try {
-      const page = await fetchPage(nextPageToken);
+      const page = await fetchRows(nextPageToken, request);
       if (request !== generation.current) return;
       setRows((prev) => [...prev, ...page.rows]);
       setNextPageToken(page.nextPageToken);
@@ -92,7 +131,7 @@ export function useActivity({ view, userId, siteId }: { view: ActivityView; user
     } finally {
       setLoadingMore(false);
     }
-  }, [fetchPage, nextPageToken, loadingMore]);
+  }, [fetchRows, nextPageToken, loadingMore]);
 
   return {
     rows,

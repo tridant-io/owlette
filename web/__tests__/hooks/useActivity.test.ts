@@ -3,7 +3,7 @@
  *
  * `useActivity` — the superadmin activity page's data, through
  * `/api/admin/activity`. pins the first page with its filters, load-more
- * through `next_page_token` (including a page with no rows and a token), a
+ * through `next_page_token`, reading on past pages with no rows and a token, a
  * filter change discarding a stale response, and problem details as the error.
  */
 
@@ -73,13 +73,25 @@ describe('useActivity', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/admin/activity?view=all&page_size=50', { cache: 'no-store' });
   });
 
-  it('loads more through the token and appends, keeping an empty page with a token loadable', async () => {
+  it('sends a date range as since and until, from the start of the first day to the end of the last', async () => {
+    fetchMock.mockResolvedValue(page([]));
+
+    const { result } = renderHook(() =>
+      useActivity({ view: 'all', datePreset: 'custom', dateFrom: '2026-11-01', dateTo: '2026-11-02' }),
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const since = new Date(2026, 10, 1).getTime();
+    const until = new Date(2026, 10, 2, 23, 59, 59, 999).getTime();
+    expect(fetchMock).toHaveBeenCalledWith(`/api/admin/activity?view=all&page_size=50&since=${since}&until=${until}`, {
+      cache: 'no-store',
+    });
+  });
+
+  it('loads more through the token and appends', async () => {
     const a = makeRow({ id: 'change:a' });
     const b = makeRow({ id: 'change:b' });
-    fetchMock
-      .mockResolvedValueOnce(page([a], 'tok-1'))
-      .mockResolvedValueOnce(page([], 'tok-2'))
-      .mockResolvedValueOnce(page([b]));
+    fetchMock.mockResolvedValueOnce(page([a], 'tok-1')).mockResolvedValueOnce(page([b]));
 
     const { result } = renderHook(() => useActivity({ view: 'all' }));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -91,14 +103,42 @@ describe('useActivity', () => {
     expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-1', {
       cache: 'no-store',
     });
-    expect(result.current.rows).toEqual([a]);
-    expect(result.current.hasMore).toBe(true);
+    expect(result.current.rows).toEqual([a, b]);
+    expect(result.current.hasMore).toBe(false);
+  });
 
+  it('reads on past pages with no rows, so a hidden stretch never shows as empty', async () => {
+    const b = makeRow({ id: 'change:b' });
+    const c = makeRow({ id: 'change:c' });
+    fetchMock
+      .mockResolvedValueOnce(page([], 'tok-1'))
+      .mockResolvedValueOnce(page([], 'tok-2'))
+      .mockResolvedValueOnce(page([b], 'tok-3'));
+
+    const { result } = renderHook(() => useActivity({ view: 'all' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.rows).toEqual([b]);
+    expect(result.current.hasMore).toBe(true);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-2', {
+      cache: 'no-store',
+    });
+
+    fetchMock.mockResolvedValueOnce(page([], 'tok-4')).mockResolvedValueOnce(page([c]));
     await act(async () => {
       await result.current.loadMore();
     });
-    expect(result.current.rows).toEqual([a, b]);
+    expect(result.current.rows).toEqual([b, c]);
     expect(result.current.hasMore).toBe(false);
+  });
+
+  it('stops after 15 pages with no rows and leaves the rest to load more', async () => {
+    fetchMock.mockImplementation(async () => page([], 'tok'));
+
+    const { result } = renderHook(() => useActivity({ view: 'all' }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchMock).toHaveBeenCalledTimes(15);
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.hasMore).toBe(true);
   });
 
   it('discards a stale response when the filter changes', async () => {

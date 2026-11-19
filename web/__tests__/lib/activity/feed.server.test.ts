@@ -30,7 +30,8 @@ function matches(data: Data, [field, op, value]: Where) {
   if (op === '==') return v === value;
   if (op === 'in') return (value as unknown[]).includes(v);
   if (v === undefined) return false;
-  return op === '<' ? (v as number) < (num(value) as number) : (v as number) > (num(value) as number);
+  const [a, b] = [v as number, num(value) as number];
+  return op === '<' ? a < b : op === '<=' ? a <= b : op === '>=' ? a >= b : a > b;
 }
 
 function makeQuery(scope: string, inScope: (path: string) => boolean, where: Where[] = [], order?: string, max = 1e9, after?: string): any { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -172,6 +173,61 @@ describe('loadActivityPage horizon', () => {
 
     expect(ids(second.rows)).toEqual(['platform:mid', 'decision:old']);
     expect(second.nextPageToken).toBe('');
+  });
+});
+
+describe('loadActivityPage date range', () => {
+  const seed = () => {
+    change('before', 900);
+    change('since', 1000);
+    decision('sites/site-a/audit_log/mid', 1500);
+    decision('global/audit_log/entries/signin', 1800, { capability: 'AUTH_SIGN_IN', outcome: 'allow', denyReason: undefined });
+    decision('global/audit_log/entries/until', 2000);
+    finding('after', 2100);
+  };
+
+  it('keeps every source to rows from since to until, both included', async () => {
+    seed();
+
+    const page = await loadActivityPage(db, { view: 'all', pageSize: 10, sinceMs: 1000, untilMs: 2000 });
+
+    expect(ids(page.rows)).toEqual(['platform:until', 'platform:signin', 'decision:mid', 'change:since']);
+    expect(page.nextPageToken).toBe('');
+    for (const q of queries) {
+      expect(q.where.some(([f, op]) => f === q.order && op === '>=')).toBe(true);
+    }
+  });
+
+  it('pages inside the range with none lost, repeated or outside it', async () => {
+    seed();
+
+    const seen: string[] = [];
+    let token: string | null = null;
+    let pages = 0;
+    do {
+      const page: Awaited<ReturnType<typeof loadActivityPage>> = await loadActivityPage(db, {
+        view: 'all',
+        pageSize: 1,
+        pageToken: token,
+        sinceMs: 1000,
+        untilMs: 2000,
+      });
+      seen.push(...ids(page.rows));
+      token = page.nextPageToken || null;
+      pages += 1;
+    } while (token && pages < 20);
+
+    expect(seen).toEqual(['platform:until', 'platform:signin', 'decision:mid', 'change:since']);
+  });
+
+  it('takes either bound alone', async () => {
+    seed();
+
+    const since = await loadActivityPage(db, { view: 'all', pageSize: 10, sinceMs: 1800 });
+    const until = await loadActivityPage(db, { view: 'all', pageSize: 10, untilMs: 1000 });
+
+    expect(ids(since.rows)).toEqual(['finding:after', 'platform:until', 'platform:signin']);
+    expect(ids(until.rows)).toEqual(['change:since', 'change:before']);
   });
 });
 

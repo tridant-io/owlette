@@ -7,8 +7,9 @@
  * feed writes no audit row of its own.
  *
  * Params: view (all | flagged | changes | refused | sign-ins, default all),
- * user (uid), site (site id), page_size (1..100, default 50), page_token
- * (opaque; a page can be empty and still carry a token).
+ * user (uid), site (site id), since and until (unix ms or iso 8601, both
+ * included), page_size (1..100, default 50), page_token (opaque; a page can be
+ * empty and still carry a token).
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -18,6 +19,7 @@ import { loadUserLabels } from '@/lib/activity/labels.server';
 import type { ActivityView } from '@/lib/activity/types';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { parsePagination, withPaginationFields } from '@/lib/pagination';
+import { parseTimestampQuery } from '@/lib/timestampQuery';
 import { applyAuthDeprecations, requirePlatformAuthAndScope } from '@/app/api/_shared';
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -48,6 +50,16 @@ export async function GET(request: NextRequest) {
       return problemValidation('invalid site', { 'query.site': ['must be a site id'] });
     }
 
+    const sinceMs = parseTimestampQuery(sp, 'since');
+    if (sinceMs instanceof NextResponse) return sinceMs;
+    const untilMs = parseTimestampQuery(sp, 'until');
+    if (untilMs instanceof NextResponse) return untilMs;
+    if (sinceMs !== undefined && untilMs !== undefined && sinceMs > untilMs) {
+      return problemValidation('since must be <= until', {
+        'query.since': ['must be <= query.until'],
+      });
+    }
+
     const parsedPagination = parsePagination(sp, {
       defaultPageSize: DEFAULT_PAGE_SIZE,
       maxPageSize: MAX_PAGE_SIZE,
@@ -60,6 +72,8 @@ export async function GET(request: NextRequest) {
       view: view as ActivityView,
       userId,
       siteId,
+      sinceMs,
+      untilMs,
       pageSize,
       pageToken,
     });

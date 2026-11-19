@@ -163,6 +163,28 @@ describe('GET /api/admin/activity', () => {
     );
   });
 
+  it('passes since and until to the feed, each as unix ms or iso 8601', async () => {
+    signIn('staff-1', 'superadmin');
+    await list('?since=1000&until=2026-11-19T00:00:00.000Z');
+    expect(mockLoadActivityPage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sinceMs: 1000, untilMs: Date.parse('2026-11-19T00:00:00.000Z') }),
+    );
+  });
+
+  it.each([
+    ['?since=yesterday', 'query.since'],
+    ['?until=soon', 'query.until'],
+    ['?since=2000&until=1000', 'query.since'],
+  ])('400s %s', async (query, field) => {
+    signIn('staff-1', 'superadmin');
+    const { res, body } = await list(query);
+
+    expect(res.status).toBe(400);
+    expect(body.errors[field]).toBeDefined();
+    expect(mockLoadActivityPage).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['user', 'a%2Fb'],
     ['user', ''],

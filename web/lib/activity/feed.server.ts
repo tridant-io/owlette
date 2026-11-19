@@ -30,6 +30,9 @@ export interface ActivityPageOptions {
   view: ActivityView;
   userId?: string;
   siteId?: string;
+  // when the row happened, unix ms, both bounds included
+  sinceMs?: number;
+  untilMs?: number;
   pageSize: number;
   pageToken?: string | null;
 }
@@ -70,11 +73,21 @@ function decodeToken(token: string | null | undefined): Cursor | null {
   throw new InvalidPageTokenError();
 }
 
-// ms-numeric time field (change rows, findings) or Timestamp field (decision rows), newest first
-const byMs = (q: Query, field: string, upper: number | null): Query =>
-  (upper === null ? q : q.where(field, '<', upper)).orderBy(field, 'desc');
-const byTs = (q: Query, field: string, upper: number | null): Query =>
-  (upper === null ? q : q.where(field, '<', Timestamp.fromMillis(upper))).orderBy(field, 'desc');
+// ms-numeric time field (change rows, findings) or Timestamp field (decision rows), newest first,
+// below `upper` and at or after `lower`. a range on the ordered field, so the same indexes serve it
+function bounded(q: Query, field: string, upper: unknown, lower: unknown): Query {
+  const below = upper === null ? q : q.where(field, '<', upper);
+  return (lower === null ? below : below.where(field, '>=', lower)).orderBy(field, 'desc');
+}
+const byMs = (q: Query, field: string, upper: number | null, lower: number | null): Query =>
+  bounded(q, field, upper, lower);
+const byTs = (q: Query, field: string, upper: number | null, lower: number | null): Query =>
+  bounded(
+    q,
+    field,
+    upper === null ? null : Timestamp.fromMillis(upper),
+    lower === null ? null : Timestamp.fromMillis(lower),
+  );
 
 // decision 5: a user's changes are named `user:<uid>`, `cortex:user_<uid>` when hoot made them, or `apiKey:<id>` when a key did
 async function loadActors(db: Db, userId: string): Promise<string[]> {
@@ -94,6 +107,7 @@ const isAuth = (data: Data) => (AUTH_CAPABILITIES as readonly string[]).includes
 
 function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null): Source[] {
   const { view, userId, siteId } = opts;
+  const lower = opts.sinceMs ?? null;
   const all = view === 'all';
   const group = db.collectionGroup('audit_log');
   const entries = db.collection('global').doc('audit_log').collection('entries');
@@ -102,21 +116,21 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
   if (all || view === 'changes') {
     if (siteId) {
       sources.push({
-        build: (u) => byMs(db.collection('sites').doc(siteId).collection('audit_log'), 'recordedAt', u),
+        build: (u) => byMs(db.collection('sites').doc(siteId).collection('audit_log'), 'recordedAt', u, lower),
         map: fromChangeDoc,
         sparse: true,
         keep: (r, d) => notRoutine(r) && isMutation(d) && (!actors || actors.includes(d.event?.actor)),
       });
     } else if (actors) {
       sources.push({
-        build: (u) => byMs(group.where('event.actor', 'in', actors), 'recordedAt', u),
+        build: (u) => byMs(group.where('event.actor', 'in', actors), 'recordedAt', u, lower),
         map: fromChangeDoc,
         keep: (r, d) => notRoutine(r) && isMutation(d),
         sparse: true,
       });
     } else {
       sources.push({
-        build: (u) => byMs(group.where('event.kind', 'in', MUTATION_KINDS), 'recordedAt', u),
+        build: (u) => byMs(group.where('event.kind', 'in', MUTATION_KINDS), 'recordedAt', u, lower),
         map: fromChangeDoc,
         keep: notRoutine,
         sparse: true,
@@ -128,7 +142,7 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
     const mine = (d: Data) => !userId || d.actor?.userId === userId;
     if (siteId) {
       sources.push({
-        build: (u) => byTs(db.collection('sites').doc(siteId).collection('audit_log'), 'timestamp', u),
+        build: (u) => byTs(db.collection('sites').doc(siteId).collection('audit_log'), 'timestamp', u, lower),
         map: (d) => fromDecisionDoc(d, 'decision', siteId),
         keep: (_r, d) => isRefused(d) && mine(d),
       });
@@ -137,12 +151,12 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
       const keep = userId ? (_r: ActivityRow, d: Data) => isRefused(d) : undefined;
       sources.push(
         {
-          build: (u) => byTs(scoped(group), 'timestamp', u),
+          build: (u) => byTs(scoped(group), 'timestamp', u, lower),
           map: (d) => fromDecisionDoc(d, 'decision', d.ref.parent.parent?.id ?? null),
           keep,
         },
         {
-          build: (u) => byTs(scoped(entries), 'timestamp', u),
+          build: (u) => byTs(scoped(entries), 'timestamp', u, lower),
           map: (d) => fromDecisionDoc(d, 'platform', null),
           keep,
         },
@@ -157,6 +171,7 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
           userId ? entries.where('actor.userId', '==', userId) : entries.where('capability', 'in', AUTH_CAPABILITIES),
           'timestamp',
           u,
+          lower,
         ),
       map: (d) => fromDecisionDoc(d, 'platform', null),
       keep: userId ? (_r, d) => isAuth(d) : undefined,
@@ -166,7 +181,7 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
   if (all || view === 'flagged') {
     const [a, b, c] = ACTIVITY_FINDINGS_COLLECTION.split('/');
     sources.push({
-      build: (u) => byMs(db.collection(a).doc(b).collection(c), 'detectedAt', u),
+      build: (u) => byMs(db.collection(a).doc(b).collection(c), 'detectedAt', u, lower),
       map: fromFindingDoc,
       keep:
         userId || siteId
@@ -261,7 +276,11 @@ export async function loadActivityPage(
 ): Promise<{ rows: ActivityRow[]; nextPageToken: string }> {
   const cursor = decodeToken(opts.pageToken);
   const skip = new Set(cursor?.ids);
-  const upper = cursor ? cursor.t + 1 : null;
+  // exclusive: up to the cursor's time (its ties are skipped by id) and to until
+  const uppers = [cursor ? cursor.t + 1 : null, opts.untilMs === undefined ? null : opts.untilMs + 1].filter(
+    (u): u is number => u !== null,
+  );
+  const upper = uppers.length > 0 ? Math.min(...uppers) : null;
   const need = opts.pageSize + 1 + skip.size;
   const actors =
     opts.userId && (opts.view === 'all' || opts.view === 'changes') ? await loadActors(db, opts.userId) : null;

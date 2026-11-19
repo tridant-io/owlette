@@ -431,14 +431,16 @@ describe('states', () => {
     expect(screen.getByText('no activity matches this view and these filters')).toBeInTheDocument();
   });
 
-  it('offers load more while the token is non-empty, even on an empty page, and appends', async () => {
+  it('reads past an empty page by itself, offers load more while the token is non-empty, and appends', async () => {
     const user = userEvent.setup();
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({ rows: [], next_page_token: 'tok' }))
+      .mockResolvedValueOnce(jsonResponse({ rows: [], next_page_token: 'tok-1' }))
+      .mockResolvedValueOnce(jsonResponse({ rows: [ROWS[0]], next_page_token: 'tok-2' }))
       .mockResolvedValueOnce(jsonResponse({ rows: [ROWS[2]] }));
     renderPage();
+    expect(await item('superadmin promoted')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'load more' }));
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok', {
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-2', {
       cache: 'no-store',
     });
     expect(await item('promoted user lee')).toBeInTheDocument();
