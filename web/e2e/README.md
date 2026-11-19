@@ -196,6 +196,27 @@ If two Claude Code agents run `npm run e2e` simultaneously, the emulators try to
 the same ports and one will fail to start. There is no lockfile guard yet (A3.6 deferred).
 Run E2E from one agent at a time.
 
+## Live-dev security-boundary specs
+
+`specs/security-boundary/` runs against the real dev project and dev.owlette.app, not the
+emulators. Nothing runs it automatically: run one file at a time, by hand.
+
+```bash
+cd web && npx playwright test --config=playwright.security-boundary.config.ts e2e/specs/security-boundary/major-flows.spec.ts
+```
+
+- It needs the dev admin credentials in `web/.env.local` (`FIREBASE_PROJECT_ID`,
+  `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` and the `NEXT_PUBLIC_FIREBASE_*` keys) and
+  refuses any project but `owlette-dev-3838a`.
+- Each run seeds users and a site named after the run (`user-w8-…`, `site-w8-…`) and deletes
+  them in its `finally` (`cleanup.ts`); anything it could not delete fails the test. Each run
+  first sweeps what runs that died more than a day ago left behind.
+- `rollback-rehearsal.spec.ts` and `railway-drill.spec.ts` are drills behind their own env
+  flags. The rehearsal deploys the pre-lockdown Firestore rules to dev for about a minute, then
+  restores the rules that were live when it started: run it only as a planned drill.
+- `npm run typecheck` covers this folder through `tsconfig.security-boundary.json`, because the
+  main tsconfig leaves `e2e/` out.
+
 ## CI
 
 The suite runs in GitHub Actions via `.github/workflows/e2e.yml` on every PR and push

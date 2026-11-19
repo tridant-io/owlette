@@ -9,15 +9,17 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore';
+import { cleanupRun, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
   errorCode,
   errorMessage,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
+  pushCleanup,
   resolveProjectId,
+  seedMember,
   type CheckResult,
   writeReport,
 } from './helpers';
@@ -73,18 +75,21 @@ test('live dev rejects direct browser control-plane writes post-lockdown', async
   const projectId = resolveProjectId();
   assertDevProject(projectId);
   const ids = makeRunIds('w8');
-  const adminApp = createAdminApp(projectId, `security-boundary-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
 
   let clientApp: FirebaseApp | undefined;
   let signOutAndDelete: (() => Promise<void>) | undefined;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
 
   try {
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
     await adminDb.collection('sites').doc(ids.siteId).set({
       name: 'W8.1 Security Boundary',
       owner: 'security-boundary-owner',
+      ...runSiteMark(ids.siteId),
       timezone: 'UTC',
       createdAt: FieldValue.serverTimestamp(),
     });
@@ -105,18 +110,7 @@ test('live dev rejects direct browser control-plane writes post-lockdown', async
     // `member` is deliberate: the read-only tier is exactly the actor this drill
     // is about, someone with legitimate access who must still be refused direct
     // writes.
-    await adminDb
-      .collection('sites')
-      .doc(ids.siteId)
-      .collection('members')
-      .doc(ids.uid)
-      .set({
-        uid: ids.uid,
-        role: 'member',
-        status: 'active',
-        addedAt: FieldValue.serverTimestamp(),
-        addedBy: 'security-boundary-drill',
-      });
+    await seedMember(adminDb, ids.siteId, ids.uid, 'member');
     await adminDb
       .collection('sites')
       .doc(ids.siteId)
@@ -224,6 +218,9 @@ test('live dev rejects direct browser control-plane writes post-lockdown', async
       checks,
     );
   } finally {
+    leftovers.push(...(await cleanupRun(adminDb, adminAuth, ids, [ids.uid])));
+    pushCleanup(checks, leftovers);
+
     writeReport(
       'direct-write-bypass',
       'W8.1 Direct Browser Write Bypass',
@@ -237,25 +234,8 @@ test('live dev rejects direct browser control-plane writes post-lockdown', async
       checks,
     );
 
-    await Promise.allSettled([
-      adminDb.collection('users').doc(ids.uid).collection('settings').doc('security-boundary-smoke').delete(),
-      adminDb
-        .collection('sites')
-        .doc(ids.siteId)
-        .collection('machines')
-        .doc(ids.machineId)
-        .collection('commands')
-        .doc('pending')
-        .delete(),
-      adminDb.collection('sites').doc(ids.siteId).collection('members').doc(ids.uid).delete(),
-      adminDb.collection('sites').doc(ids.siteId).collection('machines').doc(ids.machineId).delete(),
-      adminDb.collection('config').doc(ids.siteId).collection('machines').doc(ids.machineId).delete(),
-      adminDb.collection('users').doc(ids.uid).delete(),
-      adminDb.collection('sites').doc(ids.siteId).delete(),
-      adminAuth.deleteUser(ids.uid),
-    ]);
-
     await signOutAndDelete?.();
-    await adminApp.delete();
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });

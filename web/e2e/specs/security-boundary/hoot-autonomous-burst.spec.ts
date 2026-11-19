@@ -3,16 +3,19 @@ import { type Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { createHash, randomUUID } from 'node:crypto';
+import { cleanupRun, holdSecurityConfig, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
+  errorMessage,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
   pushCheck,
+  pushCleanup,
   requireEnv,
   resolveBaseUrl,
   resolveProjectId,
+  seedMember,
   type CheckResult,
   writeReport,
 } from './helpers';
@@ -144,7 +147,9 @@ async function seedHootData(
 
   await db.collection('sites').doc(ids.siteId).set({
     name: 'W8.1 Hoot Site',
-    owner: 'security-boundary-owner',
+    // no owner: plans are not enforced on a site with no payer, and a plan refusal (402) would
+    // come before the checks this drill is about
+    ...runSiteMark(ids.siteId),
     timezone: 'UTC',
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -158,6 +163,7 @@ async function seedHootData(
     mfaEnrolled: false,
     requiresMfaSetup: false,
   });
+  await seedMember(db, ids.siteId, memberUid, 'member');
 
   const batch = db.batch();
   for (const machineId of machineIds) {
@@ -267,15 +273,19 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
   const memberUid = `${ids.uid}-member`;
   const memberEmail = `${memberUid}@security-boundary.e2e`;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
   let conversationId: string | undefined;
   ensureDefaultAdminApp(projectId);
 
-  const adminApp = createAdminApp(projectId, `security-boundary-cortex-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-cortex-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
   let memberClient: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
+  let restoreSecurityConfig: Awaited<ReturnType<typeof holdSecurityConfig>> | undefined;
 
   try {
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
+    restoreSecurityConfig = await holdSecurityConfig(adminDb);
     await seedHootData(adminDb, adminAuth, ids, burstMachineIds, memberUid, memberEmail);
     memberClient = await createSignedInClient(
       adminAuth,
@@ -431,6 +441,12 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
     });
     expect(userSubjects).toHaveLength(0);
   } finally {
+    leftovers.push(...(await cleanupRun(adminDb, adminAuth, ids, [memberUid])));
+    await restoreSecurityConfig?.().catch((err: unknown) => {
+      leftovers.push(`global/security_config: ${errorMessage(err)}`);
+    });
+    pushCleanup(checks, leftovers);
+
     writeReport(
       'cortex-autonomous-burst',
       'W8.1 Hoot Member Read + Autonomous Burst',
@@ -447,15 +463,8 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
       checks,
     );
 
-    await Promise.allSettled([
-      memberClient?.signOutAndDelete(),
-      conversationId
-        ? adminDb.recursiveDelete(adminDb.collection('chat_conversations').doc(conversationId))
-        : Promise.resolve(),
-      adminDb.recursiveDelete(adminDb.collection('sites').doc(ids.siteId)),
-      adminDb.collection('users').doc(memberUid).delete(),
-      adminAuth.deleteUser(memberUid),
-    ]);
-    await adminApp.delete();
+    await Promise.allSettled([memberClient?.signOutAndDelete()]);
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });
