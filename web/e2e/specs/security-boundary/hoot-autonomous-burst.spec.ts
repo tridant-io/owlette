@@ -21,7 +21,14 @@ import {
 } from './helpers';
 import { dispatchExistingCommandAsSystem } from '@/lib/hoot/dispatch.server';
 import { Capability } from '@/lib/capabilities';
+import { WINDOW_SEC } from '@/lib/rateLimit.server';
 import { securityConfig } from '@/lib/securityConfig.server';
+
+const CALLS_PER_INVESTIGATION = 20;
+// the limiter forgets a shard's count one window after that shard's first write, and twenty calls
+// sent one after another take about a minute against dev (each waits out one result poll). sent
+// in steps, the burst ends well inside one window, so the count read afterwards is complete.
+const CALLS_PER_STEP = 4;
 
 type ApiResult = {
   status: number;
@@ -345,24 +352,29 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
     });
 
     let burstResults: unknown[] = [];
+    const burstStartedAt = Date.now();
     try {
       burstResults = (
         await Promise.all(
           burstMachineIds.map(async (machineId, investigation) => {
             const results: unknown[] = [];
-            for (let toolCall = 0; toolCall < 20; toolCall += 1) {
+            for (let first = 0; first < CALLS_PER_INVESTIGATION; first += CALLS_PER_STEP) {
               results.push(
-                await dispatchExistingCommandAsSystem(
-                  {
-                    db: adminDb,
-                    siteId: ids.siteId,
-                    machineId,
-                    chatId: `chat-${ids.runId}-${investigation}`,
-                    eventId: `event-${ids.runId}-${investigation}`,
-                  },
-                  'restart_process',
-                  { process_name: `W8Process${toolCall}.exe` },
-                ),
+                ...(await Promise.all(
+                  Array.from({ length: CALLS_PER_STEP }, (_, inStep) =>
+                    dispatchExistingCommandAsSystem(
+                      {
+                        db: adminDb,
+                        siteId: ids.siteId,
+                        machineId,
+                        chatId: `chat-${ids.runId}-${investigation}`,
+                        eventId: `event-${ids.runId}-${investigation}`,
+                      },
+                      'restart_process',
+                      { process_name: `W8Process${first + inStep}.exe` },
+                    ),
+                  ),
+                )),
               );
             }
             return results;
@@ -373,7 +385,20 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
       stopCompleter = true;
       await completer;
     }
+    const burstMs = Date.now() - burstStartedAt;
     expect(completerErrors).toEqual([]);
+
+    // the limiter runs in this process and cuts its windows in whole seconds of this clock, so
+    // only a burst a full second short of the window is sure to have restarted no shard.
+    const completeCountMs = (WINDOW_SEC - 1) * 1000;
+    pushCheck(checks, {
+      name: 'hoot burst ended inside one rate-limit window',
+      ok: burstMs < completeCountMs,
+      status: burstMs,
+    });
+    expect(burstMs, 'the burst outlasted the rate-limit window, so its count is not complete').toBeLessThan(
+      completeCountMs,
+    );
 
     pushCheck(checks, {
       name: 'hoot autonomous 3x20 burst allowed',
