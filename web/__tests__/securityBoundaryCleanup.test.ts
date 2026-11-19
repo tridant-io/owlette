@@ -10,6 +10,8 @@ import { readdirSync, readFileSync } from 'fs';
 import path from 'path';
 import type { Auth } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
+import type { Actor } from '@/lib/capabilities';
+import { rateLimitSubjectDocId, rateLimitSubjectKey } from '@/lib/rateLimit.server';
 import {
   cleanupRun,
   DEV_PROJECT_ID,
@@ -76,6 +78,7 @@ function fakeProject(
     }),
   });
   const db = {
+    doc: (docPath: string) => ref(docPath),
     collection: (name: string) => ({ ...query(name, []), doc: (id: string) => ref(`${name}/${id}`) }),
     recursiveDelete: async (target: { path: string }) => {
       failIf(target.path);
@@ -108,6 +111,11 @@ function fakeProject(
 }
 
 const row = (uid: string): Docs => ({ [`users/${uid}`]: { email: `${uid}${EMAIL}` } });
+/** a count the server keeps for a user's calls to platform routes, keyed the limiter's own way. */
+const platformShard = (uid: string) =>
+  `sites/platform_global/rate_limits/user/subjects/${rateLimitSubjectDocId(
+    rateLimitSubjectKey({ type: 'user', userId: uid } as Actor),
+  )}/capabilities/global_settings_write/shards/3`;
 
 afterEach(() => {
   jest.restoreAllMocks();
@@ -127,6 +135,7 @@ describe('cleanupRun', () => {
     'site_ids/real-site': {},
     'chat_conversations/chat-real': { siteId: 'real-site' },
     'idempotency_cache/reply-real': { userId: REAL_UID },
+    [platformShard(REAL_UID)]: { count: 4, windowStart: 1 },
   };
   const seeded = (): Docs => ({
     ...bystanders,
@@ -141,6 +150,7 @@ describe('cleanupRun', () => {
     [`site_ids/${ids.siteId}`]: {},
     'chat_conversations/chat-run': { siteId: ids.siteId },
     'idempotency_cache/reply-run': { userId: member },
+    [platformShard(superUid)]: { count: 2, windowStart: 1 },
   });
   const untouched = (project: ReturnType<typeof fakeProject>) => {
     expect(project.paths()).toEqual(Object.keys(seeded()).sort());
@@ -153,7 +163,7 @@ describe('cleanupRun', () => {
     expect(project.paths().filter((docPath) => docPath.startsWith(`users/${ids.uid}`))).toEqual([]);
   });
 
-  it('removes each user row, key lookup and auth account, and the run site, config and chats', async () => {
+  it('removes each user row, key lookup, platform rate count and auth account, and the run site, config and chats', async () => {
     const project = fakeProject(seeded(), [...all, REAL_UID]);
     await expect(cleanupRun(project.db, project.auth, ids, all)).resolves.toEqual([]);
     expect(project.paths()).toEqual(Object.keys(bystanders).sort());

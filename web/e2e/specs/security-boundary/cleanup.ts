@@ -1,6 +1,6 @@
 import type { Auth, UserRecord } from 'firebase-admin/auth';
 import type { Firestore } from 'firebase-admin/firestore';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const DEV_PROJECT_ID = 'owlette-dev-3838a';
 
@@ -48,6 +48,15 @@ export function runSiteMark(siteId: string): { e2eRun: string } {
   return { e2eRun: run[1] };
 }
 
+/**
+ * where the server counts a user's calls to platform routes: under a fixed id, so no site delete
+ * reaches it. the id is the limiter's own (`rateLimitSubjectDocId` of `user:<uid>`).
+ */
+function platformRateLimitPath(uid: string): string {
+  const subject = createHash('sha256').update(`user:${uid}`).digest('hex').slice(0, 32);
+  return `sites/platform_global/rate_limits/user/subjects/${subject}`;
+}
+
 function userDeletes(db: Firestore, auth: Auth, uid: string): Delete[] {
   if (!RUN_USER.test(uid)) throw new Error(`refusing to delete ${uid}: not a run's user id`);
   // api key lookups, and the replies the server caches for a day under the caller's Idempotency-Key
@@ -61,6 +70,7 @@ function userDeletes(db: Firestore, auth: Auth, uid: string): Delete[] {
   return [
     ownedIn('api_keys'),
     ownedIn('idempotency_cache'),
+    [`platform rate limit of ${uid}`, () => db.recursiveDelete(db.doc(platformRateLimitPath(uid)))],
     [`users/${uid}`, () => db.recursiveDelete(db.collection('users').doc(uid))],
     [
       `auth user ${uid}`,

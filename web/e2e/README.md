@@ -212,8 +212,9 @@ cd web && npx playwright test --config=playwright.security-boundary.config.ts e2
   them in its `finally` (`cleanup.ts`); anything it could not delete fails the test. Each run
   first sweeps what runs that died more than a day ago left behind.
 - `rollback-rehearsal.spec.ts` and `railway-drill.spec.ts` are drills behind their own env
-  flags. The rehearsal deploys the pre-lockdown Firestore rules to dev for about a minute, then
-  restores the rules that were live when it started: run it only as a planned drill.
+  flags. The rehearsal turns capability enforcement off on dev for a few seconds, and deploys
+  the live Firestore rules with one write opened on its own throwaway site for about a minute,
+  then restores the rules that were live when it started: run it only as a planned drill.
 - `npm run typecheck` covers this folder through `tsconfig.security-boundary.json`, because the
   main tsconfig leaves `e2e/` out.
 
