@@ -163,13 +163,13 @@ describe('loadActivityPage horizon', () => {
     decision('global/audit_log/entries/new', 5000);
     decision('global/audit_log/entries/mid', 800);
 
-    const first = await loadActivityPage(db, { view: 'refused', userId: 'u1', pageSize: 5 });
+    const first = await loadActivityPage(db, { view: 'refused', userIds: ['u1'], pageSize: 5 });
 
     // 3,200 scanned: 4499..1300, so the platform row at 800 is below the horizon and held back
     expect(ids(first.rows)).toEqual(['platform:new']);
     expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1300, ids: [] });
 
-    const second = await loadActivityPage(db, { view: 'refused', userId: 'u1', pageSize: 5, pageToken: first.nextPageToken });
+    const second = await loadActivityPage(db, { view: 'refused', userIds: ['u1'], pageSize: 5, pageToken: first.nextPageToken });
 
     expect(ids(second.rows)).toEqual(['platform:mid', 'decision:old']);
     expect(second.nextPageToken).toBe('');
@@ -254,8 +254,8 @@ describe('loadActivityPage routine rows', () => {
     routine('r1', 4500, { actor: 'machine:m1' });
     routine('r2', 4400, { actor: 'user:u1' });
 
-    const site = await loadActivityPage(db, { view: 'all', siteId: 'site-a', pageSize: 10 });
-    const user = await loadActivityPage(db, { view: 'all', userId: 'u1', pageSize: 10 });
+    const site = await loadActivityPage(db, { view: 'all', siteIds: ['site-a'], pageSize: 10 });
+    const user = await loadActivityPage(db, { view: 'all', userIds: ['u1'], pageSize: 10 });
 
     expect(ids(site.rows)).toEqual(['change:c1']);
     expect(ids(user.rows)).toEqual(['change:c1']);
@@ -369,7 +369,7 @@ describe('loadActivityPage queries', () => {
     finding('fMine', 1000, { userId: 'u1' });
     finding('fOther', 900, { userId: 'u2' });
 
-    const page = await loadActivityPage(db, { view: 'all', userId: 'u1', pageSize: 20 });
+    const page = await loadActivityPage(db, { view: 'all', userIds: ['u1'], pageSize: 20 });
 
     expect(ids(page.rows)).toEqual(['change:c1', 'change:mine', 'change:viaKey', 'change:viaHoot', 'platform:denied', 'platform:in1', 'finding:fMine']);
     const byScope = (s: string) => queries.filter((q) => q.scope === s).map((q) => q.where);
@@ -381,7 +381,7 @@ describe('loadActivityPage queries', () => {
   it('user filter: keeps the actor list inside the in-limit of 30', async () => {
     for (let i = 0; i < 40; i++) at(`users/u1/api_keys/k${i}`, {});
 
-    await loadActivityPage(db, { view: 'changes', userId: 'u1', pageSize: 20 });
+    await loadActivityPage(db, { view: 'changes', userIds: ['u1'], pageSize: 20 });
 
     const actors = queries.find((q) => q.scope === 'group:audit_log')!.where[0][2] as string[];
     expect(actors).toHaveLength(30);
@@ -396,11 +396,131 @@ describe('loadActivityPage queries', () => {
     finding('fSite', 1000, { siteId: 'site-a' });
     finding('fPlatform', 900, { siteId: null });
 
-    const page = await loadActivityPage(db, { view: 'all', siteId: 'site-a', pageSize: 20 });
+    const page = await loadActivityPage(db, { view: 'all', siteIds: ['site-a'], pageSize: 20 });
 
     expect(ids(page.rows)).toEqual(['change:c1', 'decision:d1', 'finding:fSite']);
     expect(scopes()).toEqual(['global/activity_watch/findings', 'sites/site-a/audit_log', 'sites/site-a/audit_log']);
     expect(queries.filter((q) => q.scope === 'sites/site-a/audit_log').map((q) => q.order).sort()).toEqual(['recordedAt', 'timestamp']);
+  });
+});
+
+describe('loadActivityPage with several users or sites', () => {
+  const byScope = (s: string) => queries.filter((q) => q.scope === s).map((q) => q.where);
+  const userActor = (userId: string) => ({ actor: { type: 'user', userId, role: 'admin' } });
+
+  it('several users: changes by any of their actors, decisions by actor.userId in, findings in memory', async () => {
+    at('users/u1/api_keys/k1', {});
+    change('mine', 5000, { actor: 'user:u1' });
+    change('viaKey', 4900, { actor: 'apiKey:k1' });
+    change('theirs', 4800, { actor: 'user:u2' });
+    change('theirHoot', 4700, { actor: 'cortex:user_u2' });
+    change('other', 4600, { actor: 'user:u3' });
+    decision('sites/site-a/audit_log/d2', 4000, userActor('u2'));
+    decision('sites/site-a/audit_log/d3', 3900, userActor('u3'));
+    decision('global/audit_log/entries/in1', 3000, { capability: 'AUTH_SIGN_IN', outcome: 'allow', denyReason: undefined });
+    decision('global/audit_log/entries/in3', 2900, { ...userActor('u3'), capability: 'AUTH_SIGN_IN', outcome: 'allow', denyReason: undefined });
+    finding('f1', 1000, { userId: 'u1' });
+    finding('f2', 900, { userId: 'u2' });
+    finding('f3', 800, { userId: 'u3' });
+
+    const page = await loadActivityPage(db, { view: 'all', userIds: ['u1', 'u2'], pageSize: 20 });
+
+    expect(ids(page.rows)).toEqual([
+      'change:mine',
+      'change:viaKey',
+      'change:theirs',
+      'change:theirHoot',
+      'decision:d2',
+      'platform:in1',
+      'finding:f1',
+      'finding:f2',
+    ]);
+    expect(byScope('group:audit_log')).toContainEqual([['event.actor', 'in', ['user:u1', 'cortex:user_u1', 'apiKey:k1', 'user:u2', 'cortex:user_u2']]]);
+    expect(byScope('group:audit_log')).toContainEqual([['actor.userId', 'in', ['u1', 'u2']]]);
+    expect(byScope('global/audit_log/entries')).toEqual([[['actor.userId', 'in', ['u1', 'u2']]], [['actor.userId', 'in', ['u1', 'u2']]]]);
+  });
+
+  it('splits the actors of several users past the in-limit of 30 into several queries, none dropped', async () => {
+    for (let i = 0; i < 28; i++) at(`users/u1/api_keys/k${String(i).padStart(2, '0')}`, {});
+    change('lastKey', 5000, { actor: 'apiKey:k27' });
+    change('secondUser', 4000, { actor: 'cortex:user_u2' });
+
+    const page = await loadActivityPage(db, { view: 'changes', userIds: ['u1', 'u2'], pageSize: 20 });
+
+    expect(ids(page.rows)).toEqual(['change:lastKey', 'change:secondUser']);
+    const lists = byScope('group:audit_log').map((where) => where[0][2] as string[]);
+    expect(lists.map((l) => l.length)).toEqual([30, 2]);
+    expect(lists[1]).toEqual(['user:u2', 'cortex:user_u2']);
+  });
+
+  it('several sites: reads each site collection, filters findings in memory, and leaves out platform rows', async () => {
+    change('a1', 5000, { siteId: 'site-a' });
+    change('b1', 4900, { siteId: 'site-b' });
+    change('c1', 4800, { siteId: 'site-c' });
+    decision('sites/site-b/audit_log/db', 4000);
+    decision('sites/site-c/audit_log/dc', 3900);
+    decision('global/audit_log/entries/p1', 3500);
+    decision('global/audit_log/entries/s1', 3400, { capability: 'AUTH_SIGN_IN', outcome: 'allow', denyReason: undefined });
+    finding('fa', 1000, { siteId: 'site-a' });
+    finding('fb', 900, { siteId: 'site-b' });
+    finding('fc', 800, { siteId: 'site-c' });
+    finding('fPlatform', 700, { siteId: null });
+
+    const page = await loadActivityPage(db, { view: 'all', siteIds: ['site-a', 'site-b'], pageSize: 20 });
+
+    expect(ids(page.rows)).toEqual(['change:a1', 'change:b1', 'decision:db', 'finding:fa', 'finding:fb']);
+    expect(page.rows.find((r) => r.id === 'decision:db')?.siteId).toBe('site-b');
+    expect(scopes()).toEqual([
+      'global/activity_watch/findings',
+      'sites/site-a/audit_log',
+      'sites/site-a/audit_log',
+      'sites/site-b/audit_log',
+      'sites/site-b/audit_log',
+    ]);
+  });
+
+  it('several users on several sites: each site, by any of the users or their keys', async () => {
+    at('users/u2/api_keys/k2', {});
+    change('a-u1', 5000, { siteId: 'site-a', actor: 'user:u1' });
+    change('b-key', 4900, { siteId: 'site-b', actor: 'apiKey:k2' });
+    change('b-u3', 4800, { siteId: 'site-b', actor: 'user:u3' });
+    change('c-u1', 4700, { siteId: 'site-c', actor: 'user:u1' });
+    decision('sites/site-b/audit_log/d-u2', 4000, userActor('u2'));
+    decision('sites/site-a/audit_log/d-u3', 3900, userActor('u3'));
+    finding('f-a-u1', 1000, { userId: 'u1', siteId: 'site-a' });
+    finding('f-c-u1', 900, { userId: 'u1', siteId: 'site-c' });
+    finding('f-b-u3', 800, { userId: 'u3', siteId: 'site-b' });
+
+    const page = await loadActivityPage(db, { view: 'all', userIds: ['u1', 'u2'], siteIds: ['site-a', 'site-b'], pageSize: 20 });
+
+    expect(ids(page.rows)).toEqual(['change:a-u1', 'change:b-key', 'decision:d-u2', 'finding:f-a-u1']);
+  });
+
+  it('pages through several sites sharing one millisecond with none lost or repeated', async () => {
+    for (const n of [1, 2, 3]) {
+      change(`a${n}`, 1000, { siteId: 'site-a' });
+      change(`b${n}`, 1000, { siteId: 'site-b' });
+    }
+    change('older', 900, { siteId: 'site-b' });
+
+    const seen: string[] = [];
+    let token: string | null = null;
+    let pages = 0;
+    do {
+      const page: Awaited<ReturnType<typeof loadActivityPage>> = await loadActivityPage(db, {
+        view: 'changes',
+        siteIds: ['site-a', 'site-b'],
+        pageSize: 2,
+        pageToken: token,
+      });
+      seen.push(...ids(page.rows));
+      token = page.nextPageToken || null;
+      pages += 1;
+    } while (token && pages < 20);
+
+    expect(seen).toHaveLength(7);
+    expect(new Set(seen).size).toBe(7);
+    expect(seen[seen.length - 1]).toBe('change:older');
   });
 });
 

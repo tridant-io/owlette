@@ -4,7 +4,9 @@ import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as React
 import { Check } from 'lucide-react';
 import { highlightMatch } from '@/components/admin/sites/highlightMatch';
 import { SearchRow } from '@/components/SearchRow';
+import { Checkbox } from '@/components/ui/checkbox';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
+import { CHECKBOX_ROW } from '@/components/ui/multi-select';
 import { cn } from '@/lib/utils';
 
 /** past this many sites the list has a filter */
@@ -76,7 +78,9 @@ export const siteFilterHostProps = {
  * rows, `popover` inset rows that scroll under the filter. the activity page's
  * filters list people with it too, so `noun` names what the filter searches, and
  * `leading` is their "anyone" row: on top, outside the count, and hidden while a
- * query is typed, so enter always picks a match.
+ * query is typed, so enter always picks a match. those filters take several at
+ * once: given `checkedIds`, each row is the multi-select's checkbox row with those
+ * ids checked, and `full` stops an unchecked row other than `leading` being picked.
  */
 export function SiteSwitcherList({
   sites,
@@ -85,6 +89,8 @@ export function SiteSwitcherList({
   surface,
   noun = 'sites',
   leading,
+  checkedIds,
+  full = false,
 }: {
   sites: readonly { id: string; name: string }[];
   currentSiteId?: string;
@@ -92,6 +98,8 @@ export function SiteSwitcherList({
   surface: Surface;
   noun?: string;
   leading?: { id: string; name: string };
+  checkedIds?: readonly string[];
+  full?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -177,19 +185,51 @@ export function SiteSwitcherList({
           <p className={cn('text-sm text-muted-foreground wrap-anywhere', styles.empty)}>no {noun} match “{query}”</p>
         ) : (
           shown.map((site) => {
-            const current = site.id === currentSiteId;
             // a site found by its id shows the id, so the row says why it is here
             const byIdOnly = !!needle && !site.name.toLowerCase().includes(needle);
+            const name = (
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate">{highlightMatch(site.name, query)}</span>
+                {byIdOnly && (
+                  <span className={cn('truncate text-xs text-muted-foreground', styles.id)}>
+                    {highlightMatch(site.id, query)}
+                  </span>
+                )}
+              </span>
+            );
+            if (checkedIds) {
+              const checked = checkedIds.includes(site.id);
+              // a checked row still unchecks, and the leading row still clears
+              const blocked = full && !checked && site !== leading;
+              return (
+                // the multi-select's row: the checkbox takes the focus, the arrow keys and enter's click
+                <label
+                  key={site.id}
+                  className={cn(
+                    CHECKBOX_ROW,
+                    // over its hover fill the marks take the stronger tone, for the reason given above SURFACE
+                    'dark:hover:[&_mark]:text-accent-foreground',
+                    // a blocked row takes no fill, so its marks keep their resting tone
+                    blocked && 'cursor-not-allowed opacity-50 hover:bg-transparent dark:hover:[&_mark]:text-accent-cyan',
+                  )}
+                >
+                  <Checkbox
+                    data-site-item=""
+                    checked={checked}
+                    // aria, not disabled: arrow keys still reach the row
+                    aria-disabled={blocked || undefined}
+                    onCheckedChange={() => {
+                      if (!blocked) onPick(site.id);
+                    }}
+                  />
+                  {name}
+                </label>
+              );
+            }
+            const current = site.id === currentSiteId;
             const content = (
               <>
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate">{highlightMatch(site.name, query)}</span>
-                  {byIdOnly && (
-                    <span className={cn('truncate text-xs text-muted-foreground', styles.id)}>
-                      {highlightMatch(site.id, query)}
-                    </span>
-                  )}
-                </span>
+                {name}
                 {current && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
               </>
             );

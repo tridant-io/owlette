@@ -1,5 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import logger from '@/lib/logger';
+import { FIRESTORE_IN_LIMIT } from '@/lib/logFilters';
 import { fromChangeDoc, fromDecisionDoc, fromFindingDoc } from './rows';
 import {
   ACTIVITY_FINDINGS_COLLECTION,
@@ -19,7 +20,6 @@ const SCAN_BATCH = 100;
 // a filtered source doubles its batch while the filter drops most rows, so a long stretch of
 // hidden rows (dev's old fleet session renewals, about 3,000) costs a few reads, not a page each
 const SCAN_CAP = 3200;
-const MAX_ACTORS = 30; // firestore's `in` limit
 const REFUSED = ['deny', 'error'];
 
 export class InvalidPageTokenError extends Error {
@@ -30,8 +30,9 @@ export class InvalidPageTokenError extends Error {
 
 export interface ActivityPageOptions {
   view: ActivityView;
-  userId?: string;
-  siteId?: string;
+  // any of these users, on any of these sites; none is everyone and every site
+  userIds?: readonly string[];
+  siteIds?: readonly string[];
   // when the row happened, unix ms, both bounds included
   sinceMs?: number;
   untilMs?: number;
@@ -91,16 +92,33 @@ const byTs = (q: Query, field: string, upper: number | null, lower: number | nul
     lower === null ? null : Timestamp.fromMillis(lower),
   );
 
-// decision 5: a user's changes are named `user:<uid>`, `cortex:user_<uid>` when hoot made them, or `apiKey:<id>` when a key did
-async function loadActors(db: Db, userId: string): Promise<string[]> {
-  const keys = await db
-    .collection('users')
-    .doc(userId)
-    .collection('api_keys')
-    .limit(MAX_ACTORS - 2)
-    .get();
-  return [`user:${userId}`, `cortex:user_${userId}`, ...keys.docs.map((d) => `apiKey:${d.id}`)];
+// decision 5: a user's changes are named `user:<uid>`, `cortex:user_<uid>` when hoot made them, or `apiKey:<id>` when a key did.
+// a user's keys past 28 are left out. that bounds the key reads, and keeps a user to at most 30
+// names, so ten users add at most ten `in` sources however many keys each holds
+async function loadActors(db: Db, userIds: readonly string[]): Promise<string[]> {
+  const perUser = await Promise.all(
+    userIds.map(async (userId) => {
+      const keys = await db
+        .collection('users')
+        .doc(userId)
+        .collection('api_keys')
+        .limit(FIRESTORE_IN_LIMIT - 2)
+        .get();
+      return [`user:${userId}`, `cortex:user_${userId}`, ...keys.docs.map((d) => `apiKey:${d.id}`)];
+    }),
+  );
+  return perUser.flat();
 }
+
+function chunked<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+// one id is the equality the feed always sent; several are an `in`, which firestore serves from the same index
+const anyOf = (q: Query, field: string, ids: readonly string[]): Query =>
+  ids.length === 1 ? q.where(field, '==', ids[0]) : q.where(field, 'in', ids);
 
 const isMutation = (data: Data) => (MUTATION_KINDS as readonly string[]).includes(data.event?.kind);
 const isRefused = (data: Data) => REFUSED.includes(data.outcome);
@@ -108,28 +126,35 @@ const notRoutine = (row: ActivityRow) => !ROUTINE_ACTIONS.has(row.action);
 const isAuth = (data: Data) => (AUTH_CAPABILITIES as readonly string[]).includes(data.capability);
 
 function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null): Source[] {
-  const { view, userId, siteId } = opts;
+  const { view, userIds = [], siteIds = [] } = opts;
   const lower = opts.sinceMs ?? null;
   const all = view === 'all';
   const group = db.collectionGroup('audit_log');
   const entries = db.collection('global').doc('audit_log').collection('entries');
+  const siteLog = (siteId: string) => db.collection('sites').doc(siteId).collection('audit_log');
   const sources: Source[] = [];
 
   if (all || view === 'changes') {
-    if (siteId) {
-      sources.push({
-        build: (u) => byMs(db.collection('sites').doc(siteId).collection('audit_log'), 'recordedAt', u, lower),
-        map: fromChangeDoc,
-        sparse: true,
-        keep: (r, d) => notRoutine(r) && isMutation(d) && (!actors || actors.includes(d.event?.actor)),
-      });
+    if (siteIds.length > 0) {
+      const named = actors && new Set(actors);
+      for (const siteId of siteIds) {
+        sources.push({
+          build: (u) => byMs(siteLog(siteId), 'recordedAt', u, lower),
+          map: fromChangeDoc,
+          sparse: true,
+          keep: (r, d) => notRoutine(r) && isMutation(d) && (!named || named.has(d.event?.actor)),
+        });
+      }
     } else if (actors) {
-      sources.push({
-        build: (u) => byMs(group.where('event.actor', 'in', actors), 'recordedAt', u, lower),
-        map: fromChangeDoc,
-        keep: (r, d) => notRoutine(r) && isMutation(d),
-        sparse: true,
-      });
+      // several users can name more than one `in` takes, so each slice is a source of its own
+      for (const slice of chunked(actors, FIRESTORE_IN_LIMIT)) {
+        sources.push({
+          build: (u) => byMs(group.where('event.actor', 'in', slice), 'recordedAt', u, lower),
+          map: fromChangeDoc,
+          keep: (r, d) => notRoutine(r) && isMutation(d),
+          sparse: true,
+        });
+      }
     } else {
       sources.push({
         build: (u) => byMs(group.where('event.kind', 'in', MUTATION_KINDS), 'recordedAt', u, lower),
@@ -141,16 +166,19 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
   }
 
   if (all || view === 'refused') {
-    const mine = (d: Data) => !userId || d.actor?.userId === userId;
-    if (siteId) {
-      sources.push({
-        build: (u) => byTs(db.collection('sites').doc(siteId).collection('audit_log'), 'timestamp', u, lower),
-        map: (d) => fromDecisionDoc(d, 'decision', siteId),
-        keep: (_r, d) => isRefused(d) && mine(d),
-      });
+    const mine = (d: Data) => userIds.length === 0 || userIds.includes(d.actor?.userId);
+    if (siteIds.length > 0) {
+      for (const siteId of siteIds) {
+        sources.push({
+          build: (u) => byTs(siteLog(siteId), 'timestamp', u, lower),
+          map: (d) => fromDecisionDoc(d, 'decision', siteId),
+          keep: (_r, d) => isRefused(d) && mine(d),
+        });
+      }
     } else {
-      const scoped = (q: Query) => (userId ? q.where('actor.userId', '==', userId) : q.where('outcome', 'in', REFUSED));
-      const keep = userId ? (_r: ActivityRow, d: Data) => isRefused(d) : undefined;
+      const scoped = (q: Query) =>
+        userIds.length > 0 ? anyOf(q, 'actor.userId', userIds) : q.where('outcome', 'in', REFUSED);
+      const keep = userIds.length > 0 ? (_r: ActivityRow, d: Data) => isRefused(d) : undefined;
       sources.push(
         {
           build: (u) => byTs(scoped(group), 'timestamp', u, lower),
@@ -166,17 +194,19 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
     }
   }
 
-  if ((all || view === 'sign-ins') && !siteId) {
+  if ((all || view === 'sign-ins') && siteIds.length === 0) {
     sources.push({
       build: (u) =>
         byTs(
-          userId ? entries.where('actor.userId', '==', userId) : entries.where('capability', 'in', AUTH_CAPABILITIES),
+          userIds.length > 0
+            ? anyOf(entries, 'actor.userId', userIds)
+            : entries.where('capability', 'in', AUTH_CAPABILITIES),
           'timestamp',
           u,
           lower,
         ),
       map: (d) => fromDecisionDoc(d, 'platform', null),
-      keep: userId ? (_r, d) => isAuth(d) : undefined,
+      keep: userIds.length > 0 ? (_r, d) => isAuth(d) : undefined,
     });
   }
 
@@ -186,9 +216,10 @@ function buildSources(db: Db, opts: ActivityPageOptions, actors: string[] | null
       build: (u) => byMs(db.collection(a).doc(b).collection(c), 'detectedAt', u, lower),
       map: fromFindingDoc,
       keep:
-        userId || siteId
+        userIds.length > 0 || siteIds.length > 0
           ? (_r, d) =>
-              (!userId || d.subject?.userId === userId) && (!siteId || d.subject?.siteId === siteId)
+              (userIds.length === 0 || userIds.includes(d.subject?.userId)) &&
+              (siteIds.length === 0 || siteIds.includes(d.subject?.siteId))
           : undefined,
     });
   }
@@ -286,7 +317,7 @@ export async function loadActivityPage(
   const upper = uppers.length > 0 ? Math.min(...uppers) : null;
   const need = opts.pageSize + 1 + skip.size;
   const actors =
-    opts.userId && (opts.view === 'all' || opts.view === 'changes') ? await loadActors(db, opts.userId) : null;
+    opts.userIds?.length && (opts.view === 'all' || opts.view === 'changes') ? await loadActors(db, opts.userIds) : null;
 
   const reads = await Promise.all(
     buildSources(db, opts, actors).map((s) => readSource(s, upper, need, skip)),

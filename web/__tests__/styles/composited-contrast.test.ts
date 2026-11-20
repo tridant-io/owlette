@@ -90,6 +90,10 @@ const CASES: Array<[keyof typeof THEMES, string, string[]]> = [
   ['dark', 'warning', ['card', 'warning-solid/20']],
   ['dark', 'info', ['card', 'info-solid/20']],
   ['dark', 'success', ['card', 'success/20']],
+  // a search match on a hovered checkbox row in a popover, the activity page's user and site
+  // lists: cyan comes to 4.39:1 there, so by night the mark takes the stronger tone
+  ['dark', 'accent-foreground', ['popover', 'accent/50', 'accent-cyan/25']],
+  ['light', 'foreground', ['popover', 'accent/50', 'accent-cyan/25']],
 ];
 
 describe('composited text contrast', () => {

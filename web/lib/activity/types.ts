@@ -45,6 +45,10 @@ export interface Finding {
 export const ACTIVITY_STATE_DOC = 'global/activity_watch';
 export const ACTIVITY_FINDINGS_COLLECTION = `${ACTIVITY_STATE_DOC}/findings`;
 
+// the feed takes at most this many users, and as many sites: each site is two more scans
+// per page, and the users go to firestore as one `in`, which takes 30
+export const MAX_FILTER_IDS = 10;
+
 // every MutationKind; `api_key_used` is one row per api request and stays out of the feed
 export const MUTATION_KINDS: readonly MutationKind[] = [
   'api_key_mutated',
