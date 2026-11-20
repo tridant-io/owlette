@@ -6,16 +6,17 @@ import { getDateRange, type DatePreset } from '@/lib/dateRange';
 
 /**
  * The activity feed for the superadmin page, through `/api/admin/activity` on
- * the signed-in session. A page can come back with no rows and a token, so a
- * load reads on past such pages and `hasMore` follows the token alone.
+ * the signed-in session. A page can come back short or empty with a token, so a
+ * load reads on until it has a page of rows and `hasMore` follows the token alone.
  */
 
 export type { ActivityRow, ActivityView };
 
 const PAGE_SIZE = 50;
-// a stretch of rows the feed hides comes back as pages with no rows (dev's old fleet
-// session renewals take about 9), so a load reads on until it has rows, up to this many pages
-const MAX_PAGES_PER_LOAD = 15;
+// a filter that hides most rows, or a stretch of hidden rows longer than one request scans,
+// comes back as short or empty pages, so a load reads on until it has a page of rows, up to
+// this many requests. each scans up to 3,200 rows per source, so this bounds a load's cost
+const MAX_PAGES_PER_LOAD = 5;
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
   try {
@@ -80,14 +81,16 @@ export function useActivity({
   const fetchRows = useCallback(
     async (pageToken: string, request: number) => {
       let page = await fetchPage(pageToken);
+      const rows = [...page.rows];
       for (
         let read = 1;
-        read < MAX_PAGES_PER_LOAD && page.rows.length === 0 && page.nextPageToken && request === generation.current;
+        read < MAX_PAGES_PER_LOAD && rows.length < PAGE_SIZE && page.nextPageToken && request === generation.current;
         read += 1
       ) {
         page = await fetchPage(page.nextPageToken);
+        rows.push(...page.rows);
       }
-      return page;
+      return { rows, nextPageToken: page.nextPageToken };
     },
     [fetchPage],
   );

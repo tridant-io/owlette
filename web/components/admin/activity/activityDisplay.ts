@@ -68,7 +68,9 @@ function changeWhat(row: ActivityRow): string {
   const verb = rest.join(':');
   const target = row.target?.id;
   if (kind === 'machine_command_dispatched') {
-    return `sent ${verb ? words(verb) : 'a command'}${target ? ` to ${target}` : ''}`;
+    // most command rows target the command id; every one names its machine in its attributes
+    const machine = typeof row.details.machineId === 'string' ? row.details.machineId : target;
+    return `sent ${verb ? words(verb) : 'a command'}${machine ? ` to ${machine}` : ''}`;
   }
   const noun = MUTATION_NOUN[kind] ?? words(kind);
   return `${verb ? words(verb) : 'changed'} ${noun}${target ? ` ${target}` : ''}`;

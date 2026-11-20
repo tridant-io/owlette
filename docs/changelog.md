@@ -17,7 +17,11 @@ the email sent when a machine is waiting for a reboot, an operating system updat
 
 ### changed — fleet session renewals are no longer recorded, and the activity page reads past old ones
 
-a hoot mcp sender renews its fleet session every 10 minutes, and each renewal wrote a change row. with several senders those rows filled the activity page's reach, so it showed **nothing here** with only **load more** below it. renewals are no longer recorded: the grant that allows a session, a sender dropping its grant and every fleet call made with a session still are. the rows already written stay, hidden as before, and the page now reads on past a stretch of them by itself instead of showing it as empty.
+a hoot mcp sender renews its fleet session every 10 minutes, and each renewal wrote a change row. with several senders those rows filled the activity page's reach, so it showed **nothing here** with only **load more** below it. renewals are no longer recorded: the grant that allows a session, a sender dropping its grant and every fleet call made with a session still are. the rows already written stay, hidden as before, and the page now reads on past them by itself instead of stopping at an empty or nearly empty page.
+
+### fixed — the activity page names the machine a command went to
+
+a command sent to a machine read `sent update owlette to cmd_…`, the id of the command. it now names the machine the command went to.
 
 ### added — a date range on the activity page
 

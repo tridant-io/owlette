@@ -155,19 +155,19 @@ describe('loadActivityPage merge', () => {
 
 describe('loadActivityPage horizon', () => {
   it('stops at the oldest scanned time when a filtered source hits its cap, then continues from it', async () => {
-    // 350 allow rows of u1 the refused view must scan past, newest 1349 down to 1000
-    for (let ms = 1000; ms < 1350; ms++) {
+    // 3,500 allow rows of u1 the refused view must scan past, newest 4499 down to 1000
+    for (let ms = 1000; ms < 4500; ms++) {
       decision(`sites/site-a/audit_log/a${ms}`, ms, { outcome: 'allow', denyReason: undefined });
     }
     decision('sites/site-a/audit_log/old', 500);
-    decision('global/audit_log/entries/new', 2000);
+    decision('global/audit_log/entries/new', 5000);
     decision('global/audit_log/entries/mid', 800);
 
     const first = await loadActivityPage(db, { view: 'refused', userId: 'u1', pageSize: 5 });
 
-    // 300 scanned: 1349..1050, so the platform row at 800 is below the horizon and held back
+    // 3,200 scanned: 4499..1300, so the platform row at 800 is below the horizon and held back
     expect(ids(first.rows)).toEqual(['platform:new']);
-    expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1050, ids: [] });
+    expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1300, ids: [] });
 
     const second = await loadActivityPage(db, { view: 'refused', userId: 'u1', pageSize: 5, pageToken: first.nextPageToken });
 
@@ -262,7 +262,7 @@ describe('loadActivityPage routine rows', () => {
   });
 
   it('reaches every real row behind a long run of routine ones, none lost or repeated', async () => {
-    for (let ms = 1000; ms < 1350; ms++) routine(`r${ms}`, ms);
+    for (let ms = 1000; ms < 4500; ms++) routine(`r${ms}`, ms);
     for (let n = 1; n <= 5; n++) change(`real${n}`, 100 + n);
 
     const seen: string[] = [];
@@ -280,14 +280,34 @@ describe('loadActivityPage routine rows', () => {
   });
 
   it('answers a page that scanned only routine rows with no rows and a token', async () => {
-    for (let ms = 1000; ms < 1350; ms++) routine(`r${ms}`, ms);
+    for (let ms = 1000; ms < 4500; ms++) routine(`r${ms}`, ms);
     change('real', 500);
 
     const first = await loadActivityPage(db, { view: 'changes', pageSize: 5 });
 
-    // a probe of 6, then batches of 100 until the cap: 1349 down to 1044
+    // a probe of 6, doubling until the cap of 3,200: 4499 down to 1300
     expect(first.rows).toEqual([]);
-    expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1044, ids: [] });
+    expect(JSON.parse(Buffer.from(first.nextPageToken, 'base64url').toString())).toEqual({ t: 1300, ids: [] });
+  });
+
+  it("fills the first page past dev's 3,000 old renewals in one request and a handful of reads", async () => {
+    for (let ms = 1000; ms < 4000; ms++) routine(`r${ms}`, ms);
+    for (let n = 1; n <= 5; n++) change(`real${n}`, 100 + n);
+    decision('global/audit_log/entries/p1', 50);
+
+    const page = await loadActivityPage(db, { view: 'all', pageSize: 50 });
+
+    expect(ids(page.rows)).toEqual([
+      'change:real5',
+      'change:real4',
+      'change:real3',
+      'change:real2',
+      'change:real1',
+      'platform:p1',
+    ]);
+    expect(page.nextPageToken).toBe('');
+    // a probe of 51, then doubling: 102, 204, 408, 816, and the rest of the cap
+    expect(queries.filter((q) => q.order === 'recordedAt')).toHaveLength(6);
   });
 
   it('costs one read of page size plus one when nothing is routine', async () => {
