@@ -55,7 +55,7 @@ describe('useActivity', () => {
     const one = makeRow();
     fetchMock.mockResolvedValue(page([one]));
 
-    const { result } = renderHook(() => useActivity({ view: 'changes', userId: 'uid-1', siteId: 'site-1' }));
+    const { result } = renderHook(() => useActivity({ view: 'changes', userIds: ['uid-1'], siteIds: ['site-1'] }));
     expect(result.current.loading).toBe(true);
 
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -65,6 +65,33 @@ describe('useActivity', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/admin/activity?view=changes&page_size=50&user=uid-1&site=site-1', {
       cache: 'no-store',
     });
+  });
+
+  it('repeats user and site for several of each', async () => {
+    fetchMock.mockResolvedValue(page([]));
+
+    const { result } = renderHook(() =>
+      useActivity({ view: 'all', userIds: ['uid-1', 'uid-2'], siteIds: ['site-1', 'site-2'] }),
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/admin/activity?view=all&page_size=50&user=uid-1&user=uid-2&site=site-1&site=site-2',
+      { cache: 'no-store' },
+    );
+  });
+
+  it('reads once when a render passes new lists of the same ids', async () => {
+    fetchMock.mockResolvedValue(page([]));
+
+    const { result, rerender } = renderHook(({ ids }: { ids: string[] }) => useActivity({ view: 'all', userIds: ids }), {
+      initialProps: { ids: ['uid-1', 'uid-2'] },
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    rerender({ ids: ['uid-1', 'uid-2'] });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('leaves out the filters it was not given', async () => {

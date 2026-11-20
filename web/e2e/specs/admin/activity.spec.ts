@@ -297,10 +297,16 @@ async function badges(page: Page): Promise<string[]> {
 
 // each picker opens its list in a popover named for what it lists, with a filter past ten rows
 const pickerList = (page: Page, picker: 'user' | 'site') => page.getByRole('dialog', { name: `${picker}s` });
+// and its trigger is a button with a dialog popup, as the logs page's multi-select's is. exact,
+// since playwright matches a name by part and "clear user filter" holds "user"
+const pickerButton = (page: Page, picker: 'user' | 'site') => page.getByRole('button', { name: picker, exact: true });
 
+// several can be picked, so the list stays open after a row: escape closes it, as a person would
 async function pick(page: Page, picker: 'user' | 'site', option: string) {
-  await page.getByRole('combobox', { name: picker }).click();
-  await pickerList(page, picker).getByRole('button', { name: option, exact: true }).click();
+  await pickerButton(page, picker).click();
+  await pickerList(page, picker).getByRole('checkbox', { name: option, exact: true }).click();
+  await page.keyboard.press('Escape');
+  await expect(pickerList(page, picker)).toBeHidden();
 }
 
 test.describe('the page, as a superadmin', () => {
@@ -411,13 +417,13 @@ test.describe('the page, as a superadmin', () => {
 
     await row.getByRole('button', { name: 'everything from this actor' }).click();
     await expect(page).toHaveURL(/user=admin-uid$/);
-    await expect(page.getByRole('combobox', { name: 'user' })).toHaveText(ADMIN);
+    await expect(pickerButton(page, 'user')).toHaveText(ADMIN);
     await expect(item(page, PLATFORM)).toHaveCount(0);
 
     await item(page, CHANGE).getByRole('button').click();
     await item(page, CHANGE).getByRole('button', { name: 'everything on this site' }).click();
     await expect(page).toHaveURL(/user=admin-uid&site=site-A$/);
-    await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SITE_A);
+    await expect(pickerButton(page, 'site')).toHaveText(SITE_A);
     await expect.poll(() => seededOnScreen(page)).toEqual([CHANGE, DENY]);
 
     await page.goto('/admin/activity');
@@ -502,11 +508,11 @@ test.describe('the site picker, past ten sites', () => {
 
   test('opens on a filter that finds a site by part of its name, and enter picks it', async ({ page }) => {
     await page.goto('/admin/activity');
-    await page.getByRole('combobox', { name: 'site' }).click();
+    await pickerButton(page, 'site').click();
     const list = pickerList(page, 'site');
     const filter = list.getByRole('textbox', { name: 'filter sites', exact: true });
     await expect(filter).toBeFocused();
-    await expect(list.getByRole('button', { name: 'every site', exact: true })).toHaveAttribute('aria-current', 'true');
+    await expect(list.getByRole('checkbox', { name: 'every site', exact: true })).toHaveAttribute('aria-checked', 'true');
     await attachPicture(page, list, 'site picker, dark');
     await page.emulateMedia({ colorScheme: 'light' });
     await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
@@ -514,15 +520,20 @@ test.describe('the site picker, past ten sites', () => {
     await page.emulateMedia({ colorScheme: 'dark' });
 
     await filter.pressSequentially(`pick 7 ${SUFFIX}`);
-    const rows = list.locator('[data-site-item]');
+    // each row is a checkbox square, named by the label around it
+    const rows = list.getByRole('checkbox');
     await expect(rows).toHaveCount(1);
-    await expect(rows).toHaveText(SEVENTH.name);
+    await expect(rows).toHaveAccessibleName(SEVENTH.name);
     await attachPicture(page, list, 'site picker filtered, dark');
 
     await filter.press('Enter');
     await expect(page).toHaveURL(new RegExp(`site=${SEVENTH.id}$`));
+    // checked, with the list left open for another: the first escape clears the text, the next closes
+    await expect(rows).toHaveAttribute('aria-checked', 'true');
+    await filter.press('Escape');
+    await filter.press('Escape');
     await expect(list).toBeHidden();
-    await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SEVENTH.name);
+    await expect(pickerButton(page, 'site')).toHaveText(SEVENTH.name);
   });
 });
 
@@ -536,8 +547,8 @@ test.describe('the page at a phone width', () => {
 
     const views = page.getByRole('group', { name: 'view' }).getByRole('button');
     for (const button of await views.all()) await expectFullyWithinViewport(page, button, 'a view button');
-    await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'user' }), 'the user filter');
-    await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'site' }), 'the site filter');
+    await expectFullyWithinViewport(page, pickerButton(page, 'user'), 'the user filter');
+    await expectFullyWithinViewport(page, pickerButton(page, 'site'), 'the site filter');
     await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'date range' }), 'the date range');
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
@@ -668,5 +679,167 @@ test.describe('the detection path, through the cron route', () => {
     await row.getByRole('button').click();
     await expect(row.getByText('failures', { exact: true })).toBeVisible();
     await expect(row.locator('dt:has-text("failures") + dd')).toHaveText('5');
+  });
+});
+
+// a row under site-B of this run's own, so two sites the picker lists each hold one. a machine
+// made it, so no user filter shows it. it sits among the seeded rows, so the views above never see it
+test.describe('several users and sites', () => {
+  test.use(roleState('superadmin'));
+  const SUPER = 'super@e2e.test';
+  const SITE_B = 'Site B (Unassigned)';
+  const SITE_B_CHANGE = `siteb-${SUFFIX}`;
+
+  test.beforeAll(async () => {
+    const hash = crypto.createHash('sha256').update(`siteb-${SUFFIX}`).digest('hex');
+    const ref = getAdminDb().collection('sites').doc('site-B').collection('audit_log').doc(hash);
+    seeded.push(ref);
+    await ref.set(
+      changeRow('site-B', hash, NOW - 35 * 1000, {
+        kind: 'user_mutated',
+        actor: 'machine:kiosk-b',
+        target: SITE_B_CHANGE,
+        verb: 'promoted',
+      }),
+    );
+  });
+
+  test('two users narrow the list to both, and the x clears them', async ({ page }) => {
+    await page.goto('/admin/activity');
+    await expect(item(page, SECOND_FACTOR)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'clear user filter' })).toHaveCount(0);
+
+    const picker = pickerButton(page, 'user');
+    await picker.click();
+    const list = pickerList(page, 'user');
+    await list.getByRole('checkbox', { name: ADMIN, exact: true }).click();
+    await expect(page).toHaveURL(/user=admin-uid$/);
+    await list.getByRole('checkbox', { name: SUPER, exact: true }).click();
+    await expect(page).toHaveURL(/user=admin-uid&user=super-uid$/);
+    await expect(list.getByRole('checkbox', { name: ADMIN, exact: true })).toHaveAttribute('aria-checked', 'true');
+    await expect(list.getByRole('checkbox', { name: 'anyone', exact: true })).toHaveAttribute('aria-checked', 'false');
+    await page.keyboard.press('Escape');
+    await expect(list).toBeHidden();
+
+    await expect(picker).toHaveText('2 users');
+    await expect.poll(() => seededOnScreen(page)).toEqual([HIGH, CHANGE, PLATFORM, DENY, SIGN_IN, SECOND_FACTOR]);
+    await expect(item(page, DIGEST)).toHaveCount(0);
+    await expect(item(page, SITE_B_CHANGE)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'clear user filter' }).click();
+    await expect(page).toHaveURL(/\/admin\/activity$/);
+    await expect(picker).toHaveText('anyone');
+    await expect(picker).toBeFocused();
+    await expect(page.getByRole('button', { name: 'clear user filter' })).toHaveCount(0);
+    await expect(item(page, DIGEST)).toBeVisible();
+  });
+
+  test('two sites narrow the list to both, and the x clears them', async ({ page }) => {
+    await page.goto('/admin/activity');
+    await expect(item(page, SECOND_FACTOR)).toBeVisible();
+
+    const picker = pickerButton(page, 'site');
+    await picker.click();
+    const list = pickerList(page, 'site');
+    await list.getByRole('checkbox', { name: SITE_A, exact: true }).click();
+    await expect(page).toHaveURL(/site=site-A$/);
+    await list.getByRole('checkbox', { name: SITE_B, exact: true }).click();
+    await expect(page).toHaveURL(/site=site-A&site=site-B$/);
+    await page.keyboard.press('Escape');
+    await expect(list).toBeHidden();
+
+    await expect(picker).toHaveText('2 sites');
+    await expect(item(page, SITE_B_CHANGE)).toBeVisible();
+    await expect.poll(() => seededOnScreen(page)).toEqual([DIGEST, CHANGE, DENY]);
+    await expect(item(page, PLATFORM)).toHaveCount(0);
+    await expect(item(page, SIGN_IN)).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'clear site filter' }).click();
+    await expect(page).toHaveURL(/\/admin\/activity$/);
+    await expect(picker).toHaveText('every site');
+    await expect(picker).toBeFocused();
+    await expect(item(page, PLATFORM)).toBeVisible();
+  });
+
+  test('at ten picked the rest of the list is dimmed and says so, and a dimmed row picks nothing', async ({ page }) => {
+    // two real people and eight ids no list has loaded, which the page shows as themselves
+    const ten = ['admin-uid', 'super-uid', ...Array.from({ length: 8 }, (_, i) => `picked-${i}-${SUFFIX}`)];
+    await page.goto(`/admin/activity?${ten.map((id) => `user=${id}`).join('&')}`);
+    const picker = pickerButton(page, 'user');
+    await expect(picker).toHaveText('10 users');
+
+    await picker.click();
+    const list = pickerList(page, 'user');
+    await expect(list.getByText('at most 10 users', { exact: true })).toBeVisible();
+    const member = list.getByRole('checkbox', { name: 'member@e2e.test', exact: true });
+    await expect(member).toHaveAttribute('aria-disabled', 'true');
+    await expect(member).toHaveAttribute('aria-checked', 'false');
+    await expect(list.getByRole('checkbox', { name: ADMIN, exact: true })).not.toHaveAttribute('aria-disabled');
+    await expect(list.getByRole('checkbox', { name: 'anyone', exact: true })).not.toHaveAttribute('aria-disabled');
+
+    // forced: playwright waits on a disabled control, and on the row that labels it, but a person can still click
+    const url = page.url();
+    await member.locator('xpath=..').click({ force: true });
+    await expect(member).toHaveAttribute('aria-checked', 'false');
+    expect(page.url()).toBe(url);
+
+    // dropping one frees the rest. the open list hides the page behind it, so the trigger is read once it closes
+    await list.getByRole('checkbox', { name: ADMIN, exact: true }).click();
+    await expect(page).not.toHaveURL(/user=admin-uid/);
+    await expect(member).not.toHaveAttribute('aria-disabled');
+    await expect(list.getByText('at most 10 users', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(picker).toHaveText('9 users');
+  });
+
+  for (const [picker, any, query] of [
+    ['user', 'anyone', 'user=admin-uid&user=super-uid'],
+    ['site', 'every site', 'site=site-A&site=site-B'],
+  ] as const) {
+    test(`"${any}" clears every ${picker} picked and leaves the list open`, async ({ page }) => {
+      await page.goto(`/admin/activity?${query}`);
+      await expect(pickerButton(page, picker)).toHaveText(`2 ${picker}s`);
+      await pickerButton(page, picker).click();
+      const list = pickerList(page, picker);
+      const leading = list.getByRole('checkbox', { name: any, exact: true });
+      await expect(leading).toHaveAttribute('aria-checked', 'false');
+
+      await leading.click();
+      await expect(page).toHaveURL(/\/admin\/activity$/);
+      await expect(list).toBeVisible();
+      await expect(leading).toHaveAttribute('aria-checked', 'true');
+      await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(1);
+      await page.keyboard.press('Escape');
+      await expect(pickerButton(page, picker)).toHaveText(any);
+    });
+  }
+
+  test.describe('at a phone width', () => {
+    test.use({ viewport: { width: 390, height: 844 } });
+
+    test('each picker and its x fit, and the x keeps clear of the text and the chevron', async ({ page }) => {
+      await page.goto('/admin/activity?user=admin-uid&user=super-uid&site=site-A&site=site-B');
+      await expect(pickerButton(page, 'user')).toHaveText('2 users');
+      await expect(pickerButton(page, 'site')).toHaveText('2 sites');
+      await assertNoHorizontalOverflow(page);
+
+      for (const name of ['user', 'site'] as const) {
+        const trigger = pickerButton(page, name);
+        const clear = page.getByRole('button', { name: `clear ${name} filter` });
+        await expectFullyWithinViewport(page, trigger, `the ${name} filter`);
+        await expectFullyWithinViewport(page, clear, `the ${name} filter's x`);
+        const x = (await clear.boundingBox())!;
+        const box = (await trigger.boundingBox())!;
+        const chevron = (await trigger.locator('svg').boundingBox())!;
+        // the text stops where its padding for the x starts
+        const text = await trigger.locator('span').first().evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return r.right - parseFloat(getComputedStyle(el).paddingRight);
+        });
+        expect(x.x, `the ${name} x starts inside the trigger`).toBeGreaterThanOrEqual(box.x);
+        expect(x.x + x.width, `the ${name} x ends before the chevron`).toBeLessThanOrEqual(chevron.x);
+        expect(text, `the ${name} text ends before the x`).toBeLessThanOrEqual(x.x);
+      }
+    });
   });
 });

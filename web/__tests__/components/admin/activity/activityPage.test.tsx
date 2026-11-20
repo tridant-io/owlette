@@ -12,6 +12,7 @@ import React from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { CHECKBOX_ROW } from '@/components/ui/multi-select';
 import ActivityPage from '@/app/admin/activity/page';
 import type { ActivityRow } from '@/lib/activity/types';
 
@@ -215,6 +216,9 @@ function renderPage() {
   );
 }
 
+// a picker row's text: the label around its checkbox square, which holds none of its own
+const rowText = (checkbox: Element) => checkbox.closest('label')?.textContent;
+
 async function item(text: RegExp | string) {
   const list = await screen.findByRole('list', { name: 'activity' });
   return within(list)
@@ -401,16 +405,17 @@ describe('the filters', () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
-    await user.click(screen.getByRole('combobox', { name: 'user' }));
+    await user.click(screen.getByRole('button', { name: 'user' }));
     const list = await screen.findByRole('dialog', { name: 'users' });
     // ten or fewer to pick from, so no filter, as in the site switcher
     expect(within(list).queryByRole('textbox')).toBeNull();
-    const rows = within(list).getAllByRole('button').map((b) => b.textContent);
+    const rows = within(list).getAllByRole('checkbox').map(rowText);
     expect(rows).toEqual(['anyone', 'ana@tridant.example', 'sam@lumenevents.example']);
-    expect(within(list).getByRole('button', { name: 'anyone' })).toHaveAttribute('aria-current', 'true');
-    await user.click(within(list).getByRole('button', { name: 'sam@lumenevents.example' }));
+    expect(within(list).getByRole('checkbox', { name: 'anyone' })).toBeChecked();
+    await user.click(within(list).getByRole('checkbox', { name: 'sam@lumenevents.example' }));
     expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-sam', { scroll: false });
-    expect(screen.queryByRole('dialog', { name: 'users' })).toBeNull();
+    // several can be picked, so the list stays open
+    expect(screen.getByRole('dialog', { name: 'users' })).toBeInTheDocument();
   });
 
   it('past ten users the list opens on a filter that finds a user by part of an email', async () => {
@@ -421,14 +426,14 @@ describe('the filters', () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
-    await user.click(screen.getByRole('combobox', { name: 'user' }));
+    await user.click(screen.getByRole('button', { name: 'user' }));
     const list = await screen.findByRole('dialog', { name: 'users' });
     const filter = within(list).getByRole('textbox', { name: 'filter users' });
     await waitFor(() => expect(filter).toHaveFocus());
 
     await user.type(filter, 'lumen');
     // the match is marked mid-word, which jsdom spaces apart in a row's name, so this reads the text
-    const rows = () => Array.from(list.querySelectorAll('[data-site-item]'), (b) => b.textContent);
+    const rows = () => Array.from(list.querySelectorAll('[data-site-item]'), rowText);
     expect(rows()).toEqual(['sam@lumenevents.example']);
 
     await user.clear(filter);
@@ -449,14 +454,14 @@ describe('the filters', () => {
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
     // the arrow opens the list, as on a select
-    screen.getByRole('combobox', { name: 'user' }).focus();
+    screen.getByRole('button', { name: 'user' }).focus();
     await user.keyboard('{ArrowDown}');
     const list = await screen.findByRole('dialog', { name: 'users' });
     const filter = within(list).getByRole('textbox', { name: 'filter users' });
     await waitFor(() => expect(filter).toHaveFocus());
 
     await user.type(filter, 'an');
-    expect(Array.from(list.querySelectorAll('[data-site-item]'), (b) => b.textContent)).toEqual(['ana@tridant.example']);
+    expect(Array.from(list.querySelectorAll('[data-site-item]'), rowText)).toEqual(['ana@tridant.example']);
     await user.keyboard('{Enter}');
     expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-ana', { scroll: false });
   });
@@ -469,9 +474,9 @@ describe('the filters', () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
-    await user.click(screen.getByRole('combobox', { name: 'user' }));
+    await user.click(screen.getByRole('button', { name: 'user' }));
     const list = await screen.findByRole('dialog', { name: 'users' });
-    expect(within(list).getAllByRole('button')).toHaveLength(11);
+    expect(within(list).getAllByRole('checkbox')).toHaveLength(11);
     expect(within(list).queryByRole('textbox')).toBeNull();
   });
 
@@ -480,12 +485,12 @@ describe('the filters', () => {
     mockSearch = 'user=uid-gone';
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
-    const trigger = screen.getByRole('combobox', { name: 'user' });
+    const trigger = screen.getByRole('button', { name: 'user' });
     expect(trigger).toHaveTextContent('uid-gone');
     await user.click(trigger);
     const list = await screen.findByRole('dialog', { name: 'users' });
-    expect(within(list).getByRole('button', { name: 'uid-gone' })).toHaveAttribute('aria-current', 'true');
-    await user.click(within(list).getByRole('button', { name: 'anyone' }));
+    expect(within(list).getByRole('checkbox', { name: 'uid-gone' })).toBeChecked();
+    await user.click(within(list).getByRole('checkbox', { name: 'anyone' }));
     expect(mockReplace).toHaveBeenCalledWith('/admin/activity', { scroll: false });
   });
 
@@ -494,13 +499,184 @@ describe('the filters', () => {
     mockSearch = 'site=site-harbor';
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
-    const trigger = screen.getByRole('combobox', { name: 'site' });
+    const trigger = screen.getByRole('button', { name: 'site' });
     expect(trigger).toHaveTextContent('harbor museum');
     await user.click(trigger);
     const list = await screen.findByRole('dialog', { name: 'sites' });
-    expect(within(list).getByRole('button', { name: 'harbor museum' })).toHaveAttribute('aria-current', 'true');
-    await user.click(within(list).getByRole('button', { name: 'every site' }));
+    expect(within(list).getByRole('checkbox', { name: 'harbor museum' })).toBeChecked();
+    await user.click(within(list).getByRole('checkbox', { name: 'every site' }));
     expect(mockReplace).toHaveBeenCalledWith('/admin/activity', { scroll: false });
+  });
+});
+
+describe('several users and sites', () => {
+  beforeEach(() => fetchMock.mockResolvedValue(jsonResponse({ rows: [] })));
+
+  const CREW = Array.from({ length: 10 }, (_, i) => ({ uid: `uid-crew-${i}`, email: `crew${i}@venue.example` }));
+
+  it('opens its list as the multi-select does: a button with a dialog popup, not a combobox', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.queryByRole('combobox', { name: 'user' })).toBeNull();
+    const trigger = screen.getByRole('button', { name: 'user' });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await user.click(trigger);
+    expect(await screen.findByRole('dialog', { name: 'users' })).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('keeps the first ten of more ids pasted into the url, so the page loads instead of failing', async () => {
+    mockUsers = [...TWO_USERS, ...CREW];
+    const eleven = [...CREW.map((c) => c.uid), 'uid-sam'];
+    mockSearch = `${eleven.map((id) => `user=${id}`).join('&')}&site=site-lumen`;
+    renderPage();
+    expect(screen.getByRole('button', { name: 'user' })).toHaveTextContent('10 users');
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        `/api/admin/activity?view=all&page_size=50&${CREW.map((c) => `user=${c.uid}`).join('&')}&site=site-lumen`,
+        { cache: 'no-store' },
+      ),
+    );
+  });
+
+  it('reads several users and sites from the url into the request', async () => {
+    mockSearch = 'user=uid-sam&user=uid-ana&site=site-lumen&site=site-harbor';
+    renderPage();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/admin/activity?view=all&page_size=50&user=uid-sam&user=uid-ana&site=site-lumen&site=site-harbor',
+        { cache: 'no-store' },
+      ),
+    );
+  });
+
+  it("draws each row as the logs page's multi-select does: its checkbox square first, and no trailing check", async () => {
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-sam';
+    renderPage();
+    await user.click(screen.getByRole('button', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+
+    for (const box of within(list).getAllByRole('checkbox')) {
+      const row = box.closest('label')!;
+      expect(row.firstElementChild).toBe(box);
+      expect(row).toHaveClass(CHECKBOX_ROW);
+      expect(box).toHaveAttribute('data-state', box.getAttribute('aria-checked') === 'true' ? 'checked' : 'unchecked');
+      // no trailing check: any icon in the row is the square's own
+      for (const icon of row.querySelectorAll('svg')) expect(box).toContainElement(icon as unknown as HTMLElement);
+    }
+    expect(within(list).getByRole('checkbox', { name: 'sam@lumenevents.example' })).toHaveAttribute('data-state', 'checked');
+    expect(within(list).getByRole('checkbox', { name: 'anyone' })).toHaveAttribute('data-state', 'unchecked');
+  });
+
+  it('a row adds a user beside the ones picked, and the list stays open', async () => {
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-sam';
+    renderPage();
+    const trigger = screen.getByRole('button', { name: 'user' });
+    expect(trigger).toHaveTextContent('sam@lumenevents.example');
+    await user.click(trigger);
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    expect(within(list).getByRole('checkbox', { name: 'anyone' })).not.toBeChecked();
+    expect(within(list).getByRole('checkbox', { name: 'sam@lumenevents.example' })).toBeChecked();
+
+    await user.click(within(list).getByRole('checkbox', { name: 'ana@tridant.example' }));
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-sam&user=uid-ana', { scroll: false });
+    expect(screen.getByRole('dialog', { name: 'users' })).toBeInTheDocument();
+  });
+
+  it('counts several on the trigger, a checked row drops its user, and anyone clears them all', async () => {
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-sam&user=uid-ana&site=site-lumen&site=site-harbor';
+    renderPage();
+    expect(screen.getByRole('button', { name: 'user' })).toHaveTextContent('2 users');
+    expect(screen.getByRole('button', { name: 'site' })).toHaveTextContent('2 sites');
+
+    await user.click(screen.getByRole('button', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    expect(within(list).getByRole('checkbox', { name: 'ana@tridant.example' })).toBeChecked();
+    await user.click(within(list).getByRole('checkbox', { name: 'sam@lumenevents.example' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?user=uid-ana&site=site-lumen&site=site-harbor', {
+      scroll: false,
+    });
+    await user.click(within(list).getByRole('checkbox', { name: 'anyone' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?site=site-lumen&site=site-harbor', { scroll: false });
+  });
+
+  it('enter toggles the first match, off as well as on', async () => {
+    mockUsers = [...TWO_USERS, ...CREW];
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-ana&user=uid-crew-1';
+    renderPage();
+    await user.click(screen.getByRole('button', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    const filter = within(list).getByRole('textbox', { name: 'filter users' });
+    await waitFor(() => expect(filter).toHaveFocus());
+
+    await user.type(filter, 'tridant{Enter}');
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?user=uid-crew-1', { scroll: false });
+    expect(screen.getByRole('dialog', { name: 'users' })).toBeInTheDocument();
+  });
+
+  it('has an x beside each picker only while it filters, which clears it and hands focus back', async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderPage();
+    expect(screen.queryByRole('button', { name: 'clear user filter' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'clear site filter' })).toBeNull();
+    unmount();
+
+    mockSearch = 'view=changes&user=uid-sam&user=uid-ana&site=site-lumen';
+    renderPage();
+    await user.click(screen.getByRole('button', { name: 'clear user filter' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?view=changes&site=site-lumen', { scroll: false });
+    expect(screen.getByRole('button', { name: 'user' })).toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'clear site filter' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?view=changes&user=uid-sam&user=uid-ana', {
+      scroll: false,
+    });
+    expect(screen.getByRole('button', { name: 'site' })).toHaveFocus();
+  });
+
+  it('stops at ten users: the rest are disabled, it says so, and a picked one still drops', async () => {
+    mockUsers = [...TWO_USERS, ...CREW];
+    const user = userEvent.setup();
+    mockSearch = CREW.map((c) => `user=${c.uid}`).join('&');
+    renderPage();
+    expect(screen.getByRole('button', { name: 'user' })).toHaveTextContent('10 users');
+    await user.click(screen.getByRole('button', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    expect(within(list).getByText('at most 10 users')).toBeInTheDocument();
+
+    const sam = within(list).getByRole('checkbox', { name: 'sam@lumenevents.example' });
+    expect(sam).toHaveAttribute('aria-disabled', 'true');
+    await user.click(sam);
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    await user.click(within(list).getByRole('checkbox', { name: 'crew0@venue.example' }));
+    expect(mockReplace).toHaveBeenCalledWith(
+      `/admin/activity?${CREW.slice(1)
+        .map((c) => `user=${c.uid}`)
+        .join('&')}`,
+      { scroll: false },
+    );
+  });
+
+  it('a row shortcut narrows to just that one person or site', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ rows: ROWS }));
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-ana&user=uid-kai&site=site-harbor&site=site-lumen';
+    renderPage();
+    await user.click(await item('promoted user lee'));
+    await user.click(screen.getByRole('button', { name: 'everything from this actor' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?user=uid-sam&site=site-harbor&site=site-lumen', {
+      scroll: false,
+    });
+    await user.click(screen.getByRole('button', { name: 'everything on this site' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/activity?user=uid-ana&user=uid-kai&site=site-lumen', {
+      scroll: false,
+    });
   });
 });
 

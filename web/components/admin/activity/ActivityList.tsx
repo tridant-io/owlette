@@ -1,7 +1,7 @@
 'use client';
 
-import { useId, useMemo, useState } from 'react';
-import { Activity as ActivityIcon, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Activity as ActivityIcon, ChevronDown, Loader2, RefreshCw, X } from 'lucide-react';
 import { useActivity, type ActivityRow, type ActivityView } from '@/hooks/useActivity';
 import { useSites } from '@/hooks/useFirestore';
 import { useUserManagement } from '@/hooks/useUserManagement';
@@ -16,7 +16,9 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MAX_FILTER_IDS } from '@/lib/activity/types';
 import { DATE_PRESETS, fromYMD, toYMD, type DatePreset } from '@/lib/dateRange';
+import { cn } from '@/lib/utils';
 import {
   kindLabel,
   rowFacts,
@@ -32,8 +34,9 @@ export const ACTIVITY_VIEWS: readonly ActivityView[] = ['all', 'flagged', 'chang
 
 export interface ActivityFilters {
   view: ActivityView;
-  userId?: string;
-  siteId?: string;
+  // any of these; none is everyone, and every site
+  userIds: string[];
+  siteIds: string[];
   datePreset: DatePreset;
   // yyyy-mm-dd, read only when datePreset is custom
   dateFrom?: string;
@@ -191,7 +194,14 @@ function ActivityResults({
                 open={openId === row.id}
                 siteNames={siteNames}
                 onToggle={() => setOpenId(openId === row.id ? null : row.id)}
-                onFilter={(next) => onFilter({ ...filters, view: 'all', ...next })}
+                onFilter={({ userId, siteId }) =>
+                  onFilter({
+                    ...filters,
+                    view: 'all',
+                    userIds: userId ? [userId] : filters.userIds,
+                    siteIds: siteId ? [siteId] : filters.siteIds,
+                  })
+                }
               />
             ))}
           </ul>
@@ -218,72 +228,104 @@ function ActivityResults({
   );
 }
 
-// a select with the site switcher's filter, as owlette swoop's site picker is: a combobox
-// that opens the list in a popover, styled as the date range's select trigger beside it
+// the site switcher's list with its filter, in a popover as owlette swoop's site picker has it,
+// behind a trigger styled as the date range's select beside it. it takes several, so a row
+// toggles and the list stays open, and its trigger names and announces them as the logs
+// page's multi-select does. while it filters, an x on the trigger clears it, placed and drawn
+// as the sites page's filter places and draws its own
 function FilterPicker({
   label,
   noun,
   anyLabel,
-  value,
+  values,
   options,
   onChange,
 }: {
   label: string;
   noun: string;
   anyLabel: string;
-  value?: string;
+  values: string[];
   options: { value: string; label: string }[];
-  onChange: (next?: string) => void;
+  onChange: (next: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const listId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const items = useMemo(() => {
     // an id from the url that the list has not loaded yet still shows as itself
-    const known = value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options;
-    return known.map((o) => ({ id: o.value, name: o.label }));
-  }, [options, value]);
+    const known = new Set(options.map((o) => o.value));
+    const unknown = values.filter((v) => !known.has(v)).map((v) => ({ value: v, label: v }));
+    return [...options, ...unknown].map((o) => ({ id: o.value, name: o.label }));
+  }, [options, values]);
   const leading = useMemo(() => ({ id: ANY, name: anyLabel }), [anyLabel]);
-  const current = value ?? ANY;
+  const full = values.length >= MAX_FILTER_IDS;
+  const shown =
+    values.length === 0
+      ? anyLabel
+      : values.length === 1
+        ? items.find((i) => i.id === values[0])?.name
+        : `${values.length} ${noun}`;
   return (
-    <Popover modal open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
+    <div className="relative min-w-0 flex-1 basis-36 md:w-52 md:flex-none">
+      <Popover modal open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            ref={triggerRef}
+            type="button"
+            // not a combobox: it opens a panel of checkboxes, as the multi-select's trigger does
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-label={label}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowDown') return;
+              e.preventDefault();
+              setOpen(true);
+            }}
+            className="flex h-9 w-full min-w-0 items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50"
+          >
+            {/* room on its right for the x, which sits on the trigger beside the chevron */}
+            <span className={cn('truncate', values.length > 0 && 'pr-6')}>{shown}</span>
+            <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground opacity-50" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          aria-label={noun}
+          className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
+          {...siteFilterHostProps}
+        >
+          <SiteSwitcherList
+            surface="popover"
+            noun={noun}
+            sites={items}
+            leading={leading}
+            checkedIds={values.length > 0 ? values : [ANY]}
+            full={full}
+            onPick={(id) =>
+              onChange(id === ANY ? [] : values.includes(id) ? values.filter((v) => v !== id) : [...values, id])
+            }
+          />
+          {full && (
+            <p className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+              at most {MAX_FILTER_IDS} {noun}
+            </p>
+          )}
+        </PopoverContent>
+      </Popover>
+      {/* beside the trigger, not in it: a button inside a button is not valid html */}
+      {values.length > 0 && (
         <button
           type="button"
-          role="combobox"
-          aria-label={label}
-          aria-expanded={open}
-          aria-controls={open ? listId : undefined}
-          onKeyDown={(e) => {
-            if (e.key !== 'ArrowDown') return;
-            e.preventDefault();
-            setOpen(true);
+          aria-label={`clear ${label} filter`}
+          onClick={() => {
+            onChange([]);
+            triggerRef.current?.focus();
           }}
-          className="flex h-9 min-w-0 flex-1 basis-36 items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:w-52 md:flex-none dark:bg-input/30 dark:hover:bg-input/50"
+          className="absolute right-9 top-1/2 -translate-y-1/2 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
         >
-          <span className="truncate">{value ? items.find((i) => i.id === value)?.name : anyLabel}</span>
-          <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground opacity-50" />
+          <X className="h-3.5 w-3.5" />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        id={listId}
-        align="start"
-        aria-label={noun}
-        className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
-        {...siteFilterHostProps}
-      >
-        <SiteSwitcherList
-          surface="popover"
-          noun={noun}
-          sites={items}
-          leading={leading}
-          currentSiteId={current}
-          onPick={(next) => {
-            setOpen(false);
-            onChange(next === ANY ? undefined : next);
-          }}
-        />
-      </PopoverContent>
-    </Popover>
+      )}
+    </div>
   );
 }
 
@@ -389,23 +431,23 @@ export function ActivityList({
               label="user"
               noun="users"
               anyLabel="anyone"
-              value={filters.userId}
+              values={filters.userIds}
               options={userOptions}
-              onChange={(userId) => onFiltersChange({ ...filters, userId })}
+              onChange={(userIds) => onFiltersChange({ ...filters, userIds })}
             />
             <FilterPicker
               label="site"
               noun="sites"
               anyLabel="every site"
-              value={filters.siteId}
+              values={filters.siteIds}
               options={siteOptions}
-              onChange={(siteId) => onFiltersChange({ ...filters, siteId })}
+              onChange={(siteIds) => onFiltersChange({ ...filters, siteIds })}
             />
           </div>
           <DateRangeFilter filters={filters} onChange={onFiltersChange} />
         </div>
         <ActivityResults
-          key={`${filters.view}:${filters.userId ?? ''}:${filters.siteId ?? ''}:${filters.datePreset}:${filters.dateFrom ?? ''}:${filters.dateTo ?? ''}:${reloads}`}
+          key={`${filters.view}:${filters.userIds.join(',')}:${filters.siteIds.join(',')}:${filters.datePreset}:${filters.dateFrom ?? ''}:${filters.dateTo ?? ''}:${reloads}`}
           filters={filters}
           siteNames={siteNames}
           onFilter={onFiltersChange}

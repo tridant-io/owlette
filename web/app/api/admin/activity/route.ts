@@ -7,16 +7,16 @@
  * feed writes no audit row of its own.
  *
  * Params: view (all | flagged | changes | refused | sign-ins, default all),
- * user (uid), site (site id), since and until (unix ms or iso 8601, both
- * included), page_size (1..100, default 50), page_token (opaque; a page can be
- * empty and still carry a token).
+ * user (uid) and site (site id), each repeated for up to 10 of them, since and
+ * until (unix ms or iso 8601, both included), page_size (1..100, default 50),
+ * page_token (opaque; a page can be empty and still carry a token).
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { problemFromError, problemValidation } from '@/lib/apiErrors';
 import { InvalidPageTokenError, loadActivityPage } from '@/lib/activity/feed.server';
 import { loadUserLabels } from '@/lib/activity/labels.server';
-import type { ActivityView } from '@/lib/activity/types';
+import { MAX_FILTER_IDS, type ActivityView } from '@/lib/activity/types';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { parsePagination, withPaginationFields } from '@/lib/pagination';
 import { parseTimestampQuery } from '@/lib/timestampQuery';
@@ -26,6 +26,18 @@ const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 100;
 const VIEWS: readonly ActivityView[] = ['all', 'flagged', 'changes', 'refused', 'sign-ins'];
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** a repeated `user` or `site` param: each id once, every one an id, at most MAX_FILTER_IDS of them */
+function parseIds(sp: URLSearchParams, param: 'user' | 'site'): string[] | NextResponse {
+  const ids = [...new Set(sp.getAll(param))];
+  if (!ids.every((id) => ID_RE.test(id))) {
+    return problemValidation(`invalid ${param}`, { [`query.${param}`]: [`must be a ${param} id`] });
+  }
+  if (ids.length > MAX_FILTER_IDS) {
+    return problemValidation(`too many ${param}s`, { [`query.${param}`]: [`at most ${MAX_FILTER_IDS} ${param}s`] });
+  }
+  return ids;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -41,14 +53,10 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const userId = sp.get('user') ?? undefined;
-    if (userId !== undefined && !ID_RE.test(userId)) {
-      return problemValidation('invalid user', { 'query.user': ['must be a user id'] });
-    }
-    const siteId = sp.get('site') ?? undefined;
-    if (siteId !== undefined && !ID_RE.test(siteId)) {
-      return problemValidation('invalid site', { 'query.site': ['must be a site id'] });
-    }
+    const userIds = parseIds(sp, 'user');
+    if (userIds instanceof NextResponse) return userIds;
+    const siteIds = parseIds(sp, 'site');
+    if (siteIds instanceof NextResponse) return siteIds;
 
     const sinceMs = parseTimestampQuery(sp, 'since');
     if (sinceMs instanceof NextResponse) return sinceMs;
@@ -70,8 +78,8 @@ export async function GET(request: NextRequest) {
     const db = getAdminDb();
     const page = await loadActivityPage(db, {
       view: view as ActivityView,
-      userId,
-      siteId,
+      userIds,
+      siteIds,
       sinceMs,
       untilMs,
       pageSize,

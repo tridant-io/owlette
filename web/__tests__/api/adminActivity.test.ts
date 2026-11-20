@@ -102,8 +102,8 @@ describe('GET /api/admin/activity', () => {
     expect(body).toEqual({ rows: [], next_page_token: '', nextPageToken: '' });
     expect(mockLoadActivityPage).toHaveBeenCalledWith(expect.anything(), {
       view: 'all',
-      userId: undefined,
-      siteId: undefined,
+      userIds: [],
+      siteIds: [],
       pageSize: 50,
       pageToken: null,
     });
@@ -159,8 +159,30 @@ describe('GET /api/admin/activity', () => {
     await list('?user=uid_1&site=site-a');
     expect(mockLoadActivityPage).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ userId: 'uid_1', siteId: 'site-a' }),
+      expect.objectContaining({ userIds: ['uid_1'], siteIds: ['site-a'] }),
     );
+  });
+
+  it('passes repeated user and site params to the feed as lists, each id once', async () => {
+    signIn('staff-1', 'superadmin');
+    await list('?user=uid_1&user=uid_2&user=uid_1&site=site-a&site=site-b');
+    expect(mockLoadActivityPage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userIds: ['uid_1', 'uid_2'], siteIds: ['site-a', 'site-b'] }),
+    );
+  });
+
+  it.each(['user', 'site'])('takes ten %s ids and 400s eleven', async (param) => {
+    signIn('staff-1', 'superadmin');
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `${param}=id-${i}`).join('&');
+
+    expect((await list(`?${ids(10)}`)).res.status).toBe(200);
+
+    mockLoadActivityPage.mockClear();
+    const { res, body } = await list(`?${ids(11)}`);
+    expect(res.status).toBe(400);
+    expect(body.errors[`query.${param}`]).toEqual([`at most 10 ${param}s`]);
+    expect(mockLoadActivityPage).not.toHaveBeenCalled();
   });
 
   it('passes since and until to the feed, each as unix ms or iso 8601', async () => {
@@ -188,6 +210,7 @@ describe('GET /api/admin/activity', () => {
   it.each([
     ['user', 'a%2Fb'],
     ['user', ''],
+    ['user', 'uid_1&user=a%2Fb'],
     ['site', 'a%2Fb'],
     ['site', 'x'.repeat(129)],
   ])('400s a bad %s id %p', async (param, value) => {

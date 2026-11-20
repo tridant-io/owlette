@@ -32,20 +32,20 @@ function errorMessage(err: unknown, fallback: string): string {
 }
 
 /**
- * Lists activity newest first for one view, optionally one user, one site and a date range,
+ * Lists activity newest first for one view, optionally some users, some sites and a date range,
  * a page at a time. The range is resolved per request, so the last hour stays the last hour.
  */
 export function useActivity({
   view,
-  userId,
-  siteId,
+  userIds = [],
+  siteIds = [],
   datePreset = 'all',
   dateFrom,
   dateTo,
 }: {
   view: ActivityView;
-  userId?: string;
-  siteId?: string;
+  userIds?: readonly string[];
+  siteIds?: readonly string[];
   datePreset?: DatePreset;
   dateFrom?: string;
   dateTo?: string;
@@ -58,11 +58,15 @@ export function useActivity({
   // bumped per first-page load, so a page for an earlier filter never lands
   const generation = useRef(0);
 
+  // a string, so a render that passes new lists of the same ids is the same request
+  const scope = new URLSearchParams({ view, page_size: String(PAGE_SIZE) });
+  for (const id of userIds) scope.append('user', id);
+  for (const id of siteIds) scope.append('site', id);
+  const query = scope.toString();
+
   const fetchPage = useCallback(
     async (pageToken: string) => {
-      const params = new URLSearchParams({ view, page_size: String(PAGE_SIZE) });
-      if (userId) params.set('user', userId);
-      if (siteId) params.set('site', siteId);
+      const params = new URLSearchParams(query);
       const { from, to } = getDateRange(datePreset, dateFrom, dateTo);
       if (from) params.set('since', String(from.getTime()));
       if (to) params.set('until', String(to.getTime()));
@@ -75,7 +79,7 @@ export function useActivity({
         nextPageToken: body.next_page_token ?? '',
       };
     },
-    [view, userId, siteId, datePreset, dateFrom, dateTo],
+    [query, datePreset, dateFrom, dateTo],
   );
 
   const fetchRows = useCallback(
