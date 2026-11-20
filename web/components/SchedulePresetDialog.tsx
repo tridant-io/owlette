@@ -136,9 +136,7 @@ export default function SchedulePresetDialog({
             <div className="flex items-center gap-3 mb-2">
               <WeekSummaryBar schedules={blocks} />
             </div>
-            <div className="max-h-[250px] overflow-y-auto pr-1">
-              <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} compact />
-            </div>
+            <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} compact maxHeight="250px" />
           </div>
         </div>
 

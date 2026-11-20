@@ -307,6 +307,8 @@ quiet and precise. the fill is flat at rest and wakes up with a directional swee
 
 ### Keyboard Focus
 - **Default:** keyboard focus is deliberately quiet: a 1px outline at 30% alpha (`oklch(0.5 0.15 250 / 0.3)`) at a 2px offset, buttons add a faint 1px `--ring` at 20% plus the sweep fill, inputs keep their 3px ring at 50%, and menu and listbox rows use their highlight fill. there is no strong focus ring anywhere.
+- **Launch mode toggle:** its segments draw no focus outline. owner call on 2026-11-20: outlines are for form fields. whether that reaches other buttons is still open.
+- **Clipping:** a box that scrolls or clips, flush with a control, cuts the ring off. give it an inline gutter cancelled by a negative margin (`-ml-1 px-1`, or `DialogBody`), and scroll padding (`scroll-py-1`) where tabbing scrolls a control in.
 
 **The Quiet Focus Rule.** focus stays subtle: no full-strength or inset cyan ring on any surface. owner call on 2026-10-02, after a 2px ring added for wcag 1.4.11 read as a box drawn over the ui. the quiet outline measures about 1.3:1, under that criterion's 3:1, and the trade is deliberate. reopen it only with the owner.
 

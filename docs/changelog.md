@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — focus outlines are no longer cut off at the edge of a form
+
+the outline around a focused field lost its left edge in the **add process** dialog: the form scrolls, and a box that scrolls clips whatever reaches past its sides. the same thing cut the outlines of the fields that open on the **sign in** and **sign up** pages, the fields in the talon editor, the schedule editor and schedule presets, the buttons in the list of shared hoot links and, on a short window, the last link in the admin sidebar. each now leaves room for the whole outline, and inside a dialog that scrolls, a control that tabbing brings in at the top or bottom edge keeps its whole outline too. nothing moves.
+
 ### fixed — a pending reboot no longer emails as an agent error
 
 the email sent when a machine is waiting for a reboot, an operating system update ready to install for example, now reads **reboot pending** in amber, with the subject `[owlette] reboot pending on {machine}` and no error code. it used to arrive as `[ALERT] owlette agent error`, though nothing had failed. the server writes the email, so this holds for every agent version.

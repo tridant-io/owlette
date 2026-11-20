@@ -1241,6 +1241,10 @@ input[type="week"] {
      not. Both are required; neither is optional. */
   min-height: 0;
   overflow: hidden;
+  /* the clip is flush with the fields' sides, so a 4px gutter, cancelled by its
+     margin, keeps their focus rings whole and moves nothing */
+  margin: -0.25rem;
+  padding: 0.25rem;
 }
 @keyframes form-reveal {
   from {
