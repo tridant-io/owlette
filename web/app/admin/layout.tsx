@@ -272,8 +272,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </div>
 
           {/* Navigation Links */}
-          {/* the drawer is viewport-tall, so on a short phone its nav scrolls */}
-          <nav className={`flex-1 min-h-0 overflow-y-auto p-3 md:p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
+          {/* the drawer is viewport-tall, so on a short phone its nav scrolls. tabbing
+              scrolls a link in flush with the edge, padding or not: scroll-py-1 lands it
+              4px inside, so its focus outline stays whole */}
+          <nav className={`flex-1 min-h-0 overflow-y-auto scroll-py-1 p-3 md:p-4 ${collapsed ? 'lg:p-2' : 'lg:p-4'}`}>
             {navSections.map((section, index) => (
               <div
                 key={section.group}

@@ -392,8 +392,9 @@ export function ShareChatDialog({
             <p className="text-xs text-muted-foreground">no active links</p>
           ) : (
             // Its own scroll, capped at four rows, so a long list cannot starve
-            // the preview.
-            <ul className="max-h-[8.75rem] space-y-1 overflow-y-auto">
+            // the preview. -m-1 p-1 is room for the buttons' focus rings at the
+            // clipped edges, so the cap is four rows plus that 0.5rem.
+            <ul className="-m-1 max-h-[9.25rem] space-y-1 overflow-y-auto p-1">
               {shares.map((share) => {
                 const createdAt = formatDateTime(share.createdAt);
                 return (

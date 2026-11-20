@@ -1,18 +1,21 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Activity as ActivityIcon, Loader2, RefreshCw } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
+import { Activity as ActivityIcon, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
 import { useActivity, type ActivityRow, type ActivityView } from '@/hooks/useActivity';
 import { useSites } from '@/hooks/useFirestore';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
+import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { DatePicker } from '@/components/ui/date-picker';
 import { IconButton } from '@/components/ui/icon-button';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DATE_PRESETS, fromYMD, toYMD, type DatePreset } from '@/lib/dateRange';
 import {
@@ -38,8 +41,8 @@ export interface ActivityFilters {
   dateTo?: string;
 }
 
-// a select item cannot hold an empty value, so "no filter" is this
-const ANY = 'any';
+// "no filter" is the list's leading row. its id is empty, which no uid or site id is
+const ANY = '';
 
 // light takes the family surface; dark a tint of the solid, as the issue status badges do
 const KIND_TONE: Record<ActivityRow['kind'], string> = {
@@ -78,54 +81,56 @@ function ActivityItem({
 }) {
   const person = row.subject ?? row.actor;
   return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
-      >
-        <span className="col-[2] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[1] md:row-[1/3] md:text-left">
-          <time dateTime={new Date(row.at).toISOString()} title={rowFullTime(row)}>
-            {rowTime(row)}
-          </time>
-        </span>
-        <span className="col-[1] row-[1] flex md:col-[2] md:row-[1/3]">
-          <KindBadge row={row} />
-        </span>
-        <span className="col-[1/3] row-[2] break-words text-sm md:col-[3] md:row-[1] md:truncate">
-          <span className="font-semibold text-foreground">{rowWho(row)}</span>
-          <span className="text-foreground"> {rowWhat(row)}</span>
-        </span>
-        <span className="col-[1/3] row-[3] break-words text-xs text-muted-foreground md:col-[3] md:row-[2] md:truncate">
-          {rowMeta(row, siteNames)}
-        </span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-3 px-3 pb-4 pt-1 sm:px-4 md:pl-[6.5rem]">
-          <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
-            {rowFacts(row, siteNames).map(([key, value], i) => (
-              <div key={`${key}:${i}`} className="contents">
-                <dt className="text-muted-foreground">{key}</dt>
-                <dd className="break-words font-mono text-xs text-foreground">{value}</dd>
-              </div>
-            ))}
-          </dl>
-          <div className="flex flex-wrap gap-2">
-            {person.type === 'user' && person.id && (
-              <Button variant="outline" size="sm" onClick={() => onFilter({ userId: person.id })}>
-                everything from this actor
-              </Button>
-            )}
-            {row.siteId !== null && (
-              <Button variant="outline" size="sm" onClick={() => onFilter({ siteId: row.siteId as string })}>
-                everything on this site
-              </Button>
-            )}
+    <Collapsible asChild open={open} onOpenChange={onToggle}>
+      <li>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
+          >
+            <span className="col-[2] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[1] md:row-[1/3] md:text-left">
+              <time dateTime={new Date(row.at).toISOString()} title={rowFullTime(row)}>
+                {rowTime(row)}
+              </time>
+            </span>
+            <span className="col-[1] row-[1] flex md:col-[2] md:row-[1/3]">
+              <KindBadge row={row} />
+            </span>
+            <span className="col-[1/3] row-[2] break-words text-sm md:col-[3] md:row-[1] md:truncate">
+              <span className="font-semibold text-foreground">{rowWho(row)}</span>
+              <span className="text-foreground"> {rowWhat(row)}</span>
+            </span>
+            <span className="col-[1/3] row-[3] break-words text-xs text-muted-foreground md:col-[3] md:row-[2] md:truncate">
+              {rowMeta(row, siteNames)}
+            </span>
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+          <div className="flex flex-col gap-3 px-3 pb-4 pt-1 sm:px-4 md:pl-[6.5rem]">
+            <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+              {rowFacts(row, siteNames).map(([key, value], i) => (
+                <div key={`${key}:${i}`} className="contents">
+                  <dt className="text-muted-foreground">{key}</dt>
+                  <dd className="break-words font-mono text-xs text-foreground">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              {person.type === 'user' && person.id && (
+                <Button variant="outline" size="sm" onClick={() => onFilter({ userId: person.id })}>
+                  everything from this actor
+                </Button>
+              )}
+              {row.siteId !== null && (
+                <Button variant="outline" size="sm" onClick={() => onFilter({ siteId: row.siteId as string })}>
+                  everything on this site
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-    </li>
+        </CollapsibleContent>
+      </li>
+    </Collapsible>
   );
 }
 
@@ -216,35 +221,72 @@ function ActivityResults({
   );
 }
 
-function FilterSelect({
+// a select with the site switcher's filter, as owlette swoop's site picker is: a combobox
+// that opens the list in a popover, styled as the date range's select trigger beside it
+function FilterPicker({
   label,
+  noun,
   anyLabel,
   value,
   options,
   onChange,
 }: {
   label: string;
+  noun: string;
   anyLabel: string;
   value?: string;
   options: { value: string; label: string }[];
   onChange: (next?: string) => void;
 }) {
-  // an id from the url that the list has not loaded yet still shows as itself
-  const shown = value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options;
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const items = useMemo(() => {
+    // an id from the url that the list has not loaded yet still shows as itself
+    const known = value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options;
+    return known.map((o) => ({ id: o.value, name: o.label }));
+  }, [options, value]);
+  const leading = useMemo(() => ({ id: ANY, name: anyLabel }), [anyLabel]);
+  const current = value ?? ANY;
   return (
-    <Select value={value ?? ANY} onValueChange={(next) => onChange(next === ANY ? undefined : next)}>
-      <SelectTrigger aria-label={label} className="min-w-0 flex-1 basis-36 md:w-52 md:flex-none">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ANY}>{anyLabel}</SelectItem>
-        {shown.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Popover modal open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-label={label}
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            setOpen(true);
+          }}
+          className="flex h-9 min-w-0 flex-1 basis-36 items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:w-52 md:flex-none dark:bg-input/30 dark:hover:bg-input/50"
+        >
+          <span className="truncate">{value ? items.find((i) => i.id === value)?.name : anyLabel}</span>
+          <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        id={listId}
+        align="start"
+        aria-label={noun}
+        className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
+        {...siteFilterHostProps}
+      >
+        <SiteSwitcherList
+          surface="popover"
+          noun={noun}
+          sites={items}
+          leading={leading}
+          currentSiteId={current}
+          onPick={(next) => {
+            setOpen(false);
+            onChange(next === ANY ? undefined : next);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -346,15 +388,17 @@ export function ActivityList({
             onChange={(view) => onFiltersChange({ ...filters, view })}
           />
           <div className="flex w-full gap-2 md:w-auto">
-            <FilterSelect
+            <FilterPicker
               label="user"
+              noun="users"
               anyLabel="anyone"
               value={filters.userId}
               options={userOptions}
               onChange={(userId) => onFiltersChange({ ...filters, userId })}
             />
-            <FilterSelect
+            <FilterPicker
               label="site"
+              noun="sites"
               anyLabel="every site"
               value={filters.siteId}
               options={siteOptions}

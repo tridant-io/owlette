@@ -10,7 +10,9 @@
  * of their own so a view holds more than a page, and one change row sits on a
  * fixed day in 2024 for the date range. Under a third site, one command row sits
  * above 350 hidden renewals and fifty more change rows, the shape dev's feed had
- * when its first page showed a single row. Everything seeded is removed afterwards.
+ * when its first page showed a single row. Eleven sites of its own put the site
+ * picker past ten rows, where it opens on a filter. Everything seeded is removed
+ * afterwards.
  *
  * The last describe runs the real detection path: five failed second factors for
  * one user, then `GET /api/cron/activity-watch` twice. No mail goes out (resend is
@@ -27,12 +29,14 @@
 
 import crypto from 'crypto';
 import { Timestamp } from 'firebase-admin/firestore';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mintApiKey, revokeApiKey, authHeaders, type MintedApiKey } from '../../helpers/apiKey';
 import { getAdminDb } from '../../helpers/emulator';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { E2E_CRON_SECRET } from '../../helpers/cron';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
+import { releaseFixtureSite, seedSite } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const ASN = 4_200_000_000 + crypto.randomInt(99_999_999);
@@ -280,6 +284,14 @@ test.afterAll(async () => {
 const feed = (page: Page) => page.getByRole('list', { name: 'activity' });
 const item = (page: Page, text: string) => feed(page).getByRole('listitem').filter({ hasText: text });
 
+/** opens a row and waits out its slide: a click inside a row still sliding open can miss its target */
+async function openRow(row: Locator): Promise<void> {
+  const trigger = row.getByRole('button').first();
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await row.evaluate((li) => Promise.allSettled(li.getAnimations({ subtree: true }).map((a) => a.finished)));
+}
+
 /** the seeded rows on screen, in the order they appear */
 async function seededOnScreen(page: Page): Promise<string[]> {
   await expect(feed(page)).toBeVisible();
@@ -292,9 +304,12 @@ async function badges(page: Page): Promise<string[]> {
   return [...new Set(await feed(page).locator('[data-slot="badge"]').allInnerTexts())].sort();
 }
 
+// each picker opens its list in a popover named for what it lists, with a filter past ten rows
+const pickerList = (page: Page, picker: 'user' | 'site') => page.getByRole('dialog', { name: `${picker}s` });
+
 async function pick(page: Page, picker: 'user' | 'site', option: string) {
   await page.getByRole('combobox', { name: picker }).click();
-  await page.getByRole('option', { name: option, exact: true }).click();
+  await pickerList(page, picker).getByRole('button', { name: option, exact: true }).click();
 }
 
 test.describe('the page, as a superadmin', () => {
@@ -357,7 +372,7 @@ test.describe('the page, as a superadmin', () => {
     await expect(row).toContainText(`${ADMIN} was refused: input not permitted on ${HOST_MACHINE}`);
     await expect(row).toContainText(`${SITE_A} · reported by owlette · swoop host`);
 
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.locator('dt:text-is("viewer") + dd')).toHaveText(ADMIN);
     await expect(row.locator('dt:text-is("machine") + dd')).toHaveText(HOST_MACHINE);
     await expect(row.locator('dt:text-is("target") + dd')).toHaveText(`swoop session sid-${SUFFIX}`);
@@ -398,7 +413,7 @@ test.describe('the page, as a superadmin', () => {
     await page.goto('/admin/activity');
 
     const row = item(page, CHANGE);
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.getByRole('button').first()).toHaveAttribute('aria-expanded', 'true');
     await expect(row.getByText('user_mutated:promoted')).toBeVisible();
     await expect(row.getByText('/api/e2e')).toBeVisible();
@@ -408,7 +423,7 @@ test.describe('the page, as a superadmin', () => {
     await expect(page.getByRole('combobox', { name: 'user' })).toHaveText(ADMIN);
     await expect(item(page, PLATFORM)).toHaveCount(0);
 
-    await item(page, CHANGE).getByRole('button').click();
+    await openRow(item(page, CHANGE));
     await item(page, CHANGE).getByRole('button', { name: 'everything on this site' }).click();
     await expect(page).toHaveURL(/user=admin-uid&site=site-A$/);
     await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SITE_A);
@@ -416,11 +431,39 @@ test.describe('the page, as a superadmin', () => {
 
     await page.goto('/admin/activity');
     const finding = item(page, HIGH);
-    await finding.getByRole('button').click();
+    await openRow(finding);
     await expect(finding.getByText('attempts', { exact: true })).toBeVisible();
     await expect(finding.getByText('severity', { exact: true })).toBeVisible();
     await expect(finding.getByText('not emailed yet')).toBeVisible();
     await expect(finding.getByRole('button', { name: 'everything on this site' })).toHaveCount(0);
+  });
+
+  test('a row opens and closes with the slide the other expandable rows use', async ({ page }) => {
+    await page.goto('/admin/activity');
+    const row = item(page, CHANGE);
+    await expect(row).toBeVisible();
+
+    // read the animations off their start events, so the test never races a 200ms slide
+    await row.evaluate((li: HTMLElement) => {
+      li.dataset.slides = '';
+      li.addEventListener('animationstart', (e) => {
+        if (e.animationName.startsWith('collapsible-')) li.dataset.slides += `${e.animationName} `;
+      });
+    });
+    const slides = () => row.evaluate((li: HTMLElement) => (li.dataset.slides ?? '').trim());
+
+    await row.getByRole('button').first().click();
+    await expect.poll(slides).toBe('collapsible-down');
+    await expect(row.getByText('user_mutated:promoted')).toBeVisible();
+
+    await row.getByRole('button').first().click();
+    await expect.poll(slides).toBe('collapsible-down collapsible-up');
+    await expect(row.getByText('user_mutated:promoted')).toHaveCount(0);
+
+    // the slide clips its content, so the shortcuts' outlines must stay inside it.
+    // last, because the check turns animation off for the rest of the page
+    await openRow(row);
+    expect(await clippedFocusRings(page, row)).toEqual([]);
   });
 
   test('the date range narrows the list and stays in the url', async ({ page }) => {
@@ -471,6 +514,55 @@ test.describe('the page, as a superadmin', () => {
   });
 });
 
+// eleven sites of this run's own, so the site picker is past the site switcher's ten whatever
+// else the emulator holds; released after the describe, as the switcher's own spec does
+test.describe('the site picker, past ten sites', () => {
+  test.use(roleState('superadmin'));
+  const OWNER = 'someone-else';
+  const PICK_SITES = Array.from({ length: 11 }, (_, i) => ({ id: `act-pick-${i}-${SUFFIX}`, name: `Activity pick ${i} ${SUFFIX}` }));
+  const SEVENTH = PICK_SITES[7];
+
+  test.beforeAll(async () => {
+    await Promise.all(PICK_SITES.map((site) => seedSite({ ...site, owner: OWNER, timezone: 'UTC' })));
+  });
+
+  test.afterAll(async () => {
+    await Promise.all(PICK_SITES.map((site) => releaseFixtureSite(site.id, OWNER)));
+  });
+
+  // the open list and 16 px around it, so its edges and shadow are in the picture
+  async function attachPicture(page: Page, surface: Locator, name: string) {
+    const box = (await surface.boundingBox())!;
+    const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
+    await test.info().attach(name, { body: await page.screenshot({ clip }), contentType: 'image/png' });
+  }
+
+  test('opens on a filter that finds a site by part of its name, and enter picks it', async ({ page }) => {
+    await page.goto('/admin/activity');
+    await page.getByRole('combobox', { name: 'site' }).click();
+    const list = pickerList(page, 'site');
+    const filter = list.getByRole('textbox', { name: 'filter sites', exact: true });
+    await expect(filter).toBeFocused();
+    await expect(list.getByRole('button', { name: 'every site', exact: true })).toHaveAttribute('aria-current', 'true');
+    await attachPicture(page, list, 'site picker, dark');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+    await attachPicture(page, list, 'site picker, light');
+    await page.emulateMedia({ colorScheme: 'dark' });
+
+    await filter.pressSequentially(`pick 7 ${SUFFIX}`);
+    const rows = list.locator('[data-site-item]');
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toHaveText(SEVENTH.name);
+    await attachPicture(page, list, 'site picker filtered, dark');
+
+    await filter.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`site=${SEVENTH.id}$`));
+    await expect(list).toBeHidden();
+    await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SEVENTH.name);
+  });
+});
+
 test.describe('the page at a phone width', () => {
   test.use({ ...roleState('superadmin'), viewport: { width: 390, height: 844 } });
 
@@ -487,7 +579,7 @@ test.describe('the page at a phone width', () => {
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
     const row = item(page, CHANGE);
-    await row.getByRole('button').click();
+    await openRow(row);
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything from this actor' }), 'the actor shortcut');
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything on this site' }), 'the site shortcut');
     await assertNoHorizontalOverflow(page);
@@ -610,7 +702,7 @@ test.describe('the detection path, through the cron route', () => {
     await page.goto('/admin/activity?view=flagged');
     const row = item(page, `for ${BURST_EMAIL} within 15 minutes`);
     await expect(row).toContainText('flagged · high');
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.getByText('failures', { exact: true })).toBeVisible();
     await expect(row.locator('dt:has-text("failures") + dd')).toHaveText('5');
   });

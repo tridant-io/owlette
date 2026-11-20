@@ -13,6 +13,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
 import { TEST_SITES } from '../../helpers/seed';
 
@@ -87,4 +88,22 @@ test('a failed deployment expands, shows its reason and reaches retry by keyboar
   await page.keyboard.press('Enter');
   await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await expect(retry).toHaveCount(0);
+});
+
+// A dialog that scrolls as a whole brings a control it tabs to in flush with
+// its edge; the shared DialogContent keeps room there for the focus ring.
+test('the deploy dialog keeps every focus ring whole on a short screen', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await page.goto('/deployments');
+  await expect(page.getByRole('heading', { level: 1, name: 'deployments', exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
+
+  await page.getByRole('button', { name: 'new deployment' }).first().click();
+  const dialog = page.getByRole('dialog', { name: 'deploy software' });
+  await expect(dialog).toBeVisible();
+  // the case needs a dialog taller than the screen
+  expect(await dialog.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+
+  expect(await clippedFocusRings(page, dialog)).toEqual([]);
 });

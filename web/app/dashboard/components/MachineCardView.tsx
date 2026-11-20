@@ -1125,6 +1125,7 @@ const MachineCard = memo(function MachineCard({
                                   aria-label={`launch mode for ${process.name}`}
                                   className="hidden md:flex items-stretch rounded-md overflow-hidden border border-border/50 h-8"
                                 >
+                                  {/* no focus outline on the segments: outlines are for form fields (owner, 2026-11-20) */}
                                   {(['off', 'always', 'scheduled'] as const).map((mode) => {
                                     const isActive = currentMode === mode;
                                     const activeColors = {
@@ -1140,7 +1141,7 @@ const MachineCard = memo(function MachineCard({
                                             type="button"
                                             aria-pressed={isActive}
                                             onClick={() => !isActive && onSetLaunchMode(machineId, process.id, process.name, mode, process.exe_path)}
-                                            className={`px-3 text-sm font-medium ${isActive ? 'cursor-default' : 'hover:bg-accent/50 cursor-pointer'} transition-colors`}
+                                            className={`px-3 text-sm font-medium focus-visible:outline-none ${isActive ? 'cursor-default' : 'hover:bg-accent/50 cursor-pointer'} transition-colors`}
                                           >
                                             {modeLabels[mode]}
                                           </button>
@@ -1152,7 +1153,7 @@ const MachineCard = memo(function MachineCard({
                                                 onClick={() => onConfigureSchedule?.(machineId, process)}
                                                 aria-label={`configure schedule for ${process.name}`}
                                                 data-testid="process-row-configure-schedule"
-                                                className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-info-solid-foreground/15' : 'hover:bg-accent/50'}`}
+                                                className={`px-1.5 transition-colors cursor-pointer flex items-center focus-visible:outline-none ${isActive ? 'hover:bg-info-solid-foreground/15' : 'hover:bg-accent/50'}`}
                                               >
                                                 <Settings2 className="h-3.5 w-3.5" />
                                               </button>
@@ -1171,7 +1172,7 @@ const MachineCard = memo(function MachineCard({
                                         type="button"
                                         aria-pressed={isActive}
                                         onClick={() => onSetLaunchMode(machineId, process.id, process.name, mode, process.exe_path)}
-                                        className={`px-3 text-sm font-medium transition-all duration-500 cursor-pointer ${isActive ? activeColors[mode] : 'bg-card text-muted-foreground hover:bg-accent/50'}`}
+                                        className={`px-3 text-sm font-medium transition-all duration-500 cursor-pointer focus-visible:outline-none ${isActive ? activeColors[mode] : 'bg-card text-muted-foreground hover:bg-accent/50'}`}
                                       >
                                         {modeLabels[mode]}
                                       </button>

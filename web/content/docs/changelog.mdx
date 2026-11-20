@@ -12,6 +12,14 @@ tocDepth: 2
 
 a Mac's agent now marks the machine asleep on its way to sleep (idle sleep on battery, a closed lid, sleep from the Apple menu) and keeps it asleep through the Mac's dark wakes. the dashboard shows a blue **asleep** pill instead of **offline**, and the machine is never paged as not responding. people with **machine offline alerts** get two emails per sleep instead: **machines asleep** once it has slept for 5 minutes, and **machines awake** when it fully wakes, with how long it slept. a shorter sleep sends nothing. it needs the Mac on this agent version; Windows and Linux machines that sleep still page as offline. see [asleep machines](/docs/dashboard/admin/email-alerts#asleep-machines).
 
+### fixed — activity rows slide open and closed
+
+a row on **admin** → **activity** opened and closed in one jump. it now slides, as the rows on the logs and deployments pages do.
+
+### fixed — focus outlines are no longer cut off at the edge of a form
+
+the outline around a focused field lost its left edge in the **add process** dialog: the form scrolls, and a box that scrolls clips whatever reaches past its sides. the same thing cut the outlines of the fields that open on the **sign in** and **sign up** pages, the fields in the talon editor, the schedule editor and schedule presets, the buttons in the list of shared hoot links and, on a short window, the last link in the admin sidebar. each now leaves room for the whole outline, and inside a dialog that scrolls, a control that tabbing brings in at the top or bottom edge keeps its whole outline too. nothing moves.
+
 ### fixed — a pending reboot no longer emails as an agent error
 
 the email sent when a machine is waiting for a reboot, an operating system update ready to install for example, now reads **reboot pending** in amber, with the subject `[owlette] reboot pending on {machine}` and no error code. it used to arrive as `[ALERT] owlette agent error`, though nothing had failed. the server writes the email, so this holds for every agent version.
@@ -27,6 +35,10 @@ a command sent to a machine read `sent update owlette to cmd_…`, the id of the
 ### added — a date range on the activity page
 
 **admin** → **activity** has the logs page's date range beside its user and site filters: all time, the last hour or 24 hours, today, yesterday, the last 7 or 30 days, this week, this month, last month, or a custom range of days. the range is kept in the address, so a shared link opens the same range, read from the moment it is opened. the API takes it as `since` and `until` on `GET /api/admin/activity`, unix milliseconds or ISO 8601, both included.
+
+### changed — the activity page's user and site filters search
+
+the user and site lists on **admin** → **activity** open on a filter past ten entries, as the site switcher does: type part of an email or a site's name, and enter picks the first match.
 
 ## [4.2.3] - 2026-11-17
 

@@ -221,6 +221,8 @@ interface ScheduleBlocksEditorProps {
   blocks: ScheduleBlock[];
   onChange: (blocks: ScheduleBlock[]) => void;
   compact?: boolean;
+  /** the blocks scroll past this height (a css length) */
+  maxHeight: string;
 }
 
 /** Stable colour slot: the block's `colorIndex`, else its position. */
@@ -228,7 +230,7 @@ function getBlockColorIndex(block: ScheduleBlock, position: number): number {
   return block.colorIndex ?? position;
 }
 
-export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBlocksEditorProps) {
+export function ScheduleBlocksEditor({ blocks, onChange, compact, maxHeight }: ScheduleBlocksEditorProps) {
   const updateBlock = (index: number, updated: ScheduleBlock) => {
     const next = [...blocks];
     next[index] = updated;
@@ -268,8 +270,15 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
     updateBlock(blockIndex, { ...block, name: name || undefined });
   };
 
+  // the list scrolls, and a scroller clips the focus ring of the full-width
+  // add block button at its left and bottom edges. the gutter that makes room
+  // is handed back by negative margins, and the cap counts it, so nothing
+  // moves. inside a space-y parent it must come last, or -mb-1 eats the gap
   return (
-    <div className="space-y-3">
+    <div
+      className="-mb-1 -ml-1 space-y-3 overflow-y-auto px-1 pb-1"
+      style={{ maxHeight: `calc(${maxHeight} + 0.25rem)` }}
+    >
       {blocks.map((block, blockIndex) => {
         const color = BLOCK_COLORS[getBlockColorIndex(block, blockIndex) % BLOCK_COLORS.length];
         return (
@@ -701,9 +710,7 @@ export default function ScheduleEditor({
           })()}
         </div>
 
-        <div className="max-h-[60dvh] overflow-y-auto pr-1">
-          <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} />
-        </div>
+        <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} maxHeight="60dvh" />
 
         {currentLaunchMode === 'scheduled' && !isCurrentlyInSchedule(blocks, siteTimezone) && (
           <p className="text-xs text-warning dark:text-warning/90 bg-warning-surface border border-warning-border/50 rounded-md px-3 py-2">

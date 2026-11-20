@@ -1446,8 +1446,10 @@ export default function DashboardPage() {
           </DialogHeader>
           {/* The form scrolls inside the dialog: with the schedule section open
               the fields alone can outgrow a laptop viewport, and a Dialog that
-              overflows puts its footer (save/cancel) out of reach. */}
-          <div ref={processFormRef} className="space-y-4 py-4 max-h-[70vh] overflow-y-auto pr-1">
+              overflows puts its footer (save/cancel) out of reach.
+              a scroller clips both axes, so -ml-1 px-1 is a gutter for the
+              fields' focus rings at its left edge. */}
+          <div ref={processFormRef} className="-ml-1 space-y-4 py-4 max-h-[70vh] overflow-y-auto px-1">
             {/* Name */}
             <div className="space-y-2">
               <Label htmlFor="edit-name" className="text-foreground">name</Label>
@@ -1462,6 +1464,7 @@ export default function DashboardPage() {
             {/* Launch Mode — positioned prominently after name */}
             <div className="space-y-2">
               <Label className="text-foreground text-sm">launch mode</Label>
+              {/* no focus outline on the segments: outlines are for form fields (owner, 2026-11-20) */}
               <div role="group" aria-label="launch mode" className="flex items-stretch rounded-lg overflow-hidden border border-border">
                 {(['off', 'always', 'scheduled'] as const).map((mode) => {
                   const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
@@ -1478,7 +1481,7 @@ export default function DashboardPage() {
                       type="button"
                       aria-pressed={isActive}
                       onClick={() => setEditProcessForm({ ...editProcessForm, launch_mode: mode, autolaunch: mode !== 'off' })}
-                      className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${colors[mode]} ${!isActive ? 'bg-card text-muted-foreground hover:bg-muted/50' : ''}`}
+                      className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none ${colors[mode]} ${!isActive ? 'bg-card text-muted-foreground hover:bg-muted/50' : ''}`}
                     >
                       {labels[mode]}
                     </button>
@@ -1499,7 +1502,7 @@ export default function DashboardPage() {
                       aria-expanded={scheduleSectionVisible}
                       data-testid="process-dialog-configure-schedule"
                       onClick={() => setScheduleSectionOpen((open) => !open)}
-                      className={`px-2 transition-colors cursor-pointer flex items-center ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid text-info-solid-foreground hover:brightness-125' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
+                      className={`px-2 transition-colors cursor-pointer flex items-center focus-visible:outline-none ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid text-info-solid-foreground hover:brightness-125' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </button>
@@ -1653,13 +1656,12 @@ export default function DashboardPage() {
                 <div className="flex justify-center mb-2">
                   <WeekSummaryBar schedules={scheduleBlocks} tall />
                 </div>
-                <div className="max-h-[200px] overflow-y-auto pr-1">
-                  <ScheduleBlocksEditor
-                    blocks={scheduleBlocks}
-                    onChange={(blocks) => setEditProcessForm({ ...editProcessForm, schedules: blocks })}
-                    compact
-                  />
-                </div>
+                <ScheduleBlocksEditor
+                  blocks={scheduleBlocks}
+                  onChange={(blocks) => setEditProcessForm({ ...editProcessForm, schedules: blocks })}
+                  compact
+                  maxHeight="200px"
+                />
               </div>
             )}
           </div>

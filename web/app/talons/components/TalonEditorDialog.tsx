@@ -870,7 +870,9 @@ function TalonEditorForm({ siteId, machines, talon, isSiteAdmin, onClose }: Talo
         </div>
       </DialogHeader>
 
-      <div ref={bodyRef} className="max-h-[65vh] overflow-y-auto space-y-5 pr-1">
+      {/* a scroller clips both axes: -ml-1 px-1 is a gutter for the focus
+          rings of the fields at its left edge */}
+      <div ref={bodyRef} className="-ml-1 max-h-[65vh] overflow-y-auto space-y-5 px-1">
         {isCreate && (
           <div className="space-y-2">
 
