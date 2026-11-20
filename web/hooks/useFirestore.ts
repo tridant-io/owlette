@@ -372,6 +372,12 @@ export interface Machine {
   /** those viewers' seats, each with its person's name, for the swoop picker's cards; absent until the server first mirrors them */
   swoopSeats?: SwoopSeatMirror[];
   /**
+   * The agent marked the machine asleep on its way to sleep, and it has not fully
+   * woken since. `online` is false meanwhile, dark wakes included. macOS agents
+   * only, so far.
+   */
+  asleep?: boolean;
+  /**
    * What the agent holds for the site's keep screens awake switch, mirrored on
    * each change. `held` is the service's own hold (system sleep, and on macOS
    * the display), `session` the desktop app's (idle lock, screensaver, and on
@@ -1112,6 +1118,8 @@ const OFFLINE_HEARTBEAT_AGE_SEC = 300;
  * check). Both the snapshot parser and the 30s staleness tick call this — with
  * separate logic a killed agent (doc stuck at `online: true`) rendered green
  * forever. Mirrors `classifyMachineHealth` in `app/api/cron/health-check/route.ts`.
+ * An asleep machine is offline too: the snapshot parser rules it out before this
+ * check, and the tick reads the parsed flag, so it never turns one green.
  */
 export function isMachineOnline(
   onlineFlag: unknown,
@@ -1488,7 +1496,9 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
           const rebootDeferredUntil = rebootDeferredUntilParsed > 0 ? rebootDeferredUntilParsed : undefined;
 
           const now = Math.floor(Date.now() / 1000);
-          const isOnline = isMachineOnline(data.online, lastHeartbeat, now);
+          // a dark wake heartbeats for seconds and still says asleep: no green flicker
+          const asleep = data.asleep === true && data.online === true;
+          const isOnline = !asleep && isMachineOnline(data.online, lastHeartbeat, now);
 
             // keep the last good GPU when this update reports "N/A"/missing
             const metrics = data.metrics ? {
@@ -1515,6 +1525,7 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
               swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
               swoopSeats: parseSwoopSeats(data.swoopSeats),
               displayAwake: parseDisplayAwake(data.displayAwake),
+              asleep,
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,

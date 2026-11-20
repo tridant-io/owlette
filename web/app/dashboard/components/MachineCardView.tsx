@@ -425,6 +425,7 @@ const MachineCard = memo(function MachineCard({
           <div className="flex items-center gap-2">
             <MachineStatusPill
               online={machine.online}
+              asleep={machine.asleep}
               rebooting={machine.rebooting}
               shuttingDown={machine.shuttingDown}
               rebootScheduledAt={machine.rebootScheduledAt}

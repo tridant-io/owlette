@@ -20,13 +20,16 @@ connection setup; only the handful of attributes _upload_metrics touches are stu
 The same write also carries the swoop capability handshake (capabilities.swoop)
 and cross-plan rule C3's osFamily/arch keys; those are pinned at the bottom.
 """
+import datetime
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import shared_utils
+import sleep_watch
 import swoop_capability
+from firestore_rest_client import DELETE_FIELD
 
 # pre-mock win32 so the import works on non-windows CI as well as locally.
 _MOCK_MODULES = {
@@ -316,3 +319,78 @@ def test_swoop_command_types_are_on_the_fast_lane():
 def test_site_move_is_on_the_fast_lane():
     # like unpair: behind an in-flight install a move would wait minutes
     assert "site_move" in FirebaseClient._FAST_COMMAND_TYPES
+
+
+# asleep: the mac's will-sleep announce, and what each heartbeat says after it
+
+
+SLEPT_AT = datetime.datetime(2026, 11, 20, 2, 26, 10)
+
+
+class _Watch:
+    def __init__(self, supported=True, listening=True, since=None):
+        self.supported = supported
+        self.listening = listening
+        self.since = since
+
+    def asleep_since(self):
+        return self.since
+
+
+def test_heartbeat_has_no_asleep_field_where_the_platform_cannot_tell(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(supported=False, listening=False))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert "asleep" not in payload and "asleepSince" not in payload
+
+
+def test_a_watch_that_failed_to_start_deletes_the_asleep_flag(monkeypatch):
+    # a stale asleep would hold off the offline alert for good
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(listening=False))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is DELETE_FIELD
+    assert "asleepSince" not in payload
+
+
+def test_an_asleep_heartbeat_carries_when_the_sleep_began(monkeypatch):
+    # a dark wake's heartbeat: it stands in for an announce that never landed
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(since=SLEPT_AT))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is True
+    assert payload["asleepSince"] == SLEPT_AT
+
+
+def test_an_awake_heartbeat_leaves_asleep_since_for_the_awake_email(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch())
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is False
+    assert "asleepSince" not in payload
+
+
+def test_the_announce_writes_what_the_next_heartbeat_would(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(since=SLEPT_AT))
+    fc = _make_client()
+
+    fc.announce_asleep()
+
+    machine_ref = (
+        fc.db.collection.return_value.document.return_value
+        .collection.return_value.document.return_value
+    )
+    machine_ref.set.assert_called_once_with({"asleep": True, "asleepSince": SLEPT_AT}, merge=True)
+
+
+def test_the_announce_writes_nothing_while_disconnected():
+    fc = _make_client()
+    fc.connection_manager.is_connected = False
+
+    fc.announce_asleep()
+
+    fc.db.collection.assert_not_called()

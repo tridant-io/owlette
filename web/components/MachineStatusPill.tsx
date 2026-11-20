@@ -9,6 +9,8 @@ import { cn } from '@/lib/utils';
 
 interface MachineStatusPillProps {
   online: boolean;
+  /** the agent marked it asleep before it slept: an offline machine that is not an outage. */
+  asleep?: boolean;
   rebooting?: boolean;
   shuttingDown?: boolean;
   rebootScheduledAt?: number;    // Unix seconds — TARGET restart time (when the OS will actually restart). Field name kept as the agent-written wire contract.
@@ -90,6 +92,7 @@ function CancelPill({
 
 export function MachineStatusPill({
   online,
+  asleep,
   rebooting,
   shuttingDown,
   rebootScheduledAt,
@@ -179,8 +182,18 @@ export function MachineStatusPill({
     );
   }
 
-  // Idle. Online is the boring case, so it's a dot — only offline gets a labelled pill.
+  // Idle. Online is the boring case, so it's a dot — only offline and asleep get a labelled pill.
   if (!isActive) {
+    if (!online && asleep) {
+      return (
+        <Badge
+          className="text-xs select-none bg-info-solid text-info-solid-foreground"
+          data-testid="machine-status-asleep"
+        >
+          asleep
+        </Badge>
+      );
+    }
     return online ? (
       <Tooltip>
         <TooltipTrigger asChild>

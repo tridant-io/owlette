@@ -38,6 +38,21 @@ describe('MachineStatusPill theme tokens', () => {
     expect(pill.className).not.toMatch(RAW_PALETTE);
   });
 
+  it('draws an asleep machine as the info solid, not the offline pill', () => {
+    renderPill({ online: false, asleep: true });
+    const pill = screen.getByTestId('machine-status-asleep');
+    expect(pill).toHaveTextContent('asleep');
+    expect(pill).toHaveClass('bg-info-solid', 'text-info-solid-foreground');
+    expect(pill.className).not.toMatch(RAW_PALETTE);
+    expect(screen.queryByText('offline')).not.toBeInTheDocument();
+  });
+
+  it('lets a restart countdown outrank asleep', () => {
+    const inTwoMinutes = Math.floor(Date.now() / 1000) + 120;
+    renderPill({ online: false, asleep: true, rebooting: true, rebootScheduledAt: inTwoMinutes });
+    expect(screen.queryByTestId('machine-status-asleep')).not.toBeInTheDocument();
+  });
+
   it('draws the cancellable countdown as the danger solid too', () => {
     const inTwoMinutes = Math.floor(Date.now() / 1000) + 120;
     renderPill({

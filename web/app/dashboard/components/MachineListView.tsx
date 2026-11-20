@@ -528,6 +528,7 @@ export const MachineRow = memo(function MachineRow({
         <TableCell className="w-[72px] p-2">
           <MachineStatusPill
             online={machine.online}
+            asleep={machine.asleep}
             rebooting={machine.rebooting}
             shuttingDown={machine.shuttingDown}
             rebootScheduledAt={machine.rebootScheduledAt}

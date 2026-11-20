@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — a Mac that goes to sleep reads asleep, not offline
+
+a Mac's agent now marks the machine asleep on its way to sleep (idle sleep on battery, a closed lid, sleep from the Apple menu) and keeps it asleep through the Mac's dark wakes. the dashboard shows a blue **asleep** pill instead of **offline**, and the machine is never paged as not responding. people with **machine offline alerts** get two emails per sleep instead: **machines asleep** once it has slept for 5 minutes, and **machines awake** when it fully wakes, with how long it slept. a shorter sleep sends nothing. it needs the Mac on this agent version; Windows and Linux machines that sleep still page as offline. see [asleep machines](https://owlette.app/docs/dashboard/admin/email-alerts#asleep-machines).
+
 ### fixed — activity rows slide open and closed
 
 a row on **admin** → **activity** opened and closed in one jump. it now slides, as the rows on the logs and deployments pages do.
