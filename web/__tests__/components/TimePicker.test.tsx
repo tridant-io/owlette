@@ -54,7 +54,7 @@ function ControlledBlocks({ initial }: { initial: ScheduleBlock[] }) {
   const [blocks, setBlocks] = useState(initial);
   return (
     <TooltipProvider>
-      <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} />
+      <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} maxHeight="200px" />
     </TooltipProvider>
   );
 }
