@@ -10,7 +10,9 @@
  * of their own so a view holds more than a page, and one change row sits on a
  * fixed day in 2024 for the date range. Under a third site, one command row sits
  * above 350 hidden renewals and fifty more change rows, the shape dev's feed had
- * when its first page showed a single row. Everything seeded is removed afterwards.
+ * when its first page showed a single row. Eleven sites of its own put the site
+ * picker past ten rows, where it opens on a filter. Everything seeded is removed
+ * afterwards.
  *
  * The last describe runs the real detection path: five failed second factors for
  * one user, then `GET /api/cron/activity-watch` twice. No mail goes out (resend is
@@ -27,12 +29,13 @@
 
 import crypto from 'crypto';
 import { Timestamp } from 'firebase-admin/firestore';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mintApiKey, revokeApiKey, authHeaders, type MintedApiKey } from '../../helpers/apiKey';
 import { getAdminDb } from '../../helpers/emulator';
 import { E2E_CRON_SECRET } from '../../helpers/cron';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
+import { releaseFixtureSite, seedSite } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const ASN = 4_200_000_000 + crypto.randomInt(99_999_999);
@@ -292,9 +295,12 @@ async function badges(page: Page): Promise<string[]> {
   return [...new Set(await feed(page).locator('[data-slot="badge"]').allInnerTexts())].sort();
 }
 
+// each picker opens its list in a popover named for what it lists, with a filter past ten rows
+const pickerList = (page: Page, picker: 'user' | 'site') => page.getByRole('dialog', { name: `${picker}s` });
+
 async function pick(page: Page, picker: 'user' | 'site', option: string) {
   await page.getByRole('combobox', { name: picker }).click();
-  await page.getByRole('option', { name: option, exact: true }).click();
+  await pickerList(page, picker).getByRole('button', { name: option, exact: true }).click();
 }
 
 test.describe('the page, as a superadmin', () => {
@@ -468,6 +474,55 @@ test.describe('the page, as a superadmin', () => {
     await expect(rows.first()).toContainText(`${ADMIN} sent update owlette to ${GAP_MACHINE}`);
     await expect(rows.first()).not.toContainText(GAP_COMMAND);
     await expect(item(page, ROUTINE)).toHaveCount(0);
+  });
+});
+
+// eleven sites of this run's own, so the site picker is past the site switcher's ten whatever
+// else the emulator holds; released after the describe, as the switcher's own spec does
+test.describe('the site picker, past ten sites', () => {
+  test.use(roleState('superadmin'));
+  const OWNER = 'someone-else';
+  const PICK_SITES = Array.from({ length: 11 }, (_, i) => ({ id: `act-pick-${i}-${SUFFIX}`, name: `Activity pick ${i} ${SUFFIX}` }));
+  const SEVENTH = PICK_SITES[7];
+
+  test.beforeAll(async () => {
+    await Promise.all(PICK_SITES.map((site) => seedSite({ ...site, owner: OWNER, timezone: 'UTC' })));
+  });
+
+  test.afterAll(async () => {
+    await Promise.all(PICK_SITES.map((site) => releaseFixtureSite(site.id, OWNER)));
+  });
+
+  // the open list and 16 px around it, so its edges and shadow are in the picture
+  async function attachPicture(page: Page, surface: Locator, name: string) {
+    const box = (await surface.boundingBox())!;
+    const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
+    await test.info().attach(name, { body: await page.screenshot({ clip }), contentType: 'image/png' });
+  }
+
+  test('opens on a filter that finds a site by part of its name, and enter picks it', async ({ page }) => {
+    await page.goto('/admin/activity');
+    await page.getByRole('combobox', { name: 'site' }).click();
+    const list = pickerList(page, 'site');
+    const filter = list.getByRole('textbox', { name: 'filter sites', exact: true });
+    await expect(filter).toBeFocused();
+    await expect(list.getByRole('button', { name: 'every site', exact: true })).toHaveAttribute('aria-current', 'true');
+    await attachPicture(page, list, 'site picker, dark');
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+    await attachPicture(page, list, 'site picker, light');
+    await page.emulateMedia({ colorScheme: 'dark' });
+
+    await filter.pressSequentially(`pick 7 ${SUFFIX}`);
+    const rows = list.locator('[data-site-item]');
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toHaveText(SEVENTH.name);
+    await attachPicture(page, list, 'site picker filtered, dark');
+
+    await filter.press('Enter');
+    await expect(page).toHaveURL(new RegExp(`site=${SEVENTH.id}$`));
+    await expect(list).toBeHidden();
+    await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SEVENTH.name);
   });
 });
 

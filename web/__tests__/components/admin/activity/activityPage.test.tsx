@@ -19,13 +19,13 @@ jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: { uid: 'root' }, userSites: [], isSuperadmin: true }),
 }));
 
+const TWO_USERS = [
+  { uid: 'uid-sam', email: 'sam@lumenevents.example' },
+  { uid: 'uid-ana', email: 'ana@tridant.example' },
+];
+let mockUsers = TWO_USERS;
 jest.mock('@/hooks/useUserManagement', () => ({
-  useUserManagement: () => ({
-    users: [
-      { uid: 'uid-sam', email: 'sam@lumenevents.example' },
-      { uid: 'uid-ana', email: 'ana@tridant.example' },
-    ],
-  }),
+  useUserManagement: () => ({ users: mockUsers }),
 }));
 
 jest.mock('@/hooks/useFirestore', () => ({
@@ -197,6 +197,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   mockReplace.mockReset();
   mockSearch = '';
+  mockUsers = TWO_USERS;
   global.fetch = fetchMock as unknown as typeof global.fetch;
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -401,10 +402,105 @@ describe('the filters', () => {
     fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
     renderPage();
     await user.click(screen.getByRole('combobox', { name: 'user' }));
-    const options = screen.getAllByRole('option').map((o) => o.textContent);
-    expect(options).toEqual(['anyone', 'ana@tridant.example', 'sam@lumenevents.example']);
-    await user.click(screen.getByRole('option', { name: 'sam@lumenevents.example' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    // ten or fewer to pick from, so no filter, as in the site switcher
+    expect(within(list).queryByRole('textbox')).toBeNull();
+    const rows = within(list).getAllByRole('button').map((b) => b.textContent);
+    expect(rows).toEqual(['anyone', 'ana@tridant.example', 'sam@lumenevents.example']);
+    expect(within(list).getByRole('button', { name: 'anyone' })).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: 'sam@lumenevents.example' }));
     expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-sam', { scroll: false });
+    expect(screen.queryByRole('dialog', { name: 'users' })).toBeNull();
+  });
+
+  it('past ten users the list opens on a filter that finds a user by part of an email', async () => {
+    mockUsers = [
+      ...TWO_USERS,
+      ...Array.from({ length: 9 }, (_, i) => ({ uid: `uid-crew-${i}`, email: `crew${i}@venue.example` })),
+    ];
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
+    renderPage();
+    await user.click(screen.getByRole('combobox', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    const filter = within(list).getByRole('textbox', { name: 'filter users' });
+    await waitFor(() => expect(filter).toHaveFocus());
+
+    await user.type(filter, 'lumen');
+    // the match is marked mid-word, which jsdom spaces apart in a row's name, so this reads the text
+    const rows = () => Array.from(list.querySelectorAll('[data-site-item]'), (b) => b.textContent);
+    expect(rows()).toEqual(['sam@lumenevents.example']);
+
+    await user.clear(filter);
+    await user.type(filter, 'zzz');
+    expect(within(list).getByText('no users match “zzz”')).toBeInTheDocument();
+
+    await user.clear(filter);
+    await user.type(filter, 'lumen{Enter}');
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-sam', { scroll: false });
+  });
+
+  it('hides "anyone" while a query is typed, so enter picks a user even when "anyone" holds the text', async () => {
+    mockUsers = [
+      ...TWO_USERS,
+      ...Array.from({ length: 9 }, (_, i) => ({ uid: `uid-crew-${i}`, email: `crew${i}@venue.example` })),
+    ];
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
+    renderPage();
+    // the arrow opens the list, as on a select
+    screen.getByRole('combobox', { name: 'user' }).focus();
+    await user.keyboard('{ArrowDown}');
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    const filter = within(list).getByRole('textbox', { name: 'filter users' });
+    await waitFor(() => expect(filter).toHaveFocus());
+
+    await user.type(filter, 'an');
+    expect(Array.from(list.querySelectorAll('[data-site-item]'), (b) => b.textContent)).toEqual(['ana@tridant.example']);
+    await user.keyboard('{Enter}');
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity?user=uid-ana', { scroll: false });
+  });
+
+  it('opens ten users with no filter, as the site switcher does ten sites', async () => {
+    mockUsers = [
+      ...TWO_USERS,
+      ...Array.from({ length: 8 }, (_, i) => ({ uid: `uid-crew-${i}`, email: `crew${i}@venue.example` })),
+    ];
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
+    renderPage();
+    await user.click(screen.getByRole('combobox', { name: 'user' }));
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    expect(within(list).getAllByRole('button')).toHaveLength(11);
+    expect(within(list).queryByRole('textbox')).toBeNull();
+  });
+
+  it('shows a user id the list has not loaded as itself, and anyone clears it', async () => {
+    const user = userEvent.setup();
+    mockSearch = 'user=uid-gone';
+    fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
+    renderPage();
+    const trigger = screen.getByRole('combobox', { name: 'user' });
+    expect(trigger).toHaveTextContent('uid-gone');
+    await user.click(trigger);
+    const list = await screen.findByRole('dialog', { name: 'users' });
+    expect(within(list).getByRole('button', { name: 'uid-gone' })).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: 'anyone' }));
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity', { scroll: false });
+  });
+
+  it('names a picked site on its trigger, and every site clears it', async () => {
+    const user = userEvent.setup();
+    mockSearch = 'site=site-harbor';
+    fetchMock.mockResolvedValue(jsonResponse({ rows: [] }));
+    renderPage();
+    const trigger = screen.getByRole('combobox', { name: 'site' });
+    expect(trigger).toHaveTextContent('harbor museum');
+    await user.click(trigger);
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    expect(within(list).getByRole('button', { name: 'harbor museum' })).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: 'every site' }));
+    expect(mockReplace).toHaveBeenCalledWith('/admin/activity', { scroll: false });
   });
 });
 

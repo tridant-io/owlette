@@ -73,18 +73,25 @@ export const siteFilterHostProps = {
 /**
  * the sites to switch between, with a filter on top past SITE_FILTER_THRESHOLD.
  * `menu` renders the items of the dropdown menu around it, `drawer` full-width
- * rows, `popover` inset rows that scroll under the filter.
+ * rows, `popover` inset rows that scroll under the filter. the activity page's
+ * filters list people with it too, so `noun` names what the filter searches, and
+ * `leading` is their "anyone" row: on top, outside the count, and hidden while a
+ * query is typed, so enter always picks a match.
  */
 export function SiteSwitcherList({
   sites,
   currentSiteId,
   onPick,
   surface,
+  noun = 'sites',
+  leading,
 }: {
   sites: readonly { id: string; name: string }[];
   currentSiteId?: string;
   onPick: (siteId: string) => void;
   surface: Surface;
+  noun?: string;
+  leading?: { id: string; name: string };
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -95,8 +102,13 @@ export function SiteSwitcherList({
   const query = showFilter ? text.trim() : '';
   const needle = query.toLowerCase();
   const shown = useMemo(
-    () => (needle ? sites.filter((s) => s.name.toLowerCase().includes(needle) || s.id.toLowerCase().includes(needle)) : sites),
-    [sites, needle],
+    () =>
+      needle
+        ? sites.filter((s) => s.name.toLowerCase().includes(needle) || s.id.toLowerCase().includes(needle))
+        : leading
+          ? [leading, ...sites]
+          : sites,
+    [sites, needle, leading],
   );
 
   const items = () => Array.from(listRef.current?.querySelectorAll<HTMLElement>(ITEM_SELECTOR) ?? []);
@@ -155,14 +167,14 @@ export function SiteSwitcherList({
           value={text}
           onChange={setText}
           onKeyDown={handleFilterKeyDown}
-          placeholder="filter sites…"
-          aria-label="filter sites"
+          placeholder={`filter ${noun}…`}
+          aria-label={`filter ${noun}`}
           className={styles.filter}
         />
       )}
       <div ref={listRef} onKeyDown={handleListKeyDown} className={styles.list}>
         {query && shown.length === 0 ? (
-          <p className={cn('text-sm text-muted-foreground wrap-anywhere', styles.empty)}>no sites match “{query}”</p>
+          <p className={cn('text-sm text-muted-foreground wrap-anywhere', styles.empty)}>no {noun} match “{query}”</p>
         ) : (
           shown.map((site) => {
             const current = site.id === currentSiteId;
