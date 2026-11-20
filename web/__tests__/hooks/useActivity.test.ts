@@ -3,7 +3,7 @@
  *
  * `useActivity` — the superadmin activity page's data, through
  * `/api/admin/activity`. pins the first page with its filters, load-more
- * through `next_page_token`, reading on past pages with no rows and a token, a
+ * through `next_page_token`, reading on past short or empty pages with a token, a
  * filter change discarding a stale response, and problem details as the error.
  */
 
@@ -23,6 +23,9 @@ function makeRow(overrides: Partial<ActivityRow> = {}): ActivityRow {
     ...overrides,
   };
 }
+
+const rowsOf = (n: number, prefix: string) =>
+  Array.from({ length: n }, (_, i) => makeRow({ id: `change:${prefix}${i}` }));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return { ok: status < 400, status, json: async () => body } as unknown as Response;
@@ -89,12 +92,13 @@ describe('useActivity', () => {
   });
 
   it('loads more through the token and appends', async () => {
-    const a = makeRow({ id: 'change:a' });
+    const a = rowsOf(50, 'a');
     const b = makeRow({ id: 'change:b' });
-    fetchMock.mockResolvedValueOnce(page([a], 'tok-1')).mockResolvedValueOnce(page([b]));
+    fetchMock.mockResolvedValueOnce(page(a, 'tok-1')).mockResolvedValueOnce(page([b]));
 
     const { result } = renderHook(() => useActivity({ view: 'all' }));
     await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.current.hasMore).toBe(true);
 
     await act(async () => {
@@ -103,40 +107,42 @@ describe('useActivity', () => {
     expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-1', {
       cache: 'no-store',
     });
-    expect(result.current.rows).toEqual([a, b]);
+    expect(result.current.rows).toEqual([...a, b]);
     expect(result.current.hasMore).toBe(false);
   });
 
-  it('reads on past pages with no rows, so a hidden stretch never shows as empty', async () => {
-    const b = makeRow({ id: 'change:b' });
+  it('reads on past short and empty pages until it has a page of rows, so a hidden stretch never stops a load at one row', async () => {
+    const one = makeRow({ id: 'change:one' });
+    const rest = rowsOf(49, 'r');
     const c = makeRow({ id: 'change:c' });
     fetchMock
-      .mockResolvedValueOnce(page([], 'tok-1'))
+      .mockResolvedValueOnce(page([one], 'tok-1'))
       .mockResolvedValueOnce(page([], 'tok-2'))
-      .mockResolvedValueOnce(page([b], 'tok-3'));
+      .mockResolvedValueOnce(page(rest, 'tok-3'));
 
     const { result } = renderHook(() => useActivity({ view: 'all' }));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.rows).toEqual([b]);
+    expect(result.current.rows).toEqual([one, ...rest]);
     expect(result.current.hasMore).toBe(true);
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-2', {
-      cache: 'no-store',
-    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
 
-    fetchMock.mockResolvedValueOnce(page([], 'tok-4')).mockResolvedValueOnce(page([c]));
+    fetchMock.mockResolvedValueOnce(page([c], 'tok-4')).mockResolvedValueOnce(page([]));
     await act(async () => {
       await result.current.loadMore();
     });
-    expect(result.current.rows).toEqual([b, c]);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-4', {
+      cache: 'no-store',
+    });
+    expect(result.current.rows).toEqual([one, ...rest, c]);
     expect(result.current.hasMore).toBe(false);
   });
 
-  it('stops after 15 pages with no rows and leaves the rest to load more', async () => {
+  it('stops after 5 pages with no rows and leaves the rest to load more', async () => {
     fetchMock.mockImplementation(async () => page([], 'tok'));
 
     const { result } = renderHook(() => useActivity({ view: 'all' }));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(fetchMock).toHaveBeenCalledTimes(15);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
     expect(result.current.rows).toEqual([]);
     expect(result.current.hasMore).toBe(true);
   });
@@ -158,6 +164,8 @@ describe('useActivity', () => {
     await act(async () => {
       resolveStale(page([stale], 'stale-token'));
     });
+    // a short stale page does not read on
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.current.rows).toEqual([fresh]);
     expect(result.current.hasMore).toBe(false);
     expect(result.current.loading).toBe(false);

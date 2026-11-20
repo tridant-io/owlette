@@ -16,7 +16,9 @@ type Snap = FirebaseFirestore.QueryDocumentSnapshot;
 type Data = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const SCAN_BATCH = 100;
-const SCAN_CAP = 300;
+// a filtered source doubles its batch while the filter drops most rows, so a long stretch of
+// hidden rows (dev's old fleet session renewals, about 3,000) costs a few reads, not a page each
+const SCAN_CAP = 3200;
 const MAX_ACTORS = 30; // firestore's `in` limit
 const REFUSED = ['deny', 'error'];
 
@@ -216,8 +218,8 @@ async function readSource(source: Source, upper: number | null, need: number, sk
   let scanned = 0;
   let last: Snap | null = null;
   let lastAt = 0;
+  let batch = source.sparse ? Math.min(need, SCAN_BATCH) : SCAN_BATCH;
   while (scanned < SCAN_CAP) {
-    const batch = source.sparse && scanned === 0 ? Math.min(need, SCAN_BATCH) : SCAN_BATCH;
     let query = source.build(upper).limit(batch);
     if (last) query = query.startAfter(last);
     const { docs } = await query.get();
@@ -230,6 +232,7 @@ async function readSource(source: Source, upper: number | null, need: number, sk
     scanned += docs.length;
     if (docs.length < batch) return { rows, truncated: false, horizon: null };
     last = docs[docs.length - 1];
+    batch = Math.min(batch * 2, SCAN_CAP - scanned);
   }
   return { rows, truncated: true, horizon: lastAt };
 }

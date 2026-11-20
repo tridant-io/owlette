@@ -105,7 +105,9 @@ const ROWS: ActivityRow[] = [
     actor: { type: 'machine', id: 'KIOSK-3' },
     siteId: 'site-harbor',
     action: 'machine_command_dispatched:reboot_machine',
-    target: { id: 'LOBBY-01' },
+    // as recorded: the target is the command, the machine is in the attributes
+    target: { id: 'cmd_mwnqj6bs_imrh8jsk' },
+    details: { machineId: 'LOBBY-01' },
   }),
   row({
     id: 'change:system',
@@ -431,16 +433,19 @@ describe('states', () => {
     expect(screen.getByText('no activity matches this view and these filters')).toBeInTheDocument();
   });
 
-  it('reads past an empty page by itself, offers load more while the token is non-empty, and appends', async () => {
+  it('reads past short and empty pages by itself, then offers load more while the token is non-empty, and appends', async () => {
     const user = userEvent.setup();
+    const filler = Array.from({ length: 49 }, (_, i) => row({ id: `change:filler${i}`, action: 'webhook_mutated:created' }));
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({ rows: [], next_page_token: 'tok-1' }))
-      .mockResolvedValueOnce(jsonResponse({ rows: [ROWS[0]], next_page_token: 'tok-2' }))
+      .mockResolvedValueOnce(jsonResponse({ rows: [ROWS[0]], next_page_token: 'tok-1' }))
+      .mockResolvedValueOnce(jsonResponse({ rows: [], next_page_token: 'tok-2' }))
+      .mockResolvedValueOnce(jsonResponse({ rows: filler, next_page_token: 'tok-3' }))
       .mockResolvedValueOnce(jsonResponse({ rows: [ROWS[2]] }));
     renderPage();
     expect(await item('superadmin promoted')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     await user.click(await screen.findByRole('button', { name: 'load more' }));
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-2', {
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/admin/activity?view=all&page_size=50&page_token=tok-3', {
       cache: 'no-store',
     });
     expect(await item('promoted user lee')).toBeInTheDocument();

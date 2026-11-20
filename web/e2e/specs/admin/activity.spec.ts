@@ -8,7 +8,9 @@
  * second factor in `global/audit_log/entries`, and a high and a digest finding in
  * `global/activity_watch/findings`. Fifty-five more change rows sit under a site
  * of their own so a view holds more than a page, and one change row sits on a
- * fixed day in 2024 for the date range. Everything seeded is removed afterwards.
+ * fixed day in 2024 for the date range. Under a third site, one command row sits
+ * above 350 hidden renewals and fifty more change rows, the shape dev's feed had
+ * when its first page showed a single row. Everything seeded is removed afterwards.
  *
  * The last describe runs the real detection path: five failed second factors for
  * one user, then `GET /api/cron/activity-watch` twice. No mail goes out (resend is
@@ -37,6 +39,10 @@ const ASN = 4_200_000_000 + crypto.randomInt(99_999_999);
 const NOW = Date.now();
 const FILL_SITE = `act-fill-${SUFFIX}`;
 const FILL_COUNT = 55;
+const GAP_SITE = `act-gap-${SUFFIX}`;
+const GAP_HIDDEN = 350;
+const GAP_COMMAND = `cmd_${SUFFIX}`;
+const GAP_MACHINE = `kiosk-${SUFFIX}`;
 
 const FINDING_HIGH = `act-high-${SUFFIX}`;
 const FINDING_DIGEST = `act-digest-${SUFFIX}`;
@@ -69,6 +75,7 @@ function changeRow(
   hash: string,
   recordedAt: number,
   event: { kind: string; actor: string; target: string; verb: string },
+  attributes: Record<string, string> = {},
 ) {
   return {
     event: {
@@ -77,7 +84,7 @@ function changeRow(
       actor: event.actor,
       occurredAt: recordedAt,
       target: event.target,
-      attributes: { verb: event.verb, endpoint: '/api/e2e', method: 'PATCH' },
+      attributes: { verb: event.verb, endpoint: '/api/e2e', method: 'PATCH', ...attributes },
     },
     recordedAt,
     previousHash: '',
@@ -237,6 +244,28 @@ test.beforeAll(async () => {
     );
   }
   await fill.commit();
+
+  // two hours back, newest first: the command, the hidden renewals, then fifty more changes
+  const gap = db.batch();
+  const gapRow = (name: string, n: number, event: Parameters<typeof changeRow>[3], attributes?: Record<string, string>) => {
+    const hash = crypto.createHash('sha256').update(`gap-${name}-${SUFFIX}`).digest('hex');
+    const ref = siteLog(GAP_SITE).doc(hash);
+    seeded.push(ref);
+    gap.set(ref, changeRow(GAP_SITE, hash, NOW - 2 * 60 * 60 * 1000 - n * 1000, event, attributes));
+  };
+  gapRow(
+    'command',
+    0,
+    { kind: 'machine_command_dispatched', actor: 'user:admin-uid', target: GAP_COMMAND, verb: '' },
+    { commandType: 'update_owlette', machineId: GAP_MACHINE },
+  );
+  for (let i = 1; i <= GAP_HIDDEN; i++) {
+    gapRow(`routine-${i}`, i, { kind: 'site_mutated', actor: 'machine:tec-a4d', target: ROUTINE, verb: 'fleet_session_minted' });
+  }
+  for (let i = 1; i <= 50; i++) {
+    gapRow(`change-${i}`, GAP_HIDDEN + i, { kind: 'site_mutated', actor: 'user:admin-uid', target: `gap-${i}`, verb: 'updated' });
+  }
+  await gap.commit();
 });
 
 test.afterAll(async () => {
@@ -430,6 +459,15 @@ test.describe('the page, as a superadmin', () => {
     await page.getByRole('button', { name: 'load more' }).click();
     await expect(rows).toHaveCount(FILL_COUNT);
     await expect(page.getByRole('button', { name: 'load more' })).toHaveCount(0);
+  });
+
+  test('one row above a long run of hidden renewals still opens on a full page, and a command names its machine', async ({ page }) => {
+    await page.goto(`/admin/activity?view=changes&site=${GAP_SITE}`);
+    const rows = feed(page).getByRole('listitem');
+    await expect(rows).toHaveCount(50);
+    await expect(rows.first()).toContainText(`${ADMIN} sent update owlette to ${GAP_MACHINE}`);
+    await expect(rows.first()).not.toContainText(GAP_COMMAND);
+    await expect(item(page, ROUTINE)).toHaveCount(0);
   });
 });
 
