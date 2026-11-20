@@ -4,6 +4,7 @@ const REPORT_DIR = './e2e/.output/report/security-boundary';
 
 export default defineConfig({
   testDir: './e2e/specs/security-boundary',
+  tsconfig: './tsconfig.security-boundary.json',
   outputDir: './e2e/.output/results/security-boundary',
   fullyParallel: false,
   workers: 1,

@@ -2,15 +2,17 @@ import { type Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
+import { cleanupRun, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
   pushCheck,
+  pushCleanup,
   resolveBaseUrl,
   resolveProjectId,
+  seedMember,
   type CheckResult,
   writeReport,
 } from './helpers';
@@ -133,7 +135,9 @@ async function seedLiveData(
 
   await db.collection('sites').doc(ids.siteId).set({
     name: 'W8.1 Major Flow Site',
-    owner: 'security-boundary-owner',
+    // no owner: plans are not enforced on a site with no payer, and a plan refusal (402) would
+    // come before the checks this drill is about
+    ...runSiteMark(ids.siteId),
     timezone: 'UTC',
     deployQuota: 100,
     distributionQuota: 100,
@@ -148,6 +152,7 @@ async function seedLiveData(
     mfaEnrolled: false,
     requiresMfaSetup: false,
   });
+  await seedMember(db, ids.siteId, ids.uid, 'admin');
 
   const batch = db.batch();
   for (const machineId of machineIds) {
@@ -206,14 +211,16 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
     i === 0 ? ids.machineId : `${ids.machineId}-${String(i + 1).padStart(2, '0')}`,
   );
 
-  const adminApp = createAdminApp(projectId, `security-boundary-api-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-api-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
   let client: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
   const createdIds: Record<string, string | undefined> = {};
 
   try {
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
     await seedLiveData(adminDb, adminAuth, ids, fanOutMachineIds);
     client = await createSignedInClient(
       adminAuth,
@@ -540,10 +547,6 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
       expectStatus(checks, 'machine removal superadmin', machineRemoval, 200);
     } finally {
       await superClient.signOutAndDelete();
-      await Promise.allSettled([
-        adminDb.collection('users').doc(superUid).delete(),
-        adminAuth.deleteUser(superUid),
-      ]);
     }
 
     const memberUid = `${ids.uid}-member`;
@@ -557,6 +560,7 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
       requiresMfaSetup: false,
       createdAt: FieldValue.serverTimestamp(),
     });
+    await seedMember(adminDb, ids.siteId, memberUid, 'member');
     const memberClient = await createSignedInClient(
       adminAuth,
       projectId,
@@ -575,12 +579,13 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
       expectStatusIn(checks, 'member command denied by capability', memberCommandDenied, [403]);
     } finally {
       await memberClient.signOutAndDelete();
-      await Promise.allSettled([
-        adminDb.collection('users').doc(memberUid).delete(),
-        adminAuth.deleteUser(memberUid),
-      ]);
     }
   } finally {
+    leftovers.push(
+      ...(await cleanupRun(adminDb, adminAuth, ids, [ids.uid, `${ids.uid}-super`, `${ids.uid}-member`])),
+    );
+    pushCleanup(checks, leftovers);
+
     writeReport(
       'major-flows',
       'W8.1 Major API Control-Plane Flows',
@@ -595,13 +600,8 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
       checks,
     );
 
-    await Promise.allSettled([
-      client?.signOutAndDelete(),
-      adminDb.recursiveDelete(adminDb.collection('sites').doc(ids.siteId)),
-      adminDb.recursiveDelete(adminDb.collection('config').doc(ids.siteId)),
-      adminDb.recursiveDelete(adminDb.collection('users').doc(ids.uid)),
-      adminAuth.deleteUser(ids.uid),
-    ]);
-    await adminApp.delete();
+    await Promise.allSettled([client?.signOutAndDelete()]);
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });

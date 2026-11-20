@@ -1,24 +1,28 @@
+import { type App } from 'firebase-admin/app';
 import { type Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import { getSecurityRules } from 'firebase-admin/security-rules';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { doc, getFirestore, setDoc } from 'firebase/firestore';
+import { cleanupRun, holdSecurityConfig, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
   errorCode,
   errorMessage,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
   pushCheck,
+  pushCleanup,
   REPORT_DIR,
   resolveBaseUrl,
   resolveProjectId,
+  seedMember,
   type CheckResult,
   writeReport,
 } from './helpers';
@@ -35,10 +39,6 @@ type CommandResult = {
 };
 
 const execFileAsync = promisify(execFile);
-const WEB_ROOT = process.cwd();
-const REPO_ROOT = resolve(WEB_ROOT, '..');
-const LOCKED_RULES_REF = 'd94122b:firestore.rules';
-const PERMISSIVE_RULES_REF = 'd94122b^:firestore.rules';
 
 test.skip(
   process.env.SECURITY_BOUNDARY_RUN_ROLLBACK_REHEARSAL !== '1',
@@ -84,17 +84,43 @@ async function runCommand(command: string, args: string[], cwd: string): Promise
   }
 }
 
-async function gitShow(ref: string): Promise<string> {
-  const result = await runCommand('git', ['show', ref], REPO_ROOT);
-  return result.stdout;
+/**
+ * the live rules with one write opened: the drill's own admin may create deployments on the
+ * drill's own site. that is enough to see a rules deploy land and be undone, and it changes
+ * nothing for any other site or account.
+ */
+function drillRules(live: string, siteId: string, uid: string): string {
+  if (uid !== `user-${runSiteMark(siteId).e2eRun}`) {
+    throw new Error(`${uid} and ${siteId} are not one run's ids`);
+  }
+  const opening = /^([ \t]*)match \/databases\/\{database\}\/documents \{[ \t]*$/gm;
+  if ((live.match(opening) ?? []).length !== 1) {
+    throw new Error('expected the live rules to open the documents block exactly once');
+  }
+  return live.replace(opening, (line: string, indent: string) =>
+    [
+      line,
+      `${indent}  match /sites/{drillSite}/deployments/{drillDeployment} {`,
+      `${indent}    allow create: if request.auth != null && request.auth.uid == '${uid}' && drillSite == '${siteId}';`,
+      `${indent}  }`,
+    ].join('\n'),
+  );
 }
 
-async function deployRules(
-  runId: string,
-  projectId: string,
-  label: string,
-  rulesContent: string,
-): Promise<CommandResult> {
+async function liveRules(app: App): Promise<string> {
+  const { source } = await getSecurityRules(app).getFirestoreRuleset();
+  if (source.length !== 1 || !source[0].content) {
+    throw new Error(`expected one firestore rules file live on the project, found ${source.length}`);
+  }
+  return source[0].content;
+}
+
+function sameRules(a: string, b: string): boolean {
+  return a.replace(/\r\n/g, '\n') === b.replace(/\r\n/g, '\n');
+}
+
+/** writes a folder `firebase deploy --only firestore:rules --config firebase.json` deploys from. */
+function writeRules(runId: string, label: string, rulesContent: string): string {
   const dir = join(REPORT_DIR, 'rules-rollback', runId, label);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'firestore.rules'), rulesContent, 'utf8');
@@ -103,6 +129,16 @@ async function deployRules(
     `${JSON.stringify({ firestore: { rules: 'firestore.rules' } }, null, 2)}\n`,
     'utf8',
   );
+  return dir;
+}
+
+async function deployRules(
+  runId: string,
+  projectId: string,
+  label: string,
+  rulesContent: string,
+): Promise<CommandResult> {
+  const dir = writeRules(runId, label, rulesContent);
 
   return runCommand(
     firebaseBinary(),
@@ -207,7 +243,8 @@ async function waitForDirectWriteOutcome(
   expected: 'allow' | 'deny',
 ): Promise<{ ok: boolean; code?: string; message?: string }> {
   let last: { ok: boolean; code?: string; message?: string } | undefined;
-  for (let attempt = 0; attempt < 18; attempt += 1) {
+  // a released ruleset can take about a minute to reach new requests
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     last = await attemptDirectDeploymentWrite(app, siteId, `${suffix}-${attempt}`);
     if (expected === 'allow' && last.ok) return last;
     if (expected === 'deny' && !last.ok && last.code === 'permission-denied') return last;
@@ -261,7 +298,9 @@ async function seedRollbackData(
 
   await db.collection('sites').doc(ids.siteId).set({
     name: 'W8.1 Rollback Rehearsal',
-    owner: ids.uid,
+    // no owner: plans are not enforced on a site with no payer, and a plan refusal (402) would
+    // come before the checks this drill is about
+    ...runSiteMark(ids.siteId),
     timezone: 'UTC',
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -286,6 +325,8 @@ async function seedRollbackData(
   await seedUser(auth, db, ids.uid, ids.email, 'admin', [ids.siteId]);
   await seedUser(auth, db, memberUid, memberEmail, 'member', [ids.siteId]);
   await seedUser(auth, db, superUid, superEmail, 'superadmin', []);
+  await seedMember(db, ids.siteId, ids.uid, 'admin');
+  await seedMember(db, ids.siteId, memberUid, 'member');
 
   return { memberUid, superUid, memberEmail, superEmail };
 }
@@ -315,27 +356,36 @@ async function hasCapabilityBypassAudit(
   });
 }
 
-test('live dev rollback rehearsal flips kill switch and restores locked rules', async ({ request }) => {
+test('live dev rollback rehearsal flips kill switch and restores the rules that were live', async ({ request }) => {
+  // three waits for the switch cache, two rules deploys and two waits of up to a minute for a release to land
+  test.setTimeout(420_000);
   loadLocalEnv();
 
   const projectId = resolveProjectId();
   assertDevProject(projectId);
   const baseUrl = resolveBaseUrl();
   const ids = makeRunIds('w8-rollback');
-  const adminApp = createAdminApp(projectId, `security-boundary-rollback-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-rollback-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
   const deployTimings: Record<string, number> = {};
-  let lockedRules = '';
-  let permissiveRules = '';
+  let startRules = '';
+  let rulesChanged = false;
+  let restoreSecurityConfig: Awaited<ReturnType<typeof holdSecurityConfig>> | undefined;
   let adminClient: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
   let memberClient: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
   let superClient: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
 
   try {
-    lockedRules = await gitShow(LOCKED_RULES_REF);
-    permissiveRules = await gitShow(PERMISSIVE_RULES_REF);
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
+    // read before anything is deployed: a run that cannot read the live rules back never changes them
+    startRules = await liveRules(admin.app);
+    const backup = writeRules(ids.runId, 'live-at-start', startRules);
+    console.log(`[security-boundary] the rules live at the start are saved in ${backup}; deploy from there if this run dies`);
+    const drill = drillRules(startRules, ids.siteId, ids.uid);
+    restoreSecurityConfig = await holdSecurityConfig(adminDb);
 
     const seeded = await seedRollbackData(adminDb, adminAuth, ids);
     adminClient = await createSignedInClient(
@@ -357,9 +407,15 @@ test('live dev rollback rehearsal flips kill switch and restores locked rules', 
       `security-boundary-rollback-client-super-${ids.runId}`,
     );
 
-    const lockedDeploy = await deployRules(ids.runId, projectId, 'locked-start', lockedRules);
-    deployTimings.lockedStartMs = lockedDeploy.durationMs;
-    pushCheck(checks, { name: 'locked rules deploy at rehearsal start', ok: true });
+    // before any switch is touched: a run that cannot show the write denied has nothing to drill
+    const directBefore = await attemptDirectDeploymentWrite(adminClient.app, ids.siteId, 'before');
+    pushCheck(checks, {
+      name: 'direct browser control-plane write denied under the live rules',
+      ok: directBefore.code === 'permission-denied',
+      code: directBefore.code,
+      message: directBefore.message,
+    });
+    expect(directBefore.code, directBefore.message).toBe('permission-denied');
 
     await adminDb.collection('global').doc('security_config').set(
       {
@@ -441,50 +497,43 @@ test('live dev rollback rehearsal flips kill switch and restores locked rules', 
     );
     checkStatus(checks, 'member command denied after kill switch restore', memberDeniedRestored, 403);
 
-    const permissiveDeploy = await deployRules(ids.runId, projectId, 'permissive', permissiveRules);
-    deployTimings.permissiveMs = permissiveDeploy.durationMs;
-    pushCheck(checks, { name: 'permissive rules rollback deploy', ok: true });
+    rulesChanged = true;
+    const drillDeploy = await deployRules(ids.runId, projectId, 'drill', drill);
+    deployTimings.drillMs = drillDeploy.durationMs;
+    pushCheck(checks, { name: 'drill rules deploy', ok: true });
 
     const directAllowed = await waitForDirectWriteOutcome(
       adminClient.app,
       ids.siteId,
-      'permissive',
+      'drill',
       'allow',
     );
     pushCheck(checks, {
-      name: 'direct browser control-plane write allowed under permissive rules',
+      name: 'direct browser control-plane write allowed under the drill rules',
       ok: directAllowed.ok,
       code: directAllowed.code,
       message: directAllowed.message,
     });
     expect(directAllowed.ok, directAllowed.message).toBe(true);
   } finally {
-    await adminDb.collection('global').doc('security_config').set(
-      {
-        capability_enforcement: true,
-        rate_limit_enforcement: true,
-        lastUpdated: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    ).catch((err: unknown) => {
-      pushCheck(checks, {
-        name: 'security config force-enable cleanup',
-        ok: false,
-        message: errorMessage(err),
-      });
+    await restoreSecurityConfig?.().catch((err: unknown) => {
+      leftovers.push(`global/security_config: ${errorMessage(err)}`);
     });
 
-    if (lockedRules) {
+    if (rulesChanged) {
       try {
-        const restoreDeploy = await deployRules(ids.runId, projectId, 'locked-restore', lockedRules);
-        deployTimings.lockedRestoreMs = restoreDeploy.durationMs;
-        pushCheck(checks, { name: 'locked rules restored after rollback drill', ok: true });
+        const restoreDeploy = await deployRules(ids.runId, projectId, 'restore', startRules);
+        deployTimings.restoreMs = restoreDeploy.durationMs;
+        if (!sameRules(await liveRules(admin.app), startRules)) {
+          throw new Error('the live rules still differ from the ones saved at the start');
+        }
+        pushCheck(checks, { name: 'rules live at the start restored', ok: true });
 
         if (adminClient) {
           const directDenied = await waitForDirectWriteOutcome(
             adminClient.app,
             ids.siteId,
-            'locked',
+            'restored',
             'deny',
           );
           pushCheck(checks, {
@@ -493,15 +542,18 @@ test('live dev rollback rehearsal flips kill switch and restores locked rules', 
             code: directDenied.code,
             message: directDenied.message,
           });
+          expect.soft(directDenied.code, 'direct write after the rules restore').toBe('permission-denied');
         }
       } catch (err) {
-        pushCheck(checks, {
-          name: 'locked rules restored after rollback drill',
-          ok: false,
-          message: errorMessage(err),
-        });
+        pushCheck(checks, { name: 'rules live at the start restored', ok: false, message: errorMessage(err) });
+        leftovers.push(`firestore rules: ${errorMessage(err)}`);
       }
     }
+
+    leftovers.push(
+      ...(await cleanupRun(adminDb, adminAuth, ids, [ids.uid, `${ids.uid}-member`, `${ids.uid}-super`])),
+    );
+    pushCleanup(checks, leftovers);
 
     writeReport(
       'rollback-rehearsal',
@@ -512,9 +564,8 @@ test('live dev rollback rehearsal flips kill switch and restores locked rules', 
         baseUrl,
         siteId: ids.siteId,
         uid: ids.uid,
-        lockedStartDeployMs: deployTimings.lockedStartMs ?? '',
-        permissiveDeployMs: deployTimings.permissiveMs ?? '',
-        lockedRestoreDeployMs: deployTimings.lockedRestoreMs ?? '',
+        drillDeployMs: deployTimings.drillMs ?? '',
+        restoreDeployMs: deployTimings.restoreMs ?? '',
       },
       checks,
     );
@@ -523,13 +574,8 @@ test('live dev rollback rehearsal flips kill switch and restores locked rules', 
       adminClient?.signOutAndDelete(),
       memberClient?.signOutAndDelete(),
       superClient?.signOutAndDelete(),
-      adminDb.recursiveDelete(adminDb.collection('sites').doc(ids.siteId)),
-      adminDb.recursiveDelete(adminDb.collection('config').doc(ids.siteId)),
-      adminDb.recursiveDelete(adminDb.collection('users').doc(ids.uid)),
-      adminAuth.deleteUser(ids.uid),
-      adminAuth.deleteUser(`${ids.uid}-member`),
-      adminAuth.deleteUser(`${ids.uid}-super`),
     ]);
-    await adminApp.delete();
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });

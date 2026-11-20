@@ -3,22 +3,32 @@ import { type Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { createHash, randomUUID } from 'node:crypto';
+import { cleanupRun, holdSecurityConfig, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
+  errorMessage,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
   pushCheck,
+  pushCleanup,
   requireEnv,
   resolveBaseUrl,
   resolveProjectId,
+  seedMember,
   type CheckResult,
   writeReport,
 } from './helpers';
 import { dispatchExistingCommandAsSystem } from '@/lib/hoot/dispatch.server';
 import { Capability } from '@/lib/capabilities';
+import { WINDOW_SEC } from '@/lib/rateLimit.server';
 import { securityConfig } from '@/lib/securityConfig.server';
+
+const CALLS_PER_INVESTIGATION = 20;
+// the limiter forgets a shard's count one window after that shard's first write, and twenty calls
+// sent one after another take about a minute against dev (each waits out one result poll). sent
+// in steps, the burst ends well inside one window, so the count read afterwards is complete.
+const CALLS_PER_STEP = 4;
 
 type ApiResult = {
   status: number;
@@ -144,7 +154,9 @@ async function seedHootData(
 
   await db.collection('sites').doc(ids.siteId).set({
     name: 'W8.1 Hoot Site',
-    owner: 'security-boundary-owner',
+    // no owner: plans are not enforced on a site with no payer, and a plan refusal (402) would
+    // come before the checks this drill is about
+    ...runSiteMark(ids.siteId),
     timezone: 'UTC',
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -158,6 +170,7 @@ async function seedHootData(
     mfaEnrolled: false,
     requiresMfaSetup: false,
   });
+  await seedMember(db, ids.siteId, memberUid, 'member');
 
   const batch = db.batch();
   for (const machineId of machineIds) {
@@ -267,15 +280,19 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
   const memberUid = `${ids.uid}-member`;
   const memberEmail = `${memberUid}@security-boundary.e2e`;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
   let conversationId: string | undefined;
   ensureDefaultAdminApp(projectId);
 
-  const adminApp = createAdminApp(projectId, `security-boundary-cortex-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-cortex-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
   let memberClient: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
+  let restoreSecurityConfig: Awaited<ReturnType<typeof holdSecurityConfig>> | undefined;
 
   try {
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
+    restoreSecurityConfig = await holdSecurityConfig(adminDb);
     await seedHootData(adminDb, adminAuth, ids, burstMachineIds, memberUid, memberEmail);
     memberClient = await createSignedInClient(
       adminAuth,
@@ -335,24 +352,29 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
     });
 
     let burstResults: unknown[] = [];
+    const burstStartedAt = Date.now();
     try {
       burstResults = (
         await Promise.all(
           burstMachineIds.map(async (machineId, investigation) => {
             const results: unknown[] = [];
-            for (let toolCall = 0; toolCall < 20; toolCall += 1) {
+            for (let first = 0; first < CALLS_PER_INVESTIGATION; first += CALLS_PER_STEP) {
               results.push(
-                await dispatchExistingCommandAsSystem(
-                  {
-                    db: adminDb,
-                    siteId: ids.siteId,
-                    machineId,
-                    chatId: `chat-${ids.runId}-${investigation}`,
-                    eventId: `event-${ids.runId}-${investigation}`,
-                  },
-                  'restart_process',
-                  { process_name: `W8Process${toolCall}.exe` },
-                ),
+                ...(await Promise.all(
+                  Array.from({ length: CALLS_PER_STEP }, (_, inStep) =>
+                    dispatchExistingCommandAsSystem(
+                      {
+                        db: adminDb,
+                        siteId: ids.siteId,
+                        machineId,
+                        chatId: `chat-${ids.runId}-${investigation}`,
+                        eventId: `event-${ids.runId}-${investigation}`,
+                      },
+                      'restart_process',
+                      { process_name: `W8Process${first + inStep}.exe` },
+                    ),
+                  ),
+                )),
               );
             }
             return results;
@@ -363,7 +385,20 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
       stopCompleter = true;
       await completer;
     }
+    const burstMs = Date.now() - burstStartedAt;
     expect(completerErrors).toEqual([]);
+
+    // the limiter runs in this process and cuts its windows in whole seconds of this clock, so
+    // only a burst a full second short of the window is sure to have restarted no shard.
+    const completeCountMs = (WINDOW_SEC - 1) * 1000;
+    pushCheck(checks, {
+      name: 'hoot burst ended inside one rate-limit window',
+      ok: burstMs < completeCountMs,
+      status: burstMs,
+    });
+    expect(burstMs, 'the burst outlasted the rate-limit window, so its count is not complete').toBeLessThan(
+      completeCountMs,
+    );
 
     pushCheck(checks, {
       name: 'hoot autonomous 3x20 burst allowed',
@@ -431,6 +466,12 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
     });
     expect(userSubjects).toHaveLength(0);
   } finally {
+    leftovers.push(...(await cleanupRun(adminDb, adminAuth, ids, [memberUid])));
+    await restoreSecurityConfig?.().catch((err: unknown) => {
+      leftovers.push(`global/security_config: ${errorMessage(err)}`);
+    });
+    pushCleanup(checks, leftovers);
+
     writeReport(
       'cortex-autonomous-burst',
       'W8.1 Hoot Member Read + Autonomous Burst',
@@ -447,15 +488,8 @@ test('member Hoot read path and autonomous burst stay inside system boundary', a
       checks,
     );
 
-    await Promise.allSettled([
-      memberClient?.signOutAndDelete(),
-      conversationId
-        ? adminDb.recursiveDelete(adminDb.collection('chat_conversations').doc(conversationId))
-        : Promise.resolve(),
-      adminDb.recursiveDelete(adminDb.collection('sites').doc(ids.siteId)),
-      adminDb.collection('users').doc(memberUid).delete(),
-      adminAuth.deleteUser(memberUid),
-    ]);
-    await adminApp.delete();
+    await Promise.allSettled([memberClient?.signOutAndDelete()]);
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });

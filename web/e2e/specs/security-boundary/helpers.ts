@@ -1,6 +1,6 @@
-import { type App, cert, initializeApp as initializeAdminApp } from 'firebase-admin/app';
-import { type Auth } from 'firebase-admin/auth';
-import { randomUUID } from 'node:crypto';
+import { type App, cert, deleteApp, initializeApp as initializeAdminApp } from 'firebase-admin/app';
+import { type Auth, getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { FieldValue, type Firestore, getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
@@ -9,6 +9,7 @@ import {
   type FirebaseApp,
 } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
+import { DEV_PROJECT_ID } from './cleanup';
 
 export type CheckResult = {
   name: string;
@@ -16,14 +17,6 @@ export type CheckResult = {
   code?: string;
   status?: number;
   message?: string;
-};
-
-export type RunIds = {
-  runId: string;
-  siteId: string;
-  machineId: string;
-  uid: string;
-  email: string;
 };
 
 export type SignedInClient = {
@@ -36,7 +29,6 @@ const WEB_ROOT = process.cwd();
 const REPO_ROOT = resolve(WEB_ROOT, '..');
 
 export const REPORT_DIR = join(WEB_ROOT, 'e2e', '.output', 'report', 'security-boundary');
-export const DEV_PROJECT_ID = 'owlette-dev-3838a';
 
 function loadEnvFile(path: string): void {
   if (!existsSync(path)) return;
@@ -108,22 +100,15 @@ export function resolveBaseUrl(): string {
   return baseUrl.replace(/\/+$/, '');
 }
 
-export function makeRunIds(prefix = 'w8'): RunIds {
-  const runId = `${prefix}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-  const siteId = `site-${runId}`;
-  const machineId = `machine-${runId}`;
-  const uid = `user-${runId}`;
-  return {
-    runId,
-    siteId,
-    machineId,
-    uid,
-    email: `${uid}@security-boundary.e2e`,
-  };
-}
+export type Admin = {
+  app: App;
+  auth: Auth;
+  db: Firestore;
+  close: () => Promise<void>;
+};
 
-export function createAdminApp(projectId: string, appName: string): App {
-  return initializeAdminApp(
+export function openAdmin(projectId: string, appName: string): Admin {
+  const app = initializeAdminApp(
     {
       credential: cert({
         projectId,
@@ -134,6 +119,23 @@ export function createAdminApp(projectId: string, appName: string): App {
     },
     appName,
   );
+  return { app, auth: getAdminAuth(app), db: getAdminFirestore(app), close: () => deleteApp(app) };
+}
+
+/** site access is the member row; the `sites` list on the users row no longer grants it. */
+export async function seedMember(
+  db: Firestore,
+  siteId: string,
+  uid: string,
+  role: 'admin' | 'member',
+): Promise<void> {
+  await db.collection('sites').doc(siteId).collection('members').doc(uid).set({
+    uid,
+    role,
+    status: 'active',
+    addedAt: FieldValue.serverTimestamp(),
+    addedBy: 'security-boundary-drill',
+  });
 }
 
 export async function createSignedInClient(
@@ -179,6 +181,13 @@ export function errorMessage(err: unknown): string {
 
 export function pushCheck(checks: CheckResult[], check: CheckResult): void {
   checks.push(check);
+}
+
+export function pushCleanup(checks: CheckResult[], leftovers: string[]): void {
+  if (leftovers.length === 0) pushCheck(checks, { name: 'run data cleaned up', ok: true });
+  for (const leftover of leftovers) {
+    pushCheck(checks, { name: 'run data cleaned up', ok: false, message: leftover });
+  }
 }
 
 export function writeReport(
