@@ -1,18 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { Activity as ActivityIcon, Loader2, RefreshCw } from 'lucide-react';
+import { useId, useMemo, useState } from 'react';
+import { Activity as ActivityIcon, ChevronDown, Loader2, RefreshCw } from 'lucide-react';
 import { useActivity, type ActivityRow, type ActivityView } from '@/hooks/useActivity';
 import { useSites } from '@/hooks/useFirestore';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
+import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DatePicker } from '@/components/ui/date-picker';
 import { IconButton } from '@/components/ui/icon-button';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DATE_PRESETS, fromYMD, toYMD, type DatePreset } from '@/lib/dateRange';
 import {
@@ -38,8 +40,8 @@ export interface ActivityFilters {
   dateTo?: string;
 }
 
-// a select item cannot hold an empty value, so "no filter" is this
-const ANY = 'any';
+// "no filter" is the list's leading row. its id is empty, which no uid or site id is
+const ANY = '';
 
 // light takes the family surface; dark a tint of the solid, as the issue status badges do
 const KIND_TONE: Record<ActivityRow['kind'], string> = {
@@ -216,35 +218,72 @@ function ActivityResults({
   );
 }
 
-function FilterSelect({
+// a select with the site switcher's filter, as owlette swoop's site picker is: a combobox
+// that opens the list in a popover, styled as the date range's select trigger beside it
+function FilterPicker({
   label,
+  noun,
   anyLabel,
   value,
   options,
   onChange,
 }: {
   label: string;
+  noun: string;
   anyLabel: string;
   value?: string;
   options: { value: string; label: string }[];
   onChange: (next?: string) => void;
 }) {
-  // an id from the url that the list has not loaded yet still shows as itself
-  const shown = value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options;
+  const [open, setOpen] = useState(false);
+  const listId = useId();
+  const items = useMemo(() => {
+    // an id from the url that the list has not loaded yet still shows as itself
+    const known = value && !options.some((o) => o.value === value) ? [...options, { value, label: value }] : options;
+    return known.map((o) => ({ id: o.value, name: o.label }));
+  }, [options, value]);
+  const leading = useMemo(() => ({ id: ANY, name: anyLabel }), [anyLabel]);
+  const current = value ?? ANY;
   return (
-    <Select value={value ?? ANY} onValueChange={(next) => onChange(next === ANY ? undefined : next)}>
-      <SelectTrigger aria-label={label} className="min-w-0 flex-1 basis-36 md:w-52 md:flex-none">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ANY}>{anyLabel}</SelectItem>
-        {shown.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Popover modal open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          role="combobox"
+          aria-label={label}
+          aria-expanded={open}
+          aria-controls={open ? listId : undefined}
+          onKeyDown={(e) => {
+            if (e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            setOpen(true);
+          }}
+          className="flex h-9 min-w-0 flex-1 basis-36 items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 md:w-52 md:flex-none dark:bg-input/30 dark:hover:bg-input/50"
+        >
+          <span className="truncate">{value ? items.find((i) => i.id === value)?.name : anyLabel}</span>
+          <ChevronDown aria-hidden className="size-4 shrink-0 text-muted-foreground opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        id={listId}
+        align="start"
+        aria-label={noun}
+        className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
+        {...siteFilterHostProps}
+      >
+        <SiteSwitcherList
+          surface="popover"
+          noun={noun}
+          sites={items}
+          leading={leading}
+          currentSiteId={current}
+          onPick={(next) => {
+            setOpen(false);
+            onChange(next === ANY ? undefined : next);
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -346,15 +385,17 @@ export function ActivityList({
             onChange={(view) => onFiltersChange({ ...filters, view })}
           />
           <div className="flex w-full gap-2 md:w-auto">
-            <FilterSelect
+            <FilterPicker
               label="user"
+              noun="users"
               anyLabel="anyone"
               value={filters.userId}
               options={userOptions}
               onChange={(userId) => onFiltersChange({ ...filters, userId })}
             />
-            <FilterSelect
+            <FilterPicker
               label="site"
+              noun="sites"
               anyLabel="every site"
               value={filters.siteId}
               options={siteOptions}

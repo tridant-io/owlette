@@ -28,6 +28,10 @@ a command sent to a machine read `sent update owlette to cmd_…`, the id of the
 
 **admin** → **activity** has the logs page's date range beside its user and site filters: all time, the last hour or 24 hours, today, yesterday, the last 7 or 30 days, this week, this month, last month, or a custom range of days. the range is kept in the address, so a shared link opens the same range, read from the moment it is opened. the API takes it as `since` and `until` on `GET /api/admin/activity`, unix milliseconds or ISO 8601, both included.
 
+### changed — the activity page's user and site filters search
+
+the user and site lists on **admin** → **activity** open on a filter past ten entries, as the site switcher does: type part of an email or a site's name, and enter picks the first match.
+
 ## [4.2.3] - 2026-11-17
 
 ### added — an activity page that flags risky changes and sign-ins
