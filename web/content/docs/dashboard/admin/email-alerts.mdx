@@ -1,7 +1,7 @@
 ---
 title: "email alerts"
 description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. site owners and admins write threshold rules on admin → alerts; each person picks which emails they get in account settings."
-keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "built-in alerts", "custom rules"]
+keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "built-in alerts", "custom rules", "sleep", "asleep", "laptop", "lid closed", "battery"]
 ---
 
 alert email goes to the people on a site, not to a fixed address. each person decides which categories they get; site owners and admins decide what counts as a threshold breach.
@@ -30,6 +30,7 @@ every alert email ends with **manage alerts**, which opens `/settings/alerts`, a
 | category | sent when | switch | how it is sent |
 |---|---|---|---|
 | machine offline | a machine its agent last reported online stops sending heartbeats | **machine offline alerts** | the health-check cron, one email per site; see [offline timing](#offline-timing) |
+| machine asleep, machine awake | a Mac's agent marked it asleep on its way to sleep, then it woke | **machine offline alerts** | the health-check cron, one email per site for each; see [asleep machines](#asleep-machines) |
 | agent connection failure | the agent reports a `connection_failure` | **machine offline alerts** | at once, from `POST /api/agent/alert` |
 | process crashed or failed to start | the agent reports `process_crash` or `process_start_failed` | **process crash alerts** | queued, then sent as a digest by `GET /api/cron/process-alerts` |
 | threshold | a [rule](#threshold-alert-rules) is breached | **threshold alerts** | the metrics Cloud Function calls `POST /api/alerts/trigger` |
@@ -55,6 +56,19 @@ the email lists the machines **not responding**, any that **reported shutting do
 - **planned downtime is skipped.** no alert fires while the agent has announced a reboot or shutdown scheduled within 15 minutes either side of now
 - **a clean shutdown never pages.** a machine whose agent reported itself offline is only listed as context in an email another machine triggered
 - with the cron every 5 minutes, the first email lands about 20 to 25 minutes after the last heartbeat
+
+### asleep machines
+
+a Mac's agent marks the machine **asleep** on its way to sleep: idle sleep on battery, a closed lid, or sleep from the Apple menu. an asleep machine is never paged as offline. it gets two emails instead:
+
+1. **machines asleep**, once it has slept for 5 minutes. a shorter sleep sends nothing at all
+2. **machines awake**, at its first heartbeat after it fully wakes, with how long it slept
+
+the Mac's dark wakes, a few seconds of maintenance every quarter hour or so with the displays off, do not count as waking. a machine that never wakes, because its battery ran out for example, stays asleep on the dashboard and is never paged as offline.
+
+- **macOS agents only, so far.** a Windows or Linux machine that sleeps still pages as not responding
+- sleep fires no webhook and no talon: `machine.offline` and `machine_offline` stay outage events
+- [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) stops idle sleep, but a closed lid or the Apple menu sleeps a Mac either way
 
 ---
 
@@ -179,6 +193,7 @@ the email page reads the configuration from `GET /api/platform/email/config` and
 | alert | limit |
 |---|---|
 | machine offline | one email per machine per hour, after the [settling window](#offline-timing) |
+| machine asleep, machine awake | one of each per sleep; see [asleep machines](#asleep-machines) |
 | everything an agent posts | 5 reports per hour per IP address on `POST /api/agent/alert`: process, display and connection reports together. machines behind one NAT share the budget |
 | process alerts | 3 per hour per machine and process. a report over the limit is dropped, not queued |
 | display alerts | 1 per hour per machine and event type; `display_drift` once every 4 hours |

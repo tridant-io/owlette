@@ -10,12 +10,15 @@ keywords: ["machine menu", "three dots", "delete a machine", "decommission", "mo
 
 the agent sends a **heartbeat** to Firestore on an adaptive interval: every 5 seconds while the owlette app's window is open on the machine, every 30 seconds while a managed process is running or launching, and every 120 seconds when idle.
 
-the status indicator is binary:
+the status indicator:
 
 | status | condition | indicator |
 |--------|-----------|-----------|
 | **online** | the agent reports the machine online | green dot (hover for *online*) |
 | **offline** | the agent reports offline, or the dashboard's own timeout marks an old heartbeat offline | red **offline** pill |
+| **asleep** | a Mac's agent marked the machine asleep on its way to sleep, and it has not fully woken since | blue **asleep** pill |
+
+an asleep machine is offline for everything else on the dashboard, and is never paged as offline: see [asleep machines](/docs/dashboard/admin/email-alerts#asleep-machines).
 
 while a restart or shutdown is counting down, the indicator becomes the [countdown](#reboot-countdown--cancel) instead, and while a restart waits for the machine's [active hours](#inside-active-hours) to end, an amber **restart at** pill.
 

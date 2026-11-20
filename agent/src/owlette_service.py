@@ -21,6 +21,7 @@ import config_sync
 import configure_site
 import fleet_session
 import site_move_commands
+import sleep_watch
 from command_router import COMMAND_DEFERRED, CommandRouter
 from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
@@ -3285,6 +3286,12 @@ class OwletteService:
     # ─── End swoop ────────────────────────────────────────────────────────
 
     # ─── keep screens awake ───────────────────────────────────────────────
+
+    def _announce_asleep(self):
+        """sleep_watch's announce: the client is looked up now, a re-pair replaces it."""
+        client = self.firebase_client
+        if client is not None:
+            client.announce_asleep()
 
     def _check_keep_awake(self):
         """Hold the machine awake while its site asks, and mirror what is held.
@@ -9766,6 +9773,10 @@ class OwletteService:
         self.fleet_session = fleet_session.FleetSessionKeeper(
             lambda: getattr(self, 'firebase_client', None)
         )
+
+        # Marks the machine asleep on the system's way to sleep, so the server
+        # tells sleep from a crash. Its own thread; mac only so far.
+        sleep_watch.WATCH.start(self._announce_asleep)
 
         # Before Firebase init, which can take seconds — the user needs immediate
         # feedback that the service is starting.

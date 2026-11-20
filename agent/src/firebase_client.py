@@ -23,6 +23,7 @@ import shared_utils
 import hardware_profile
 import installer_utils
 import config_sync
+import sleep_watch
 import swoop_capability
 
 # OAuth REST modules — deliberately not firebase_admin
@@ -1527,6 +1528,33 @@ class FirebaseClient:
             return DELETE_FIELD
         return window if window else DELETE_FIELD
 
+    def _asleep_fields(self):
+        """The machine document's asleep flag and, while asleep, when that sleep
+        began; none where the platform cannot tell.
+
+        A dark wake's heartbeat still says asleep (see sleep_watch). Every asleep
+        write carries asleepSince, so a missed announce never leaves an older
+        sleep's time behind; a wake leaves it in place for the awake email. A
+        watch that failed to start deletes the flag, or a stale asleep would
+        hold off the offline alert for good.
+        """
+        watch = sleep_watch.WATCH
+        if not watch.supported:
+            return {}
+        if not watch.listening:
+            return {'asleep': DELETE_FIELD}
+        since = watch.asleep_since()
+        return {'asleep': False} if since is None else {'asleep': True, 'asleepSince': since}
+
+    def announce_asleep(self):
+        """Mark the machine asleep, on the system's way to sleep: what its next
+        heartbeat would say, written before the agent freezes."""
+        if not self.connected or not self.db:
+            return
+        self.db.collection('sites').document(self.site_id)\
+            .collection('machines').document(self.machine_id).set(self._asleep_fields(), merge=True)
+        self.logger.info("Machine marked asleep in Firestore")
+
     def _upload_metrics(self, metrics: Dict[str, Any]) -> bool:
         """Upload system metrics to Firestore.
 
@@ -1614,6 +1642,7 @@ class FirebaseClient:
                 # a machine whose heartbeat lacks it
                 'capabilities.siteMove': 1,
                 'activeHours': self._active_hours_field(),
+                **self._asleep_fields(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,

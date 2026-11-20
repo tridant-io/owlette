@@ -34,6 +34,10 @@ _Avoid_: autolaunch, autostart
 The agent's periodic write of its machine's state to Firestore. A machine whose heartbeat goes stale reads as offline.
 _Avoid_: ping, check-in
 
+**Asleep**:
+A machine whose agent marked it asleep on the system's way to sleep, until it fully wakes; a dark wake does not count. It is offline but never an outage, and earns one asleep and one awake email. macOS agents only, so far.
+_Avoid_: sleeping, suspended, standby, hibernating
+
 **Command**:
 An instruction the web app writes to a machine's `commands/pending` for its agent to run and answer in `commands/completed`.
 _Avoid_: request, RPC, job
