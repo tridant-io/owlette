@@ -11,6 +11,7 @@ import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { DatePicker } from '@/components/ui/date-picker';
 import { IconButton } from '@/components/ui/icon-button';
 import { Label } from '@/components/ui/label';
@@ -80,54 +81,56 @@ function ActivityItem({
 }) {
   const person = row.subject ?? row.actor;
   return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
-      >
-        <span className="col-[2] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[1] md:row-[1/3] md:text-left">
-          <time dateTime={new Date(row.at).toISOString()} title={rowFullTime(row)}>
-            {rowTime(row)}
-          </time>
-        </span>
-        <span className="col-[1] row-[1] flex md:col-[2] md:row-[1/3]">
-          <KindBadge row={row} />
-        </span>
-        <span className="col-[1/3] row-[2] break-words text-sm md:col-[3] md:row-[1] md:truncate">
-          <span className="font-semibold text-foreground">{rowWho(row)}</span>
-          <span className="text-foreground"> {rowWhat(row)}</span>
-        </span>
-        <span className="col-[1/3] row-[3] break-words text-xs text-muted-foreground md:col-[3] md:row-[2] md:truncate">
-          {rowMeta(row, siteNames)}
-        </span>
-      </button>
-      {open && (
-        <div className="flex flex-col gap-3 px-3 pb-4 pt-1 sm:px-4 md:pl-[6.5rem]">
-          <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
-            {rowFacts(row, siteNames).map(([key, value], i) => (
-              <div key={`${key}:${i}`} className="contents">
-                <dt className="text-muted-foreground">{key}</dt>
-                <dd className="break-words font-mono text-xs text-foreground">{value}</dd>
-              </div>
-            ))}
-          </dl>
-          <div className="flex flex-wrap gap-2">
-            {person.type === 'user' && person.id && (
-              <Button variant="outline" size="sm" onClick={() => onFilter({ userId: person.id })}>
-                everything from this actor
-              </Button>
-            )}
-            {row.siteId !== null && (
-              <Button variant="outline" size="sm" onClick={() => onFilter({ siteId: row.siteId as string })}>
-                everything on this site
-              </Button>
-            )}
+    <Collapsible asChild open={open} onOpenChange={onToggle}>
+      <li>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
+          >
+            <span className="col-[2] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[1] md:row-[1/3] md:text-left">
+              <time dateTime={new Date(row.at).toISOString()} title={rowFullTime(row)}>
+                {rowTime(row)}
+              </time>
+            </span>
+            <span className="col-[1] row-[1] flex md:col-[2] md:row-[1/3]">
+              <KindBadge row={row} />
+            </span>
+            <span className="col-[1/3] row-[2] break-words text-sm md:col-[3] md:row-[1] md:truncate">
+              <span className="font-semibold text-foreground">{rowWho(row)}</span>
+              <span className="text-foreground"> {rowWhat(row)}</span>
+            </span>
+            <span className="col-[1/3] row-[3] break-words text-xs text-muted-foreground md:col-[3] md:row-[2] md:truncate">
+              {rowMeta(row, siteNames)}
+            </span>
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+          <div className="flex flex-col gap-3 px-3 pb-4 pt-1 sm:px-4 md:pl-[6.5rem]">
+            <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+              {rowFacts(row, siteNames).map(([key, value], i) => (
+                <div key={`${key}:${i}`} className="contents">
+                  <dt className="text-muted-foreground">{key}</dt>
+                  <dd className="break-words font-mono text-xs text-foreground">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-wrap gap-2">
+              {person.type === 'user' && person.id && (
+                <Button variant="outline" size="sm" onClick={() => onFilter({ userId: person.id })}>
+                  everything from this actor
+                </Button>
+              )}
+              {row.siteId !== null && (
+                <Button variant="outline" size="sm" onClick={() => onFilter({ siteId: row.siteId as string })}>
+                  everything on this site
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-    </li>
+        </CollapsibleContent>
+      </li>
+    </Collapsible>
   );
 }
 
