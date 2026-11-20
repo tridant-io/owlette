@@ -32,6 +32,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { mintApiKey, revokeApiKey, authHeaders, type MintedApiKey } from '../../helpers/apiKey';
 import { getAdminDb } from '../../helpers/emulator';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { E2E_CRON_SECRET } from '../../helpers/cron';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
@@ -283,6 +284,14 @@ test.afterAll(async () => {
 const feed = (page: Page) => page.getByRole('list', { name: 'activity' });
 const item = (page: Page, text: string) => feed(page).getByRole('listitem').filter({ hasText: text });
 
+/** opens a row and waits out its slide: a click inside a row still sliding open can miss its target */
+async function openRow(row: Locator): Promise<void> {
+  const trigger = row.getByRole('button').first();
+  await trigger.click();
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await row.evaluate((li) => Promise.allSettled(li.getAnimations({ subtree: true }).map((a) => a.finished)));
+}
+
 /** the seeded rows on screen, in the order they appear */
 async function seededOnScreen(page: Page): Promise<string[]> {
   await expect(feed(page)).toBeVisible();
@@ -363,7 +372,7 @@ test.describe('the page, as a superadmin', () => {
     await expect(row).toContainText(`${ADMIN} was refused: input not permitted on ${HOST_MACHINE}`);
     await expect(row).toContainText(`${SITE_A} · reported by owlette · swoop host`);
 
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.locator('dt:text-is("viewer") + dd')).toHaveText(ADMIN);
     await expect(row.locator('dt:text-is("machine") + dd')).toHaveText(HOST_MACHINE);
     await expect(row.locator('dt:text-is("target") + dd')).toHaveText(`swoop session sid-${SUFFIX}`);
@@ -404,7 +413,7 @@ test.describe('the page, as a superadmin', () => {
     await page.goto('/admin/activity');
 
     const row = item(page, CHANGE);
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.getByRole('button').first()).toHaveAttribute('aria-expanded', 'true');
     await expect(row.getByText('user_mutated:promoted')).toBeVisible();
     await expect(row.getByText('/api/e2e')).toBeVisible();
@@ -414,7 +423,7 @@ test.describe('the page, as a superadmin', () => {
     await expect(page.getByRole('combobox', { name: 'user' })).toHaveText(ADMIN);
     await expect(item(page, PLATFORM)).toHaveCount(0);
 
-    await item(page, CHANGE).getByRole('button').click();
+    await openRow(item(page, CHANGE));
     await item(page, CHANGE).getByRole('button', { name: 'everything on this site' }).click();
     await expect(page).toHaveURL(/user=admin-uid&site=site-A$/);
     await expect(page.getByRole('combobox', { name: 'site' })).toHaveText(SITE_A);
@@ -422,11 +431,39 @@ test.describe('the page, as a superadmin', () => {
 
     await page.goto('/admin/activity');
     const finding = item(page, HIGH);
-    await finding.getByRole('button').click();
+    await openRow(finding);
     await expect(finding.getByText('attempts', { exact: true })).toBeVisible();
     await expect(finding.getByText('severity', { exact: true })).toBeVisible();
     await expect(finding.getByText('not emailed yet')).toBeVisible();
     await expect(finding.getByRole('button', { name: 'everything on this site' })).toHaveCount(0);
+  });
+
+  test('a row opens and closes with the slide the other expandable rows use', async ({ page }) => {
+    await page.goto('/admin/activity');
+    const row = item(page, CHANGE);
+    await expect(row).toBeVisible();
+
+    // read the animations off their start events, so the test never races a 200ms slide
+    await row.evaluate((li: HTMLElement) => {
+      li.dataset.slides = '';
+      li.addEventListener('animationstart', (e) => {
+        if (e.animationName.startsWith('collapsible-')) li.dataset.slides += `${e.animationName} `;
+      });
+    });
+    const slides = () => row.evaluate((li: HTMLElement) => (li.dataset.slides ?? '').trim());
+
+    await row.getByRole('button').first().click();
+    await expect.poll(slides).toBe('collapsible-down');
+    await expect(row.getByText('user_mutated:promoted')).toBeVisible();
+
+    await row.getByRole('button').first().click();
+    await expect.poll(slides).toBe('collapsible-down collapsible-up');
+    await expect(row.getByText('user_mutated:promoted')).toHaveCount(0);
+
+    // the slide clips its content, so the shortcuts' outlines must stay inside it.
+    // last, because the check turns animation off for the rest of the page
+    await openRow(row);
+    expect(await clippedFocusRings(page, row)).toEqual([]);
   });
 
   test('the date range narrows the list and stays in the url', async ({ page }) => {
@@ -542,7 +579,7 @@ test.describe('the page at a phone width', () => {
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
     const row = item(page, CHANGE);
-    await row.getByRole('button').click();
+    await openRow(row);
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything from this actor' }), 'the actor shortcut');
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything on this site' }), 'the site shortcut');
     await assertNoHorizontalOverflow(page);
@@ -665,7 +702,7 @@ test.describe('the detection path, through the cron route', () => {
     await page.goto('/admin/activity?view=flagged');
     const row = item(page, `for ${BURST_EMAIL} within 15 minutes`);
     await expect(row).toContainText('flagged · high');
-    await row.getByRole('button').click();
+    await openRow(row);
     await expect(row.getByText('failures', { exact: true })).toBeVisible();
     await expect(row.locator('dt:has-text("failures") + dd')).toHaveText('5');
   });

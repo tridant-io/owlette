@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — activity rows slide open and closed
+
+a row on **admin** → **activity** opened and closed in one jump. it now slides, as the rows on the logs and deployments pages do.
+
 ### fixed — focus outlines are no longer cut off at the edge of a form
 
 the outline around a focused field lost its left edge in the **add process** dialog: the form scrolls, and a box that scrolls clips whatever reaches past its sides. the same thing cut the outlines of the fields that open on the **sign in** and **sign up** pages, the fields in the talon editor, the schedule editor and schedule presets, the buttons in the list of shared hoot links and, on a short window, the last link in the admin sidebar. each now leaves room for the whole outline, and inside a dialog that scrolls, a control that tabbing brings in at the top or bottom edge keeps its whole outline too. nothing moves.
