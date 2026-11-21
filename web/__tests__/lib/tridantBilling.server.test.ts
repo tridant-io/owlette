@@ -37,6 +37,9 @@ jest.mock('@/lib/firebase-admin', () => ({
             }
             mockStore.set(key, data);
           },
+          delete: async () => {
+            mockStore.delete(key);
+          },
         };
       };
       const where = (field: string, op: string, value: unknown) => {
@@ -68,7 +71,9 @@ import {
   confirmCheckout,
   foundersRemaining,
   linkAccount,
+  previewTrial,
   pushSite,
+  removeSite,
   reportUsage,
   siteRef,
   startCheckout,
@@ -91,6 +96,20 @@ const mockFetch = jest.fn();
 
 const answer = (json: unknown, status = 200): TridantResult => ({ ok: true, status, json });
 const refusal = (status: number, json: unknown): TridantResult => ({ ok: false, reason: 'rejected', status, json });
+
+/** a usage outcome, not recorded and with no period unless `more` says. */
+const outcome = (siteId: string, status: string, more: Record<string, unknown> = {}) => ({
+  siteId,
+  status,
+  recorded: false,
+  settling: false,
+  settlesAt: null,
+  periodStart: null,
+  periodEnd: null,
+  ...more,
+});
+/** recorded into this month, which has not closed. */
+const RECORDED = { recorded: true, periodStart: MONTH_START, periodEnd: MONTH_END };
 
 function expectCall(method: string, path: string, body?: unknown) {
   expect(mockTridantFetch).toHaveBeenCalledTimes(1);
@@ -323,7 +342,7 @@ describe('addSite', () => {
     mockTridantFetch.mockResolvedValue(answer({ subscription: SUBSCRIPTION, sites: [BILLED_SITE], already: true }));
     const result = await addSite(INPUT);
     expect(result).toMatchObject({ ok: true, already: true });
-    // what tridant bills now, so the caller can see a resumed site kept its old plan
+    // what tridant bills now, so the caller can see the plan the site is on
     expect(result.ok && result.sites.length).toBe(1);
   });
 
@@ -341,7 +360,7 @@ describe('switchTier', () => {
     expectCall('PATCH', '/v1/billing/sites/owlette:site-7', { product: 'prd_owlette_core', founders: false });
   });
 
-  it('leaves founders out when the caller does not say, so tridant keeps the rate', async () => {
+  it('leaves founders and the payer out when the caller does not say, so tridant keeps the rate', async () => {
     mockTridantFetch.mockResolvedValue(answer({ subscription: SUBSCRIPTION, sites: [] }));
 
     await switchTier('a/b', 'pro');
@@ -350,12 +369,23 @@ describe('switchTier', () => {
     expect(JSON.parse(JSON.stringify(request.body))).toEqual({ product: 'prd_owlette_pro' });
   });
 
+  it('names the payer by subject when the caller does', async () => {
+    mockTridantFetch.mockResolvedValue(answer({ subscription: SUBSCRIPTION, sites: [BILLED_SITE] }));
+
+    expect(await switchTier('site-7', 'pro', undefined, 'u1')).toEqual({ ok: true });
+    expect(JSON.parse(JSON.stringify(mockTridantFetch.mock.calls[0][1].body))).toEqual({
+      product: 'prd_owlette_pro',
+      payer: { subject: 'owlette:u1' },
+    });
+  });
+
   it.each([
     [404, 'site_not_billed'],
     [409, 'founders_sold_out'],
+    [409, 'payer_mismatch'],
   ])('maps %i %s', async (status, code) => {
     mockTridantFetch.mockResolvedValue(refusal(status, { error: code }));
-    expect(await switchTier('site-7', 'pro', true)).toEqual({ ok: false, reason: 'rejected', status, code });
+    expect(await switchTier('site-7', 'pro', true, 'u1')).toEqual({ ok: false, reason: 'rejected', status, code });
   });
 });
 
@@ -367,6 +397,18 @@ describe('stopSite', () => {
     expectCall('DELETE', '/v1/billing/sites/owlette:site-7');
   });
 
+  it('names the payer by its encoded subject in the query when the caller does', async () => {
+    mockTridantFetch.mockResolvedValue(answer({ site: 'owlette:a/b', ends_at: MONTH_END, subscription: SUBSCRIPTION }));
+
+    expect(await stopSite('a/b', 'u 1&x')).toEqual({ ok: true, endsAt: MONTH_END });
+    expectCall('DELETE', '/v1/billing/sites/owlette:a%2Fb?payer_subject=owlette%3Au%201%26x');
+  });
+
+  it('maps a payer that is not the one billed', async () => {
+    mockTridantFetch.mockResolvedValue(refusal(409, { error: 'payer_mismatch' }));
+    expect(await stopSite('site-7', 'u1')).toEqual({ ok: false, reason: 'rejected', status: 409, code: 'payer_mismatch' });
+  });
+
   it('reads an answer without an end as malformed', async () => {
     mockTridantFetch.mockResolvedValue(answer({ site: 'owlette:site-7' }));
     expect(await stopSite('site-7')).toEqual({ ok: false, reason: 'malformed_response', status: 200 });
@@ -375,6 +417,23 @@ describe('stopSite', () => {
   it('maps a site nobody bills', async () => {
     mockTridantFetch.mockResolvedValue(refusal(404, { error: 'site_not_billed' }));
     expect(await stopSite('site-7')).toEqual({ ok: false, reason: 'rejected', status: 404, code: 'site_not_billed' });
+  });
+});
+
+describe('removeSite', () => {
+  it('deletes the site by its encoded reference', async () => {
+    mockTridantFetch.mockResolvedValue(answer({ ok: true, removed: true, site: { id: 'ste_1', name: 'Venue A' } }));
+
+    expect(await removeSite('a/b')).toEqual({ ok: true, removed: true });
+    expectCall('DELETE', '/v1/sites/owlette:a%2Fb');
+  });
+
+  it.each([
+    [404, { error: 'site_not_found' }, 'site_not_found'],
+    [409, { error: 'site_running', license_id: 'lic_1' }, 'site_running'],
+  ])('maps %i', async (status, body, code) => {
+    mockTridantFetch.mockResolvedValue(refusal(status, body));
+    expect(await removeSite('site-7')).toEqual({ ok: false, reason: 'rejected', status, code });
   });
 });
 
@@ -405,7 +464,7 @@ describe('startTrial', () => {
     expect(await startTrial(INPUT)).toMatchObject({ ok: true, already: true });
   });
 
-  it.each(['link_required', 'already_subscribed'])('maps 409 %s', async (code) => {
+  it.each(['link_required', 'already_subscribed', 'trial_already_used'])('maps 409 %s', async (code) => {
     mockTridantFetch.mockResolvedValue(refusal(409, { error: code }));
     expect(await startTrial(INPUT)).toEqual({ ok: false, reason: 'rejected', status: 409, code });
   });
@@ -416,8 +475,66 @@ describe('startTrial', () => {
   });
 });
 
+describe('previewTrial', () => {
+  const INPUT = { uid: 'u1', email: EMAIL, name: 'Acme' };
+
+  it('posts what startTrial posts, to the preview', async () => {
+    mockTridantFetch.mockResolvedValue(
+      answer({ subject: 'owlette:u1', payer: 'linked', trial: 'already', org_id: 'org_1' }),
+    );
+
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: 'already', orgId: 'org_1' });
+    expectCall('POST', '/v1/billing/trial/preview', {
+      payer: { subject: 'owlette:u1', email: EMAIL, name: 'Acme' },
+      product: 'prd_owlette_pro',
+      days: 14,
+    });
+  });
+
+  it.each([
+    ['would_create', 'would_start'],
+    ['would_create', 'used'],
+    ['linked', 'already_subscribed'],
+  ])('reads payer %s with trial %s', async (payer, trial) => {
+    mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer, trial, org_id: null }));
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer, trial, orgId: null });
+  });
+
+  it('reads a payer that must link first, with no trial', async () => {
+    mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer: 'link_required', trial: null, org_id: null }));
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'link_required', trial: null, orgId: null });
+  });
+
+  it('reads a trial outcome it does not know as none', async () => {
+    mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer: 'linked', trial: 'paused', org_id: 'org_1' }));
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: null, orgId: 'org_1' });
+  });
+
+  it.each([
+    ['an unknown payer', { payer: 'adopted', trial: 'would_start', org_id: null }],
+    ['no payer', { trial: 'would_start', org_id: null }],
+  ])('reads %s as malformed', async (_name, body) => {
+    mockTridantFetch.mockResolvedValue(answer(body));
+    expect(await previewTrial(INPUT)).toEqual({ ok: false, reason: 'malformed_response', status: 200 });
+  });
+
+  it('maps a refusal', async () => {
+    mockTridantFetch.mockResolvedValue(refusal(400, { error: 'invalid_payer' }));
+    expect(await previewTrial(INPUT)).toEqual({ ok: false, reason: 'rejected', status: 400, code: 'invalid_payer' });
+  });
+});
+
 describe('reportUsage', () => {
-  const recorded = (site: string) => ({ site, status: 'recorded', recorded: true, machines: 1, as_of: NOW });
+  const recorded = (site: string) => ({
+    site,
+    status: 'recorded',
+    recorded: true,
+    machines: 1,
+    as_of: NOW,
+    settling: false,
+    period_start: MONTH_START,
+    period_end: MONTH_END,
+  });
   const sitesSent = (call: number) =>
     (mockTridantFetch.mock.calls[call][1].body as { sites: Array<{ site: string }> }).sites;
 
@@ -436,16 +553,77 @@ describe('reportUsage', () => {
       ),
     ).toEqual({
       ok: true,
-      results: [
-        { siteId: 'site-7', status: 'recorded', recorded: true },
-        { siteId: 'site-8', status: 'recorded', recorded: true },
-      ],
+      results: [outcome('site-7', 'recorded', RECORDED), outcome('site-8', 'recorded', RECORDED)],
     });
     expectCall('POST', '/v1/usage', {
       sites: [
         { site: 'owlette:site-7', machines: 12, as_of: NOW },
         { site: 'owlette:site-8', machines: 3, as_of: NOW },
       ],
+    });
+  });
+
+  it("sends an entry's own moment in place of the call's", async () => {
+    mockTridantFetch.mockResolvedValue(answer({ results: [recorded('owlette:site-7'), recorded('owlette:site-8')] }));
+
+    await reportUsage(
+      [
+        { siteId: 'site-7', machines: 12, asOfMs: MONTH_START - 1 },
+        { siteId: 'site-8', machines: 3 },
+      ],
+      NOW,
+    );
+    expect(sitesSent(0)).toEqual([
+      { site: 'owlette:site-7', machines: 12, as_of: MONTH_START - 1 },
+      { site: 'owlette:site-8', machines: 3, as_of: NOW },
+    ]);
+  });
+
+  it('reads an entry recorded into a closed period that tridant still holds open', async () => {
+    const LAST_MONTH = Date.UTC(2026, 9, 1);
+    mockTridantFetch.mockResolvedValue(
+      answer({
+        results: [
+          {
+            site: 'owlette:site-7',
+            status: 'recorded',
+            recorded: true,
+            machines: 4,
+            as_of: MONTH_START - 1,
+            settling: true,
+            settles_at: MONTH_START + 86_400_000,
+            period_start: LAST_MONTH,
+            period_end: MONTH_START,
+          },
+        ],
+      }),
+    );
+
+    expect(await reportUsage([{ siteId: 'site-7', machines: 4, asOfMs: MONTH_START - 1 }], NOW)).toEqual({
+      ok: true,
+      results: [
+        outcome('site-7', 'recorded', {
+          recorded: true,
+          settling: true,
+          settlesAt: MONTH_START + 86_400_000,
+          periodStart: LAST_MONTH,
+          periodEnd: MONTH_START,
+        }),
+      ],
+    });
+  });
+
+  it('reads the period fields as null when absent or not numbers', async () => {
+    mockTridantFetch.mockResolvedValue(
+      answer({
+        results: [
+          { site: 'owlette:site-7', status: 'recorded', recorded: true, settles_at: '2026-12-02T00:00:00Z', period_start: null },
+        ],
+      }),
+    );
+    expect(await reportUsage([{ siteId: 'site-7', machines: 1 }], NOW)).toEqual({
+      ok: true,
+      results: [outcome('site-7', 'recorded', { recorded: true })],
     });
   });
 
@@ -459,13 +637,20 @@ describe('reportUsage', () => {
     'invalid_site_ref',
     'invalid_machines',
     'invalid_as_of',
-  ])('passes the status %s through as not recorded', async (status) => {
+  ])('passes the status %s through as not recorded, with no period', async (status) => {
+    // tridant sends the subscription's current period on the period_* statuses; it is not the entry's.
     mockTridantFetch.mockResolvedValue(
-      answer({ recorded: 0, max: 500, results: [{ site: 'owlette:site-7', status, recorded: false, error: status }] }),
+      answer({
+        recorded: 0,
+        max: 500,
+        results: [
+          { site: 'owlette:site-7', status, recorded: false, error: status, period_start: MONTH_START, period_end: NOW },
+        ],
+      }),
     );
     expect(await reportUsage([{ siteId: 'site-7', machines: 1 }], NOW)).toEqual({
       ok: true,
-      results: [{ siteId: 'site-7', status, recorded: false }],
+      results: [outcome('site-7', status)],
     });
   });
 
@@ -482,7 +667,7 @@ describe('reportUsage', () => {
     expect(sitesSent(1)[0].site).toBe('owlette:s500');
     expect(result).toEqual({
       ok: true,
-      results: entries.map(({ siteId }) => ({ siteId, status: 'recorded', recorded: true })),
+      results: entries.map(({ siteId }) => outcome(siteId, 'recorded', RECORDED)),
     });
   });
 
@@ -497,11 +682,11 @@ describe('reportUsage', () => {
 
     if (!result.ok) throw new Error('expected per-entry outcomes');
     expect(result.results).toHaveLength(1001);
-    expect(result.results[0]).toEqual({ siteId: 's0', status: 'unreachable', recorded: false });
+    expect(result.results[0]).toEqual(outcome('s0', 'unreachable'));
     expect(result.results[499].status).toBe('unreachable');
-    expect(result.results[500]).toEqual({ siteId: 's500', status: 'rejected', recorded: false });
+    expect(result.results[500]).toEqual(outcome('s500', 'rejected'));
     expect(result.results[999].status).toBe('rejected');
-    expect(result.results[1000]).toEqual({ siteId: 's1000', status: 'recorded', recorded: true });
+    expect(result.results[1000]).toEqual(outcome('s1000', 'recorded', RECORDED));
   });
 
   it('marks an entry tridant did not answer for, or answered out of order, as malformed', async () => {
@@ -526,9 +711,9 @@ describe('reportUsage', () => {
     ).toEqual({
       ok: true,
       results: [
-        { siteId: 'site-7', status: 'malformed_response', recorded: false },
-        { siteId: 'site-8', status: 'malformed_response', recorded: false },
-        { siteId: 'site-9', status: 'malformed_response', recorded: false },
+        outcome('site-7', 'malformed_response'),
+        outcome('site-8', 'malformed_response'),
+        outcome('site-9', 'malformed_response'),
       ],
     });
   });
@@ -537,7 +722,7 @@ describe('reportUsage', () => {
     mockTridantFetch.mockResolvedValue({ ok: false, reason: 'malformed_response', status: 200 });
     expect(await reportUsage([{ siteId: 'site-7', machines: 1 }], NOW)).toEqual({
       ok: true,
-      results: [{ siteId: 'site-7', status: 'malformed_response', recorded: false }],
+      results: [outcome('site-7', 'malformed_response')],
     });
   });
 
@@ -728,7 +913,20 @@ describe('the e2e fake', () => {
     'owlette.webhooks': false,
     'owlette.api_keys': false,
   };
-  const BILLING = { periodStart: MONTH_START, periodEnd: MONTH_END, endsAt: null, cancelAtPeriodEnd: false };
+  /** a seed's billing as the fake writes it: this calendar month, with the tier's product and the rate. */
+  const billing = (tier: 'core' | 'pro', founders: boolean) => ({
+    periodStart: MONTH_START,
+    periodEnd: MONTH_END,
+    endsAt: null,
+    cancelAtPeriodEnd: false,
+    productId: PRODUCT[tier],
+    founders,
+  });
+  const seed = (siteId: string) => mockStore.get(`e2e_entitlements/site:${siteId}`);
+  const endBilling = (siteId: string, endsAt: number) => {
+    const current = seed(siteId);
+    mockStore.set(`e2e_entitlements/site:${siteId}`, { ...current, billing: { ...(current?.billing as object), endsAt } });
+  };
   const calls = () => [...mockStore].filter(([key]) => key.startsWith('e2e_billing_calls/')).map(([, call]) => call);
 
   beforeEach(() => {
@@ -769,13 +967,12 @@ describe('the e2e fake', () => {
       orgId: 'org_e2e_u1',
       sites: [{ siteId: 'site-7', productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null }],
     });
-    expect(mockStore.get('e2e_entitlements/site:site-7')).toEqual({
+    expect(seed('site-7')).toEqual({
       resolved: true,
       standing: 'active',
       ent: PRO_ENT,
       orgId: 'org_e2e_u1',
-      founders: true,
-      billing: BILLING,
+      billing: billing('pro', true),
     });
   });
 
@@ -797,10 +994,7 @@ describe('the e2e fake', () => {
     const started = await startCheckout(CHECKOUT);
     if (!started.ok) throw new Error('expected a checkout');
     await confirmCheckout(started.sessionId);
-    mockStore.set('e2e_entitlements/site:site-7', {
-      ...mockStore.get('e2e_entitlements/site:site-7'),
-      billing: { ...BILLING, endsAt: NOW - 1 },
-    });
+    endBilling('site-7', NOW - 1);
 
     expect(await startCheckout({ ...CHECKOUT, siteId: 'site-8' })).toMatchObject({
       ok: false,
@@ -813,10 +1007,7 @@ describe('the e2e fake', () => {
     expect(await startCheckout(CHECKOUT)).toMatchObject({ ok: true });
 
     await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
-    mockStore.set('e2e_entitlements/site:site-8', {
-      ...mockStore.get('e2e_entitlements/site:site-8'),
-      billing: { ...BILLING, endsAt: NOW - 1 },
-    });
+    endBilling('site-8', NOW - 1);
 
     expect(await startCheckout(CHECKOUT)).toMatchObject({ ok: true });
   });
@@ -836,65 +1027,84 @@ describe('the e2e fake', () => {
       already: false,
       sites: [{ siteId: 'site-8', productId: 'prd_owlette_core', founders: false, status: 'active', endsAt: null }],
     });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toEqual({
+    expect(seed('site-8')).toEqual({
       resolved: true,
       standing: 'active',
       ent: CORE_ENT,
       orgId: 'org_e2e_u1',
-      founders: false,
-      billing: BILLING,
+      billing: billing('core', false),
     });
   });
 
-  it('adds a site whose removal is pending back at the plan it had, whatever was asked for', async () => {
+  it('adds a stopped site still inside its period back at the plan asked for (a7)', async () => {
     await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: true });
     await stopSite('site-8');
 
     expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false })).toEqual({
       ok: true,
       already: false,
-      sites: [{ siteId: 'site-8', productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null }],
+      sites: [{ siteId: 'site-8', productId: 'prd_owlette_core', founders: false, status: 'active', endsAt: null }],
     });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: PRO_ENT, billing: BILLING });
+    expect(seed('site-8')).toEqual({
+      resolved: true,
+      standing: 'active',
+      ent: CORE_ENT,
+      orgId: 'org_e2e_u1',
+      billing: billing('core', false),
+    });
   });
 
-  it('answers already for a site it bills, and changes nothing', async () => {
-    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+  it('answers already for a site it bills, with the plan its billing names, and changes nothing', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: true });
+    // flags that read pro, as a site's do while its trial runs: the billed product still says core.
+    mockStore.set('e2e_entitlements/site:site-8', { ...seed('site-8'), ent: PRO_ENT });
 
-    expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: true })).toMatchObject({
+    expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: false })).toEqual({
       ok: true,
       already: true,
-      sites: [{ productId: 'prd_owlette_core', founders: false }],
+      sites: [{ siteId: 'site-8', productId: 'prd_owlette_core', founders: true, status: 'active', endsAt: null }],
     });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: CORE_ENT, founders: false });
+    expect(seed('site-8')).toMatchObject({ ent: PRO_ENT, billing: billing('core', true) });
   });
 
   it('switches a billed site and keeps its organization and period', async () => {
     await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
 
     expect(await switchTier('site-8', 'pro')).toEqual({ ok: true });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toEqual({
+    expect(seed('site-8')).toEqual({
       resolved: true,
       standing: 'active',
       ent: PRO_ENT,
       orgId: 'org_e2e_u1',
-      founders: false,
-      billing: BILLING,
+      billing: billing('pro', false),
     });
 
     expect(await switchTier('site-8', 'core', true)).toEqual({ ok: true });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: CORE_ENT, founders: true });
+    expect(seed('site-8')).toMatchObject({ ent: CORE_ENT, billing: billing('core', true) });
   });
 
   it('stops a billed site at the month end', async () => {
     await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: true });
 
     expect(await stopSite('site-8')).toEqual({ ok: true, endsAt: MONTH_END });
-    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({
+    expect(seed('site-8')).toMatchObject({
       standing: 'active',
       ent: PRO_ENT,
-      billing: { ...BILLING, endsAt: MONTH_END },
+      billing: { ...billing('pro', true), endsAt: MONTH_END },
     });
+  });
+
+  it("refuses to switch or stop for a payer whose organization is not the site's, and changes nothing", async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+    const mismatch = { ok: false, reason: 'rejected', status: 409, code: 'payer_mismatch' };
+
+    expect(await switchTier('site-8', 'pro', true, 'u2')).toEqual(mismatch);
+    expect(await stopSite('site-8', 'u2')).toEqual(mismatch);
+    expect(seed('site-8')).toMatchObject({ ent: CORE_ENT, billing: billing('core', false) });
+
+    expect(await switchTier('site-8', 'pro', true, 'u1')).toEqual({ ok: true });
+    expect(await stopSite('site-8', 'u1')).toEqual({ ok: true, endsAt: MONTH_END });
+    expect(seed('site-8')).toMatchObject({ ent: PRO_ENT, billing: { ...billing('pro', true), endsAt: MONTH_END } });
   });
 
   it('refuses to switch or stop a site nobody bills', async () => {
@@ -905,6 +1115,35 @@ describe('the e2e fake', () => {
     expect(await stopSite('free')).toEqual(notBilled);
     expect(await stopSite('never-seen')).toEqual(notBilled);
     expect(mockStore.get('e2e_entitlements/site:free')).toEqual({ resolved: false, standing: 'expired', ent: {} });
+  });
+
+  it('removes a site only once its billing has ended, and logs every call', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+    const running = { ok: false, reason: 'rejected', status: 409, code: 'site_running' };
+
+    expect(await removeSite('site-8')).toEqual(running);
+    // a stop runs to the month end, as tridant's billing item stays open until its period is invoiced.
+    await stopSite('site-8');
+    expect(await removeSite('site-8')).toEqual(running);
+    expect(seed('site-8')).toBeDefined();
+
+    jest.setSystemTime(MONTH_END);
+    expect(await removeSite('site-8')).toEqual({ ok: true, removed: true });
+    expect(seed('site-8')).toBeUndefined();
+    expect(await removeSite('never-seen')).toEqual({ ok: true, removed: true });
+
+    expect(calls()).toEqual([
+      { fn: 'removeSite', siteId: 'site-8', answer: 'site_running', at: NOW },
+      { fn: 'removeSite', siteId: 'site-8', answer: 'site_running', at: NOW },
+      { fn: 'removeSite', siteId: 'site-8', answer: 'removed', at: MONTH_END },
+      { fn: 'removeSite', siteId: 'never-seen', answer: 'removed', at: MONTH_END },
+    ]);
+  });
+
+  it('removes a site nobody bills', async () => {
+    mockStore.set('e2e_entitlements/site:free', { resolved: false, standing: 'expired', ent: {} });
+    expect(await removeSite('free')).toEqual({ ok: true, removed: true });
+    expect(seed('free')).toBeUndefined();
   });
 
   it('starts a 14-day trial', async () => {
@@ -928,22 +1167,87 @@ describe('the e2e fake', () => {
     expect(await startTrial({ uid: 'u1', email: EMAIL, name: 'Acme' })).toMatchObject({ ok: true });
   });
 
+  it('refuses a trial to the accounts the rig lists as having had one', async () => {
+    mockStore.set('e2e_billing_config/trial', { linkRequired: ['u2'], trialUsed: ['u3'] });
+
+    expect(await startTrial({ uid: 'u3', email: EMAIL, name: 'Acme' })).toEqual({
+      ok: false,
+      reason: 'rejected',
+      status: 409,
+      code: 'trial_already_used',
+    });
+    expect(await startTrial({ uid: 'u1', email: EMAIL, name: 'Acme' })).toMatchObject({ ok: true });
+  });
+
+  it('previews the trial from the same lists, and writes nothing', async () => {
+    mockStore.set('e2e_billing_config/trial', { linkRequired: ['u2'], trialUsed: ['u3'] });
+    const preview = (uid: string) => previewTrial({ uid, email: EMAIL, name: 'Acme' });
+
+    expect(await preview('u1')).toEqual({ ok: true, payer: 'would_create', trial: 'would_start', orgId: null });
+    expect(await preview('u2')).toEqual({ ok: true, payer: 'link_required', trial: null, orgId: null });
+    expect(await preview('u3')).toEqual({ ok: true, payer: 'would_create', trial: 'used', orgId: null });
+    expect([...mockStore.keys()]).toEqual(['e2e_billing_config/trial']);
+  });
+
   it('records the calls that leave nothing else behind, without the id token', async () => {
     expect(await pushSite({ uid: 'u1', siteId: 'site-7', name: 'Venue A' })).toEqual({ ok: true, created: true, moved: false });
     expect(await linkAccount({ uid: 'u1', orgId: 'org_1', idToken: ID_TOKEN })).toEqual({ ok: true, already: false });
     expect(await unlinkAccount('u1')).toEqual({ ok: true });
     expect(await reportUsage([{ siteId: 'site-7', machines: 3 }], NOW)).toEqual({
       ok: true,
-      results: [{ siteId: 'site-7', status: 'recorded', recorded: true }],
+      results: [outcome('site-7', 'recorded', RECORDED)],
     });
 
     expect(calls()).toEqual([
       { fn: 'pushSite', uid: 'u1', siteId: 'site-7', name: 'Venue A', at: NOW },
       { fn: 'linkAccount', uid: 'u1', orgId: 'org_1', at: NOW },
       { fn: 'unlinkAccount', uid: 'u1', at: NOW },
-      { fn: 'reportUsage', entries: [{ siteId: 'site-7', machines: 3 }], asOfMs: NOW, at: NOW },
+      { fn: 'reportUsage', entries: [{ siteId: 'site-7', machines: 3, asOfMs: NOW }], asOfMs: NOW, at: NOW },
     ]);
     expect(JSON.stringify([...mockStore])).not.toContain(ID_TOKEN);
+  });
+
+  it("logs each entry's own moment, and records into its month as tridant does", async () => {
+    const LAST_MONTH = Date.UTC(2026, 9, 1);
+    const SETTLES_AT = MONTH_START + 86_400_000;
+    const EARLY = MONTH_START + 3 * 3_600_000;
+    const entries = [
+      { siteId: 'site-7', machines: 3, asOfMs: MONTH_START - 1 },
+      { siteId: 'site-8', machines: 2 },
+    ];
+
+    // the morning after a month end: the closed month still settles.
+    jest.setSystemTime(EARLY);
+    expect(await reportUsage(entries, EARLY)).toEqual({
+      ok: true,
+      results: [
+        outcome('site-7', 'recorded', {
+          recorded: true,
+          settling: true,
+          settlesAt: SETTLES_AT,
+          periodStart: LAST_MONTH,
+          periodEnd: MONTH_START,
+        }),
+        outcome('site-8', 'recorded', RECORDED),
+      ],
+    });
+    expect(calls()).toEqual([
+      {
+        fn: 'reportUsage',
+        entries: [
+          { siteId: 'site-7', machines: 3, asOfMs: MONTH_START - 1 },
+          { siteId: 'site-8', machines: 2, asOfMs: EARLY },
+        ],
+        asOfMs: EARLY,
+        at: EARLY,
+      },
+    ]);
+
+    jest.setSystemTime(SETTLES_AT);
+    expect(await reportUsage(entries, SETTLES_AT)).toEqual({
+      ok: true,
+      results: [outcome('site-7', 'period_closed'), outcome('site-8', 'recorded', RECORDED)],
+    });
   });
 
   it('offers founders places', async () => {
@@ -956,8 +1260,11 @@ describe('the e2e fake', () => {
 
     expect(await startCheckout(CHECKOUT)).toEqual(down);
     expect(await confirmCheckout('e2e_1')).toEqual(down);
-    expect(await stopSite('site-7')).toEqual(down);
+    expect(await switchTier('site-7', 'pro', undefined, 'u1')).toEqual(down);
+    expect(await stopSite('site-7', 'u1')).toEqual(down);
+    expect(await removeSite('site-7')).toEqual(down);
     expect(await startTrial({ uid: 'u1', email: EMAIL, name: 'Acme' })).toEqual(down);
+    expect(await previewTrial({ uid: 'u1', email: EMAIL, name: 'Acme' })).toEqual(down);
     expect(await pushSite({ uid: 'u1', siteId: 'site-7', name: 'Venue A' })).toEqual(down);
   });
 });

@@ -56,6 +56,7 @@ export type Plan =
       ent: Record<string, string>;
       billing: SiteBillingPeriod | null;
       orgId: string | null;
+      trialEndsAt: number | null;
     };
 
 export type PlanTier = SiteTier;
@@ -148,6 +149,7 @@ function planFromAnswer(answer: EntitlementsResult): Plan {
     ent: answer.ent,
     billing: answer.billing,
     orgId: answer.orgId,
+    trialEndsAt: answer.trialEndsAt,
   };
 }
 

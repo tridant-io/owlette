@@ -18,6 +18,8 @@ export type SiteBillingPeriod = {
   periodEnd: number | null;
   endsAt: number | null;
   cancelAtPeriodEnd: boolean;
+  productId: string | null;
+  founders: boolean;
 };
 
 export type Entitlements = {
@@ -33,6 +35,8 @@ export type Entitlements = {
   orgId: string | null;
   /** only a site billed per site has one; a site under a trial does not. */
   billing: SiteBillingPeriod | null;
+  /** epoch ms, only while trialing: the latest end among the site's running trial licences. */
+  trialEndsAt: number | null;
 };
 
 export type EntitlementsResult = Entitlements | { ok: false; reason: TridantFailureReason };
@@ -67,7 +71,7 @@ function normaliseEnt(ent: Record<string, unknown>): Record<string, string> {
 
 function parseEntitlements(body: unknown): Entitlements | null {
   if (!isRecord(body)) return null;
-  const { resolved, standing, in_good_standing, grace_until, ent, ent_epoch, org_id, billing } = body;
+  const { resolved, standing, in_good_standing, grace_until, ent, ent_epoch, org_id, billing, trial_ends_at } = body;
   if (
     typeof resolved !== 'boolean' ||
     typeof standing !== 'string' ||
@@ -91,8 +95,11 @@ function parseEntitlements(body: unknown): Entitlements | null {
           periodEnd: numberOrNull(billing.current_period_end),
           endsAt: numberOrNull(billing.ends_at),
           cancelAtPeriodEnd: billing.cancel_at_period_end === true,
+          productId: typeof billing.product_id === 'string' ? billing.product_id : null,
+          founders: billing.founders === true,
         }
       : null,
+    trialEndsAt: numberOrNull(trial_ends_at),
   };
 }
 
@@ -146,13 +153,14 @@ async function readE2eSeed(
 
 // a site seed is written in this module's names, so it goes back into tridant's before parsing.
 function siteSeedToAnswer(seed: Record<string, unknown>): unknown {
-  const { resolved, standing, inGoodStanding, ent, orgId, billing } = seed;
+  const { resolved, standing, inGoodStanding, ent, orgId, billing, trialEndsAt } = seed;
   return {
     resolved,
     standing,
     in_good_standing: inGoodStanding ?? (typeof standing === 'string' && GOOD_STANDINGS.includes(standing)),
     ent,
     org_id: orgId,
+    trial_ends_at: trialEndsAt,
     ...(isRecord(billing)
       ? {
           billing: {
@@ -160,6 +168,8 @@ function siteSeedToAnswer(seed: Record<string, unknown>): unknown {
             current_period_end: billing.periodEnd,
             ends_at: billing.endsAt,
             cancel_at_period_end: billing.cancelAtPeriodEnd,
+            product_id: billing.productId,
+            founders: billing.founders,
           },
         }
       : {}),

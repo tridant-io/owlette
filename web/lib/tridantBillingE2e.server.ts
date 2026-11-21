@@ -6,7 +6,9 @@
  * appended to `e2e_billing_calls`. like tridant, it opens a checkout only for a
  * payer with no running subscription, and bills every later site on it at once.
  * a subscription keeps running at no charge once every site on it has stopped,
- * so a payer who ever completed a checkout never gets another.
+ * so a payer who ever completed a checkout never gets another. the trial start
+ * and its preview read `e2e_billing_config/trial`: uids listed in
+ * `linkRequired` must link first, and uids in `trialUsed` had their trial.
  */
 
 import 'server-only';
@@ -28,11 +30,14 @@ import type {
   PushSiteInput,
   Trial,
   TrialInput,
+  TrialPreview,
   UsageEntry,
   UsageOutcome,
 } from '@/lib/tridantBilling.server';
 
 const DAY_MS = 86_400_000;
+/** tridant's `site_settle_hours`: a closed period's invoice stays open this long. */
+const SETTLE_MS = DAY_MS;
 
 const PRO_ONLY_FLAGS = [
   'owlette.deployments',
@@ -46,6 +51,7 @@ const PRO_ONLY_FLAGS = [
 
 // typed against the real ids, so a renamed product fails to compile here.
 const productId = (tier: BillingTier): (typeof PRODUCT)[BillingTier] => `prd_owlette_${tier}`;
+const tierOf = (billing: Record<string, unknown>): BillingTier => (billing.productId === productId('pro') ? 'pro' : 'core');
 const orgFor = (uid: string) => `org_e2e_${uid}`;
 const siteDoc = (siteId: string) => getAdminDb().collection('e2e_entitlements').doc(`site:${siteId}`);
 const refused = (status: number, code: string): BillingFailure => ({ ok: false, reason: 'rejected', status, code });
@@ -62,11 +68,14 @@ function entFor(tier: BillingTier): Record<string, boolean | number | string> {
 }
 
 /** tridant bills calendar months from the 1st, 00:00 utc. */
-function monthEnd(now: Date): number {
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+function monthStart(at: Date): number {
+  return Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1);
 }
 
-// `founders` is the fake's own field: the entitlement seam reads the rest, as tridant's answer.
+function monthEnd(at: Date): number {
+  return Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1);
+}
+
 function billedSite(tier: BillingTier, orgId: string, founders: boolean) {
   const now = new Date();
   return {
@@ -74,21 +83,35 @@ function billedSite(tier: BillingTier, orgId: string, founders: boolean) {
     standing: 'active',
     ent: entFor(tier),
     orgId,
-    founders,
     billing: {
-      periodStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
+      periodStart: monthStart(now),
       periodEnd: monthEnd(now),
       endsAt: null,
       cancelAtPeriodEnd: false,
+      productId: productId(tier),
+      founders,
     },
   };
 }
 
-/** a site billed under `orgId` that has not ended: billing that runs, or a stop still inside its period. */
-function runs(seed: Record<string, unknown> | undefined, orgId: string): boolean {
+/** billing that has not ended: it runs, or a stop is still inside its period. */
+function billingRuns(seed: Record<string, unknown> | undefined): boolean {
   const billing = seed?.billing as { endsAt?: unknown } | undefined;
-  if (seed?.orgId !== orgId || !billing) return false;
+  if (!billing) return false;
   return billing.endsAt === null || (typeof billing.endsAt === 'number' && billing.endsAt > Date.now());
+}
+
+/** a site billed under `orgId` that has not ended. */
+function runs(seed: Record<string, unknown> | undefined, orgId: string): boolean {
+  return seed?.orgId === orgId && billingRuns(seed);
+}
+
+/** tridant's refusal of a change to a site's billing: nobody bills it, or the payer named is not its payer. */
+async function changeRefused(siteId: string, payerUid: string | undefined): Promise<BillingFailure | null> {
+  const seed = (await siteDoc(siteId).get()).data();
+  if (!seed?.billing) return refused(404, 'site_not_billed');
+  if (payerUid !== undefined && seed.orgId !== orgFor(payerUid)) return refused(409, 'payer_mismatch');
+  return null;
 }
 
 /** like the client it stands in for, the fake never throws: a firestore failure reads as tridant being down. */
@@ -100,11 +123,21 @@ async function guarded<T>(run: () => Promise<BillingResult<T>>): Promise<Billing
   }
 }
 
+function logCall(fn: string, args: Record<string, unknown>) {
+  return getAdminDb().collection('e2e_billing_calls').add({ fn, ...args, at: Date.now() });
+}
+
 function logged<T extends object>(fn: string, args: Record<string, unknown>, answer: T): Promise<BillingResult<T>> {
   return guarded(async () => {
-    await getAdminDb().collection('e2e_billing_calls').add({ fn, ...args, at: Date.now() });
+    await logCall(fn, args);
     return { ok: true, ...answer };
   });
+}
+
+async function trialListsFor(uid: string): Promise<{ linkRequired: boolean; trialUsed: boolean }> {
+  const config = (await getAdminDb().collection('e2e_billing_config').doc('trial').get()).data();
+  const listed = (name: string) => Array.isArray(config?.[name]) && (config[name] as unknown[]).includes(uid);
+  return { linkRequired: listed('linkRequired'), trialUsed: listed('trialUsed') };
 }
 
 export function startCheckout(input: CheckoutInput): Promise<BillingResult<Checkout>> {
@@ -149,7 +182,7 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
 }
 
 export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean; sites: BilledSite[] }>> {
-  return guarded(async () => {
+  return guarded<{ already: boolean; sites: BilledSite[] }>(async () => {
     const doc = siteDoc(input.siteId);
     const seed = (await doc.get()).data();
     const billed = (tier: BillingTier, founders: boolean): BilledSite => ({
@@ -159,44 +192,62 @@ export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: b
       status: 'active',
       endsAt: null,
     });
-    // a site billed here, or whose removal is pending, keeps the plan it had, whatever was asked for.
-    if (runs(seed, orgFor(input.uid))) {
-      const tier: BillingTier = (seed?.ent as Record<string, unknown>)?.['owlette.deployments'] === true ? 'pro' : 'core';
-      const already = (seed?.billing as { endsAt: unknown }).endsAt === null;
-      if (!already) await doc.update({ 'billing.endsAt': null });
-      return { ok: true, already, sites: [billed(tier, seed?.founders === true)] };
+    // a site billed here already keeps its plan, whatever was asked for; a stopped one still inside its
+    // period is billed afresh at the plan asked for, as tridant cancels the stop and applies it.
+    const billing = seed?.billing as Record<string, unknown> | undefined;
+    if (runs(seed, orgFor(input.uid)) && billing?.endsAt === null) {
+      return { ok: true, already: true, sites: [billed(tierOf(billing), billing.founders === true)] };
     }
     await doc.set(billedSite(input.tier, orgFor(input.uid), input.founders));
     return { ok: true, already: false, sites: [billed(input.tier, input.founders)] };
   });
 }
 
-export function switchTier(siteId: string, tier: BillingTier, founders?: boolean): Promise<BillingResult> {
+export function switchTier(
+  siteId: string,
+  tier: BillingTier,
+  founders?: boolean,
+  payerUid?: string,
+): Promise<BillingResult> {
   return guarded(async () => {
-    const doc = siteDoc(siteId);
-    if (!(await doc.get()).data()?.billing) return refused(404, 'site_not_billed');
+    const refusal = await changeRefused(siteId, payerUid);
+    if (refusal) return refusal;
     // without `founders`, the site keeps its rate.
-    await doc.update({ ent: entFor(tier), ...(founders === undefined ? {} : { founders }) });
+    await siteDoc(siteId).update({
+      ent: entFor(tier),
+      'billing.productId': productId(tier),
+      ...(founders === undefined ? {} : { 'billing.founders': founders }),
+    });
     return { ok: true };
   });
 }
 
-export function stopSite(siteId: string): Promise<BillingResult<{ endsAt: number }>> {
+export function stopSite(siteId: string, payerUid?: string): Promise<BillingResult<{ endsAt: number }>> {
+  return guarded(async () => {
+    const refusal = await changeRefused(siteId, payerUid);
+    if (refusal) return refusal;
+    const endsAt = monthEnd(new Date());
+    await siteDoc(siteId).update({ 'billing.endsAt': endsAt });
+    return { ok: true, endsAt };
+  });
+}
+
+export function removeSite(siteId: string): Promise<BillingResult<{ removed: boolean }>> {
   return guarded(async () => {
     const doc = siteDoc(siteId);
-    if (!(await doc.get()).data()?.billing) return refused(404, 'site_not_billed');
-    const endsAt = monthEnd(new Date());
-    await doc.update({ 'billing.endsAt': endsAt });
-    return { ok: true, endsAt };
+    const running = billingRuns((await doc.get()).data());
+    await logCall('removeSite', { siteId, answer: running ? 'site_running' : 'removed' });
+    if (running) return refused(409, 'site_running');
+    await doc.delete();
+    return { ok: true, removed: true };
   });
 }
 
 export function startTrial(input: TrialInput): Promise<BillingResult<Trial>> {
   return guarded(async () => {
-    const config = (await getAdminDb().collection('e2e_billing_config').doc('trial').get()).data();
-    if (Array.isArray(config?.linkRequired) && config.linkRequired.includes(input.uid)) {
-      return refused(409, 'link_required');
-    }
+    const { linkRequired, trialUsed } = await trialListsFor(input.uid);
+    if (linkRequired) return refused(409, 'link_required');
+    if (trialUsed) return refused(409, 'trial_already_used');
     return {
       ok: true,
       orgId: orgFor(input.uid),
@@ -206,12 +257,52 @@ export function startTrial(input: TrialInput): Promise<BillingResult<Trial>> {
   });
 }
 
+// the fake links no account, so no preview names an organization.
+export function previewTrial(input: TrialInput): Promise<BillingResult<TrialPreview>> {
+  return guarded<TrialPreview>(async () => {
+    const { linkRequired, trialUsed } = await trialListsFor(input.uid);
+    if (linkRequired) return { ok: true, payer: 'link_required', trial: null, orgId: null };
+    return { ok: true, payer: 'would_create', trial: trialUsed ? 'used' : 'would_start', orgId: null };
+  });
+}
+
+/** recorded into the month of each entry's moment; a closed month settles for a day, then refuses. */
+function usageOutcome(siteId: string, asOfMs: number): UsageOutcome {
+  const asOf = new Date(asOfMs);
+  const periodEnd = monthEnd(asOf);
+  const settlesAt = periodEnd + SETTLE_MS;
+  const now = Date.now();
+  if (settlesAt <= now) {
+    return {
+      siteId,
+      status: 'period_closed',
+      recorded: false,
+      settling: false,
+      settlesAt: null,
+      periodStart: null,
+      periodEnd: null,
+    };
+  }
+  const settling = periodEnd <= now;
+  return {
+    siteId,
+    status: 'recorded',
+    recorded: true,
+    settling,
+    settlesAt: settling ? settlesAt : null,
+    periodStart: monthStart(asOf),
+    periodEnd,
+  };
+}
+
 export function reportUsage(
   entries: UsageEntry[],
   asOfMs: number,
 ): Promise<BillingResult<{ results: UsageOutcome[] }>> {
-  return logged('reportUsage', { entries, asOfMs }, {
-    results: entries.map(({ siteId }): UsageOutcome => ({ siteId, status: 'recorded', recorded: true })),
+  // each entry's moment as tridant gets it, so firestore never sees an undefined `asOfMs`.
+  const sent = entries.map(({ siteId, machines, asOfMs: own }) => ({ siteId, machines, asOfMs: own ?? asOfMs }));
+  return logged('reportUsage', { entries: sent, asOfMs }, {
+    results: sent.map((entry) => usageOutcome(entry.siteId, entry.asOfMs)),
   });
 }
 

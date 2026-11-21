@@ -20,6 +20,7 @@ export const FREE_ENTITLEMENTS: Entitlements = {
   epoch: 0,
   orgId: null,
   billing: null,
+  trialEndsAt: null,
 };
 
 /** a site billed at pro, inside november 2026. */
@@ -37,17 +38,26 @@ export const PRO_ENTITLEMENTS: Entitlements = {
     periodEnd: Date.UTC(2026, 11, 1),
     endsAt: null,
     cancelAtPeriodEnd: false,
+    productId: 'prd_owlette_pro',
+    founders: false,
   },
+  trialEndsAt: null,
 };
 
 /** a site billed at core: remote control; deployments, swoop, hoot and the rest of pro withheld. */
 export const CORE_ENTITLEMENTS: Entitlements = {
   ...PRO_ENTITLEMENTS,
   ent: { ...PRO_ENTITLEMENTS.ent, ...flags('0'), 'owlette.control': '1' },
+  billing: { ...PRO_ENTITLEMENTS.billing!, productId: 'prd_owlette_core' },
 };
 
-/** a site under its owner's trial: pro values, and no billing period. */
-export const TRIAL_ENTITLEMENTS: Entitlements = { ...PRO_ENTITLEMENTS, standing: 'trialing', billing: null };
+/** a site under its owner's trial, which ends on 15 november 2026: pro values, and no billing period. */
+export const TRIAL_ENTITLEMENTS: Entitlements = {
+  ...PRO_ENTITLEMENTS,
+  standing: 'trialing',
+  billing: null,
+  trialEndsAt: Date.UTC(2026, 10, 15),
+};
 
 export function enforcePlans(): void {
   process.env.PLAN_ENFORCEMENT = 'on';

@@ -3,8 +3,9 @@
  * OWLETTE_E2E=1, so a site's plan is whatever `e2e_entitlements/site:{siteId}`
  * holds, and a site without that doc fails open (playwright.config.ts). the
  * billing fake (`lib/tridantBillingE2e.server.ts`) writes the same docs when a
- * spec buys, switches or stops a plan, and its trial start reads
- * `e2e_billing_config/trial`.
+ * spec buys, switches or stops a plan, with the billed product and rate in
+ * `billing.productId` and `billing.founders`. its trial start and preview read
+ * `e2e_billing_config/trial` (`linkRequired`, `trialUsed`: lists of uids).
  */
 
 import { expect, type Page } from '@playwright/test';

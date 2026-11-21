@@ -63,6 +63,17 @@ const FREE_ENT_READ = {
 
 const PERIOD_START = Date.UTC(2026, 10, 1);
 const PERIOD_END = Date.UTC(2026, 11, 1);
+const TRIAL_END = Date.UTC(2026, 10, 25);
+
+// as plan.server.ts reads PRO_SITE's billing.
+const PRO_BILLING_READ = {
+  periodStart: PERIOD_START,
+  periodEnd: PERIOD_END,
+  endsAt: null,
+  cancelAtPeriodEnd: false,
+  productId: 'prd_owlette_pro',
+  founders: false,
+};
 
 const PRO_SITE = {
   subject: 'owlette:site-1',
@@ -74,6 +85,8 @@ const PRO_SITE = {
     current_period_end: PERIOD_END,
     cancel_at_period_end: false,
     ends_at: null,
+    product_id: 'prd_owlette_pro',
+    founders: false,
   },
   license_keys: ['OWLT-AAAAA'],
   standing: 'active',
@@ -84,7 +97,7 @@ const PRO_SITE = {
   resolved_at: '2026-11-11T00:00:00Z',
 };
 
-const TRIAL_SITE = { ...PRO_SITE, billing: undefined, standing: 'trialing' };
+const TRIAL_SITE = { ...PRO_SITE, billing: undefined, standing: 'trialing', trial_ends_at: TRIAL_END };
 
 const UNKNOWN_SITE = {
   subject: 'owlette:site-2',
@@ -163,7 +176,8 @@ describe('getSiteEntitlements', () => {
       ent: PRO_ENT_READ,
       epoch: 47,
       orgId: 'org_1',
-      billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+      billing: PRO_BILLING_READ,
+      trialEndsAt: null,
     });
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe('https://api-staging.tridant.io/v1/sites/owlette:site-1/entitlements?app=owlette');
@@ -192,6 +206,7 @@ describe('getSiteEntitlements', () => {
       epoch: 47,
       orgId: null,
       billing: null,
+      trialEndsAt: null,
     });
   });
 
@@ -208,10 +223,11 @@ describe('getSiteEntitlements', () => {
       epoch: 47,
       orgId: 'org_1',
       billing: null,
+      trialEndsAt: null,
     });
   });
 
-  it('reads a site under a trial as trialing with no billing period', async () => {
+  it('reads a site under a trial as trialing with no billing period, and the end of its trial', async () => {
     mockFetch.mockResolvedValue(reply(200, TRIAL_SITE));
 
     expect(await getSiteEntitlements('site-1')).toMatchObject({
@@ -221,6 +237,43 @@ describe('getSiteEntitlements', () => {
       ent: PRO_ENT_READ,
       orgId: 'org_1',
       billing: null,
+      trialEndsAt: TRIAL_END,
+    });
+  });
+
+  it('reads a trial end tridant sends as null, or not as a number, as null', async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, { ...TRIAL_SITE, trial_ends_at: null }));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({ standing: 'trialing', trialEndsAt: null });
+
+    mockFetch.mockResolvedValueOnce(reply(200, { ...TRIAL_SITE, trial_ends_at: '2026-11-25T00:00:00Z' }));
+    expect(await getSiteEntitlements('site-2')).toMatchObject({ standing: 'trialing', trialEndsAt: null });
+  });
+
+  it("carries a billed site's product and its founders rate", async () => {
+    mockFetch.mockResolvedValue(
+      reply(200, { ...PRO_SITE, billing: { ...PRO_SITE.billing, product_id: 'prd_owlette_core', founders: true } }),
+    );
+
+    expect(await getSiteEntitlements('site-1')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: 'prd_owlette_core', founders: true },
+    });
+  });
+
+  it('reads a billing block without a product or founders flag as null and false', async () => {
+    const billing = {
+      current_period_start: PERIOD_START,
+      current_period_end: PERIOD_END,
+      cancel_at_period_end: false,
+      ends_at: null,
+    };
+    mockFetch.mockResolvedValueOnce(reply(200, { ...PRO_SITE, billing }));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: null, founders: false },
+    });
+
+    mockFetch.mockResolvedValueOnce(reply(200, { ...PRO_SITE, billing: { ...billing, product_id: 7, founders: 'yes' } }));
+    expect(await getSiteEntitlements('site-2')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: null, founders: false },
     });
   });
 
@@ -396,14 +449,9 @@ describe('getSiteEntitlements', () => {
     });
 
     it('reads e2e_entitlements/site:{siteId} instead of calling tridant', async () => {
+      const billing = { ...PRO_BILLING_READ, productId: 'prd_owlette_core', founders: true };
       mockSeedGet.mockResolvedValue(
-        seed({
-          resolved: true,
-          standing: 'active',
-          ent: PRO_ENT,
-          orgId: 'org_e2e_u1',
-          billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
-        }),
+        seed({ resolved: true, standing: 'active', ent: PRO_ENT, orgId: 'org_e2e_u1', billing }),
       );
 
       expect(await getSiteEntitlements('site-1')).toEqual({
@@ -415,11 +463,39 @@ describe('getSiteEntitlements', () => {
         ent: PRO_ENT_READ,
         epoch: null,
         orgId: 'org_e2e_u1',
-        billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+        billing,
+        trialEndsAt: null,
       });
       expect(mockCollection).toHaveBeenCalledWith('e2e_entitlements');
       expect(mockDoc).toHaveBeenCalledWith('site:site-1');
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("maps a trialing seed's trialEndsAt", async () => {
+      mockSeedGet.mockResolvedValue(
+        seed({ resolved: true, standing: 'trialing', ent: PRO_ENT, orgId: 'org_e2e_u1', trialEndsAt: TRIAL_END }),
+      );
+
+      expect(await getSiteEntitlements('site-1')).toMatchObject({
+        standing: 'trialing',
+        billing: null,
+        trialEndsAt: TRIAL_END,
+      });
+    });
+
+    it('reads a billed seed without productId or founders as null and false', async () => {
+      mockSeedGet.mockResolvedValue(
+        seed({
+          resolved: true,
+          standing: 'active',
+          ent: PRO_ENT,
+          billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+        }),
+      );
+
+      expect(await getSiteEntitlements('site-1')).toMatchObject({
+        billing: { ...PRO_BILLING_READ, productId: null, founders: false },
+      });
     });
 
     it('works without tridant configured, and reads a seed with no billing or organization', async () => {
@@ -437,6 +513,7 @@ describe('getSiteEntitlements', () => {
         epoch: null,
         orgId: null,
         billing: null,
+        trialEndsAt: null,
       });
     });
 

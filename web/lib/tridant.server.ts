@@ -36,6 +36,8 @@ export interface TridantRequest {
   keyName?: string;
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
+  /** defaults to 5 s. */
+  timeoutMs?: number;
 }
 
 /** `TRIDANT_API_URL` without a trailing slash, or null when blank. */
@@ -99,7 +101,7 @@ export async function tridantFetch(path: string, request: TridantRequest): Promi
         ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(hasBody ? { body: JSON.stringify(request.body) } : {}),
-      signal: AbortSignal.timeout(TRIDANT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(request.timeoutMs ?? TRIDANT_TIMEOUT_MS),
     });
     status = response.status;
     // optional, because fetch doubles across the test suite answer without headers.
@@ -120,4 +122,60 @@ export async function tridantFetch(path: string, request: TridantRequest): Promi
     return failed(method, path, { ok: false, reason: 'malformed_response', status });
   }
   return { ok: true, status, json };
+}
+
+export type TridantKeyName = 'TRIDANT_LICENSE_KEY' | 'TRIDANT_RELEASE_KEY';
+
+export interface TridantKeyCheck {
+  keyName: TridantKeyName;
+  /** tridant answered and the key holds every scope owlette needs. */
+  ok: boolean;
+  /** set when the key's scopes could not be read. */
+  reason?: TridantFailureReason;
+  /** the required scopes the key lacks; empty when its scopes could not be read. */
+  missing: string[];
+  expiresAt: number | null;
+  expiresInDays: number | null;
+}
+
+// tridant grants a product-bound scope across its product's whole group, so a
+// trailing `*` here stands for any owlette product.
+const REQUIRED_SCOPES: Record<TridantKeyName, string[]> = {
+  TRIDANT_LICENSE_KEY: ['license.read', 'site.write', 'billing.write:prd_owlette_*'],
+  TRIDANT_RELEASE_KEY: ['release.write:prd_owlette_*'],
+};
+
+// a legacy `*` key holds these, and never a product-bound scope.
+const WILDCARD_GRANTS = ['license.read', 'license.validate', 'site.write'];
+
+function holds(scopes: string[], required: string): boolean {
+  if (required.endsWith('*')) return scopes.some((scope) => scope.startsWith(required.slice(0, -1)));
+  return scopes.includes(required) || (scopes.includes('*') && WILDCARD_GRANTS.includes(required));
+}
+
+async function checkKey(keyName: TridantKeyName): Promise<TridantKeyCheck> {
+  const answer = { keyName, missing: [], expiresAt: null, expiresInDays: null };
+  if (process.env.OWLETTE_E2E === '1') return { ...answer, ok: true };
+
+  const response = await tridantFetch('/v1/key', { key: process.env[keyName], keyName });
+  if (!response.ok) return { ...answer, ok: false, reason: response.reason };
+  const body = typeof response.json === 'object' && response.json !== null ? (response.json as Record<string, unknown>) : {};
+  const { scopes, expires_at, expires_in_days } = body;
+  if (!Array.isArray(scopes) || !scopes.every((scope): scope is string => typeof scope === 'string')) {
+    return { ...answer, ok: false, reason: 'malformed_response' };
+  }
+
+  const missing = REQUIRED_SCOPES[keyName].filter((required) => !holds(scopes, required));
+  return {
+    keyName,
+    ok: missing.length === 0,
+    missing,
+    expiresAt: typeof expires_at === 'number' ? expires_at : null,
+    expiresInDays: typeof expires_in_days === 'number' ? expires_in_days : null,
+  };
+}
+
+/** what tridant id says each of owlette's keys can do, license key first. `GET /v1/key` writes nothing. */
+export function checkTridantKeys(): Promise<TridantKeyCheck[]> {
+  return Promise.all((Object.keys(REQUIRED_SCOPES) as TridantKeyName[]).map(checkKey));
 }
