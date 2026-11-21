@@ -151,6 +151,7 @@ beforeEach(() => {
     userId: 'admin-uid',
     auth: { userId: 'admin-uid', keyContext: null },
     scopeCheck: { isLegacy: false },
+    machineIds: null,
   });
   mockClearLogs.mockResolvedValue({ siteId: SITE, deletedCount: 3, filters: {} });
   mocks.get.mockResolvedValue(docSnapshot('any', {}));
@@ -254,6 +255,85 @@ describe('GET /api/sites/{siteId}/logs', () => {
   });
 });
 
+function scopedTo(machineIds: string[]): void {
+  mockRequireSiteAuthAndScope.mockResolvedValue({
+    ok: true,
+    userId: 'scoped-uid',
+    auth: { userId: 'scoped-uid', keyContext: null },
+    scopeCheck: { isLegacy: false },
+    machineIds,
+  });
+}
+
+describe('GET /api/sites/{siteId}/logs for a scoped member', () => {
+  const rows = [
+    { id: 'on-m1', data: { timestamp: 1_700_000_000_003, action: 'agent_started', level: 'info', machineId: 'm1' } },
+    { id: 'on-m2', data: { timestamp: 1_700_000_000_002, action: 'agent_started', level: 'info', machineId: 'm2' } },
+    { id: 'no-machine', data: { timestamp: 1_700_000_000_001, action: 'site_event', level: 'info' } },
+  ];
+
+  it('admits scoped callers at the gate', async () => {
+    await logsGET(createMockRequest(`http://localhost/api/sites/${SITE}/logs`), routeContext());
+
+    expect(mockRequireSiteAuthAndScope).toHaveBeenCalledWith(
+      expect.anything(),
+      SITE,
+      'read',
+      { machineScope: 'admit' },
+    );
+  });
+
+  it('returns only rows of machines in scope, and the query carried machineId in the scope', async () => {
+    scopedTo(['m1']);
+    mocks.collectionGet.mockResolvedValueOnce(querySnapshot(rows));
+
+    const res = await logsGET(createMockRequest(`http://localhost/api/sites/${SITE}/logs`), routeContext());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.logs.map((log: { id: string }) => log.id)).toEqual(['on-m1']);
+    expect(mocks.where).toHaveBeenCalledWith('machineId', 'in', ['m1']);
+  });
+
+  it('answers a machineId filter outside the scope with an empty page and no read', async () => {
+    scopedTo(['m1']);
+
+    const res = await logsGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/logs?machineId=m2`),
+      routeContext(),
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ siteId: SITE, logs: [], next_page_token: '', nextPageToken: '' });
+    expect(mocks.collectionGet).not.toHaveBeenCalled();
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
+  it('answers an empty scope with an empty page and no read', async () => {
+    scopedTo([]);
+
+    const res = await logsGET(createMockRequest(`http://localhost/api/sites/${SITE}/logs`), routeContext());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ siteId: SITE, logs: [], next_page_token: '' });
+    expect(mocks.collectionGet).not.toHaveBeenCalled();
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
+  it('leaves a whole-site caller unchanged: no machine filter in the query, rows with no machine included', async () => {
+    mocks.collectionGet.mockResolvedValueOnce(querySnapshot(rows));
+
+    const res = await logsGET(createMockRequest(`http://localhost/api/sites/${SITE}/logs`), routeContext());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.logs.map((log: { id: string }) => log.id)).toEqual(['on-m1', 'on-m2', 'no-machine']);
+    expect(mocks.where).not.toHaveBeenCalledWith('machineId', 'in', expect.anything());
+  });
+});
+
 describe('GET /api/sites/{siteId}/logs/{logId}', () => {
   it('returns one log entry', async () => {
     mocks.get.mockResolvedValueOnce(
@@ -278,6 +358,76 @@ describe('GET /api/sites/{siteId}/logs/{logId}', () => {
       action: 'agent_started',
       level: 'info',
       machineId: 'm1',
+    });
+  });
+
+  describe('for a scoped member', () => {
+    const detail = (logId: string) =>
+      logDetailGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/logs/${logId}`),
+        { params: Promise.resolve({ siteId: SITE, logId }) },
+      );
+
+    it('admits scoped callers at the gate', async () => {
+      await detail('log-1');
+
+      expect(mockRequireSiteAuthAndScope).toHaveBeenCalledWith(
+        expect.anything(),
+        SITE,
+        'read',
+        { machineScope: 'admit' },
+      );
+    });
+
+    it('answers a row on a machine outside the scope, or on no machine, as a missing log', async () => {
+      // each response carries its own requestId; everything else must match
+      const bodyOf = async (res: Response) => ({ ...(await res.json()), requestId: undefined });
+      scopedTo(['m1']);
+      mocks.get.mockResolvedValueOnce(docSnapshot('log-1', null));
+      const missing = await detail('log-1');
+      const missingBody = await bodyOf(missing);
+
+      mocks.get.mockResolvedValueOnce(
+        docSnapshot('log-1', { timestamp: 1_700_000_000_000, action: 'agent_started', level: 'info', machineId: 'm2' }),
+      );
+      const offScope = await detail('log-1');
+
+      mocks.get.mockResolvedValueOnce(
+        docSnapshot('log-1', { timestamp: 1_700_000_000_000, action: 'site_event', level: 'info' }),
+      );
+      const noMachine = await detail('log-1');
+
+      expect(missing.status).toBe(404);
+      expect(offScope.status).toBe(404);
+      expect(noMachine.status).toBe(404);
+      expect(missingBody).toMatchObject({ status: 404, title: 'log entry not found' });
+      expect(await bodyOf(offScope)).toEqual(missingBody);
+      expect(await bodyOf(noMachine)).toEqual(missingBody);
+    });
+
+    it('returns a row on a machine in scope', async () => {
+      scopedTo(['m1']);
+      mocks.get.mockResolvedValueOnce(
+        docSnapshot('log-1', { timestamp: 1_700_000_000_000, action: 'agent_started', level: 'info', machineId: 'm1' }),
+      );
+
+      const res = await detail('log-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({ id: 'log-1', machineId: 'm1' });
+    });
+
+    it('leaves a whole-site caller unchanged: a row with no machine comes back', async () => {
+      mocks.get.mockResolvedValueOnce(
+        docSnapshot('log-1', { timestamp: 1_700_000_000_000, action: 'site_event', level: 'info' }),
+      );
+
+      const res = await detail('log-1');
+      const body = await res.json();
+
+      expect(res.status).toBe(200);
+      expect(body).toMatchObject({ id: 'log-1', machineId: null });
     });
   });
 });

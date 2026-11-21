@@ -26,7 +26,17 @@ const TARGET_SITE = TEST_SITES[0];
 
 test('pairing phrase prefills, the site picker opens, and authorize succeeds', async ({ page }) => {
   await page.route('**/api/agent/auth/device-code/authorize', async (route) => {
-    expect(route.request().postDataJSON()).toEqual({
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (body.preview) {
+      expect(body).toEqual({ pairPhrase: PAIR_PHRASE, siteId: TARGET_SITE.id, preview: true });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ machineId: PAIRED_MACHINE_ID, existing: false }),
+      });
+      return;
+    }
+    expect(body).toEqual({
       pairPhrase: PAIR_PHRASE,
       siteId: TARGET_SITE.id,
     });
@@ -42,8 +52,8 @@ test('pairing phrase prefills, the site picker opens, and authorize succeeds', a
   await expect(page.getByLabel(/pairing phrase/i)).toHaveValue(PAIR_PHRASE);
 
   // Superadmin has more than one site, so nothing is pre-selected and the
-  // authorize button is not rendered yet.
-  await expect(page.getByRole('button', { name: /authorize machine/i })).toHaveCount(0);
+  // continue button is not rendered yet.
+  await expect(page.getByRole('button', { name: /^continue$/i })).toHaveCount(0);
   await assertNoHorizontalOverflow(page);
 
   // Radix Select: the trigger is the labelled combobox, the options land in a
@@ -53,6 +63,10 @@ test('pairing phrase prefills, the site picker opens, and authorize succeeds', a
   await expect(option).toBeVisible();
   await assertNoHorizontalOverflow(page);
   await option.click();
+
+  // the machine is named before anything is approved
+  await page.getByRole('button', { name: /^continue$/i }).click();
+  await expect(page.getByTestId('add-machine-name')).toHaveText(PAIRED_MACHINE_ID);
 
   const authorize = page.getByRole('button', { name: /authorize machine/i });
   await expect(authorize).toBeVisible();

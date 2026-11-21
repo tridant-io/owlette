@@ -1,16 +1,27 @@
-import { BookOpen, Bug, FileCog, LogIn, LogOut, Menu, RotateCcw, RotateCw, ScrollText } from 'lucide-react'
-import { useCallback } from 'react'
+import {
+  BookOpen,
+  Bug,
+  FileCog,
+  LogIn,
+  LogOut,
+  Menu,
+  MonitorPlay,
+  RotateCcw,
+  RotateCw,
+  ScrollText,
+  Settings,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { openExternalUrl, openOwlettePath } from '@/lib/agentCli'
-import { OWLETTE_FILES } from '@/lib/ipc'
+import { OWLETTE_FILES, openSwoopViewer, swoopViewerInstalled } from '@/lib/ipc'
 import { MENU_SURFACE } from '@/lib/surfaces'
 
 /** Where the logs the operator wants live, relative to the data root. */
@@ -25,16 +36,17 @@ interface AppMenuProps {
   onJoinSite: () => void
   onLeaveSite: () => void
   onReportIssue: () => void
-  /** Ask the service to restart itself (restart.flag — no elevation). */
+  onOpenSettings: () => void
+  /**
+   * Restart the service without elevation: restart.flag on windows, the polkit
+   * rule's `systemctl restart` on linux, a request to the daemon on macos.
+   */
   onRestartService: () => void
-  /** Run-on-login state — null until the host answers, hiding the row. */
-  startOnLogin: boolean | null
-  onStartOnLoginChange: (enabled: boolean) => void
 }
 
 /**
- * The overflow menu: config, logs, docs, feedback (the legacy GUI's `···` items,
- * same order) plus the site action.
+ * The overflow menu: swoop, then docs, submit issue, config and logs, then
+ * settings with the recovery pair, and the site action last on its own.
  *
  * The site action lives BOTH here and in the footer, for different readers —
  * this menu is where someone who knows the app looks for `leave site`, the
@@ -44,15 +56,20 @@ interface AppMenuProps {
  *
  * Opening a file/folder/link goes through the host (`src-tauri/src/shell_open.rs`);
  * nothing is spawned from here.
+ *
+ * settings opens the app's settings window: appearance, start on login, hoot mcp
+ * and, on a mac, permissions all live there rather than in the menu.
+ *
+ * swoop opens owlette swoop, the viewer app, and leads the menu: it is the row
+ * people reach for. it is there only when the host finds the app installed.
  */
 export function AppMenu({
   paired,
   onJoinSite,
   onLeaveSite,
   onReportIssue,
+  onOpenSettings,
   onRestartService,
-  startOnLogin,
-  onStartOnLoginChange,
 }: AppMenuProps) {
   const open = useCallback((path: string, what: string) => {
     void openOwlettePath(path).catch((cause: unknown) => {
@@ -70,6 +87,30 @@ export function AppMenu({
     })
   }, [])
 
+  const openSwoop = useCallback(() => {
+    void openSwoopViewer().catch((cause: unknown) => {
+      toast.error('could not open the owlette swoop desktop app', {
+        description: cause instanceof Error ? cause.message : String(cause),
+      })
+    })
+  }, [])
+
+  const [swoopInstalled, setSwoopInstalled] = useState(false)
+
+  useEffect(() => {
+    let disposed = false
+    void swoopViewerInstalled()
+      .then((installed) => {
+        if (!disposed) setSwoopInstalled(installed)
+      })
+      .catch(() => {
+        // no bridge: no app to open, so the row stays hidden
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -80,18 +121,23 @@ export function AppMenu({
         <Menu className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className={`${MENU_SURFACE} w-52`}>
-        {paired ? (
-          <DropdownMenuItem data-testid="menu-leave-site" onSelect={onLeaveSite}>
-            <LogOut aria-hidden className="size-4" />
-            leave site
-          </DropdownMenuItem>
-        ) : (
-          <DropdownMenuItem data-testid="menu-join-site" onSelect={onJoinSite}>
-            <LogIn aria-hidden className="size-4" />
-            join site
-          </DropdownMenuItem>
+        {swoopInstalled && (
+          <>
+            <DropdownMenuItem data-testid="menu-swoop" onSelect={openSwoop}>
+              <MonitorPlay aria-hidden className="size-4" />
+              swoop
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
         )}
-        <DropdownMenuSeparator />
+        <DropdownMenuItem data-testid="menu-docs" onSelect={openDocs}>
+          <BookOpen aria-hidden className="size-4" />
+          docs
+        </DropdownMenuItem>
+        <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
+          <Bug aria-hidden className="size-4" />
+          submit issue
+        </DropdownMenuItem>
         <DropdownMenuItem
           data-testid="menu-config"
           onSelect={() => open(OWLETTE_FILES.config, 'config.json')}
@@ -103,26 +149,12 @@ export function AppMenu({
           <ScrollText aria-hidden className="size-4" />
           logs
         </DropdownMenuItem>
-        <DropdownMenuItem data-testid="menu-docs" onSelect={openDocs}>
-          <BookOpen aria-hidden className="size-4" />
-          docs
-        </DropdownMenuItem>
-        <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
-          <Bug aria-hidden className="size-4" />
-          submit bug report
-        </DropdownMenuItem>
         <DropdownMenuSeparator />
-        {/* Mirrors the tray's checkbox — same startup_link, same state. */}
-        {startOnLogin !== null && (
-          <DropdownMenuCheckboxItem
-            data-testid="menu-start-on-login"
-            checked={startOnLogin}
-            onCheckedChange={(next) => onStartOnLoginChange(next === true)}
-          >
-            start on login
-          </DropdownMenuCheckboxItem>
-        )}
-        {/* Recovery pair, escalating: the same restart.flag the tray writes,
+        <DropdownMenuItem data-testid="menu-settings" onSelect={onOpenSettings}>
+          <Settings aria-hidden className="size-4" />
+          settings
+        </DropdownMenuItem>
+        {/* Recovery pair, escalating: the same restart the tray asks for,
             surfaced here for operators who never right-click a tray icon. */}
         <DropdownMenuItem data-testid="menu-restart-service" onSelect={onRestartService}>
           <RotateCcw aria-hidden className="size-4" />
@@ -134,6 +166,18 @@ export function AppMenu({
           <RotateCw aria-hidden className="size-4" />
           reload window
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {paired ? (
+          <DropdownMenuItem data-testid="menu-leave-site" onSelect={onLeaveSite}>
+            <LogOut aria-hidden className="size-4" />
+            leave site
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem data-testid="menu-join-site" onSelect={onJoinSite}>
+            <LogIn aria-hidden className="size-4" />
+            join site
+          </DropdownMenuItem>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )

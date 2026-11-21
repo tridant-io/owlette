@@ -14,7 +14,11 @@
  *
  * A control grant is not a row of its own: `session_started` with `ctl: true`
  * and `MACHINE_REMOTE_CONTROL` as the row's capability IS the grant, and a
- * second row would double-count one act.
+ * second row would double-count one act. A step-up window opened with no proof
+ * in the request IS a row of its own (`step_up_opened`), because that is the
+ * one opening no ceremony request evidences. So is the network half of a control
+ * decision (`step_up_network_check`): which network asked and whether the user
+ * had verified it, the record that says how often enforcing the binding asks.
  */
 
 import {
@@ -37,7 +41,9 @@ export type SwoopAuditEvent =
   | 'session_ended'
   | 'session_denied'
   | 'lease_denied'
-  | 'step_up_failed';
+  | 'step_up_failed'
+  | 'step_up_opened'
+  | 'step_up_network_check';
 
 export interface SwoopAuditBase {
   siteId: string;
@@ -94,9 +100,11 @@ function swoopEntry(args: {
 /**
  * A session was granted. Awaited and fails the caller closed: a control session
  * that starts unrecorded is the one case this whole module exists to prevent.
+ * `joined` marks a viewer seated in a session already running on the machine,
+ * which shares its sid: each viewer's grant is a row of its own either way.
  */
 export async function recordSwoopSessionStarted(
-  args: SwoopAuditBase & { sid: string; viewerId: string; ctl: boolean },
+  args: SwoopAuditBase & { sid: string; viewerId: string; ctl: boolean; joined?: boolean },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -105,17 +113,83 @@ export async function recordSwoopSessionStarted(
       event: 'session_started',
       capability: capabilityFor(args.ctl),
       outcome: 'allow',
-      metadata: { viewerId: args.viewerId, ctl: args.ctl },
+      metadata: { viewerId: args.viewerId, ctl: args.ctl, ...(args.joined ? { joined: true } : {}) },
     }),
   );
 }
 
 /**
- * A session stopped. `endReason` distinguishes an operator hanging up from a
- * kill or a revocation, and `durationMs` is how long control was held.
+ * A step-up window opened without a proof in the request: the sign-in's own
+ * ceremony, minutes old, stood in for it (`reason: 'fresh_sign_in'`). Awaited,
+ * and written before the window is, so no window opens unrecorded.
+ */
+export async function recordSwoopStepUpOpened(
+  args: SwoopAuditBase & { reason: 'fresh_sign_in' },
+): Promise<void> {
+  await writeAuditEntryBlocking(
+    args.siteId,
+    swoopEntry({
+      base: args,
+      event: 'step_up_opened',
+      capability: Capability.MACHINE_REMOTE_CONTROL,
+      outcome: 'allow',
+      metadata: { reason: args.reason },
+    }),
+  );
+}
+
+/**
+ * The network half of one control decision (`lib/swoop/networks.server.ts`):
+ * the network that asked, whether this user verified it in the last 7 days, and
+ * the network the open window was opened on, if one is. An observation, so its
+ * outcome is always `allow` and `match` carries the answer: in `enforce` a
+ * ceremony in the same request can still turn a mismatch into control, and the
+ * decision's own row (`session_started`, `session_denied`) says which. Fire-and-forget.
+ */
+export function recordSwoopNetworkCheck(
+  args: SwoopAuditBase & {
+    mode: 'log' | 'enforce';
+    network: { key: string; prefix: string | null; viaEdge: boolean };
+    match: boolean;
+    windowNetwork: string | null;
+  },
+): void {
+  writeAuditEntry(
+    args.siteId,
+    swoopEntry({
+      base: args,
+      event: 'step_up_network_check',
+      capability: Capability.MACHINE_REMOTE_CONTROL,
+      outcome: 'allow',
+      metadata: {
+        mode: args.mode,
+        key: args.network.key,
+        prefix: args.network.prefix,
+        viaEdge: args.network.viaEdge,
+        match: args.match,
+        windowNetwork: args.windowNetwork,
+      },
+    }),
+  );
+}
+
+/**
+ * A session stopped, or one viewer left it. `endReason` distinguishes an
+ * operator hanging up from a kill or a revocation, and `durationMs` is how long
+ * control was held. `left` marks a viewer leaving a session that goes on for
+ * the others in it; `viewerId` names the viewer, when one did.
  */
 export async function recordSwoopSessionEnded(
-  args: SwoopAuditBase & { sid: string; endReason: string; durationMs?: number },
+  args: SwoopAuditBase & {
+    sid: string;
+    endReason: string;
+    viewerReason?: string;
+    durationMs?: number;
+    viewerId?: string;
+    left?: boolean;
+    /** the uid a revocation or a kick ended it for. */
+    endedFor?: string;
+  },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -126,7 +200,11 @@ export async function recordSwoopSessionEnded(
       outcome: 'allow',
       metadata: {
         endReason: reasonCode(args.endReason),
+        ...(args.viewerReason !== undefined ? { viewerReason: reasonCode(args.viewerReason) } : {}),
         ...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
+        ...(args.viewerId !== undefined ? { viewerId: args.viewerId } : {}),
+        ...(args.left ? { left: true } : {}),
+        ...(args.endedFor !== undefined ? { endedFor: args.endedFor } : {}),
       },
     }),
   );

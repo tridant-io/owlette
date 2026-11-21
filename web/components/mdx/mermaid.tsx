@@ -44,11 +44,35 @@ function cachePromise<T>(key: string, setPromise: () => Promise<T>): Promise<T> 
   return promise;
 }
 
+/** a token that fails to resolve falls back to a hex from the theme being drawn */
+const FALLBACKS = {
+  dark: {
+    background: "#0b1020",
+    foreground: "#f7f8f8",
+    card: "#1c2333",
+    border: "#3a4663",
+    muted: "#262f44",
+    mutedForeground: "#9aa6c0",
+    accent: "#36c5d6",
+    accentMuted: "#2a6e78",
+  },
+  light: {
+    background: "#f4f7fb",
+    foreground: "#101926",
+    card: "#fcfdff",
+    border: "#d0d9e2",
+    muted: "#eaeff5",
+    mutedForeground: "#4f5c6d",
+    accent: "#007691",
+    accentMuted: "#91c9d4",
+  },
+};
+
 /**
  * Design tokens → hex colors + font stack. Reads the docs layout element so it
  * inherits the active theme's cascade, falling back to <html> then `fallback`.
  */
-function resolveTokens() {
+function resolveTokens(fallback: (typeof FALLBACKS)["dark"]) {
   const root = document.getElementById("nd-docs-layout") ?? document.documentElement;
   const cs = getComputedStyle(root);
   const ctx = document.createElement("canvas").getContext("2d", {
@@ -77,14 +101,14 @@ function resolveTokens() {
 
   const fontGeist = cs.getPropertyValue("--font-geist").trim();
   return {
-    background: color("--background", "#0b1020"),
-    foreground: color("--foreground", "#f7f8f8"),
-    card: color("--card", "#1c2333"),
-    border: color("--border", "#3a4663"),
-    muted: color("--muted", "#262f44"),
-    mutedForeground: color("--muted-foreground", "#9aa6c0"),
-    accent: color("--accent-cyan", "#36c5d6"),
-    accentMuted: color("--accent-cyan-muted", "#2a6e78"),
+    background: color("--background", fallback.background),
+    foreground: color("--foreground", fallback.foreground),
+    card: color("--card", fallback.card),
+    border: color("--border", fallback.border),
+    muted: color("--muted", fallback.muted),
+    mutedForeground: color("--muted-foreground", fallback.mutedForeground),
+    accent: color("--accent-cyan", fallback.accent),
+    accentMuted: color("--accent-cyan-muted", fallback.accentMuted),
     fontFamily: `${fontGeist ? `${fontGeist}, ` : ""}ui-sans-serif, system-ui, sans-serif`,
   };
 }
@@ -100,7 +124,7 @@ function MermaidContent({ chart }: { chart: string }) {
     cachePromise(`${chart}-${resolvedTheme}`, async () => {
       // Measure with the render font — see the clipping note above.
       if (document.fonts?.ready) await document.fonts.ready;
-      const t = resolveTokens();
+      const t = resolveTokens(FALLBACKS[resolvedTheme === "light" ? "light" : "dark"]);
 
       mermaid.initialize({
         startOnLoad: false,

@@ -3,7 +3,9 @@
  *
  * Update the `installer_metadata/latest` pointer to the given version.
  * Atomic Firestore transaction — refuses if the version doesn't exist or
- * is soft-deleted.
+ * is soft-deleted. Then registers the version with tridant id, yanking any
+ * registered release above it (a rollback); the outcome is `tridant`, and a
+ * tridant id failure never fails the promote.
  *
  * Auth: an api key with `installer=*:admin` scope, or a superadmin session.
  * Idempotency-Key is REQUIRED; the same key + body within 24h replays the
@@ -24,6 +26,7 @@ import {
   installerVersionResponse,
   type InstallerVersionRecord,
 } from '@/lib/installerVersionResponse.server';
+import { syncInstallerRelease } from '@/lib/tridantRelease.server';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
@@ -126,10 +129,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           },
         });
 
+        const tridant = await syncInstallerRelease(version);
+
         return applyAuthDeprecations(
           NextResponse.json({
             version,
             latest: result.latestData,
+            tridant,
           }),
           auth.scopeCheck,
         );

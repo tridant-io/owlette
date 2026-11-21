@@ -59,22 +59,9 @@ interface AuditLogDetail {
 }
 
 export function registerAuditLogCommands(program: Command): void {
-  const auditLog =
-    (program.commands.find((c) => c.name() === 'audit-log') as Command | undefined) ??
-    program.command('audit-log').description('inspect site audit log records');
-
-  // Overwrite any earlier stub description so help text is canonical whatever the load order.
-  auditLog.description('inspect site audit log records');
-
-  // Drop stubs left by earlier file-load ordering.
-  for (const verb of ['list', 'get'] as const) {
-    const existing = auditLog.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = auditLog.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const auditLog = program
+    .command('audit-log')
+    .description('inspect site audit log records');
 
   auditLog
     .command('list')

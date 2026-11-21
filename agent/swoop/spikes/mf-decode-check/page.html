@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>mf decode check</title>
+<pre id="log"></pre>
+<script type="module">
+// decodes every stream run.mjs lists with WebCodecs and posts what came out.
+// annex-b with no `description`, as swoop's viewer feeds it.
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; };
+
+// access units: a new one at an access unit delimiter, or at any nal once the
+// current one holds its slice (both rungs emit one slice a picture)
+function units(bytes) {
+  const starts = [];
+  for (let i = 0; i + 2 < bytes.length; i++) {
+    if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 1) { starts.push(i + 3); i += 2; }
+  }
+  const nals = starts.map((s, n) => {
+    let end = n + 1 < starts.length ? starts[n + 1] - 3 : bytes.length;
+    while (end > s && bytes[end - 1] === 0) end--;
+    return { type: bytes[s] & 0x1f, start: s, end };
+  });
+  const out = [];
+  let cur = null;
+  for (const nal of nals) {
+    if (!cur || nal.type === 9 || cur.slices > 0) {
+      cur = { nals: [], slices: 0, key: false };
+      out.push(cur);
+    }
+    cur.nals.push(nal);
+    if (nal.type === 1 || nal.type === 5) cur.slices++;
+    if (nal.type === 5) cur.key = true;
+  }
+  return out.map((u) => {
+    const data = new Uint8Array(u.nals.reduce((a, n) => a + 4 + n.end - n.start, 0));
+    let o = 0;
+    for (const n of u.nals) {
+      data.set([0, 0, 0, 1], o);
+      data.set(bytes.subarray(n.start, n.end), o + 4);
+      o += 4 + n.end - n.start;
+    }
+    const sps = u.nals.find((n) => n.type === 7);
+    return { data, key: u.key, sps: sps ? bytes.subarray(sps.start, sps.end) : null };
+  });
+}
+
+const hex = (b) => b.toString(16).padStart(2, '0');
+
+async function check(name, accel) {
+  const bytes = new Uint8Array(await (await fetch('/' + encodeURIComponent(name))).arrayBuffer());
+  const aus = units(bytes);
+  const sps = aus.find((u) => u.sps).sps;
+  // the codec string from the bitstream's own sps, as the viewer builds it
+  const codec = `avc1.${hex(sps[1])}${hex(sps[2])}${hex(sps[3])}`;
+  const config = { codec, hardwareAcceleration: accel, optimizeForLatency: true };
+  const result = { name, accel, codec, units: aus.length, keys: aus.filter((u) => u.key).length };
+  try {
+    result.supported = (await VideoDecoder.isConfigSupported(config)).supported;
+  } catch (e) {
+    result.supported = `threw ${e.name}`;
+  }
+  let out = 0;
+  const decoder = new VideoDecoder({
+    output: (frame) => {
+      if (out === 0) {
+        result.size = `${frame.displayWidth}x${frame.displayHeight}`;
+        const canvas = new OffscreenCanvas(frame.displayWidth, frame.displayHeight);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(frame, 0, 0);
+        const px = ctx.getImageData(0, 0, frame.displayWidth, frame.displayHeight).data;
+        let lit = 0, samples = 0;
+        for (let i = 0; i < px.length; i += 4 * 997) { samples++; if (px[i] + px[i + 1] + px[i + 2] > 48) lit++; }
+        result.nonblack = `${lit}/${samples}`;
+        // the tests' frames carry a white (240) panel down the right edge
+        const at = (Math.floor(frame.displayHeight * 0.9) * frame.displayWidth + Math.floor(frame.displayWidth * 0.97)) * 4;
+        result.firstPanelRgb = [px[at], px[at + 1], px[at + 2]];
+      }
+      out++;
+      frame.close();
+    },
+    error: (e) => { result.error = `${e.name}: ${e.message}`; },
+  });
+  try {
+    decoder.configure(config);
+    const t0 = performance.now();
+    aus.forEach((u, i) => decoder.decode(new EncodedVideoChunk({ type: u.key ? 'key' : 'delta', timestamp: i * 16667, data: u.data })));
+    await decoder.flush();
+    result.decodeMs = Math.round(performance.now() - t0);
+  } catch (e) {
+    result.error = result.error ?? `${e.name}: ${e.message}`;
+  }
+  result.framesOut = out;
+  try { decoder.close(); } catch {}
+  return result;
+}
+
+const results = { userAgent: navigator.userAgent, runs: [] };
+for (const name of await (await fetch('/streams')).json()) {
+  for (const accel of ['no-preference', 'prefer-hardware', 'prefer-software']) {
+    const r = await check(name, accel);
+    log(JSON.stringify(r));
+    results.runs.push(r);
+  }
+}
+await fetch('/result', { method: 'POST', body: JSON.stringify(results) });
+log('done');
+</script>

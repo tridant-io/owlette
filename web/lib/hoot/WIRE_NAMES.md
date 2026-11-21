@@ -23,8 +23,9 @@ cloud-function writer that would have to ship in the same release.
 | `cortexStatus.*` | `machines/{id}.cortexStatus.{online,lastHeartbeat}` — `lib/hootStream.server.ts`, `app/api/agent/alert/route.ts` | agent release: the agent is the sole writer |
 | `settings/cortex` | `sites/{siteId}/settings/cortex` (`.requireTier3Approval`, `.autonomousEnabled`) — `lib/hoot-utils.server.ts`, `lib/actions/setHootRequireTier3Approval.server.ts`, `hooks/useHootApprovalSetting.ts`, `app/api/hoot/autonomous/route.ts`, `app/api/agent/alert/route.ts` | doc-id migration per site + a `firestore.rules` change |
 | `cortex-events`, `cortex-nonces`, `cortex-state` | `sites/{siteId}/cortex-*` — `app/api/hoot/autonomous/route.ts`, `app/api/hoot/escalation/route.ts` | collection migration + `firestore.rules` + index rebuild |
+| `cortex-followups` | `cortex-followups/{id}`, scheduled follow-ups — `lib/hoot/followupStore.server.ts`, `lib/hoot/followupSweep.server.ts`, `hooks/useHoot.ts` | collection migration + `firestore.rules` + index rebuild |
 | `machines/{id}/cortex/*` | active-chat subcollection — `lib/hootStream.server.ts` | agent release + `firestore.rules` (`__tests__/rules/wave-hardening.test.ts` pins the path) |
-| `cortexAlerts` | user preference key — `components/AccountSettingsDialog.tsx`, `app/settings/alerts/page.tsx`, `app/api/unsubscribe/route.ts`, `lib/adminUtils.server.ts`, `lib/hoot-escalation.server.ts` | backfill every `users/{uid}.preferences`; unsubscribe links already in inboxes carry the key |
+| `cortexAlerts` | user preference key — `components/AccountSettingsDialog.tsx`, `components/AlertEmailToggles.tsx`, `app/api/unsubscribe/route.ts`, `lib/adminUtils.server.ts`, `lib/hoot-escalation.server.ts` | backfill every `users/{uid}.preferences`; unsubscribe links already in inboxes carry the key |
 | `cortexSidebarOpen`, `cortexCollapsedGroups` | `users/{uid}/devicePrefs/global` — `hooks/useHootSidebarPrefs.ts` | backfill, or accept every user's sidebar state resetting once |
 | `cortexChatId`, `cortexEventId` | audit-entry metadata — `lib/hoot/dispatch.server.ts` | historical audit rows keep the old keys; `e2e/specs/security-boundary/hoot-autonomous-burst.spec.ts` reads `metadata.cortexEventId` |
 | `cortex:user_<uid>` | talon `auditActor` string — `lib/hoot-utils.server.ts`, `lib/talons/store.server.ts` | rewrite of stored talon provenance |
@@ -68,7 +69,7 @@ Two other legacy alias families predate this rename and are untouched:
 
 | name | where | retire cost |
 |---|---|---|
-| `CORTEX_INTERNAL_SECRET` | `lib/hootInternalSecret.ts` — the **only** place in `web/` that spells it. Every reader goes through `hootInternalSecret()` | simultaneous rotation on Railway dev + Railway prod + Vercel + the Firebase Functions config (`functions/src/lib/requireInternalSecret`) |
+| `CORTEX_INTERNAL_SECRET` | `lib/hootInternalSecret.ts` — the **only** place in `web/` that reads it. Every reader goes through `hootInternalSecret()` | simultaneous rotation on Railway dev + Railway prod + Vercel + the Firebase Functions config (`functions/src/lib/requireInternalSecret`) |
 | `x-cortex-secret` | the request header that carries it — `app/api/hoot/autonomous/route.ts`, `app/api/hoot/escalation/route.ts`, `app/api/agent/alert/route.ts` | same release as the callers above |
 | `cortex_chat` / `INSTATUS_COMPONENT_CORTEX_CHAT_ID` | status-page component id — `lib/healthChecks.server.ts`, `lib/instatusClient.ts`, `scripts/check-status-page-ready.mjs` | rename the component in Instatus and re-point the env var |
 | `cortex_events_incoming_total`, `cortex_events_processed_total` | security-boundary metric names — `lib/securityBoundaryMetrics.server.ts`, `app/api/hoot/autonomous/route.ts` | breaks historical metric continuity in the monitoring stack |
@@ -88,7 +89,7 @@ future readers know it was checked.
 
 `.cortex-markdown` → `.hoot-markdown`. Verified first that nothing stored
 references it: the class is applied at render time by
-`app/hoot/components/ChatWindow.tsx` and is never embedded in persisted chat
+`components/hoot/HootMarkdown.tsx` and is never embedded in persisted chat
 content. `desktop/`'s design-system test and README (which assert the block is
 *absent* from the desktop port) were updated in the same pass.
 
@@ -96,7 +97,7 @@ content. `desktop/`'s design-system test and README (which assert the block is
 
 The agent's Python surface (`agent/src/cortex_*.py`, `owlette_cortex.py`) and
 `scripts/upload-cortex-cli.mjs` keep their names: they are coupled to the
-`cortex-cli/` storage prefix and the `installer_metadata/cortex_cli` document,
+`cortex-cli/` storage prefix and the `installer_metadata/cortex_cli*` documents,
 so renaming them is an agent-release task, not a web one. e2e fixture document
 ids (`e2e-cortex-*`, `screenshot-cortex-*`) and the docs screenshot asset
 `cortex-chat.png` are likewise left alone — the first are seeded Firestore ids,

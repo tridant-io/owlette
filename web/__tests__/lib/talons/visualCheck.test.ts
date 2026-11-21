@@ -18,6 +18,7 @@ const mockResolveTalonAuthor = jest.fn();
 const mockResolveTalonAuthorLlmConfig = jest.fn();
 const mockCreateModel = jest.fn();
 const mockGenerateObject = jest.fn();
+const mockIssueScreenshotReadUrl = jest.fn();
 
 jest.mock('firebase-admin/firestore', () => ({
   __esModule: true,
@@ -58,6 +59,10 @@ jest.mock('@/lib/logger', () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  ...jest.requireActual('@/lib/screenshotStorage.server'),
+  issueScreenshotReadUrl: (...args: unknown[]) => mockIssueScreenshotReadUrl(...args),
+}));
 
 import type { Firestore } from 'firebase-admin/firestore';
 import { ExecuteMachineCommandError } from '@/lib/actions/executeMachineCommand.server';
@@ -77,6 +82,8 @@ const MACHINE = 'lobby-01';
 const CORRELATION = 'corr-1';
 const SIGNED_URL = 'https://storage.googleapis.com/bucket/shot.png?X-Goog-Signature=abc';
 const STORAGE_PATH = 'screenshots/site-a/lobby-01/2026-08-14.png';
+/** The url finalize hands the agent: the dashboard's route, not a link a model can fetch. */
+const STORED_URL = `/api/sites/${SITE}/machines/${MACHINE}/screenshots/image?path=${encodeURIComponent(STORAGE_PATH)}`;
 
 const db = {} as unknown as Firestore;
 
@@ -109,7 +116,7 @@ function captureEntry(overrides: Record<string, unknown> = {}) {
       status: 'success',
       result: {
         storage_path: STORAGE_PATH,
-        url: SIGNED_URL,
+        url: STORED_URL,
         size_kb: 412,
         monitor: 0,
         monitor_count: 3,
@@ -141,6 +148,8 @@ beforeEach(() => {
   mockResolveTalonAuthor.mockReset();
   mockResolveTalonAuthorLlmConfig.mockReset();
   mockGenerateObject.mockReset();
+  mockIssueScreenshotReadUrl.mockReset();
+  mockIssueScreenshotReadUrl.mockResolvedValue({ url: SIGNED_URL, expiresAt: '2026-08-14T01:00:00.000Z' });
   mockCreateModel.mockReturnValue({ modelId: 'fake-model' });
   mockResolveTalonAuthor.mockResolvedValue({
     userId: 'admin-uid',
@@ -165,6 +174,7 @@ describe('evaluateVisualCheck', () => {
       screenshotPath: STORAGE_PATH,
       screenshotUrl: SIGNED_URL,
     });
+    expect(mockIssueScreenshotReadUrl).toHaveBeenCalledWith(STORAGE_PATH);
   });
 
   /* Confidence is bounded in code, not the schema: `z.number().min(0).max(1)`
@@ -353,17 +363,38 @@ describe('capture failures', () => {
     );
   });
 
-  it('refuses to judge a capture that returned no url', async () => {
+  it('refuses to judge a capture that returned no storage path', async () => {
     mockDispatchAndAwait.mockResolvedValue({
       status: 'completed',
       commandId: 'cmd_1',
-      entry: { status: 'success', result: { storage_path: STORAGE_PATH } },
+      entry: { status: 'success', result: { url: STORED_URL } },
     });
 
     await expectVisualCheckError(
       evaluateVisualCheck(db, SITE, MACHINE, TALON, condition(), CORRELATION),
       'capture_failed',
     );
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+  });
+
+  it("judges only this machine's screenshot, never a url the capture names", async () => {
+    mockDispatchAndAwait.mockResolvedValue({
+      status: 'completed',
+      commandId: 'cmd_1',
+      entry: {
+        status: 'success',
+        result: {
+          storage_path: 'screenshots/site-b/lobby-01/2026-08-14.png',
+          url: 'https://elsewhere.example/shot.png',
+        },
+      },
+    });
+
+    await expectVisualCheckError(
+      evaluateVisualCheck(db, SITE, MACHINE, TALON, condition(), CORRELATION),
+      'capture_failed',
+    );
+    expect(mockIssueScreenshotReadUrl).not.toHaveBeenCalled();
     expect(mockGenerateObject).not.toHaveBeenCalled();
   });
 });

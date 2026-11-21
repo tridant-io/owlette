@@ -9,10 +9,10 @@
  * already-deleted user returns `already_deleted` with the original `deletedAt`.
  *
  * The cascade refuses to orphan owned SITES but says nothing about authored
- * talons — a talon with a hoot output resolves its author's site access on every
- * run, so soft-deleting the author stops it dead. Every delete reports
- * `authoredTalonCount`, and `reassignTalons: true` hands them to the successor
- * already being named for site ownership.
+ * talons — every talon re-checks its author before any output fires, so after
+ * the author is soft-deleted each one switches off at its next run with nothing
+ * fired. Every delete reports `authoredTalonCount`, and `reassignTalons: true`
+ * hands them to the successor already being named for site ownership.
  */
 
 import {

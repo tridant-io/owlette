@@ -94,6 +94,98 @@ def test_the_identity_is_seeded_from_the_hostname(data_root, monkeypatch):
     assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'KIOSK-01'
 
 
+def test_a_mac_identity_is_seeded_without_the_local_suffix(data_root, monkeypatch):
+    """macOS reports `Name.local`; the api's machine id rule (letters, digits,
+    `_`, `-`) refuses the dot, so a Mac seeded with it pairs but never swoops."""
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA'
+    assert (data_root / 'config' / 'machine_id').read_text(encoding='utf-8') == 'TEC-MBA'
+
+
+def _scutil(monkeypatch, answer):
+    """A Mac whose network hands it `Mac.localdomain` and whose LocalHostName
+    is `answer`; an exception class makes scutil fail that way."""
+    monkeypatch.setattr(shared_utils, '_IS_MACOS', True)
+    monkeypatch.setattr(shared_utils.socket, 'gethostname', lambda: 'Mac.localdomain')
+
+    def check_output(argv, **kwargs):
+        assert argv == ['scutil', '--get', 'LocalHostName']
+        if isinstance(answer, type):
+            raise answer('scutil failed')
+        return answer
+    monkeypatch.setattr(shared_utils.subprocess, 'check_output', check_output)
+
+
+def test_a_mac_is_named_by_its_local_hostname_not_the_network(data_root, monkeypatch):
+    """Two Macs on one router both answered `Mac.localdomain` and paired onto
+    one machine doc (Bryant Place, 2026-10-12). LocalHostName is unique on the
+    LAN and has no dot."""
+    _scutil(monkeypatch, 'CPUs-MacBook-Pro\n')
+
+    assert shared_utils.get_hostname() == 'CPUs-MacBook-Pro'
+    assert shared_utils.get_machine_id() == 'CPUs-MacBook-Pro'
+
+
+@pytest.mark.parametrize('failure', [OSError, shared_utils.subprocess.SubprocessError])
+def test_a_mac_without_a_local_hostname_falls_back_to_the_network_name(data_root, monkeypatch, failure):
+    _scutil(monkeypatch, failure)
+
+    assert shared_utils.get_hostname() == 'Mac.localdomain'
+
+
+def test_an_empty_local_hostname_falls_back_to_the_network_name(data_root, monkeypatch):
+    _scutil(monkeypatch, '\n')
+
+    assert shared_utils.get_hostname() == 'Mac.localdomain'
+
+
+def test_the_local_suffix_is_kept_off_macos(data_root, monkeypatch):
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'linux')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'kiosk.local')
+
+    assert shared_utils.get_machine_id() == 'kiosk.local'
+
+
+def test_a_mac_already_registered_with_the_suffix_keeps_its_identity(data_root, monkeypatch):
+    """The token claims the persisted id: rewriting it would lock the machine out.
+    A Mac paired as `Name.local` moves only by re-pairing."""
+    (data_root / 'config').mkdir()
+    (data_root / 'config' / 'machine_id').write_text('TEC-MBA.local', encoding='utf-8')
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+
+    assert shared_utils.get_machine_id() == 'TEC-MBA.local'
+
+
+def test_a_leave_moves_the_identity_aside_so_the_next_pairing_seeds_a_fresh_one(
+        data_root, monkeypatch):
+    """The identity belongs to the document a leave deletes. Moved aside rather
+    than deleted, so a support case can still read what the machine was — and a
+    Mac registered as `Name.local` comes back without the suffix."""
+    (data_root / 'config').mkdir()
+    (data_root / 'config' / 'machine_id').write_text('TEC-MBA.local', encoding='utf-8')
+    monkeypatch.setattr(shared_utils.sys, 'platform', 'darwin')
+    monkeypatch.setattr(shared_utils, 'get_hostname', lambda: 'TEC-MBA.local')
+    assert shared_utils.get_machine_id() == 'TEC-MBA.local'
+
+    shared_utils.retire_machine_id()
+
+    retired = list((data_root / 'config').glob('machine_id.left-*'))
+    assert [path.read_text(encoding='utf-8') for path in retired] == ['TEC-MBA.local']
+    assert retired[0].name[len('machine_id.left-'):].isdigit()
+    # the cached identity went with the file, or this process would keep
+    # answering with the old one until it restarted.
+    assert shared_utils.get_machine_id() == 'TEC-MBA'
+
+
+def test_retiring_an_identity_that_was_never_persisted_is_not_an_error(data_root):
+    shared_utils.retire_machine_id()
+
+    assert not (data_root / 'config' / 'machine_id').exists()
+
+
 def test_an_existing_identity_is_read_rather_than_reseeded(data_root, monkeypatch):
     """The upgrade path: a machine already registered keeps the document it has."""
     (data_root / 'config').mkdir()
@@ -492,3 +584,42 @@ def test_the_token_file_is_written_owner_only_off_windows(data_root, machine_bin
 def test_the_token_file_refuses_a_symlink_on_posix():
     """A symlink planted at the path must not redirect the write."""
     assert secure_storage._TOKEN_FILE_FLAGS & os.O_NOFOLLOW
+
+
+# a refresh that finds no token unpairs the machine only when the store is gone,
+# so only a store that is gone may read as cleared, on every platform
+def test_a_store_never_written_reads_as_cleared(data_root, machine_binding):
+    assert secure_storage.SecureStorage(data_root).is_cleared() is True
+
+
+def test_a_saved_store_is_not_cleared_until_it_is(data_root, machine_binding):
+    storage = secure_storage.SecureStorage(data_root)
+    assert storage.save_refresh_token('refresh-abc') is True
+    assert storage.is_cleared() is False
+
+    assert storage.clear_tokens() is True
+    assert storage.is_cleared() is True
+
+
+def test_a_damaged_store_reads_empty_but_is_not_cleared(data_root, machine_binding):
+    (data_root / secure_storage.TOKEN_FILE_NAME).write_bytes(b'not a token store')
+    storage = secure_storage.SecureStorage(data_root)
+
+    assert storage.get_refresh_token() is None
+    assert storage.is_cleared() is False
+
+
+def test_a_store_that_cannot_be_read_is_not_cleared(data_root, machine_binding, monkeypatch):
+    storage = secure_storage.SecureStorage(data_root)
+    assert storage.save_refresh_token('refresh-abc') is True
+    # what _read_file answers for a file another process holds open
+    monkeypatch.setattr(storage, '_read_file', lambda path: b'')
+
+    assert storage.get_refresh_token() is None
+    assert storage.is_cleared() is False
+
+
+def test_a_retained_copy_alone_is_not_cleared(data_root, machine_binding):
+    (data_root / RETAINED_NAME).write_bytes(b'pre-migration copy')
+
+    assert secure_storage.SecureStorage(data_root).is_cleared() is False

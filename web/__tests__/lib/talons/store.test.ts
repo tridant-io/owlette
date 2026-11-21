@@ -7,18 +7,32 @@
  * writes two collections, reads back through batches, and deletes fields with
  * a `FieldValue.delete()` sentinel, so assertions like "the secret is in
  * talon_secrets and nowhere else" or "nextRunAt was removed, not nulled" need
- * real state. `firebase-admin/firestore` is mocked to `FieldValue` alone so
- * the real Admin SDK never loads.
+ * real state. `firebase-admin/firestore` is mocked to `FieldValue` alone, and
+ * `@/lib/firebase-admin` stubbed, so the real Admin SDK never loads.
  */
 
 const mockDeleteSentinel = { __fieldValue: 'delete' } as const;
 const mockEmitMutation = jest.fn();
 const mockAssertLlmKeyAvailable = jest.fn();
 const mockValidateWebhookUrl = jest.fn();
+const mockCapabilityCheck = jest.fn();
 
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { delete: () => mockDeleteSentinel },
 }));
+jest.mock('@/lib/firebase-admin', () => ({ getAdminAuth: jest.fn(), getAdminDb: jest.fn() }));
+// the real check, recording each actor it is asked about: the successor's actor
+// never leaves the store any other way.
+jest.mock('@/lib/capabilities', () => {
+  const actual = jest.requireActual('@/lib/capabilities');
+  return {
+    ...actual,
+    hasCapability: (...args: unknown[]) => {
+      mockCapabilityCheck(...args);
+      return actual.hasCapability(...args);
+    },
+  };
+});
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: (...args: unknown[]) => mockEmitMutation(...args),
 }));
@@ -34,7 +48,13 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
-import type { Actor } from '@/lib/capabilities';
+import {
+  Capability,
+  hasCapability,
+  machineScopeOf,
+  type Actor,
+  type UserActor,
+} from '@/lib/capabilities';
 import {
   TalonStoreError,
   countTalonsAuthoredBy,
@@ -296,8 +316,8 @@ const SITE = 'site-a';
 const TALONS_PATH = `sites/${SITE}/talons`;
 const SECRETS_PATH = `sites/${SITE}/talon_secrets`;
 
-const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' } };
-const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' } };
+const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
+const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' }, machineScopes: { [SITE]: null } };
 
 let fake: FakeFirestore;
 let db: Firestore;
@@ -581,6 +601,7 @@ describe('createTalon', () => {
       userId: 'admin-elsewhere',
       role: 'admin',
       siteRoles: { ['site-b']: 'admin' },
+      machineScopes: { ['site-b']: null },
     };
     await expectStoreError(
       createTalon(
@@ -738,6 +759,15 @@ describe('createTalon', () => {
     expect(storedTalon(created.id).createdVia).toBe('cortex');
     expect(storedTalon(created.id).chatId).toBe('chat-7');
     expect(auditAttributes()).toMatchObject({ via: 'cortex', chatId: 'chat-7' });
+  });
+
+  it('never takes a granted machine as author, and writes nothing (ADR 0017)', async () => {
+    const machine: Actor = { type: 'machine', siteId: SITE, machineId: 'm1', maxTier: 3, machineIds: null };
+    await expect(
+      createTalon(db, ctxFor(machine, { auditActor: 'machine:m1' }), talonInput()),
+    ).rejects.toThrow('a machine never authors a talon');
+    expect(fake.docs.size).toBe(0);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 });
 
@@ -923,12 +953,110 @@ describe('updateTalon', () => {
 
     await updateTalon(
       db,
-      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' } }),
+      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } }),
       't1',
       talonInput({ outputs: [{ type: 'cortex', directive: 'restart the show' }] }),
     );
 
     expect(mockAssertLlmKeyAvailable).toHaveBeenCalledWith(db, 'original-author');
+  });
+
+  it.each([
+    ['says enabled: true', { enabled: true }],
+    ['omits enabled', {}],
+  ])(
+    'gives a switched-off talon its ten tries back when a replace that %s switches it on',
+    async (_label, overrides) => {
+      seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+
+      const updated = await updateTalon(db, ctxFor(), 't1', talonInput(overrides));
+
+      expect(updated.enabled).toBe(true);
+      expect(updated.consecutiveFailures).toBe(0);
+    },
+  );
+
+  it('starts the count over when a replace switches on a talon a person paused', async () => {
+    seedTalon('t1', { enabled: false, consecutiveFailures: 4 });
+
+    const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: true }));
+
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it.each([true, false])(
+    'keeps the failure count when a replace sends enabled: %p for a talon that is on',
+    async (enabled) => {
+      // an editor save carries enabled: true; it must not forgive nine failures
+      seedTalon('t1', { consecutiveFailures: 9 });
+
+      const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled, name: 'renamed' }));
+
+      expect(updated.consecutiveFailures).toBe(9);
+    },
+  );
+
+  it.each([
+    ['on', { enabled: false }, true],
+    ['off', { enabled: true }, false],
+  ])(
+    'clears a system disabledReason when a replace switches the talon %s, as the toggle does',
+    async (_label, seeded, enabled) => {
+      seedTalon('t1', { ...seeded, disabledReason: 'repeated_failures' });
+
+      await updateTalon(db, ctxFor(), 't1', talonInput({ enabled }));
+
+      expect('disabledReason' in storedTalon('t1')).toBe(false);
+    },
+  );
+
+  it('keeps the disabledReason when an edit leaves a switched-off talon off', async () => {
+    // the card explains why it is off; renaming it does not answer that
+    seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures' });
+
+    await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: false, name: 'renamed' }));
+
+    expect(storedTalon('t1').disabledReason).toBe('repeated_failures');
+  });
+
+  it('re-arms a stale nextRunAt when a replace switches the talon on with the same trigger', async () => {
+    seedTalon('t1', { enabled: false, nextRunAt: new Date('2020-01-01T00:00:00Z') });
+
+    const before = Date.now();
+    const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: true }));
+
+    expect((updated.nextRunAt as Date).getTime()).toBeGreaterThanOrEqual(before + 60 * 60_000);
+  });
+
+  it('re-arms nextRunAt from the new trigger when a replace switches the talon on and changes it', async () => {
+    seedTalon('t1', { enabled: false, nextRunAt: new Date('2020-01-01T00:00:00Z') });
+
+    const before = Date.now();
+    const updated = await updateTalon(
+      db,
+      ctxFor(),
+      't1',
+      talonInput({ enabled: true, trigger: { type: 'schedule', intervalMinutes: 120 } }),
+    );
+
+    expect((updated.nextRunAt as Date).getTime()).toBeGreaterThanOrEqual(before + 120 * 60_000);
+  });
+
+  it('removes nextRunAt when a replace switches on a talon with no next run', async () => {
+    seedTalon('t1', {
+      enabled: false,
+      trigger: { type: 'event', eventTypes: ['machine_offline'] },
+      nextRunAt: new Date('2020-01-01T00:00:00Z'),
+    });
+
+    await updateTalon(
+      db,
+      ctxFor(),
+      't1',
+      talonInput({ enabled: true, trigger: { type: 'event', eventTypes: ['machine_offline'] } }),
+    );
+
+    expect('nextRunAt' in storedTalon('t1')).toBe(false);
   });
 });
 
@@ -990,6 +1118,53 @@ describe('setTalonEnabled', () => {
     );
     expect(storedTalon('t1').enabled).toBe(false);
     expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('gives a talon switched off for repeated failures its ten tries back when a person re-enables it', async () => {
+    seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+
+    const updated = await setTalonEnabled(db, ctxFor(), 't1', true);
+
+    // left at 10, the first failed run after re-enabling switched it off again
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it('starts the count over when a person re-enables a talon they paused', async () => {
+    seedTalon('t1', { enabled: false, consecutiveFailures: 4 });
+
+    const updated = await setTalonEnabled(db, ctxFor(), 't1', true);
+
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it.each([true, false])(
+    'keeps the failure count when the switch sends enabled: %p for a talon that is on',
+    async (enabled) => {
+      seedTalon('t1', { consecutiveFailures: 4 });
+
+      const updated = await setTalonEnabled(db, ctxFor(), 't1', enabled);
+
+      expect(updated.consecutiveFailures).toBe(4);
+    },
+  );
+
+  it('switching off a talon that is already off clears its reason and nothing else', async () => {
+    // the toggle counts every request as a move of the switch
+    const stale = new Date('2020-01-01T00:00:00Z');
+    seedTalon('t1', {
+      enabled: false,
+      disabledReason: 'repeated_failures',
+      consecutiveFailures: 10,
+      nextRunAt: stale,
+    });
+
+    await setTalonEnabled(db, ctxFor(), 't1', false);
+
+    const stored = storedTalon('t1');
+    expect(stored.enabled).toBe(false);
+    expect('disabledReason' in stored).toBe(false);
+    expect(stored.consecutiveFailures).toBe(10);
+    expect(stored.nextRunAt).toEqual(stale);
   });
 
   it.each([true, false])(
@@ -1155,6 +1330,7 @@ describe('reassignTalons', () => {
     uid: string,
     overrides: DocData = {},
     siteRole: 'owner' | 'admin' | 'member' | null = 'admin',
+    memberFields: DocData = {},
   ): void {
     fake.docs.set(`users/${uid}`, { role: 'admin', sites: [SITE], ...overrides });
     if (siteRole === null) return;
@@ -1164,7 +1340,16 @@ describe('reassignTalons', () => {
       status: 'active',
       addedAt: new Date(0),
       addedBy: 'system:test',
+      ...memberFields,
     });
+  }
+
+  /** the actor the author gates were asked about for `uid`. */
+  function gateActorFor(uid: string): UserActor {
+    const call = mockCapabilityCheck.mock.calls.find(
+      ([actor]) => (actor as UserActor).userId === uid,
+    );
+    return call?.[0] as UserActor;
   }
 
   it('moves every talon the departing author wrote', async () => {
@@ -1371,6 +1556,78 @@ describe('reassignTalons', () => {
     await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
 
     expect(storedTalon('t1').createdBy).toBe('successor-uid');
+  });
+
+  it('carries a successor admin held to view to the gates, so it never controls', async () => {
+    seedSuccessor('successor-uid', {}, 'admin', { swoop: 'view' });
+    seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+    await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+    const successor = gateActorFor('successor-uid');
+    expect(successor.swoopModes[SITE]).toBe('view');
+    expect(hasCapability(successor, Capability.MACHINE_REMOTE_CONTROL, SITE)).toBe(false);
+    // the mode changes swoop and nothing else: they still inherit
+    expect(storedTalon('t1').createdBy).toBe('successor-uid');
+  });
+
+  it('builds a successor actor with no mode and the whole site from a row that carries neither', async () => {
+    seedSuccessor('successor-uid');
+    seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+    await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+    const successor = gateActorFor('successor-uid');
+    expect(successor).toEqual({
+      type: 'user',
+      userId: 'successor-uid',
+      role: 'admin',
+      siteRoles: { [SITE]: 'admin' },
+      swoopModes: {},
+      machineScopes: { [SITE]: null },
+    });
+  });
+
+  describe('machine scope', () => {
+    // TALON_MANAGE is site-wide, because a talon spans the site's machines. the
+    // store's rejection reason surfaces only as its detail.
+    async function expectInsufficientRole(): Promise<void> {
+      await expect(
+        reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'successor_invalid',
+        message: expect.stringContaining('must be a site admin'),
+      });
+      expect(storedTalon('t1').createdBy).toBe('leaver-uid');
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    }
+
+    it('refuses a scoped admin with insufficient_role', async () => {
+      seedSuccessor('successor-uid', {}, 'admin', { machineIds: ['m1'] });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toEqual(['m1']);
+    });
+
+    it('refuses a member set to swoop control: a mode never grants TALON_MANAGE', async () => {
+      seedSuccessor('successor-uid', { role: 'member' }, 'member', { swoop: 'control' });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(gateActorFor('successor-uid').swoopModes[SITE]).toBe('control');
+    });
+
+    it('accepts a whole-site admin', async () => {
+      seedSuccessor('successor-uid');
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+      expect(storedTalon('t1').createdBy).toBe('successor-uid');
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toBeNull();
+    });
   });
 
   it('writes nothing when one talon in the selection is missing', async () => {

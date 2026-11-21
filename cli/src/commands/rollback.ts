@@ -62,14 +62,6 @@ interface RollbackResponse {
 }
 
 export function registerRollbackCommand(program: Command): void {
-  // drop any stub left by earlier file-load order
-  const existing = program.commands.find((c) => c.name() === 'rollback');
-  if (existing) {
-    const list = program.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
-
   program
     .command('rollback <roostId>')
     .description('roll a roost back to a previous version (prints diff, confirms)')

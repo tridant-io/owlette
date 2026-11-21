@@ -103,9 +103,37 @@ async def test_uninstall_propagates_403_scope_insufficient() -> None:
         retry=RetryPolicy(max_attempts=1),
     ) as client:
         with pytest.raises(RoostApiError) as excinfo:
-            await client.installer_deployments.uninstall("s1", "dep_1")
+            await client.installer_deployments.uninstall("s1", "dep_1", software_name="VLC")
         assert excinfo.value.status == 403
         assert excinfo.value.code == "scope_insufficient"
+
+
+@pytest.mark.asyncio
+async def test_uninstall_sends_the_program_name() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "deploymentId": "dep_1",
+                "queued": 1,
+                "machine_ids": ["m1"],
+                "skipped": [{"machineId": "m2", "reason": "software_not_found"}],
+            },
+        )
+
+    async with Roost(token="owk_live_x", transport=_transport(handler)) as client:
+        out = await client.installer_deployments.uninstall(
+            "s1", "dep_1", software_name="VLC media player"
+        )
+
+    req = captured[0]
+    assert req.method == "POST"
+    assert req.url.path == "/api/sites/s1/deployments/dep_1/uninstall"
+    assert json.loads(req.content) == {"software_name": "VLC media player"}
+    assert out["skipped"] == [{"machineId": "m2", "reason": "software_not_found"}]
 
 
 @pytest.mark.asyncio
@@ -126,6 +154,33 @@ async def test_retry_and_cancel_use_post_with_empty_body() -> None:
         assert req.method == "POST"
         assert req.headers["Idempotency-Key"].startswith("py-sdk-")
         assert json.loads(req.content) == {}
+
+
+@pytest.mark.asyncio
+async def test_create_and_retry_send_active_hours_override() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"deploymentId": "dep_1", "status": "in_progress"})
+
+    override = {"reason": "venue closed today"}
+    async with Roost(token="owk_live_x", transport=_transport(handler)) as client:
+        await client.installer_deployments.create(
+            "s1",
+            name="bulk",
+            installer_name="x.exe",
+            installer_url="https://example.com/x.exe",
+            silent_flags="/S",
+            machines=("m1",),
+            active_hours_override=override,
+        )
+        await client.installer_deployments.retry("s1", "dep_1", active_hours_override=override)
+
+    assert captured[0].url.path == "/api/sites/s1/deployments"
+    assert json.loads(captured[0].content)["active_hours_override"] == override
+    assert captured[1].url.path == "/api/sites/s1/deployments/dep_1/retry"
+    assert json.loads(captured[1].content) == {"active_hours_override": override}
 
 
 @pytest.mark.asyncio

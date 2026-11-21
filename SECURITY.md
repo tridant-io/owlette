@@ -4,10 +4,11 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 4.x.x   | :white_check_mark: |
 | 3.x.x   | :white_check_mark: |
 | < 3.0   | :x:                |
 
-The 3.x line is current; 3.0.0 replaced the NSSM-hosted service with
+The 4.x line is current; 3.0.0 replaced the NSSM-hosted service with
 `owlette-host` and is the floor for everything since. Agents older than 3.x are
 not supported and should be upgraded through the installer rather than patched.
 
@@ -52,7 +53,7 @@ We will not pursue civil action or initiate a complaint to law enforcement for a
 The following are in scope for security research:
 
 - Owlette web application (owlette.app)
-- Owlette Windows agent
+- Owlette agent on Windows, macOS and Linux, its desktop app and owlette swoop
 - API endpoints
 - Authentication and authorization mechanisms
 - Data storage and encryption
@@ -68,7 +69,7 @@ The following are out of scope:
 
 ### Account Security
 
-- Enable two-factor authentication (2FA) on your account
+- Every account sets up two-factor authentication (2FA); a passkey, an authenticator app or both
 - Use a strong, unique password
 - Keep your backup codes in a secure location
 - Review connected machines regularly
@@ -80,20 +81,20 @@ The following are out of scope:
 - Protect the machine where the agent is installed with standard security practices
 - Revoke machine tokens immediately if a machine is compromised
 
-### API Tokens
+### API Keys
 
-- Never share your API tokens
-- Rotate tokens periodically
-- Use the minimum required permissions
-- Revoke tokens that are no longer needed
+- Never share your API keys, and send them only in a header (`Authorization: Bearer` or `x-api-key`)
+- Rotate keys periodically
+- Use the minimum required scopes and tool tier
+- Revoke keys that are no longer needed
 
 ## Security Features
 
 Owlette implements the following security measures:
 
 - **Encryption in Transit**: All communications use TLS/HTTPS
-- **Encryption at Rest**: Sensitive data is encrypted using AES-256
-- **Two-Factor Authentication**: TOTP-based 2FA with backup codes
+- **Encryption at Rest**: Secrets the server keeps, such as authenticator secrets and LLM keys, are encrypted with AES-256-GCM; an agent's token store is encrypted under a machine-bound key
+- **Two-Factor Authentication**: authenticator app (TOTP) or passkey, with backup codes; a session reaches the dashboard and the API only after its second factor, and swoop control asks for it again (step-up)
 - **Token Security**: Short-lived access tokens with encrypted refresh tokens
 - **Rate Limiting**: API endpoints are rate-limited to prevent abuse
 - **Audit Logging**: Security-relevant actions are logged

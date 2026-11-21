@@ -19,9 +19,43 @@ import {
   safeEmailSubject,
   emailDataTable,
   wrapEmailLayout,
+  buildActivityFindingEmail,
+  buildActivityDigestEmail,
   buildDisplayDigestEmail,
+  buildEmailVerificationEmail,
+  buildIssueEmail,
+  buildMfaFactorNoticeEmail,
+  buildPasswordResetEmail,
+  type ActivityEmailFinding,
+  type IssueEmailInput,
   type PendingDisplayAlert,
 } from '@/lib/emailTemplates.server';
+
+const issueInput = (over: Partial<IssueEmailInput> = {}): IssueEmailInput => ({
+  number: 42,
+  categoryLabel: 'something broke',
+  title: 'viewer goes black',
+  text: 'the picture stayed black.\nreopening fixed it.',
+  from: 'dana@studio.example',
+  host: 'LOBBY-PC-01',
+  siteId: 'downtown-gallery',
+  appVersion: '4.1.13',
+  source: 'agent',
+  envLabel: 'DEVELOPMENT',
+  attachments: { screenshots: 3, videos: 1, logs: true },
+  issueUrl: 'https://dev.owlette.app/admin/issues/42',
+  ...over,
+});
+
+const finding = (over: Partial<ActivityEmailFinding> = {}): ActivityEmailFinding => ({
+  title: 'second factor burst',
+  severity: 'high',
+  summary: 'dana failed 6 second-factor checks in 4 minutes.',
+  subject: 'dana@studio.example',
+  facts: [['user', 'dana@studio.example'], ['attempts', '6']],
+  at: Date.UTC(2026, 10, 15, 14, 32),
+  ...over,
+});
 
 const displayAlert = (over: Partial<PendingDisplayAlert> = {}): PendingDisplayAlert => ({
   docId: 'd',
@@ -111,6 +145,235 @@ describe('wrapEmailLayout — manage alerts / unsubscribe footer', () => {
     expect(html).not.toContain('is made by');
     expect(html).not.toContain('automated message');
     expect(html).toContain('owlette.app');
+  });
+});
+
+describe('buildIssueEmail', () => {
+  it('puts the env, number, category and title in the subject', () => {
+    expect(buildIssueEmail(issueInput()).subject).toBe(
+      '[DEVELOPMENT] issue #42 · something broke — viewer goes black',
+    );
+  });
+
+  it('strips header-injection characters from the subject', () => {
+    const { subject } = buildIssueEmail(issueInput({ title: 'broke\r\nBcc: evil@x' }));
+    expect(subject).toBe('[DEVELOPMENT] issue #42 · something broke — broke Bcc: evil@x');
+  });
+
+  it('links one button to the issue page', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain('href="https://dev.owlette.app/admin/issues/42"');
+    expect(html).toContain('>open issue #42</a>');
+    expect(html.match(/<a href="https:\/\/dev\.owlette\.app\/admin\/issues/g)).toHaveLength(1);
+  });
+
+  it('escapes every user value', () => {
+    const evil = '<img src=x onerror=alert(1)>';
+    const { html } = buildIssueEmail(
+      issueInput({
+        title: evil,
+        text: evil,
+        from: evil,
+        host: evil,
+        siteId: evil,
+        categoryLabel: evil,
+        issueUrl: 'https://x/"><script>',
+      }),
+    );
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('"><script>');
+    expect(html).toContain('&lt;img src=x');
+  });
+
+  it('keeps line breaks in the text as <br>', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain('the picture stayed black.<br>reopening fixed it.');
+  });
+
+  it('cuts long text at about 600 characters with an ellipsis', () => {
+    const words = Array.from({ length: 200 }, (_, i) => `word${i}`).join(' ');
+    const { html } = buildIssueEmail(issueInput({ text: words }));
+    // the body paragraph, not the preheader
+    const shown = html.match(/<p [^>]*>(word0 [^<]*)<\/p>/)?.[1] ?? '';
+    expect(shown.endsWith('…')).toBe(true);
+    expect(shown.length).toBeLessThanOrEqual(601);
+    expect(shown.length).toBeGreaterThan(480);
+    // ends on a whole word
+    expect(words.startsWith(`${shown.slice(0, -1)} `)).toBe(true);
+    expect(html).not.toContain('word199');
+  });
+
+  it('leaves text under the limit whole', () => {
+    const text = 'a'.repeat(600);
+    const { html } = buildIssueEmail(issueInput({ text }));
+    expect(html).toContain(text);
+    expect(html).not.toContain(`${text}…`);
+  });
+
+  it('carries no system info or log tail', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).not.toContain('--- system info ---');
+    expect(html).not.toContain('--- recent logs');
+    expect(html).not.toMatch(/system info|log tail/);
+  });
+
+  it('uses the first line of the text as the preheader', () => {
+    const { html } = buildIssueEmail(issueInput({ text: '\n\nfirst line here\nsecond line' }));
+    expect(html).toMatch(/<div style="display:none;[^>]*>first line here<\/div>/);
+  });
+
+  it('summarises attachments on one line, and omits the row when there are none', () => {
+    expect(buildIssueEmail(issueInput()).html).toContain('logs, 3 screenshots and 1 video');
+    expect(
+      buildIssueEmail(issueInput({ attachments: { screenshots: 1, videos: 0, logs: false } })).html,
+    ).toContain('>1 screenshot<');
+    const none = buildIssueEmail(
+      issueInput({ attachments: { screenshots: 0, videos: 0, logs: false } }),
+    ).html;
+    expect(none).not.toContain('attached');
+  });
+
+  it('uses the shared button, which carries the Outlook fix', () => {
+    const { html } = buildIssueEmail(issueInput());
+    expect(html).toContain(
+      '<td bgcolor="#00bcd4" style="border-radius:6px;background:#00bcd4;mso-padding-alt:12px 28px;"><a href="https://dev.owlette.app/admin/issues/42"',
+    );
+  });
+
+  it('omits the machine and site facts a web issue does not have', () => {
+    const { html } = buildIssueEmail(issueInput({ host: null, siteId: null, source: 'web' }));
+    expect(html).not.toContain('>machine<');
+    expect(html).not.toContain('>site<');
+    expect(html).toContain('dashboard · 4.1.13');
+  });
+});
+
+describe('buildActivityFindingEmail', () => {
+  const build = (f = finding()) =>
+    buildActivityFindingEmail({ envLabel: 'DEVELOPMENT', finding: f, activityUrl: 'https://dev.owlette.app/admin/activity?x=1&y=2' });
+
+  it('puts the env, title and subject in the subject', () => {
+    expect(build().subject).toBe('[DEVELOPMENT] owlette activity · second factor burst — dana@studio.example');
+  });
+
+  it('keeps a header-injection title on one line', () => {
+    const { subject } = build(finding({ title: 'burst\r\nBcc: evil@x' }));
+    expect(subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('escapes a hostile summary and fact', () => {
+    const { html } = build(
+      finding({ summary: '<img src=x onerror=1>', facts: [['user', '<b>x</b>']] }),
+    );
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<b>x</b>');
+    expect(html).toContain('&lt;img src=x');
+  });
+
+  it('shows the severity, one button and the escaped link fallback', () => {
+    const { html } = build();
+    expect(html).toContain('>high<');
+    expect(html.match(/open in activity/g)).toHaveLength(1);
+    expect(html).toContain('admin/activity?x=1&amp;y=2');
+  });
+
+  it('is platform mail: no unsubscribe or manage-alerts link', () => {
+    const { html } = build();
+    expect(html).not.toContain('unsubscribe');
+    expect(html).not.toContain('manage alerts');
+  });
+});
+
+describe('buildActivityDigestEmail', () => {
+  const build = (over: { findings?: ActivityEmailFinding[]; alreadyEmailed?: ActivityEmailFinding[] } = {}) =>
+    buildActivityDigestEmail({
+      envLabel: 'DEVELOPMENT',
+      findings: [finding({ severity: 'digest', title: 'refusal burst' }), finding({ severity: 'digest', title: 'user deleted' })],
+      alreadyEmailed: [],
+      periodEnd: Date.UTC(2026, 10, 15, 14, 0),
+      activityUrl: 'https://dev.owlette.app/admin/activity?view=flagged',
+      ...over,
+    });
+
+  it('counts the findings in the subject and the pill', () => {
+    const { subject, html } = build();
+    expect(subject).toBe('[DEVELOPMENT] owlette activity · daily digest — 2 to review');
+    expect(html).toContain('2 to review');
+  });
+
+  it('states the period and the empty-day line', () => {
+    const { html } = build();
+    expect(html).toContain('to 14:00 utc on 2026-11-15');
+    expect(html).toContain('14:32 utc');
+    expect(html).toContain('no digest is sent on a day with nothing to review');
+    expect(html).toContain('open flagged activity');
+  });
+
+  it('without alreadyEmailed: no list and no "listed at the end"', () => {
+    const { html } = build();
+    expect(html).not.toContain('already emailed in this period');
+    expect(html).not.toContain('listed at the end');
+  });
+
+  it('with alreadyEmailed: lists them as "title · subject"', () => {
+    const { html } = build({ alreadyEmailed: [finding({ title: 'mfa removed', subject: 'sam' })] });
+    expect(html).toContain('already emailed in this period');
+    expect(html).toContain('listed at the end');
+    expect(html).toContain('mfa removed · sam');
+  });
+
+  it('escapes hostile titles and keeps a header-injection title out of the subject', () => {
+    const { html, subject } = build({ findings: [finding({ title: '<i>x</i>\r\nBcc: e', summary: '<u>y</u>' })] });
+    expect(html).not.toContain('<i>x');
+    expect(html).not.toContain('<u>y');
+    expect(subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('is platform mail: no unsubscribe or manage-alerts link', () => {
+    const { html } = build();
+    expect(html).not.toContain('unsubscribe');
+    expect(html).not.toContain('manage alerts');
+  });
+});
+
+describe('buildMfaFactorNoticeEmail', () => {
+  const at = new Date('2026-11-01T12:00:00Z');
+
+  it.each([
+    ['added', 'passkey', 'passkey added to your owlette account'],
+    ['removed', 'passkey', 'passkey removed from your owlette account'],
+    ['added', 'authenticator app', 'authenticator app added to your owlette account'],
+    ['removed', 'authenticator app', 'authenticator app removed from your owlette account'],
+    ['removed', 'backup codes', 'backup codes removed from your owlette account'],
+    ['reset', 'second factors', 'second factors removed from your owlette account'],
+  ] as const)('%s %s: subject and lowercase copy', (change, factor, subject) => {
+    const email = buildMfaFactorNoticeEmail({ change, factor, at });
+    expect(email.subject).toBe(subject);
+    expect(email.html).toContain(subject);
+    expect(email.html).toContain('account settings');
+    expect(email.html).toContain('support@tridant.io');
+  });
+
+  it('says an administrator did a reset', () => {
+    const { html } = buildMfaFactorNoticeEmail({ change: 'reset', factor: 'second factors', at });
+    expect(html).toContain('an owlette administrator');
+  });
+
+  it('is transactional: no alert footer to opt out of', () => {
+    const { html } = buildMfaFactorNoticeEmail({ change: 'added', factor: 'passkey', at });
+    expect(html).not.toContain('manage alerts');
+    expect(html).not.toContain('unsubscribe');
+  });
+});
+
+describe('transactional email buttons', () => {
+  it.each([
+    ['password reset', buildPasswordResetEmail('https://dev.owlette.app/reset-password?oobCode=x')],
+    ['email verification', buildEmailVerificationEmail('https://dev.owlette.app/verify-email?oobCode=x')],
+  ])('the %s button carries bgcolor and mso-padding-alt for Outlook', (_name, html) => {
+    expect(html).toContain(
+      '<td bgcolor="#00bcd4" style="border-radius:6px;background:#00bcd4;mso-padding-alt:12px 28px;"><a href="https://dev.owlette.app/',
+    );
   });
 });
 

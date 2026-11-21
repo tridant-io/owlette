@@ -2,13 +2,21 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { Menu, X } from 'lucide-react';
+import { ChevronDown, Menu, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAuth } from '@/contexts/AuthContext';
+import { PLATFORM_LABEL, RELEASE_NOTES_HREF, type InstallerPlatform } from '@/lib/installerPlatform';
 import { OwletteEyeIcon } from './OwletteEye';
 
-type NavLinkDef = { label: string; href: string; external?: boolean; prefetch?: boolean };
+type NavLinkDef = { label: string; href: string; external?: boolean };
 
 // Section anchors, in page order.
 const SECTION_LINKS: NavLinkDef[] = [
@@ -18,10 +26,22 @@ const SECTION_LINKS: NavLinkDef[] = [
 ];
 
 // External / product links, shown to everyone.
-const UTIL_LINKS: NavLinkDef[] = [
-  { label: 'docs', href: '/docs' },
-  { label: 'download', href: '/download', prefetch: false },
-];
+const UTIL_LINKS: NavLinkDef[] = [{ label: 'docs', href: '/docs' }];
+
+// one link per platform the latest release has a build for, so none ends in
+// "no macos build". /download?os= redirects to that build, so these are plain
+// links that need no sign-in. `short` is the label's first word, for the phone
+// menu's single row.
+function downloadLinks(platforms: readonly InstallerPlatform[]) {
+  return platforms.map((platform) => ({
+    label: PLATFORM_LABEL[platform],
+    short: PLATFORM_LABEL[platform].split(' ')[0],
+    href: `/download?os=${platform.split('_')[0]}`,
+  }));
+}
+
+// ends the download menu, so what changed in a release is a click from its download
+const RELEASE_NOTES_LINK: NavLinkDef = { label: 'release notes', href: RELEASE_NOTES_HREF };
 
 // Appended only while signed out — offering "sign in" to a signed-in visitor is
 // the thing this header used to get wrong.
@@ -43,16 +63,17 @@ function linkEl(link: NavLinkDef, className?: string, onClick?: () => void) {
     );
   }
   return (
-    <Link key={link.label} href={link.href} prefetch={link.prefetch} className={className} onClick={onClick}>
+    <Link key={link.label} href={link.href} className={className} onClick={onClick}>
       {link.label}
     </Link>
   );
 }
 
-export function LandingHeader() {
+export function LandingHeader({ downloadPlatforms }: { downloadPlatforms: readonly InstallerPlatform[] }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const close = () => setMenuOpen(false);
   const { user, loading } = useAuth();
+  const downloads = downloadLinks(downloadPlatforms);
 
   /**
    * Nothing auth-dependent renders until auth resolves. An earlier version let
@@ -63,7 +84,6 @@ export function LandingHeader() {
    */
   const authReady = !loading;
   const signedIn = authReady && !!user;
-  const utilLinks = signedIn ? UTIL_LINKS : [...UTIL_LINKS, SIGN_IN_LINK];
 
   const scrollToTop = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -95,6 +115,29 @@ export function LandingHeader() {
               {linkEl(link)}
             </Button>
           ))}
+          {/* not modal: a modal menu locks the page's scroll, and dropping the
+              scrollbar shifts the whole page sideways */}
+          {downloads.length > 0 && (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className={`${ghostClass} gap-1`}>
+                  download
+                  <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {downloads.map((link) => (
+                  <DropdownMenuItem key={link.href} asChild className="cursor-pointer">
+                    <a href={link.href}>{link.label}</a>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link href={RELEASE_NOTES_LINK.href}>{RELEASE_NOTES_LINK.label}</Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* Both states occupy the SAME grid cell, so the column is always as
               wide as the wider of the two and nothing to the left of it can move
               when auth resolves. Only opacity changes — a width swap here would
@@ -174,9 +217,11 @@ export function LandingHeader() {
         </div>
       </div>
 
-      {/* Mobile menu panel — slides open/closed via a grid-rows transition */}
+      {/* Mobile menu panel — slides open/closed via a grid-rows transition.
+          inert, not just aria-hidden, while closed: its links stay in the dom
+          for the transition and would otherwise still take tab. */}
       <div
-        aria-hidden={!menuOpen}
+        inert={!menuOpen}
         className={`lg:hidden grid overflow-hidden bg-background/95 backdrop-blur-md transition-[grid-template-rows] duration-200 ease-out ${
           menuOpen ? 'grid-rows-[1fr] border-t border-border/50' : 'grid-rows-[0fr]'
         }`}
@@ -187,9 +232,30 @@ export function LandingHeader() {
               linkEl(link, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close),
             )}
             <span aria-hidden className="my-1 h-px w-full bg-border/50" />
-            {(authReady ? utilLinks : UTIL_LINKS).map((link) =>
+            {UTIL_LINKS.map((link) =>
               linkEl(link, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close),
             )}
+            {downloads.length > 0 && (
+              <div className="py-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 text-base">
+                <span className="text-muted-foreground">download</span>
+                {downloads.map((link) => (
+                  <a
+                    key={link.href}
+                    href={link.href}
+                    aria-label={`download for ${link.label}`}
+                    className="text-foreground/80 hover:text-foreground transition-colors"
+                    onClick={close}
+                  >
+                    {link.short}
+                  </a>
+                ))}
+              </div>
+            )}
+            {downloads.length > 0 &&
+              linkEl(RELEASE_NOTES_LINK, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close)}
+            {authReady &&
+              !signedIn &&
+              linkEl(SIGN_IN_LINK, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close)}
             {signedIn && user && (
               <div className="flex items-center gap-2.5 py-3 text-base text-muted-foreground">
                 <UserAvatar user={user} size="sm" />

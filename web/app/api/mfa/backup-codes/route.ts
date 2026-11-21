@@ -93,7 +93,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     });
   } catch (error) {
     if (error instanceof ApiAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     }
     return apiError(error, 'mfa/backup-codes');
   }

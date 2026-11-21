@@ -38,6 +38,8 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
+process.env.CORTEX_INTERNAL_SECRET = 'test-secret';
+
 jest.mock('@/lib/hoot-utils.server', () => ({
   __esModule: true,
   COMMAND_POLL_INTERVAL_MS: 0,
@@ -170,6 +172,8 @@ describe('hoot dispatch audit entries', () => {
         cortexEventId: 'evt_1',
         toolName: 'get_system_info',
         commandType: 'mcp_tool_call',
+        paramNames: [],
+        paramsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
       },
     });
   });

@@ -4,7 +4,7 @@
  *
  * `--json` prints one envelope on stdout:
  * `{ ok: false, stub: true, noun, reason, dashboard_url, future_plan }` — the
- * snake_case keys are the schema in docs/cli/overview.md#json-envelope-schema.
+ * snake_case keys are the schema in "JSON output shapes", web/content/docs/cli/overview.mdx.
  * Human mode prints a block on stderr pointing at the dashboard and plan doc.
  */
 

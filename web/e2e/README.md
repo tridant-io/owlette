@@ -7,7 +7,7 @@ End-to-end tests for the Owlette web dashboard, running against Firebase emulato
 | Dependency | Version | Why |
 |---|---|---|
 | JDK 21 | exact pin | Firestore emulator requires JVM; 21 matches the CI pin |
-| Node.js | 20+ | matches CI |
+| Node.js | 22.x | matches `engines` in `web/package.json` and CI |
 | firebase-tools | 15.x | `npm i -g firebase-tools@15` — invoked bare from the repo root. 13.x CANNOT run the functions emulator against firebase-functions 7: its runtime shim calls the removed `functions.config()` and the worker is killed on every invocation |
 | Playwright | managed by `npm ci` | browsers installed separately (see below) |
 
@@ -25,14 +25,14 @@ npm run e2e
 ```
 
 This single command:
-1. Runs `next build` (production build required for `next start`)
+1. Runs `e2e:build` (`scripts/e2e-build.mjs`): a fresh `next build` into `.next-e2e` with the emulator config baked in
 2. Starts the Firebase emulators (Auth :9099, Firestore :8080, Storage :9199)
-3. Starts the Next.js server on :3100 (not :3000, so it coexists with `npm run dev`)
+3. Starts the Next.js server on :3100 (not :3000, so it coexists with `npm run dev`), and a second on :3101 with swoop network binding set to enforce
 4. Runs global-setup (reset emulators → seed users + sites → capture storageState fixtures)
-5. Runs all specs in serial (single worker, shared emulator state)
+5. Runs the `chromium` project and the `mobile-chromium` project (`specs/mobile/` only, at 390x844) in serial (single worker, shared emulator state); `specs/functions/` and `specs/security-boundary/` are left out
 6. Shuts everything down and writes the HTML report to `e2e/.output/report/`
 
-Cold run (including build): ~5–6 min. Warm rerun (skipping build via `reuseExistingServer`): ~2–3 min.
+Every run rebuilds: `e2e:build` clears `.next-e2e` first and `reuseExistingServer` is off. On a GitHub-hosted runner the suite alone takes about 27 minutes.
 
 To open the HTML report after a run:
 
@@ -42,15 +42,15 @@ cd web && npx playwright show-report e2e/.output/report
 
 ## Fixtures
 
-The three role fixtures (`e2e/fixtures/member.json`, `admin.json`, `superadmin.json`) are
+The four role fixtures (`e2e/fixtures/member.json`, `admin.json`, `superadmin.json`, `owner.json`) are
 captured by `global-setup` at the start of every run and are **gitignored**. They hold
 Firebase client auth state (cookies + IndexedDB). They are never committed.
 
-To regenerate without running the full suite:
+To regenerate without running the full suite, run one spec the way `npm run e2e` does:
 
 ```bash
-cd web && npx next build && npx firebase emulators:exec --project demo-playwright-e2e \
-  "npx playwright test --list" 2>/dev/null || true
+cd web && npm run e2e:build && cd .. && firebase emulators:exec --only auth,firestore,storage \
+  --project demo-playwright-e2e "cd web && npx playwright test e2e/specs/smoke.spec.ts --project=chromium"
 ```
 
 Or just run `npm run e2e` — global-setup always regenerates them fresh (it resets the
@@ -65,21 +65,45 @@ only for the local process that generated them.
 web/e2e/
 ├── global-setup.ts        — emulator reset + seed + storageState capture
 ├── global-teardown.ts     — cleanup
-├── helpers/
+├── helpers/               — among them:
 │   ├── emulator.ts        — Admin SDK init, emulator URLs, resetEmulators()
 │   ├── roles.ts           — roleState() helper (storageState per role)
-│   ├── seed.ts            — seedUser(), seedMachine(), seedBaseline(), TEST_USERS
-│   └── stubAgent.ts       — stubCommand(), completeCommand(), stubDeploymentTarget()
+│   ├── seed.ts            — seedUser(), seedSite(), seedMachine(), seedRoost(), seedBaseline(), TEST_USERS
+│   ├── stubAgent.ts       — completeCommand(), failCommand(), getPendingCommandIds(), stubRebootSuccess(), stubDeploymentTarget()
+│   ├── mobile.ts          — assertNoHorizontalOverflow(), expectFullyWithinViewport()
+│   └── swoopHost.ts       — a fake machine for swoop's media path
 ├── fixtures/              — gitignored; captured per-run by global-setup
-└── specs/
-    ├── smoke.spec.ts
-    ├── access-control/    — route guards, page header, machine card, display panel
-    ├── auth/              — login, logout, signup
-    ├── sites/             — CRUD + access defaults
-    ├── admin/             — installers, webhooks, schedules, alerts, tokens, email
-    ├── account/           — profile, passkeys, preferences, password
-    ├── dispatch/          — reboot, shutdown, kill-process, recall-layout, deployment, rollback
-    └── time-travel/       — page.clock specs (clock-smoke, reboot-countdown, apply-deadline, heartbeat)
+├── specs/                 — COVERAGE.md maps each surface to its specs
+│   ├── smoke.spec.ts
+│   ├── a11y/              — serious/critical axe smoke per route, keyboard paths
+│   ├── access-control/    — route guards, page header, machine card, display panel, user management
+│   ├── account/           — profile, passkeys, preferences, password, theme, hoot model
+│   ├── admin/             — installers, webhooks, schedules, alerts, tokens, email, issues, swoop
+│   ├── admin-presets/     — system presets
+│   ├── api-contracts/     — public API smoke and the public utility routes
+│   ├── api-sprint/        — public API: chat, installers, machine commands, processes, members, users
+│   ├── auth/              — signup, logout, password reset, app links
+│   ├── dashboard/         — cards, list, metrics, process config round trip, release notes, submit issue
+│   ├── dispatch/          — reboot, shutdown, kill-process, layouts, deployments, active hours
+│   ├── functions/         — Cloud Functions triggers (`npm run e2e:functions` only)
+│   ├── hoot/              — chat, machine menu, share
+│   ├── landing/           — the landing page's sections
+│   ├── logs/              — activity logs
+│   ├── mfa/               — second-factor setup and verify, passkey factor, factor change, API gate
+│   ├── mobile/            — the `mobile-chromium` project at 390x844
+│   ├── onboarding/        — `/add`, CLI authorize, generate code
+│   ├── plans/             — owlette free and billing
+│   ├── public/            — public pages, docs links
+│   ├── roosts/            — roosts, versions, rollback
+│   ├── security-boundary/ — checks against live dev (`playwright.security-boundary.config.ts`, not part of `npm run e2e`)
+│   ├── settings/          — API keys and webhooks
+│   ├── sites/             — site pages, members, machine scope, hoot mcp settings
+│   ├── swoop/             — sessions through the fake host, viewer, keys, network binding
+│   ├── talons/
+│   ├── time-travel/       — page.clock specs (clock-smoke, reboot-countdown, apply-deadline, heartbeat)
+│   └── visual/            — nonblank visual smoke, button hover
+├── screenshots/, videos/, theme-review/            — docs screenshots, docs videos, theme review (own configs)
+└── desktop-screenshots/, desktop-videos/, desktop-sync/ — suites that drive the desktop app (own READMEs)
 ```
 
 ## Spec conventions
@@ -107,9 +131,10 @@ await seedMachine('site-A', 'machine-id');
 ### Stubbing the agent
 
 ```ts
-import { stubCommand, completeCommand } from '../../helpers/stubAgent';
-const cmdId = await stubCommand('site-A', 'machine-id', { type: 'reboot', ... });
-await completeCommand('site-A', 'machine-id', cmdId);
+import { getPendingCommandIds, completeCommand } from '../../helpers/stubAgent';
+// after the page has queued a command
+const [cmdId] = await getPendingCommandIds('site-A', 'machine-id');
+await completeCommand('site-A', 'machine-id', cmdId, { ok: true }, { cmdType: 'reboot' });
 ```
 
 ### page.clock (time-travel specs)
@@ -138,7 +163,7 @@ JDK is missing or not on PATH. Verify: `java -version`. Install Temurin 21 from
 A previous `next build` is stale or broken. Run `cd web && npm run build` manually
 to see the build error, fix it, then re-run `npm run e2e`.
 
-### Port already in use (:9099, :8080, :3100)
+### Port already in use (:9099, :8080, :9199, :3100, :3101)
 
 A previous run didn't clean up. Kill orphan processes:
 
@@ -165,13 +190,6 @@ fixture user's password, revoking Firebase tokens globally. The fix is already i
 `TEST_USERS.member`. If you see this pattern again, grep for `TEST_USERS.member` in any
 spec that mutates auth state.
 
-### "valid body lands on the not-implemented stub (503)" — rollback spec
-
-`specs/dispatch/rollback-manifest.spec.ts` has one case marked partial (`[~]`) pending
-roost wave 2a.6 implementation. The handoff note is at
-`dev/active/project-distribution-v2/handoff-rollback-e2e.md`. All other cases in that
-file pass.
-
 ### Concurrent-agent port collision
 
 If two Claude Code agents run `npm run e2e` simultaneously, the emulators try to bind
@@ -181,6 +199,10 @@ Run E2E from one agent at a time.
 ## CI
 
 The suite runs in GitHub Actions via `.github/workflows/e2e.yml` on every PR and push
-to `dev`/`main` that touches `web/**`, `firestore.rules`, `firebase.json`, or the
-workflow itself. On failure, the HTML report + traces are uploaded as an artifact
-(`playwright-report`, 14-day retention).
+to `dev`/`main` that touches `web/**`, `functions/**`, `firestore.rules`,
+`firestore.indexes.json`, `storage.rules`, `firebase.json`, the few files outside `web/`
+its tests read (swoop's protocol vectors and keymap, `infra/cron-jobs.json`,
+`scripts/env-manifest.json`), or the workflow itself. The same job then runs the Cloud
+Functions trigger suite (`npm run e2e:functions:nobuild`), and a separate job runs the
+Firestore rules tests. On failure, everything under `e2e/.output/` (HTML report, traces,
+screenshots, videos) is uploaded as an artifact (`playwright-report`, 14-day retention).

@@ -8,7 +8,7 @@
  * localhost or preview hosts, which the installer cannot target.
  */
 
-import { environmentToken, serverFlagFor } from '@/lib/environment';
+import { environmentToken, pairingPreseedFor, serverFlagFor } from '@/lib/environment';
 
 describe('environmentToken', () => {
   it("returns 'dev' for the dev dashboard host", () => {
@@ -62,5 +62,26 @@ describe('serverFlagFor', () => {
     expect(`/ADD=silver-compass-drift${serverFlagFor('owlette.app')} /SILENT`).toBe(
       '/ADD=silver-compass-drift /SILENT'
     );
+  });
+});
+
+describe('pairingPreseedFor', () => {
+  it('names the dev server on the dev dashboard host', () => {
+    expect(pairingPreseedFor('balance-time-loud', 'dev.owlette.app')).toBe(
+      '{"phrase": "balance-time-loud", "server": "dev"}'
+    );
+  });
+
+  it('names no server elsewhere, as the windows command carries no /SERVER=', () => {
+    expect(pairingPreseedFor('balance-time-loud', 'owlette.app')).toBe('{"phrase": "balance-time-loud"}');
+    expect(pairingPreseedFor('balance-time-loud', 'localhost:3000')).toBe('{"phrase": "balance-time-loud"}');
+    expect(pairingPreseedFor('balance-time-loud', '')).toBe('{"phrase": "balance-time-loud"}');
+  });
+
+  it('is valid JSON the agent can parse', () => {
+    expect(JSON.parse(pairingPreseedFor('balance-time-loud', 'dev.owlette.app'))).toEqual({
+      phrase: 'balance-time-loud',
+      server: 'dev',
+    });
   });
 });

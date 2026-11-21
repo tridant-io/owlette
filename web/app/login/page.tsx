@@ -7,11 +7,21 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/components/auth/AuthShell';
-import { Fingerprint } from 'lucide-react';
+import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
+import { Fingerprint, Globe } from 'lucide-react';
+import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
+import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { toast } from '@/lib/toast';
 import { sanitizeError } from '@/lib/errorHandler';
 import { isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { resolvePostSignInPath } from '@/lib/postSignIn';
+import {
+  AppLinkError,
+  completeAppLinkSignIn,
+  exchangeAppLink,
+  safeNextPath,
+  startAppLink,
+} from '@/lib/appLink';
 import { signInWithCustomToken } from 'firebase/auth';
 import { auth as firebaseAuth } from '@/lib/firebase';
 import {
@@ -25,10 +35,38 @@ import { InAppBrowserNotice } from '@/components/InAppBrowserNotice';
 import { useFieldError } from '@/hooks/useFieldError';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { useRedirectIfAuthenticated } from '@/hooks/useRedirectIfAuthenticated';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import type { ViewerAppPlatform } from '@/lib/swoop/viewerApp';
 
-/** Same-origin relative paths only; `//evil.example` is protocol-relative and leaves the site. */
-const safeRedirect = (value: string | null): string | null =>
-  value && value.startsWith('/') && !value.startsWith('//') ? value : null;
+// every 3 s for the 10 min a pending code lives is at most 200 exchange calls, under the route's
+// 300/h per-ip limit; a faster poll would get a full wait rate-limited part way through.
+const APP_LINK_POLL_MS = 3000;
+// the client keeps its own 10 min deadline instead of comparing the route's expiresAt with the
+// local clock: a clock running ahead would give up on the first poll. the route's 410 still
+// ends the wait earlier when the server expires the code first.
+const APP_LINK_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * owlette swoop's login is the app's own: its small eye and its name, as the picker's header
+ * shows them, naming the installed release on hover as it does there, and no tagline, in one
+ * narrow column. a mac shows the name in its menu bar, so there it is for screen readers only,
+ * and the release is the menu's about item.
+ */
+const swoopShell = (platform: ViewerAppPlatform) => ({
+  minimal: true,
+  brandMark: <SwoopLogo size={56} />,
+  brandTitle:
+    platform === 'mac' ? (
+      <span className="sr-only">owlette swoop</span>
+    ) : (
+      <SwoopVersionTooltip>
+        <span data-testid="swoop-login-mark">
+          <SwoopLockup size="lg" />
+        </span>
+      </SwoopVersionTooltip>
+    ),
+  brandDescription: null,
+});
 
 /**
  * Wire half of a passkey sign-in (options → ceremony → verify → Firebase session), shared by the
@@ -101,7 +139,8 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   /**
    * Progressive disclosure for the email path, mirroring /register. Latches open on first email
-   * focus and never closes, so a partly-filled form can't collapse mid-entry.
+   * focus (in owlette swoop, on its link) and never closes, so a partly-filled form can't
+   * collapse mid-entry.
    */
   const [emailFormOpen, setEmailFormOpen] = useState(false);
   /** Field-targeted validation — see hooks/useFieldError.ts. */
@@ -121,6 +160,18 @@ function LoginForm() {
    * popup blockers, so the remediation appears even when detection said no.
    */
   const [popupBlocked, setPopupBlocked] = useState(false);
+  /**
+   * inside owlette swoop, whose webview fails both google and passkey sign-in (measured), so a
+   * signed-in browser approves the app instead.
+   */
+  const viewerPlatform = useViewerAppPlatform();
+  const viewerApp = viewerPlatform !== null;
+  /** the absolute approval url while its browser approval is being waited on. */
+  const [browserWait, setBrowserWait] = useState<string | null>(null);
+  const [browserLinkExpired, setBrowserLinkExpired] = useState(false);
+  /** identity of the running browser approval poll, or null; a stale run's answers are dropped. */
+  const browserRun = useRef<symbol | null>(null);
+  const browserPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Latched once a sign-in starts here so the guard below can't pre-empt the navigation in
    * progress. A ref, not `loading`: `loading` clears in `finally`, while the push is still in
@@ -146,7 +197,7 @@ function LoginForm() {
    * domain, so browserSupportsWebAuthn() is true while the ceremony always fails.
    * https://passkeys.dev/docs/reference/ios/
    */
-  const showPasskey = canUsePasskey && !inApp.isInApp;
+  const showPasskey = canUsePasskey && !inApp.isInApp && !viewerApp;
   /** "or" only earns its place while a non-email option is still on screen. */
   const showDivider = !googleUnavailable || showPasskey;
   /**
@@ -174,10 +225,7 @@ function LoginForm() {
   }, []);
 
   useEffect(() => {
-    const redirect = safeRedirect(searchParams.get('redirect'));
-    if (redirect) {
-      setRedirectUrl(redirect);
-    }
+    setRedirectUrl(safeNextPath(searchParams.get('redirect'), '/dashboard'));
   }, [searchParams]);
 
   // Shared with /register via lib/postSignIn. As a local helper here it was missed by /register,
@@ -189,7 +237,7 @@ function LoginForm() {
   // rather than `redirectUrl`: effects flush in declaration order, so the guard would fire against
   // the '/dashboard' default before setRedirectUrl landed and strand ?redirect=%2Froost visitors.
   useRedirectIfAuthenticated({
-    target: safeRedirect(searchParams.get('redirect')) ?? '/dashboard',
+    target: safeNextPath(searchParams.get('redirect'), '/dashboard'),
     skip: authInFlight.current,
   });
 
@@ -265,6 +313,94 @@ function LoginForm() {
     } finally {
       setLoading(false);
     }
+  };
+
+  /** stops the browser approval poll; reads only refs, so it is safe as an unmount cleanup. */
+  const stopBrowserPoll = useCallback(() => {
+    browserRun.current = null;
+    if (browserPollTimer.current) clearTimeout(browserPollTimer.current);
+    browserPollTimer.current = null;
+  }, []);
+
+  useEffect(() => stopBrowserPoll, [stopBrowserPoll]);
+
+  const cancelBrowserSignIn = () => {
+    stopBrowserPoll();
+    setBrowserWait(null);
+  };
+
+  /**
+   * owlette swoop's sign-in: a pending app-link code opens in the system browser, which approves it
+   * with its own signed-in session; this page polls until the code turns into a custom token whose
+   * claim carries the browser's mfa, so the app lands on `next` with no /verify-2fa hop.
+   */
+  const handleBrowserSignIn = async () => {
+    stopBrowserPoll();
+    setBrowserLinkExpired(false);
+    const next = safeNextPath(searchParams.get('redirect'));
+    const run = Symbol('app-link');
+    browserRun.current = run;
+
+    setLoading(true);
+    let link: Awaited<ReturnType<typeof startAppLink>>;
+    try {
+      link = await startAppLink();
+    } catch (error) {
+      toast.error(sanitizeError(error));
+      return;
+    } finally {
+      setLoading(false);
+    }
+    // unmounted while the code was minted: nothing is left to poll for.
+    if (browserRun.current !== run) return;
+
+    // absolute, so the app hands it to the system browser as a web link. the return value says
+    // nothing: the app denies the in-app window it would describe, so it is null every time.
+    const approveUrl = new URL(link.approveUrl, window.location.origin).toString();
+    window.open(approveUrl, '_blank');
+    setBrowserWait(approveUrl);
+
+    const expire = () => {
+      stopBrowserPoll();
+      setBrowserWait(null);
+      setBrowserLinkExpired(true);
+    };
+
+    const deadline = Date.now() + APP_LINK_WAIT_MS;
+    const poll = async () => {
+      if (browserRun.current !== run) return;
+      if (Date.now() >= deadline) return expire();
+
+      let customToken: string | null = null;
+      try {
+        const result = await exchangeAppLink(link.code, link.secret);
+        if ('customToken' in result) customToken = result.customToken;
+      } catch (error) {
+        if (browserRun.current !== run) return;
+        if (error instanceof AppLinkError && (error.status === 404 || error.status === 410)) {
+          return expire();
+        }
+        // anything else is transient: the next poll retries and the deadline bounds it.
+      }
+      if (browserRun.current !== run) return;
+
+      if (!customToken) {
+        browserPollTimer.current = setTimeout(poll, APP_LINK_POLL_MS);
+        return;
+      }
+
+      stopBrowserPoll();
+      authInFlight.current = true;
+      try {
+        await completeAppLinkSignIn(customToken);
+        router.replace(next);
+      } catch (error) {
+        authInFlight.current = false;
+        setBrowserWait(null);
+        toast.error(sanitizeError(error));
+      }
+    };
+    browserPollTimer.current = setTimeout(poll, APP_LINK_POLL_MS);
   };
 
   /**
@@ -378,24 +514,68 @@ function LoginForm() {
     return cancelConditionalPasskey;
   }, [showPasskey, canAutofillPasskey, cancelConditionalPasskey]);
 
+  /** owlette swoop's one passwordless option, or the wait for the browser to approve it. */
+  const browserSignIn = browserWait ? (
+    <div className="space-y-3">
+      <p role="status" className="text-center text-sm text-muted-foreground">
+        waiting for your browser…
+      </p>
+      <p className="text-center text-xs text-muted-foreground">
+        didn&apos;t open?{' '}
+        <a href={browserWait} target="_blank" rel="noopener" className={authFooterLinkClass}>
+          open the sign-in page
+        </a>
+      </p>
+      <Button type="button" variant="outline" className="w-full" onClick={cancelBrowserSignIn}>
+        cancel
+      </Button>
+    </div>
+  ) : (
+    <>
+      <FormError message={browserLinkExpired ? 'that link expired, try again' : null} />
+      <Button type="button" className="w-full" onClick={handleBrowserSignIn} disabled={loading}>
+        <Globe className="mr-2 h-4 w-4" />
+        sign in with your browser
+      </Button>
+    </>
+  );
+
+  const signUp = (
+    <span className="block whitespace-nowrap sm:inline">
+      don&apos;t have an account?{' '}
+      <a href="/register" className={authFooterLinkClass}>
+        sign up
+      </a>
+    </span>
+  );
+
   return (
     <AuthShell
+      {...(viewerPlatform ? swoopShell(viewerPlatform) : {})}
       footer={
-        <>
-          <a href="/forgot-password" className={authFooterLinkClass}>
-            forgot password?
-          </a>
-          <AuthFooterDot />
-          don&apos;t have an account?{' '}
-          <a href="/register" className={authFooterLinkClass}>
-            sign up
-          </a>
-        </>
+        viewerApp ? (
+          signUp
+        ) : (
+          <>
+            <a href="/forgot-password" className={authFooterLinkClass}>
+              forgot password?
+            </a>
+            {/* a phone's card is too narrow for both on one line: the sign-up
+                line wraps whole onto its own row instead of mid-phrase */}
+            <span className="hidden sm:inline">
+              <AuthFooterDot />
+            </span>
+            {signUp}
+          </>
+        )
       }
     >
-      {/* Passwordless first: google + passkey are one group, space-y-6 splits off email. */}
+      {/* Passwordless first: google + passkey are one group, space-y-6 splits off email. In
+          owlette swoop the browser button stands in for both. */}
       <div className="space-y-2">
-        {googleUnavailable ? (
+        {viewerApp ? (
+          browserSignIn
+        ) : googleUnavailable ? (
           /* Notice carries its own "try google anyway" — detection reorders, never removes. */
           <InAppBrowserNotice
             isInApp={inApp.isInApp}
@@ -448,69 +628,105 @@ function LoginForm() {
         )}
       </div>
 
-      {showDivider && <AuthDivider />}
-
-      <form onSubmit={handleEmailLogin} className="space-y-5" noValidate>
-        <div className="space-y-2">
-          <Label htmlFor="email" className="text-foreground">email</Label>
-          <Input
-            id="email"
-            {...fieldProps('email')}
-            type="email"
-            // Trailing "webauthn" token is what lists passkeys in this field's autofill
-            // dropdown; "username" keeps ordinary autofill and password managers working.
-            autoComplete="username webauthn"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            // Focus (not click) so keyboard tabbing expands it, and so e2e fill() — which
-            // focuses first, email before password — opens the form for the suite.
-            onFocus={() => setEmailFormOpen(true)}
-            required
-            disabled={loading}
-            className="bg-input border-border text-foreground placeholder:text-muted-foreground"
-          />
-        </div>
-
-        {emailExpanded && (
-          <div className="form-reveal">
-            <div className="space-y-5">
-            <div className="space-y-2">
-              <Label htmlFor="password" className="text-foreground">password</Label>
-              <Input
-                id="password"
-                {...fieldProps('password')}
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  // Password path chosen — retire the pending autofill ceremony.
-                  cancelConditionalPasskey();
-                }}
-                required
-                disabled={loading}
-                className="bg-input border-border text-foreground placeholder:text-muted-foreground"
-              />
-            </div>
-            <FormError message={formError?.message} id="login-form-error" />
-            <Button type="submit" className="w-full text-background font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled={loading}>
-              {loading ? 'signing in...' : 'sign in with email'}
-            </Button>
-            </div>
+      {/* in owlette swoop the email path waits behind a quiet link, form and all */}
+      {viewerApp ? (
+        !emailFormOpen && (
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => setEmailFormOpen(true)}
+              className="hl-link hl-link-muted cursor-pointer text-sm text-muted-foreground"
+            >
+              or use your email and password
+            </button>
           </div>
-        )}
-      </form>
+        )
+      ) : (
+        showDivider && <AuthDivider />
+      )}
+
+      {(!viewerApp || emailFormOpen) && (
+        <form onSubmit={handleEmailLogin} className="space-y-5" noValidate>
+          <div className="space-y-2">
+            <Label htmlFor="email" className="text-foreground">email</Label>
+            <Input
+              id="email"
+              {...fieldProps('email')}
+              type="email"
+              // Trailing "webauthn" token is what lists passkeys in this field's autofill
+              // dropdown; "username" keeps ordinary autofill and password managers working.
+              // owlette swoop drops it: passkeys fail in its webview.
+              autoComplete={viewerApp ? 'username' : 'username webauthn'}
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              // Focus (not click) so keyboard tabbing expands it, and so e2e fill() — which
+              // focuses first, email before password — opens the form for the suite.
+              onFocus={() => setEmailFormOpen(true)}
+              // in owlette swoop the field mounts on its link's click, so the keyboard follows it
+              autoFocus={viewerApp}
+              required
+              disabled={loading}
+              className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
+            />
+          </div>
+
+          {emailExpanded && (
+            <div className="form-reveal">
+              <div className="space-y-5">
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-foreground">password</Label>
+                <Input
+                  id="password"
+                  {...fieldProps('password')}
+                  type="password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    // Password path chosen — retire the pending autofill ceremony.
+                    cancelConditionalPasskey();
+                  }}
+                  required
+                  disabled={loading}
+                  className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+              <FormError message={formError?.message} id="login-form-error" />
+              <Button type="submit" className="w-full text-background font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed" disabled={loading}>
+                {loading ? 'signing in...' : 'sign in with email'}
+              </Button>
+              {/* the browser's footer carries it; owlette swoop's shows only once asked for */}
+              {viewerApp && (
+                <p className="text-center text-sm">
+                  <a href="/forgot-password" className={authFooterLinkClass}>
+                    forgot password?
+                  </a>
+                </p>
+              )}
+              </div>
+            </div>
+          )}
+        </form>
+      )}
     </AuthShell>
   );
 }
 
 export default function LoginPage() {
+  const viewerPlatform = useViewerAppPlatform();
+  const inViewerApp = viewerPlatform !== null;
   return (
-    /* Same shell as the loaded form, so the card doesn't change shape when the
-       suspense boundary resolves. */
-    <Suspense fallback={<AuthShell loading />}>
-      <LoginForm />
-    </Suspense>
+    // in owlette swoop the whole page is the window's drag surface: a press on
+    // anything that is not a control moves the window
+    <div {...(inViewerApp ? dragRegion : {})}>
+      {/* owlette swoop's window has no frame: its controls, and nothing in a browser */}
+      <SwoopWindowStrip />
+      {/* Same shell as the loaded form, so the card doesn't change shape when the
+          suspense boundary resolves. */}
+      <Suspense fallback={<AuthShell loading {...(viewerPlatform ? swoopShell(viewerPlatform) : {})} />}>
+        <LoginForm />
+      </Suspense>
+    </div>
   );
 }

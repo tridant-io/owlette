@@ -42,9 +42,9 @@
 //!
 //! 1. The roster printed names both panels, with distinct `\?\DISPLAY#...`
 //!    paths, the rects DXGI reports (negative coordinates are correct) and the
-//!    texture size — transposed against the rect on a rotated panel.
+//!    picture's size — the rect's, upright on a rotated panel too.
 //! 2. Start a session and open it in the browser. The toolbar's monitor button
-//!    lists both displays at those texture sizes, with the primary marked, and
+//!    lists both displays at those sizes, with the primary marked, and
 //!    the one being streamed selected. **Unverified.**
 //! 3. Switch to the other display. The picture changes within a keyframe, and
 //!    a click near each corner lands on that corner of the panel now shown —
@@ -65,11 +65,13 @@
 //! `signal/messages.rs` is frozen and `DisplayInfo` is `{index, width, height,
 //! primary}`. The device path, the monitor's name, dpi and refresh therefore
 //! stay host-side: they are what selection is keyed on and what the log names,
-//! not something a viewer is told. A rotated panel is advertised **transposed
-//! against its desktop rect**, because the browser is handed the un-rotated
-//! texture and that is what it will draw.
+//! not something a viewer is told. A rotated panel is advertised **as it is
+//! displayed**, at its desktop rect's size: capture turns its texture upright,
+//! and that is what the browser will draw.
 
 pub mod enumerate;
+#[cfg(target_os = "macos")]
+pub mod mac;
 pub mod policy;
 
 use std::thread::JoinHandle;
@@ -442,14 +444,14 @@ mod tests {
     }
 
     #[test]
-    fn a_rotated_output_is_advertised_transposed_against_its_desktop_rect() {
+    fn a_rotated_output_is_advertised_as_it_is_displayed() {
         let displays = loaded().hello_displays();
         assert_eq!(
             displays,
             vec![
                 DisplayInfo { index: 0, width: 1920, height: 1080, primary: true },
-                // 2160x3840 on the desktop; the browser is handed the texture.
-                DisplayInfo { index: 1, width: 3840, height: 2160, primary: false },
+                // a 3840x2160 texture, which the browser is handed upright
+                DisplayInfo { index: 1, width: 2160, height: 3840, primary: false },
             ]
         );
     }

@@ -9,6 +9,7 @@ import { timestampToMs } from '@/lib/firestoreTime.server';
 import {
   problem,
   problemFromError,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
   problemUnauthorized,
@@ -20,7 +21,9 @@ import {
   resolveAuth,
   type ResolvedAuth,
 } from '@/lib/apiAuth.server';
+import { normalizeMaxToolTier } from '@/lib/apiKeyTypes';
 import { getAdminDb } from '@/lib/firebase-admin';
+import type { ToolTier } from '@/lib/mcp-tools';
 import { SITE_STORAGE_BYTES } from '@/lib/roostStorage';
 
 export async function GET(request: NextRequest) {
@@ -40,7 +43,7 @@ export async function GET(request: NextRequest) {
             ...(err.details ?? {}),
           });
         }
-        if (err.status === 403) return problemForbidden();
+        if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden();
         if (err.status === 404) return problemNotFound();
         return problemUnauthorized();
       }
@@ -58,6 +61,7 @@ export async function GET(request: NextRequest) {
       name: string | null;
       keyPrefix: string | null;
       scopes: unknown;
+      maxToolTier: ToolTier;
       environment: string | null;
       expiresAt: number | null;
       lastUsedAt: number | null;
@@ -91,6 +95,7 @@ export async function GET(request: NextRequest) {
         name,
         keyPrefix,
         scopes: kc.isLegacy ? null : kc.scopes,
+        maxToolTier: normalizeMaxToolTier(kc.maxToolTier),
         environment: kc.environment,
         expiresAt: kc.expiresAt,
         lastUsedAt,

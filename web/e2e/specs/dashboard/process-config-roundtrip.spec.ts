@@ -22,6 +22,7 @@
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
 import { TEST_USERS } from '../../helpers/seed';
 import {
@@ -270,6 +271,48 @@ test('adding a process appends a fully-formed row to the config doc', async ({ p
 
   // The new row is invisible on the dashboard until the agent's next metrics
   // upload adds it to the status doc — the config doc above is the contract.
+});
+
+// The dialog's form scrolls, and a scroller clips both axes: with no inline
+// gutter it cut the left edge off every full-width field's focus ring.
+test('no tab stop in the add process dialog has its focus ring cut off', async ({ page }) => {
+  await page.goto('/dashboard');
+  const card = machineCard(page, MACHINE_ID);
+  await expect(card).toBeVisible();
+
+  await card.getByRole('button', { name: /^add process$/i }).click();
+  const dialog = page.getByRole('dialog', { name: /^add process$/i });
+  await expect(dialog).toBeVisible();
+  // scheduled opens the schedule section, whose blocks scroll in a box of their own
+  await dialog.getByRole('button', { name: 'scheduled', exact: true }).click();
+  await expect(dialog.getByTestId('process-dialog-schedule-section')).toBeVisible();
+
+  expect(await clippedFocusRings(page, dialog)).toEqual([]);
+});
+
+// outlines are for form fields (owner, 2026-11-20): a launch mode segment
+// takes keyboard focus with none, rather than one its overflow-hidden group cuts
+test('the launch mode toggle on a process row draws no focus outline', async ({ page }) => {
+  await page.goto('/dashboard');
+  const toggle = machineCard(page, MACHINE_ID).getByRole('group', {
+    name: `launch mode for ${ALPHA_NAME}`,
+  });
+  await expect(toggle).toBeVisible();
+
+  await page.keyboard.press('Shift');
+  const outlines = await toggle.evaluate((group) =>
+    Array.from(group.querySelectorAll<HTMLElement>('button')).map((button) => {
+      button.focus();
+      const style = button.matches(':focus-visible') ? getComputedStyle(button).outlineStyle : 'not focus-visible';
+      return `${button.getAttribute('aria-label') ?? button.textContent?.trim()}: ${style}`;
+    }),
+  );
+  expect(outlines).toEqual([
+    'off: none',
+    'always on: none',
+    'scheduled: none',
+    `configure schedule for ${ALPHA_NAME}: none`,
+  ]);
 });
 
 test('deleting a process removes only that row from the config doc', async ({ page }) => {

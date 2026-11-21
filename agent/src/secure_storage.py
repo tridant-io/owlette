@@ -638,6 +638,65 @@ class SecureStorage:
             logger.error(f"Failed to retrieve site ID: {e}")
             return None
 
+    def save_credentials(self, refresh_token: str, access_token: str, expiry: float,
+                         site_id: str, move: Optional[dict] = None) -> bool:
+        """
+        Save a pairing's credentials, and the site move they belong to, in one write.
+
+        Saved one at a time, a failure part way left one site's refresh token
+        beside another site's id. `move` is the site move these credentials
+        switch to ({'moveId', 'phase', 'source', 'target'}); None leaves the store holding
+        no move, since a new pairing ends any move in progress.
+
+        Returns:
+            True if saved successfully, False otherwise
+        """
+        try:
+            data = self._load_data()
+            data['refresh_token'] = refresh_token
+            data['access_token'] = access_token
+            data['token_expiry'] = expiry
+            data['site_id'] = site_id
+            if move is None:
+                data.pop('move', None)
+            else:
+                data['move'] = move
+            success = self._save_data(data)
+
+            if success:
+                logger.info(f"Credentials saved to encrypted file: site {site_id}")
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to save credentials: {e}")
+            return False
+
+    def get_move(self) -> Optional[dict]:
+        """The site move this machine is part way through, or None."""
+        move = self._load_data().get('move')
+        return move if isinstance(move, dict) else None
+
+    def clear_move(self) -> bool:
+        """
+        Forget the site move, keeping the credentials.
+
+        A store that holds no move is not written, and nor is one that could
+        not be read: it reads as empty, and saving that would drop the
+        credentials with the move.
+
+        Returns:
+            True if no move is left stored, False if the save failed
+        """
+        data = self._load_data()
+        if 'move' not in data:
+            return True
+        del data['move']
+        success = self._save_data(data)
+
+        if success:
+            logger.info("Site move cleared from encrypted file")
+        return success
+
     def clear_tokens(self) -> bool:
         """
         Clear all stored tokens from secure storage.
@@ -671,6 +730,24 @@ class SecureStorage:
             logger.error(f"Failed to clear tokens: {e}")
             return False
 
+    def is_cleared(self) -> bool:
+        """True when neither the store nor its retained copy is on disk: what
+        clear_tokens leaves behind.
+
+        A store that is there but reads as empty (held open by another process,
+        caught mid-replace, damaged, or not a plain file) is not cleared, so a
+        failed read is never mistaken for a revoke.
+        """
+        for path in (self.token_file, self._retained_file()):
+            try:
+                os.lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as e:
+                logger.warning(f"Could not check {path.name}: {e}")
+            return False
+        return True
+
     def has_refresh_token(self) -> bool:
         """
         Check if a refresh token exists in storage.
@@ -680,6 +757,22 @@ class SecureStorage:
         """
         token = self.get_refresh_token()
         return token is not None and len(token) > 0
+
+    def issued_claims(self) -> dict:
+        """The claims of the access token the server last issued this machine.
+
+        `aud` is the project, so the server, that issued it; `machine_id` is the
+        identity its refresh token is bound to. An expired token says the same,
+        and the signature is not checked: whoever can write this file already
+        holds the credential. Empty when there is no token to read.
+        """
+        token = self._load_data().get('access_token')
+        try:
+            payload = token.split('.')[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+        except (AttributeError, IndexError, ValueError):
+            return {}
+        return claims if isinstance(claims, dict) else {}
 
     def is_configured(self) -> bool:
         """

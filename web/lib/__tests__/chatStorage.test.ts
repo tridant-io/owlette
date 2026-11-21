@@ -293,6 +293,30 @@ describe('listConversations', () => {
     expect(all.conversations[0].deletedAt).toBeDefined();
   });
 
+  it('fills a page past soft-deleted chats and keeps paging', async () => {
+    const created = [];
+    for (let i = 0; i < 4; i++) {
+      created.push(await createConversation({ siteId: 's', ownerUid: 'u' }));
+      // ms gap keeps the sort deterministic
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    const [oldest, older, newer, newest] = created;
+    await softDeleteConversation(newest.conversationId);
+    await softDeleteConversation(newer.conversationId);
+
+    const first = await listConversations({ siteIds: ['s'], pageSize: 1 });
+    expect(first.conversations.map((c) => c.conversationId)).toEqual([older.conversationId]);
+    expect(first.nextPageToken).toBe(older.conversationId);
+
+    const second = await listConversations({
+      siteIds: ['s'],
+      pageSize: 1,
+      pageToken: first.nextPageToken,
+    });
+    expect(second.conversations.map((c) => c.conversationId)).toEqual([oldest.conversationId]);
+    expect(second.nextPageToken).toBe('');
+  });
+
   it('honors ownerUid filter', async () => {
     await createConversation({ siteId: 's', ownerUid: 'me' });
     await createConversation({ siteId: 's', ownerUid: 'someone-else' });

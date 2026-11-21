@@ -93,6 +93,9 @@ struct Viewer {
     /// §10's lease renewal binds to this in preference to the offer.
     dtls_fingerprint: Option<String>,
     verified_ctl: Option<bool>,
+    /// The certificate this viewer's peer answers with, canonical. Every peer
+    /// generates its own, so a second viewer's bind must not replace it.
+    host_fingerprint: Option<String>,
 }
 
 impl Viewer {
@@ -115,8 +118,6 @@ pub struct SignalClient {
     jti: JtiSet,
     admission: Admission,
     viewers: BTreeMap<String, Viewer>,
-    /// Canonical, set by Task 3.8 once the local dtls certificate exists.
-    host_fingerprint: Option<String>,
     /// The last `error` code the room sent, so a close can be read together
     /// with the frame that preceded it.
     last_error: Option<String>,
@@ -135,7 +136,6 @@ impl SignalClient {
             jti: JtiSet::new(),
             admission: Admission::new(Limits::from_enablement(&bundle.enablement)),
             viewers: BTreeMap::new(),
-            host_fingerprint: None,
             last_error: None,
         })
     }
@@ -148,12 +148,19 @@ impl SignalClient {
         self.admission.live()
     }
 
-    /// Task 3.8 hands over the local dtls certificate fingerprint as soon as it
-    /// has one. Nothing can be answered before this: §9's mac is over it.
-    pub fn set_host_fingerprint(&mut self, raw: &str) -> anyhow::Result<()> {
-        self.host_fingerprint =
-            Some(canonical_fingerprint(raw).ok_or_else(|| anyhow::anyhow!("not a fingerprint"))?);
-        Ok(())
+    /// The fingerprint of the certificate this viewer's peer answers with,
+    /// handed over when the peer binds. That viewer cannot be answered before
+    /// this: §9's mac is over it.
+    pub fn set_host_fingerprint(&mut self, viewer: &str, raw: &str) -> anyhow::Result<()> {
+        let canonical =
+            canonical_fingerprint(raw).ok_or_else(|| anyhow::anyhow!("not a fingerprint"))?;
+        match self.viewers.get_mut(viewer) {
+            Some(state) => {
+                state.host_fingerprint = Some(canonical);
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("no such viewer")),
+        }
     }
 
     /// The fingerprint of an established dtls session, which §10 binds a lease
@@ -279,6 +286,14 @@ impl SignalClient {
         if sid != self.sid {
             return vec![Effect::Refused(Refusal::RoomMismatch)];
         }
+        // a viewer this host already holds is not joining: it is the room
+        // replaying it to a host that re-dialed, or its own socket re-dialing
+        // under a peer that is still up. counting it again would spend the
+        // admission budget twice, and re-inserting it would drop the
+        // fingerprint its lease is bound to and the ctl its token verified.
+        if self.viewers.contains_key(&viewer) {
+            return Vec::new();
+        }
         if let Err(denial) = self.admission.admit(&viewer, now) {
             let reason = denial.reason.reason();
             return vec![Effect::Send(bye(Some(&viewer), reason)), Effect::Denied(denial)];
@@ -310,7 +325,8 @@ impl SignalClient {
             self.drop_viewer(&viewer);
             return vec![
                 Effect::Send(bye(Some(&viewer), DenialReason::OfferFingerprintMissing.reason())),
-                Effect::Denied(Denial::new(viewer, DenialReason::OfferFingerprintMissing)),
+                Effect::Denied(Denial::new(viewer.clone(), DenialReason::OfferFingerprintMissing)),
+                Effect::ViewerGone { viewer, reason: LeftReason::Bye },
             ];
         };
         if let Some(state) = self.viewers.get_mut(&viewer) {
@@ -337,9 +353,10 @@ impl SignalClient {
     }
 
     /// Read off the envelope rather than the strict decoder on purpose. The
-    /// room synthesises a `bye` for a viewer whose socket vanished and stamps an
-    /// extra `code` field on it (`infra/swoop-signal/src/room.ts`,
-    /// `webSocketClose`), which `Message`'s `deny_unknown_fields` refuses — and
+    /// room synthesises a `bye` for a viewer whose socket closed before its offer
+    /// reached this host and stamps an extra `code` field on it
+    /// (`infra/swoop-signal/src/room.ts`, `webSocketClose`), which `Message`'s
+    /// `deny_unknown_fields` refuses — and
     /// a refused `bye` would leak the viewer's slot until the session ended.
     /// `from` is all the host needs; `reason` is advisory.
     fn on_bye(&mut self, from: Option<&str>) -> Vec<Effect> {
@@ -460,9 +477,10 @@ impl SignalClient {
     /// brief says `host-ready`; the contract is the one to implement.)
     pub fn answer(&self, viewer: &str, sdp: &str) -> anyhow::Result<Message> {
         let host_fingerprint = self
-            .host_fingerprint
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("no host fingerprint yet"))?;
+            .viewers
+            .get(viewer)
+            .and_then(|state| state.host_fingerprint.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("no host fingerprint for this viewer yet"))?;
         // macing a fingerprint the answer does not actually carry would hand the
         // browser a mac it can verify over a certificate nobody is using.
         let in_sdp = fingerprint_from_sdp(sdp)
@@ -562,6 +580,8 @@ fn left_reason_text(reason: LeftReason) -> &'static str {
         LeftReason::Timeout => "timeout",
         LeftReason::LeaseExpired => "lease_expired",
         LeftReason::Kill => "kill",
+        LeftReason::Restart => "restart",
+        LeftReason::SameMachine => "same_machine",
     }
 }
 
@@ -907,6 +927,37 @@ pub(crate) mod tests {
         assert_eq!(client.handle(&dropped.to_string()), Vec::new());
     }
 
+    /// The page stops on a `kill` and starts its next session on any other
+    /// `bye` from the host, which is exactly what an agent update has to be.
+    #[test]
+    fn a_restart_reaches_the_viewer_as_its_own_bye() {
+        let (mut client, viewer) = client_with_viewer();
+        let effects = client.end_viewer(&viewer, LeftReason::Restart);
+        let Some(Effect::Send(Message::Bye { reason, to, .. })) = effects.first() else {
+            panic!("a bye leads the effects: {effects:?}");
+        };
+        assert_eq!(reason.as_deref(), Some("restart"));
+        assert_eq!(to.as_deref(), Some(viewer.as_str()));
+    }
+
+    /// The page reads `same_machine` as the one end that says why it cannot
+    /// come back, and greys the machine out for that browser.
+    #[test]
+    fn a_viewer_on_this_machine_is_told_so() {
+        let (mut client, viewer) = client_with_viewer();
+        let effects = client.end_viewer(&viewer, LeftReason::SameMachine);
+        let Some(Effect::Send(Message::Bye { reason, to, .. })) = effects.first() else {
+            panic!("a bye leads the effects: {effects:?}");
+        };
+        assert_eq!(reason.as_deref(), Some("same_machine"));
+        assert_eq!(to.as_deref(), Some(viewer.as_str()));
+        assert_eq!(
+            serde_json::to_value(LeftReason::SameMachine).expect("serialise"),
+            "same_machine",
+            "viewer_left spells it the same way"
+        );
+    }
+
     #[test]
     fn an_offer_from_a_viewer_the_host_never_admitted_is_denied() {
         let mut client = client();
@@ -932,6 +983,9 @@ pub(crate) mod tests {
             Effect::Denied(Denial::new(&viewer, DenialReason::OfferFingerprintMissing))
         );
         assert_eq!(client.viewer_count(), 0);
+        // the session admitted it too, and every later road out goes through
+        // this client, which no longer knows it: this is its one departure.
+        assert_eq!(effects[2], Effect::ViewerGone { viewer, reason: LeftReason::Bye });
     }
 
     /// Every admission refusal is both a `bye` to the browser and a record for
@@ -949,8 +1003,10 @@ pub(crate) mod tests {
             client.handle_at(&frame, start)[..],
             [Effect::Admitted { .. }]
         ));
-        // a second join inside the interval floor.
-        let effects = client.handle_at(&frame, start + Duration::from_millis(500));
+        // a second viewer inside the interval floor.
+        let mut second = join["message"].clone();
+        second["viewer"] = json!("viewer_0000000002");
+        let effects = client.handle_at(&second.to_string(), start + Duration::from_millis(500));
         let mut remaining = Vec::new();
         for effect in effects {
             match effect {
@@ -962,12 +1018,45 @@ pub(crate) mod tests {
         }
         assert_eq!(
             remaining,
-            vec![Effect::Denied(Denial::new("viewer_0000000001", DenialReason::JoinTooSoon))]
+            vec![Effect::Denied(Denial::new(
+                "viewer_0000000002",
+                DenialReason::JoinTooSoon
+            ))]
         );
         let sent: Value = serde_json::from_str(&socket.sent[0]).expect("the bye is json");
         assert_eq!(sent["type"], "bye");
-        assert_eq!(sent["to"], "viewer_0000000001");
+        assert_eq!(sent["to"], "viewer_0000000002");
         assert_eq!(sent["reason"], "join_too_soon");
+    }
+
+    /// A viewer the host holds is not joining again, whenever the join comes:
+    /// the room replays it to a host that re-dialed, and its own socket
+    /// re-dials under a peer that is still up. It keeps its admission and the
+    /// fingerprint its lease is bound to, and a join is news again only once
+    /// it has left.
+    #[test]
+    fn a_repeat_join_for_a_held_viewer_is_swallowed_until_it_leaves() {
+        let (mut client, viewer) = client_with_viewer();
+        let join = read("signaling/signal-viewer-join.json")["message"].to_string();
+        let later = Instant::now() + Duration::from_secs(600);
+
+        assert!(client.handle_at(&join, later).is_empty());
+        assert_eq!(client.viewer_count(), 1, "not counted twice");
+        // the binding survived: the refusal is the token's, not a missing fingerprint.
+        let refused = client
+            .verify_viewer_token(&viewer, "not.a.token")
+            .expect_err("garbage");
+        assert_eq!(refused.reason, DenialReason::Token(TokenError::Malformed));
+
+        let effects = client.end_viewer(&viewer, LeftReason::Timeout);
+        assert!(matches!(
+            effects[..],
+            [Effect::Send(_), Effect::ViewerGone { .. }]
+        ));
+        assert!(matches!(
+            client.handle_at(&join, later + Duration::from_secs(3))[..],
+            [Effect::Admitted { .. }]
+        ));
     }
 
     /// A join for a session this streamer is not serving is a room mismatch,
@@ -1001,7 +1090,7 @@ pub(crate) mod tests {
         // no fingerprint, no answer: there would be nothing to mac.
         assert!(client.answer(&viewer, &sdp).is_err());
 
-        client.set_host_fingerprint(&host_fingerprint).expect("it is a fingerprint");
+        client.set_host_fingerprint(&viewer, &host_fingerprint).expect("it is a fingerprint");
         let Message::Answer { to, mac, .. } = client.answer(&viewer, &sdp).expect("it answers")
         else {
             panic!("answer() returns an answer");
@@ -1014,6 +1103,41 @@ pub(crate) mod tests {
         // over a fingerprint nobody is using verifies and proves nothing.
         let other = read("signaling/signal-offer.json");
         assert!(client.answer(&viewer, other["message"]["sdp"].as_str().unwrap()).is_err());
+    }
+
+    /// Every peer generates its own certificate, so each viewer is answered
+    /// over its own. A re-offer is an ice restart, and the first viewer's must
+    /// still be answered after a second viewer's peer was bound.
+    #[test]
+    fn a_viewer_is_answered_over_its_own_peer_after_another_one_binds() {
+        let (mut client, first) = client_with_viewer();
+        let mut join = read("signaling/signal-viewer-join.json")["message"].clone();
+        join["viewer"] = json!("viewer_0000000002");
+        let later = Instant::now() + Duration::from_secs(5);
+        assert!(matches!(
+            client.handle_at(&join.to_string(), later)[..],
+            [Effect::Admitted { .. }]
+        ));
+        let mut offer = read("signaling/signal-offer.json")["message"].clone();
+        offer["from"] = json!("viewer_0000000002");
+        assert!(matches!(client.handle_at(&offer.to_string(), later)[..], [Effect::Offer { .. }]));
+
+        // two peers, two certificates. the golden offer's sdp stands in for the
+        // second peer's answer: all this needs is a second fingerprint.
+        let first_sdp = read("signaling/signal-answer.json")["message"]["sdp"]
+            .as_str()
+            .expect("sdp")
+            .to_owned();
+        let second_sdp = offer["sdp"].as_str().expect("sdp").to_owned();
+        client
+            .set_host_fingerprint(&first, &fingerprint_from_sdp(&first_sdp).unwrap())
+            .expect("it is a fingerprint");
+        client
+            .set_host_fingerprint("viewer_0000000002", &fingerprint_from_sdp(&second_sdp).unwrap())
+            .expect("it is a fingerprint");
+
+        assert!(client.answer(&first, &first_sdp).is_ok(), "the first viewer's ice restart");
+        assert!(client.answer("viewer_0000000002", &second_sdp).is_ok());
     }
 
     #[test]

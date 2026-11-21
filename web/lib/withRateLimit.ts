@@ -56,11 +56,7 @@ function reasonFor(strategy: RateLimitStrategy, identifier: IdentifierType): Rat
 }
 
 function requestHasApiKeyCredential(request: NextRequest): boolean {
-  const queryOrHeader =
-    request.nextUrl.searchParams.get('api_key') ||
-    request.headers.get('x-api-key') ||
-    null;
-  if (queryOrHeader?.startsWith('owk_')) return true;
+  if (request.headers.get('x-api-key')?.startsWith('owk_')) return true;
 
   const auth = request.headers.get('authorization') || '';
   const match = auth.match(/^Bearer\s+(.+)$/i);
@@ -81,10 +77,12 @@ async function getApiKeyRateLimitIdentifier(request: NextRequest): Promise<strin
 /**
  * The 429 a rate-limited request gets, for the wrapper and for routes that
  * check a limiter inside their handler (after auth has resolved the key).
+ * `code` replaces `rate_limited` for a limiter clients branch on by name.
  */
 export function rateLimitedResponse(
   result: Awaited<ReturnType<typeof checkRateLimit>>,
   reason: RateLimitedReason,
+  code?: string,
 ): NextResponse {
   const headers = getRateLimitHeaders({ ...result, reason });
 
@@ -100,6 +98,7 @@ export function rateLimitedResponse(
       retryAfter,
       error: 'Rate limit exceeded',
       message,
+      code,
     },
     headers,
   );

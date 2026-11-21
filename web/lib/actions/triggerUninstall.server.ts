@@ -2,17 +2,17 @@
  * Action core: machine-direct software uninstall.
  *
  * Writes an `uninstall_software` command into `sites/{siteId}/machines/{machineId}/commands/pending`
- * in the exact shape `useUninstall.ts:createUninstall` produced, so the agent handles it
- * identically, plus lifecycle fields from `stampCommand`. Software metadata comes server-side from
- * the machine's `installed_software` collection.
+ * in the shape `buildUninstallCommand` gives both uninstall routes. Software metadata comes
+ * server-side from the machine's `installed_software` collection.
  *
  * Capability `UNINSTALL_TRIGGER`, site-scoped via `authorizedSiteHandler`. Single-machine —
  * `/api/sites/{siteId}/deployments/{deploymentId}/uninstall` is the deployment fan-out variant.
  */
 
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { stampCommand } from '@/lib/commandLifecycle';
+import { buildUninstallCommand } from '@/lib/actions/uninstallCommand.server';
+import { TERMINAL_DEPLOYMENT_STATUSES } from '@/lib/deploymentStatuses';
 
 export interface TriggerUninstallResult {
   siteId: string;
@@ -20,6 +20,8 @@ export interface TriggerUninstallResult {
   software_name: string;
   commandId: string;
   status: 'pending';
+  /** Set only when the command was tied to that deployment's target. */
+  deployment_id?: string;
 }
 
 export type TriggerUninstallErrorCode =
@@ -54,6 +56,8 @@ export interface TriggerUninstallInput {
   close_processes?: string[];
   /** Overrides the agent's per-command timeout; clamped to [1s, 24h]. */
   timeout_seconds?: number;
+  /** A deployment on this site that targets this machine; the reconciler then moves that target. */
+  deployment_id?: string;
 }
 
 export interface TriggerUninstallOptions {
@@ -74,6 +78,8 @@ const TIMEOUT_MIN_S = 1;
 const TIMEOUT_MAX_S = 24 * 60 * 60; // matches the agent's longest job allowance
 const SOFTWARE_NAME_MAX = 256;
 const CLOSE_PROCESSES_MAX = 32;
+// the shape createDeployment gives ids; anything else could address another document.
+const DEPLOYMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** Throws `TriggerUninstallError(validation_failed)` so the route can render RFC 7807. */
 export function parseTriggerUninstallInput(raw: unknown): TriggerUninstallInput {
@@ -152,39 +158,70 @@ export function parseTriggerUninstallInput(raw: unknown): TriggerUninstallInput 
     timeoutSeconds = Math.min(Math.max(Math.floor(n), TIMEOUT_MIN_S), TIMEOUT_MAX_S);
   }
 
+  let deploymentId: string | undefined;
+  if (body.deployment_id !== undefined && body.deployment_id !== null) {
+    if (typeof body.deployment_id !== 'string' || !DEPLOYMENT_ID_PATTERN.test(body.deployment_id)) {
+      throw new TriggerUninstallError(
+        'validation_failed',
+        'field `deployment_id` must be a deployment id when provided',
+        { 'body.deployment_id': ['must be a deployment id'] },
+      );
+    }
+    deploymentId = body.deployment_id;
+  }
+
   const out: TriggerUninstallInput = { software_name: softwareName };
   if (closeProcesses !== undefined) out.close_processes = closeProcesses;
   if (timeoutSeconds !== undefined) out.timeout_seconds = timeoutSeconds;
+  if (deploymentId !== undefined) out.deployment_id = deploymentId;
   return out;
 }
 
 /**
- * Queried by the `name` field, not doc id — the agent derives ids from a registry-key fingerprint,
- * so they are not predictable.
+ * The deployment the command is tied to, or `undefined` to queue it untied. Looked up on this site
+ * only, so a deployment on another site reads exactly like one that does not exist (refused). A
+ * machine the deployment does not target is queued untied, as before deployment_id was read: a
+ * dashboard loaded before then sends the id for every machine selected in the dialog.
  */
-async function findSoftwareRecord(
+async function resolveDeploymentTie(
   db: Firestore,
   siteId: string,
   machineId: string,
-  softwareName: string,
-): Promise<Record<string, unknown> | null> {
-  const ref = db
+  deploymentId: string,
+): Promise<string | undefined> {
+  const snap = await db
     .collection('sites')
     .doc(siteId)
-    .collection('machines')
-    .doc(machineId)
-    .collection('installed_software');
-  const snap = await ref.where('name', '==', softwareName).limit(1).get();
-  if (snap.empty) return null;
-  const data = snap.docs[0].data();
-  return data ?? null;
+    .collection('deployments')
+    .doc(deploymentId)
+    .get();
+  if (!snap.exists) {
+    throw new TriggerUninstallError(
+      'validation_failed',
+      `deployment ${deploymentId} not found on site ${siteId}`,
+      { 'body.deployment_id': ['must name a deployment on this site'] },
+    );
+  }
+  const targets = snap.data()?.targets;
+  const target = Array.isArray(targets)
+    ? (targets as Array<{ machineId?: unknown; status?: unknown } | null>).find(
+        (t) => t?.machineId === machineId,
+      )
+    : undefined;
+  if (!target) return undefined;
+  // an install still queued or running could land after the uninstall and undo it.
+  if (typeof target.status !== 'string' || !TERMINAL_DEPLOYMENT_STATUSES.has(target.status)) {
+    throw new TriggerUninstallError(
+      'validation_failed',
+      `deployment ${deploymentId} is still ${String(target.status)} on machine ${machineId}; ` +
+        `uninstall once its install has finished`,
+      { 'body.deployment_id': ['its target for this machine has not finished installing'] },
+    );
+  }
+  return deploymentId;
 }
 
-/**
- * Writes one `uninstall_software` command into the machine's `commands/pending` map. The on-wire
- * shape MUST match the legacy client-side write in `useUninstall.ts` — the agent's handler is the
- * same code path.
- */
+/** Writes one `uninstall_software` command into the machine's `commands/pending` map. */
 export async function triggerUninstall(
   siteId: string,
   machineId: string,
@@ -220,63 +257,29 @@ export async function triggerUninstall(
     }
   }
 
-  const record = await findSoftwareRecord(db, siteId, machineId, input.software_name);
-  if (!record) {
-    throw new TriggerUninstallError(
-      'software_not_found',
-      `software "${input.software_name}" is not installed on machine ${machineId}`,
-    );
-  }
-  const uninstallCommand = record.uninstall_command;
-  if (typeof uninstallCommand !== 'string' || uninstallCommand.length === 0) {
-    throw new TriggerUninstallError(
-      'software_record_invalid',
-      `software "${input.software_name}" has no recorded uninstall command; ` +
-        `cannot trigger uninstall`,
-    );
-  }
-  const installerType =
-    typeof record.installer_type === 'string' && record.installer_type.length > 0
-      ? record.installer_type
-      : 'custom';
-  const installLocation =
-    typeof record.install_location === 'string' && record.install_location.length > 0
-      ? record.install_location
-      : '';
-  const verifyPaths = installLocation ? [installLocation] : [];
+  const deploymentId =
+    input.deployment_id === undefined
+      ? undefined
+      : await resolveDeploymentTie(db, siteId, machineId, input.deployment_id);
 
-  // Bit-for-bit match against useUninstall.ts.
-  const commandBody: Record<string, unknown> = {
-    type: 'uninstall_software',
-    software_name: input.software_name,
-    uninstall_command: uninstallCommand,
-    installer_type: installerType,
-    verify_paths: verifyPaths,
-    timestamp: FieldValue.serverTimestamp(),
-  };
-  if (input.close_processes !== undefined) {
-    commandBody.close_processes = input.close_processes;
-  }
-  if (input.timeout_seconds !== undefined) {
-    commandBody.timeout_seconds = input.timeout_seconds;
-  }
-
-  const stamped = stampCommand(commandBody, {
+  const built = await buildUninstallCommand(db, siteId, machineId, input.software_name, {
+    closeProcesses: input.close_processes,
+    timeoutSeconds: input.timeout_seconds,
+    deploymentId,
     auditCorrelationId: options.auditCorrelationId,
-    now: () => now,
+    now,
   });
+  if (!built.ok) throw new TriggerUninstallError(built.reason, built.message);
 
-  // The `uninstall-` prefix is load-bearing: dashboard listeners and the agent's command-id prefix
-  // tracking both match on it.
-  const commandId = `uninstall-${now}`;
   const pendingRef = machineRef.collection('commands').doc('pending');
-  await pendingRef.set({ [commandId]: stamped }, { merge: true });
+  await pendingRef.set({ [built.commandId]: built.command }, { merge: true });
 
   return {
     siteId,
     machineId,
     software_name: input.software_name,
-    commandId,
+    commandId: built.commandId,
     status: 'pending',
+    ...(deploymentId ? { deployment_id: deploymentId } : {}),
   };
 }

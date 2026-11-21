@@ -1,11 +1,13 @@
 /**
  * Run the agent's python helper and read what it says back.
  *
- * Pairing, leaving a site and filing a bug report need the agent's cloud client
+ * Pairing, leaving a site and filing an issue need the agent's cloud client
  * and encrypted token store, which this app deliberately does not have. The
  * host spawns `agent/src/configure_site.py` (`src-tauri/src/agent_cli.rs`) and
  * forwards every line as an `owlette://agent-cli` event; this module turns that
- * stream into one promise per run.
+ * stream into one promise per run. Off windows every mode is a request the
+ * daemon carries out instead (`src-tauri/src/seam.rs`), answered in the same
+ * stream.
  *
  * Wire format is one JSON object per line:
  * `{"event": "phrase"|"status"|"authorized"|"done"|"error", "value": …}`.
@@ -26,7 +28,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 const EVENT_AGENT_CLI = 'owlette://agent-cli'
 
 /** Mirrors `agent_cli::MODES`. */
-export type AgentMode = 'join' | 'leave' | 'report-issue' | 'reboot-now' | 'dismiss-reboot'
+export type AgentMode = 'join' | 'leave' | 'report-issue' | 'reboot-now' | 'dismiss-reboot' | 'hoot-off'
 
 export interface PairPhrase {
   pairPhrase: string
@@ -139,7 +141,7 @@ export interface AgentRunOutcome {
 }
 
 export interface AgentRunOptions {
-  /** `report-issue` only; every other mode takes none. */
+  /** `report-issue` takes the report; `join` takes `{wantsHoot: true}` or nothing; every other mode none. */
   payload?: unknown
   /** 'join' only: which owlette server to pair against. Omitted = the config's environment. */
   server?: 'dev' | 'prod'
@@ -247,7 +249,7 @@ export async function startAgentRun(
 
 /**
  * Run a mode to completion, rejecting with something worth showing. For modes
- * with no progress to render — leave, report-issue, dismiss-reboot.
+ * that need no cancel handle — leave, report-issue, dismiss-reboot.
  */
 export async function runAgent(
   mode: AgentMode,

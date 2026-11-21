@@ -9,7 +9,8 @@ export type ApiKeyResource =
   | 'deploy'
   | 'process'
   | 'user'
-  | 'installer';
+  | 'installer'
+  | 'issue';
 export type ApiKeyEnvironment = 'live' | 'test';
 
 export interface ApiKeyScope {

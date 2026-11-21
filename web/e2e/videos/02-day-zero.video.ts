@@ -61,6 +61,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
+import { COMMON_TIMEZONES } from '@/lib/timeUtils';
 import { getAdminDb } from '../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../helpers/coverageSeed';
 import { TEST_USERS, type TestUser } from '../helpers/seed';
@@ -307,51 +308,50 @@ test('episode 2 — day zero: sign up, 2fa, and your first site', async ({ brows
         await narrate(page, 'b09 tail — card advances to the download step', 10);
 
         // ── [b08] the site's clock (~31.2s) ──────────────────────────────────
-        // The beat is now the OTHER half of b07's dialog: the clock it set is
-        // already on the site (wave 3b — the create dialog writes the browser's
-        // timezone together with `schedulesFollowSiteTime: true`), and manage
-        // sites is where it is CHANGED, not where it is first set. Nothing is
-        // edited on camera; the escape ladder below cancels the editor.
+        // the other half of b07's dialog: the clock it set is already on the
+        // site (wave 3b: the create dialog writes the browser's timezone with
+        // `schedulesFollowSiteTime: true`), and site settings is where it is
+        // changed, not where it is first set. nothing is edited on camera: the
+        // picker opens and closes with nothing picked.
         await clickWithCursor(page, page.getByTestId('site-switcher-trigger'));
-        await clickWithCursor(page, page.getByRole('menuitem', { name: /manage sites/i }));
-        const manageDialog = page.getByRole('dialog');
-        await expect(manageDialog).toBeVisible();
-        // The zone the create dialog detected, now persisted on the site row
-        // (ManageSitesDialog.tsx:391 prints the raw IANA name). Reading it back
-        // off the browser rather than hardcoding a zone keeps this scene
-        // portable, and makes the row assertion the proof of the claim b08's
-        // narration makes — if the create dialog ever stops writing the
-        // timezone, this fails here instead of shipping a lie.
+        await clickWithCursor(page, page.getByRole('menuitem', { name: /site settings/i }));
+        // no ?section=, so the page opens on general, where the timezone lives
+        await expect(page).toHaveURL(/\/admin\/sites\/[^/?#]+$/, { timeout: 20_000 });
+        await expect(page.getByRole('heading', { level: 1, name: 'NYC Office' })).toBeVisible();
+        // the zone the create dialog detected, read back off the browser rather
+        // than hardcoded so the scene stays portable. the field shows it the way
+        // TimezoneSelect labels its trigger: a common zone by its label, any
+        // other by its city. if the create dialog ever stops writing the
+        // timezone, the field reads UTC and this fails here instead of
+        // shipping a lie.
         const siteZone = await page.evaluate(
           () => Intl.DateTimeFormat().resolvedOptions().timeZone,
         );
-        const zoneCell = manageDialog.getByText(siteZone, { exact: true }).first();
-        await expect(zoneCell).toBeVisible();
-        await centerInView(page, zoneCell);
-        await highlight(page, zoneCell, 2600);
+        const shownZone =
+          COMMON_TIMEZONES.find((tz) => tz.value === siteZone)?.label ??
+          siteZone.slice(siteZone.lastIndexOf('/') + 1).replace(/_/g, ' ');
+        const timezoneField = page.getByRole('combobox', { name: 'timezone', exact: true });
+        await expect(timezoneField).toContainText(shownZone);
+        await centerInView(page, timezoneField);
+        await highlight(page, timezoneField, 2600);
         await narrate(page, 'b08 the row already carries the detected clock', 6);
-        // The site list is a CSS grid of divs, not a table — no row role to
-        // target. The per-site pencil carries `aria-label="edit {site.name}"`,
-        // which is the only stable handle on a given site's line.
-        const editSiteButton = manageDialog.getByRole('button', { name: 'edit NYC Office' });
-        await centerInView(page, editSiteButton);
-        await highlight(page, editSiteButton, 2400);
+        // no pencil any more: the field that shows the clock is where it changes
+        await highlight(page, timezoneField, 2400);
         await narrate(page, 'b08 the pencil is where it changes', 4);
-        await clickWithCursor(page, editSiteButton);
-        await page.waitForTimeout(600);
+        await clickWithCursor(page, timezoneField);
+        const timezoneSearch = page.getByRole('textbox', { name: 'search timezones' });
+        await expect(timezoneSearch).toBeVisible();
         await narrate(page, 'b08 timezone picker open', 6.5);
         await slowPush(page, { scale: 1.04, originXPct: 50, originYPct: 50, seconds: 4.0 });
         await narrate(page, 'b08 timezone picker open - close', 5.5);
         await slowPush(page, { scale: 1.0, seconds: 3.0 });
         await narrate(page, 'b08 timezone picker open - settle', 1.0);
-        // ManageSitesDialog's Esc is a ladder (ManageSitesDialog.tsx:241-250):
-        // cancel edit → clear filter → close. The inline editor is open, so one
-        // Esc only cancels it; a second closes the dialog. Assert it, or
-        // signOut()'s user-menu click is eaten by the still-open overlay.
-        await page.keyboard.press('Escape'); // cancels the inline site editor
-        await page.keyboard.press('Escape'); // closes manage sites
-        await expect(manageDialog).not.toBeVisible({ timeout: 10_000 });
-        await page.waitForTimeout(600);
+        // escape closes the picker with nothing picked. the admin pages carry no
+        // page header, so signOut() needs the dashboard's user menu
+        await page.keyboard.press('Escape');
+        await expect(timezoneSearch).toBeHidden();
+        await expect(timezoneField).toContainText(shownZone);
+        await page.goto(url('/dashboard'), { waitUntil: 'domcontentloaded' });
 
         // ── [b04b] what sign-in becomes — SEPARATE TAKE (~27.1s, second half) ─
         // Leaving "passkey added" is one-way, so this can only be filmed after

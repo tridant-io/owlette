@@ -20,12 +20,16 @@ connection setup; only the handful of attributes _upload_metrics touches are stu
 The same write also carries the swoop capability handshake (capabilities.swoop)
 and cross-plan rule C3's osFamily/arch keys; those are pinned at the bottom.
 """
+import datetime
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import shared_utils
+import sleep_watch
+import swoop_capability
+from firestore_rest_client import DELETE_FIELD
 
 # pre-mock win32 so the import works on non-windows CI as well as locally.
 _MOCK_MODULES = {
@@ -212,6 +216,9 @@ def _heartbeat_payload(fc):
 
 def test_heartbeat_carries_the_swoop_and_platform_keys(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
+    # the answer is the osadapter arm's, which sys.platform no longer reaches
+    # once the arm is cached; test_swoop_capability pins it per platform.
+    monkeypatch.setattr(swoop_capability, "streamer_capable", lambda: True)
     monkeypatch.setattr(
         shared_utils, "get_swoop_exe_path",
         lambda: r"C:\ProgramData\Owlette\swoop\owlette-swoop.exe",
@@ -237,6 +244,66 @@ def test_swoop_capability_is_zero_when_the_streamer_is_absent(monkeypatch):
     assert payload["capabilities.displayRemoteApply"] == 1
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_heartbeat_says_this_agent_follows_a_site_move(monkeypatch, platform):
+    # every platform follows a move, so unlike activeHoursGuard it is not gated;
+    # the server refuses to move a machine whose heartbeat lacks it
+    monkeypatch.setattr(sys, "platform", platform)
+    _stub_os_identity(monkeypatch)
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["capabilities.siteMove"] == 1
+    assert "capabilities" not in payload
+
+
+def _fake_display_manager(drift):
+    mod = MagicMock()
+    mod.compute_drift_count = MagicMock(return_value=drift)
+    return mod
+
+
+def test_display_drift_is_zero_off_windows_without_touching_display_manager(monkeypatch):
+    # display_manager asserts the windows x64 abi on import; on a mac that
+    # failed, and was logged, on every heartbeat (issue #27, #28 log tails).
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fake = _fake_display_manager(drift=2)
+    fc = _make_client()
+    fc._cached_display_profile = {"monitors": [{"id": "a"}]}
+
+    with patch.dict(sys.modules, {"display_manager": fake}), \
+            patch.object(shared_utils, "read_config", return_value=[]):
+        assert fc._display_drift_count() == 0
+    fake.compute_drift_count.assert_not_called()
+
+
+def test_display_drift_comes_from_display_manager_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake = _fake_display_manager(drift=2)
+    fc = _make_client()
+    fc._cached_display_profile = {"monitors": [{"id": "a"}]}
+
+    with patch.dict(sys.modules, {"display_manager": fake}), \
+            patch.object(shared_utils, "read_config", return_value=[{"id": "b"}]):
+        assert fc._display_drift_count() == 2
+    fake.compute_drift_count.assert_called_once_with([{"id": "a"}], [{"id": "b"}])
+
+
+def test_display_profile_is_not_built_off_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fc = _make_client()
+    fc._ensure_display_profile = FirebaseClient._ensure_display_profile.__get__(fc)
+    fc._cached_display_profile = None
+    fc._last_display_check = 0.0
+
+    with patch.dict(sys.modules, {"display_manager": _fake_display_manager(drift=0)}), \
+            patch.object(shared_utils, "read_config", return_value=None):
+        assert fc._ensure_display_profile() is None
+    # the gate sits ahead of the rate-limit stamp: nothing was attempted.
+    assert fc._last_display_check == 0.0
+    fc.logger.debug.assert_not_called()
+
+
 def test_swoop_command_types_are_on_the_fast_lane():
     """The slow lane queues behind an in-flight install — minutes, not seconds.
 
@@ -247,3 +314,83 @@ def test_swoop_command_types_are_on_the_fast_lane():
     assert {"swoop_session_requested", "swoop_kill", "swoop_refresh"} <= fast
     # the pre-existing lane members must stay (OWL-06).
     assert {"mcp_tool_call", "capture_screenshot", "cancel_sync", "cancel_mcp_tool"} <= fast
+
+
+def test_site_move_is_on_the_fast_lane():
+    # like unpair: behind an in-flight install a move would wait minutes
+    assert "site_move" in FirebaseClient._FAST_COMMAND_TYPES
+
+
+# asleep: the mac's will-sleep announce, and what each heartbeat says after it
+
+
+SLEPT_AT = datetime.datetime(2026, 11, 20, 2, 26, 10)
+
+
+class _Watch:
+    def __init__(self, supported=True, listening=True, since=None):
+        self.supported = supported
+        self.listening = listening
+        self.since = since
+
+    def asleep_since(self):
+        return self.since
+
+
+def test_heartbeat_has_no_asleep_field_where_the_platform_cannot_tell(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(supported=False, listening=False))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert "asleep" not in payload and "asleepSince" not in payload
+
+
+def test_a_watch_that_failed_to_start_deletes_the_asleep_flag(monkeypatch):
+    # a stale asleep would hold off the offline alert for good
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(listening=False))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is DELETE_FIELD
+    assert "asleepSince" not in payload
+
+
+def test_an_asleep_heartbeat_carries_when_the_sleep_began(monkeypatch):
+    # a dark wake's heartbeat: it stands in for an announce that never landed
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(since=SLEPT_AT))
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is True
+    assert payload["asleepSince"] == SLEPT_AT
+
+
+def test_an_awake_heartbeat_leaves_asleep_since_for_the_awake_email(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch())
+
+    payload = _heartbeat_payload(_make_client())
+
+    assert payload["asleep"] is False
+    assert "asleepSince" not in payload
+
+
+def test_the_announce_writes_what_the_next_heartbeat_would(monkeypatch):
+    monkeypatch.setattr(sleep_watch, "WATCH", _Watch(since=SLEPT_AT))
+    fc = _make_client()
+
+    fc.announce_asleep()
+
+    machine_ref = (
+        fc.db.collection.return_value.document.return_value
+        .collection.return_value.document.return_value
+    )
+    machine_ref.set.assert_called_once_with({"asleep": True, "asleepSince": SLEPT_AT}, merge=True)
+
+
+def test_the_announce_writes_nothing_while_disconnected():
+    fc = _make_client()
+    fc.connection_manager.is_connected = False
+
+    fc.announce_asleep()
+
+    fc.db.collection.assert_not_called()

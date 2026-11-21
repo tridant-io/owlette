@@ -61,9 +61,9 @@ date filter and the search box don't scope the delete. action, machine, and leve
 nothing at all, and it wipes the site's entire log.
 
 ## [b07] when you're still stuck
-**SCREEN:** the dashboard header's help menu → "docs" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → "submit bug report" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast "thanks — your feedback was sent · system info and recent logs went with it."
+**SCREEN:** the dashboard header's help menu → "docs" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → "submit issue" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast "thanks — your feedback was sent · system info and recent logs went with it."
 **VOICEOVER:**
 [warm] two last resorts. in the dashboard, the help menu opens owlette's full docs, right
-in the app. and on the machine, the owlette app has submit bug report — it attaches system
+in the app. and on the machine, the owlette app has submit issue — it attaches system
 info and the last hundred lines of the service log automatically. that's the
 troubleshooting kit. one thing left: keeping every machine on the current build.

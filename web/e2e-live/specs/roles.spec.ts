@@ -1,38 +1,35 @@
 /**
- * Live smoke: per-site member management on dev (dev/active/live-smoke, Task 3.4).
+ * live smoke: per-site member management on dev (dev/active/live-smoke, Task 3.4).
  *
- * Two checks on smoke-live and the persistent users global setup seeds there (lib/seed.mjs):
+ * three checks on smoke-live and the persistent users global setup seeds there (lib/seed.mjs):
  * smoke-siteadmin holds an admin row, smoke-member a member row, and smoke-target none — it is the
- * subject both checks add and remove.
+ * subject the site admin and member checks add and remove.
  *
- *   site admin  From the dashboard's user menu into the members page: add smoke-target as a member,
- *               change them to admin, remove them. sites/smoke-live/members/smoke-target is read back
- *               after each step.
- *   member      The UI offers a member no member management: no "admin panel" in the user menu, and
- *               the members page turns a direct visit away. The members route refuses the member's
- *               add with 403 and writes nothing. The positive control sends the same request as the
- *               site admin (200 and a member row), then undoes it.
+ *   site admin  from the dashboard's user menu into smoke-live's members section: admin panel
+ *               (/admin/sites), the site's gear, then members. it adds smoke-target as a member,
+ *               makes them an admin through "change access...", and removes them.
+ *               sites/smoke-live/members/smoke-target is read back after each step.
+ *   hard loads  as the site admin, fresh loads of /admin/sites and of the members section each stay
+ *               on their page, with no "access denied" toast.
+ *   member      the UI offers a member no member management: no "admin panel" in the user menu, and
+ *               /admin/sites turns a direct visit away. the members route refuses the member's add
+ *               with 403 and writes nothing. the positive control sends the same request as the site
+ *               admin (200 and a member row), then undoes it.
  *
- * The role change is not a click. The members page offers "change role..." to superadmins only
- * (canChangeRole in web/app/admin/members/page.tsx, a settled product decision) and no smoke user is
- * one. So the check asserts the site admin's row menu lacks it, then sends from the page the request
- * that control makes — PATCH /api/sites/{siteId}/members/{uid}, handleConfirmRoleChange — which the
- * route grants on SITE_MEMBER_MANAGE, a site admin's capability.
+ * site admins change roles in the UI (owner ruling, 2026-11-04). the row menu offers "change
+ * access..." on every row but your own and the owner's, and its dialog sets the role and swoop mode
+ * on this site only. the check changes the role with the dialog's role select and save.
  *
- * Scoping: the members page takes no site parameter. It lists the site picked in its own selector
- * (rendered only for a user of two or more sites), else users/{uid}.lastSiteId, else the browser's
- * last site, else the first. The check pins smoke-siteadmin's lastSiteId to smoke-live before the page
- * loads, and every members list the page requests must be smoke-live's.
+ * the members section takes its site from the url (/admin/sites/smoke-live?section=members), and
+ * every members list the page requests must be smoke-live's.
  *
- * The site admin reaches the page through the user menu, never by loading /admin/members.
- * RequireAdminAccess admits a site admin on administersAnySite, which the membership listener feeds,
- * while AuthContext's `loading` ends with the user document alone, so a fresh load can meet the gate
- * before the admin row is known. "admin panel" renders only once it is known, and the menu navigates
- * client-side.
+ * RequireAdminAccess decides only once the memberships have loaded, so a hard load of an admin page
+ * no longer meets the gate before the admin row is known. the hard loads check proves it on dev with
+ * two such loads; the site admin check walks the user menu, as a person would.
  *
- * Each check starts and ends with smoke-target holding no standing in smoke-live. The app's add also
+ * each check starts and ends with smoke-target holding no standing in smoke-live. the app's add also
  * mirrors the site into the legacy users/{uid}.sites[] and its removal strips it again (addMember and
- * removeMember, web/lib/membership.server.ts), so the cleanup strips it too. Global teardown removes
+ * removeMember, web/lib/membership.server.ts), so the cleanup strips it too. global teardown removes
  * the member row as well.
  */
 import { randomUUID } from 'node:crypto';
@@ -46,9 +43,11 @@ const SITE_ADMIN = PERSISTENT_USERS.siteadmin;
 const MEMBER = PERSISTENT_USERS.member;
 const TARGET = PERSISTENT_USERS.target;
 
-const MEMBERS_PAGE = '/admin/members';
-/** Another site-admin destination of the admin panel, to leave the members page for. */
-const TOKENS_PAGE = '/admin/tokens';
+/** where the user menu's "admin panel" sends a site admin who is not a superadmin. */
+const SITES_PAGE = '/admin/sites';
+/** smoke-live's site settings, as siteSettingsPath (web/lib/siteSettingsPath.ts) builds it. */
+const SITE_PAGE = `${SITES_PAGE}/${SITE_ID}`;
+const MEMBERS_SECTION = `${SITE_PAGE}?section=members`;
 /** GET lists and POST adds; PATCH and DELETE take the member's uid (app/api/sites/[siteId]/members). */
 const MEMBERS_ROUTE = `/api/sites/${SITE_ID}/members`;
 const TARGET_ROUTE = `${MEMBERS_ROUTE}/${TARGET.uid}`;
@@ -95,6 +94,13 @@ function rowAddedBySiteAdmin(role: AssignableRole): StoredMemberRow {
   return { uid: TARGET.uid, role, status: 'active', addedBy: SITE_ADMIN.uid, addedAt: 'a timestamp' };
 }
 
+/** smoke-live's name, which seed holds at its own (ensureSite, lib/seed.mjs). the site's gear is named for it. */
+async function readSiteName(): Promise<string> {
+  const name: unknown = (await firestore().doc(`sites/${SITE_ID}`).get()).data()?.name;
+  if (typeof name !== 'string' || name === '') throw new Error(`sites/${SITE_ID} has no name`);
+  return name;
+}
+
 /**
  * Take away whatever standing in smoke-live an earlier attempt left smoke-target: the member row, and
  * smoke-live in the legacy users/{uid}.sites[] the app's add mirrors it into. Returns what it removed.
@@ -116,18 +122,6 @@ function annotateCleanup(removed: string[], when: 'before' | 'after'): void {
   }
 }
 
-/**
- * The members page's first automatic choice of site is the user's lastSiteId (selectedSiteId in
- * web/app/admin/members/page.tsx); pin smoke-siteadmin's to smoke-live. The app writes the same field
- * whenever its user picks a site (updateLastSite, web/contexts/AuthContext.tsx).
- */
-async function pinSiteAdminLastSite(): Promise<void> {
-  const userRef = firestore().collection('users').doc(SITE_ADMIN.uid);
-  if ((await userRef.get()).data()?.lastSiteId === SITE_ID) return;
-  await userRef.update({ lastSiteId: SITE_ID });
-  test.info().annotations.push({ type: 'site', description: `${userRef.path}.lastSiteId set to ${SITE_ID}` });
-}
-
 /** A members route request, as the app's own client sends it. */
 interface MembersRequest {
   method: 'POST' | 'PATCH' | 'DELETE';
@@ -137,7 +131,10 @@ interface MembersRequest {
   idempotent: boolean;
 }
 
-/** The add the members page sends (addMember, web/hooks/useSiteMembers.ts): smoke-target as a member. */
+/**
+ * The add the members section sends for a typed email (addMember, web/hooks/useSiteMembers.ts):
+ * smoke-target as a member.
+ */
 const ADD_TARGET: MembersRequest = {
   method: 'POST',
   path: MEMBERS_ROUTE,
@@ -145,13 +142,8 @@ const ADD_TARGET: MembersRequest = {
   idempotent: true,
 };
 
-/** The removal the members page sends (removeMember, web/hooks/useSiteMembers.ts). */
+/** The removal the members section sends (removeMember, web/hooks/useSiteMembers.ts). */
 const REMOVE_TARGET: MembersRequest = { method: 'DELETE', path: TARGET_ROUTE, body: {}, idempotent: true };
-
-/** What the superadmin-only "change role..." control sends (handleConfirmRoleChange, members/page.tsx). */
-function changeTargetRole(role: AssignableRole): MembersRequest {
-  return { method: 'PATCH', path: TARGET_ROUTE, body: { role }, idempotent: false };
-}
 
 /** The route's answer: its status and JSON body, problem+json on a refusal. */
 interface RouteAnswer {
@@ -161,7 +153,7 @@ interface RouteAnswer {
 
 /**
  * Send `request` with the page's own fetch: same origin, the context's session cookie, no
- * Authorization header — the way the members page calls the route.
+ * Authorization header — the way the members section calls the route.
  */
 async function sendFromPage(page: Page, request: MembersRequest): Promise<RouteAnswer> {
   const idempotencyKey = request.idempotent ? `smoke-roles-${randomUUID()}` : null;
@@ -229,7 +221,7 @@ function roleCell(page: Page, email: string): Locator {
   return memberRow(page, email).getByRole('cell').nth(1);
 }
 
-/** Open a row's options menu. Its trigger is the row's only button, an icon with no name. */
+/** Open a row's options menu. Its trigger is the row's only button. */
 async function openRowOptions(page: Page, email: string): Promise<Locator> {
   await memberRow(page, email).getByRole('button').click();
   const menu = page.getByRole('menu');
@@ -248,21 +240,33 @@ async function waitForMembershipsOnDashboard(page: Page): Promise<void> {
   });
 }
 
+function isMembersSection(url: URL): boolean {
+  return url.origin === DEV_ORIGIN && url.pathname === SITE_PAGE && url.searchParams.get('section') === 'members';
+}
+
 /**
- * /dashboard, then the user menu's "admin panel", which sends a site admin who is not a superadmin to
- * the members page. Returns once the page shows smoke-live's members, with the tracker of the sites
- * it has listed.
+ * /dashboard, then the user menu's "admin panel" (/admin/sites), smoke-live's gear and the members
+ * section. returns once the section shows smoke-live's members, with the tracker of the sites it has
+ * listed.
  */
-async function openMembersPage(page: Page): Promise<() => Set<string>> {
+async function openMembersSection(page: Page): Promise<() => Set<string>> {
+  const siteName = await readSiteName();
   await page.goto('/dashboard');
   await waitForMembershipsOnDashboard(page);
   const listedSites = trackListedSites(page);
-  const listed = nextResponse(page, 'GET', MEMBERS_ROUTE);
   await page.getByTestId('user-menu-trigger').click();
   await page.getByRole('menuitem', { name: 'admin panel' }).click();
-  await page.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === MEMBERS_PAGE);
+  await page.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === SITES_PAGE);
+  await page.getByRole('link', { name: `settings for ${siteName}`, exact: true }).click();
+  await page.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === SITE_PAGE);
+  const listed = nextResponse(page, 'GET', MEMBERS_ROUTE);
+  await page
+    .getByRole('group', { name: 'site settings sections' })
+    .getByRole('button', { name: 'members', exact: true })
+    .click();
+  await page.waitForURL(isMembersSection);
   await expectStatus(await listed, 200, `GET ${MEMBERS_ROUTE}`);
-  expect(listedSites(), 'the sites the members page listed').toEqual(new Set([SITE_ID]));
+  expect(listedSites(), 'the sites the members section listed').toEqual(new Set([SITE_ID]));
   // The roles the seed wrote, as the page renders them from the rows.
   await expect(roleCell(page, SITE_ADMIN.email), `${SITE_ADMIN.email}'s role on the page`).toHaveText('admin');
   await expect(roleCell(page, MEMBER.email), `${MEMBER.email}'s role on the page`).toHaveText('member');
@@ -270,18 +274,13 @@ async function openMembersPage(page: Page): Promise<() => Set<string>> {
 }
 
 /**
- * The members page lists its members once, as it mounts (useSiteMembers). Leave it for another admin
- * destination and come back, both client-side: a reload would meet RequireAdminAccess with the
- * memberships still loading.
+ * a hard load settled on `path` (pathname and query) with no "access denied": RequireAdminAccess
+ * raises that toast as it turns someone away to /dashboard.
  */
-async function remountMembersPage(page: Page): Promise<void> {
-  const sidebar = page.locator('aside nav');
-  await sidebar.locator(`a[href="${TOKENS_PAGE}"]`).click();
-  await page.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === TOKENS_PAGE);
-  const listed = nextResponse(page, 'GET', MEMBERS_ROUTE);
-  await sidebar.locator(`a[href="${MEMBERS_PAGE}"]`).click();
-  await page.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === MEMBERS_PAGE);
-  await expectStatus(await listed, 200, `GET ${MEMBERS_ROUTE} on returning to the members page`);
+async function expectAdmittedAt(page: Page, path: string): Promise<void> {
+  const url = new URL(page.url());
+  expect(`${url.pathname}${url.search}`, 'where the hard load settled').toBe(path);
+  await expect(page.getByText('access denied', { exact: true }), 'the gate refusal').toHaveCount(0);
 }
 
 test.describe('per-site member management on dev', () => {
@@ -294,14 +293,13 @@ test.describe('per-site member management on dev', () => {
   });
 
   test('a site admin adds a member, makes them an admin, and removes them', async ({ siteAdminPage: page }) => {
-    await pinSiteAdminLastSite();
-    const listedSites = await test.step('open the members page from the user menu', () => openMembersPage(page));
+    const listedSites = await test.step('open the members section from the user menu', () => openMembersSection(page));
 
     await test.step('add smoke-target as a member', async () => {
       await expect(memberRow(page, TARGET.email), `${TARGET.email} on the page before the add`).toHaveCount(0);
       await page.getByRole('button', { name: 'add member', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: 'add member' });
-      await dialog.getByLabel('email', { exact: true }).fill(TARGET.email);
+      await dialog.getByLabel('name or email', { exact: true }).fill(TARGET.email);
       await expect(dialog.getByLabel('role', { exact: true }), 'the role the dialog adds with').toHaveText('member');
       const added = nextResponse(page, 'POST', MEMBERS_ROUTE);
       const relisted = nextResponse(page, 'GET', MEMBERS_ROUTE);
@@ -321,20 +319,32 @@ test.describe('per-site member management on dev', () => {
 
     await test.step('make smoke-target an admin', async () => {
       const options = await openRowOptions(page, TARGET.email);
-      // A superadmin's menu would also hold "change role..."; a site admin's holds removal only.
       await expect(options.getByRole('menuitem'), `${TARGET.email}'s row options for a site admin`).toHaveText([
+        'change access...',
         'remove...',
       ]);
-      await page.keyboard.press('Escape');
-      await expect(options).toBeHidden();
-
-      const answer = await sendFromPage(page, changeTargetRole('admin'));
-      expect(answer.status, answered(`PATCH ${TARGET_ROUTE} as ${SITE_ADMIN.uid}`, answer)).toBe(200);
-      expect(answer.body, `PATCH ${TARGET_ROUTE}`).toMatchObject({ siteId: SITE_ID, uid: TARGET.uid, role: 'admin' });
-      expect(await readTargetRow(), `${TARGET_ROW} after the role change`).toEqual(rowAddedBySiteAdmin('admin'));
-
-      await remountMembersPage(page);
+      await options.getByRole('menuitem', { name: 'change access...' }).click();
+      const dialog = page.getByRole('dialog', { name: 'change access' });
+      await expect(dialog, 'the access dialog names the member').toContainText(TARGET.email);
+      await dialog.getByLabel('role', { exact: true }).click();
+      await page.getByRole('option', { name: 'admin', exact: true }).click();
+      await expect(dialog.getByLabel('role', { exact: true }), 'the role the dialog saves').toHaveText('admin');
+      const changed = nextResponse(page, 'PATCH', TARGET_ROUTE);
+      const relisted = nextResponse(page, 'GET', MEMBERS_ROUTE);
+      await dialog.getByRole('button', { name: 'save', exact: true }).click();
+      const response = await changed;
+      await expectStatus(response, 200, `PATCH ${TARGET_ROUTE}`);
+      // swoop untouched in the dialog is not sent, so the row stays on its role's default
+      expect(await response.json(), `PATCH ${TARGET_ROUTE}`).toMatchObject({
+        siteId: SITE_ID,
+        uid: TARGET.uid,
+        role: 'admin',
+        swoop: null,
+      });
+      await expect(dialog).toBeHidden();
+      await expectStatus(await relisted, 200, `GET ${MEMBERS_ROUTE} after the role change`);
       await expect(roleCell(page, TARGET.email), `${TARGET.email}'s role on the page`).toHaveText('admin');
+      expect(await readTargetRow(), `${TARGET_ROW} after the role change`).toEqual(rowAddedBySiteAdmin('admin'));
     });
 
     await test.step('remove smoke-target', async () => {
@@ -357,15 +367,39 @@ test.describe('per-site member management on dev', () => {
       expect(await readTargetRow(), `${TARGET_ROW} after the removal`).toBeNull();
     });
 
-    expect(listedSites(), 'the sites the members page listed').toEqual(new Set([SITE_ID]));
+    expect(listedSites(), 'the sites the members section listed').toEqual(new Set([SITE_ID]));
+  });
+
+  test('a site admin who hard-loads the sites page or the members section stays there', async ({
+    siteAdminPage: page,
+  }) => {
+    const siteName = await readSiteName();
+
+    await test.step(`a fresh load of ${SITES_PAGE}`, async () => {
+      await page.goto(SITES_PAGE);
+      await expect(
+        page.getByRole('link', { name: `settings for ${siteName}`, exact: true }),
+        `${siteName}'s gear on ${SITES_PAGE}`,
+      ).toBeVisible({ timeout: PAGE_READY_TIMEOUT_MS });
+      await expectAdmittedAt(page, SITES_PAGE);
+    });
+
+    await test.step(`a fresh load of ${MEMBERS_SECTION}`, async () => {
+      await page.goto(MEMBERS_SECTION);
+      await expect(roleCell(page, SITE_ADMIN.email), `${SITE_ADMIN.email}'s role in the members section`).toHaveText(
+        'admin',
+        { timeout: PAGE_READY_TIMEOUT_MS },
+      );
+      await expectAdmittedAt(page, MEMBERS_SECTION);
+    });
   });
 
   test('a member gets no member management, and the members route refuses their add', async ({
     memberPage,
     siteAdminPage,
   }) => {
-    await test.step('the members page turns a member away', async () => {
-      await memberPage.goto(MEMBERS_PAGE);
+    await test.step('the sites page turns a member away', async () => {
+      await memberPage.goto(SITES_PAGE);
       // RequireAdminAccess sends a signed-in user who administers no site to /dashboard, and says why.
       await memberPage.waitForURL((url) => url.origin === DEV_ORIGIN && url.pathname === '/dashboard', {
         timeout: PAGE_READY_TIMEOUT_MS,

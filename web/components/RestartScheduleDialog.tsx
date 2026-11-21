@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useRestartPresets, type RestartPreset } from '@/hooks/useRestartPresets';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -17,7 +18,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Plus, X, Save, Pencil, Trash2, Users } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import DayPillSelector from '@/components/DayPillSelector';
 import { TimePicker } from '@/components/ScheduleEditor';
@@ -146,8 +146,11 @@ export default function RestartScheduleDialog({
   onOpenChange,
   currentSchedule,
 }: RestartScheduleDialogProps) {
-  const { userPreferences } = useAuth();
-  const { updateRestartSchedule } = useMachines(siteId);
+  const { userPreferences, machineScope, isSiteAdmin } = useAuth();
+  // presets are site-wide, so a scoped admin applies them but writes none
+  const canManagePresets = isSiteAdmin(siteId);
+  // every card mounts this dialog, so it listens only while open
+  const { updateRestartSchedule } = useMachines(open ? siteId : '', machineScope(siteId));
   const { presets, createPreset, updatePreset, deletePreset } = useRestartPresets(siteId);
 
   const [enabled, setEnabled] = useState(false);
@@ -362,7 +365,7 @@ export default function RestartScheduleDialog({
       // Persist drifted edits back to the selected custom preset so the user doesn't
       // have to click both "update preset" and "save".
       let didUpdatePreset = false;
-      if (selectedPreset && !selectedPreset.isBuiltIn && presetIsModified) {
+      if (canManagePresets && selectedPreset && !selectedPreset.isBuiltIn && presetIsModified) {
         const validEntries = entries.filter(e => e.days.length > 0);
         await updatePreset(selectedPreset.id, { entries: validEntries, enabled });
         didUpdatePreset = true;
@@ -391,7 +394,7 @@ export default function RestartScheduleDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-card border-border sm:max-w-xl">
+        <DialogContent className="border-border sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>restart schedule — {machineName}</DialogTitle>
             <DialogDescription className="text-muted-foreground text-pretty">
@@ -409,12 +412,13 @@ export default function RestartScheduleDialog({
               <Label className="text-sm text-muted-foreground">presets</Label>
               <div
                 className={`flex flex-wrap items-start gap-x-1.5 gap-y-2 ${
-                  selectedPreset && !selectedPreset.isBuiltIn && !savingNewPreset && !pendingReplacePreset ? 'pb-10' : ''
+                  canManagePresets && selectedPreset && !selectedPreset.isBuiltIn && !savingNewPreset && !pendingReplacePreset ? 'pb-10' : ''
                 }`}
               >
                 {presets.map(preset => {
                   const isActive = activePresetId === preset.id;
                   const showActionRow =
+                    canManagePresets &&
                     isActive &&
                     selectedPreset &&
                     !selectedPreset.isBuiltIn &&
@@ -431,8 +435,8 @@ export default function RestartScheduleDialog({
                         onClick={() => applyPreset(preset)}
                         className={`px-2.5 py-1 rounded-full text-[13px] font-medium transition-colors duration-150 cursor-pointer ${
                           isActive
-                            ? 'bg-cyan-600/20 text-cyan-100 ring-1 ring-cyan-500/40'
-                            : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                            ? 'bg-accent-cyan/20 text-foreground/90 ring-1 ring-accent-cyan/40'
+                            : 'bg-card-sunken text-muted-foreground hover:bg-accent hover:text-foreground'
                         }`}
                       >
                         {preset.name}
@@ -447,26 +451,26 @@ export default function RestartScheduleDialog({
                           <Input
                             value={editPresetName}
                             onChange={(e) => setEditPresetName(e.target.value)}
-                            className="h-7 w-32 text-[11px] px-2 bg-background border-border"
+                            aria-label="preset name"
+                            className="h-7 w-32 text-base md:text-[11px] px-2 bg-background border-border"
                             autoFocus
                           />
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer">
-                                <Save className="h-3.5 w-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>save</p>
-                            </TooltipContent>
-                          </Tooltip>
-                          <button
-                            type="button"
+                          <IconButton
+                            type="submit"
+                            label="save name"
+                            variant="ghost"
+                            className="size-7 text-muted-foreground hover:text-foreground"
+                          >
+                            <Save className="h-3.5 w-3.5" />
+                          </IconButton>
+                          <IconButton
+                            label="cancel rename"
+                            variant="ghost"
                             onClick={() => setEditingPresetId(null)}
-                            className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                            className="size-7 text-muted-foreground hover:text-foreground"
                           >
                             <X className="h-3.5 w-3.5" />
-                          </button>
+                          </IconButton>
                         </form>
                       )}
 
@@ -487,7 +491,7 @@ export default function RestartScheduleDialog({
                                 toast.error('failed to delete preset', { description: message });
                               }
                             }}
-                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-600/20 text-red-400 hover:bg-red-600/40 hover:text-red-300 cursor-pointer transition-colors font-medium"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-danger-surface text-danger hover:bg-danger-border dark:bg-danger-solid/20 dark:hover:bg-danger-solid/40 cursor-pointer transition-colors font-medium"
                           >
                             <Trash2 className="h-3 w-3" /> yes, delete
                           </button>
@@ -520,7 +524,7 @@ export default function RestartScheduleDialog({
                                   setUpdatingPreset(false);
                                 }
                               }}
-                              className="flex items-center gap-1 text-cyan-400 hover:text-cyan-300 cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              className="flex items-center gap-1 text-accent-cyan hover:text-accent-cyan-hover cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <Save className={`h-3 w-3 ${updatingPreset ? 'animate-pulse' : ''}`} />
                               {updatingPreset ? 'updating...' : 'update preset'}
@@ -536,7 +540,7 @@ export default function RestartScheduleDialog({
                           <button
                             type="button"
                             onClick={() => setConfirmDeletePresetId(selectedPreset.id)}
-                            className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors"
+                            className="flex items-center gap-1 hover:text-danger cursor-pointer transition-colors"
                           >
                             <Trash2 className="h-3 w-3" /> delete
                           </button>
@@ -545,7 +549,7 @@ export default function RestartScheduleDialog({
                     </div>
                   );
                 })}
-                {!savingNewPreset && (
+                {canManagePresets && !savingNewPreset && (
                   <button
                     type="button"
                     onClick={() => setSavingNewPreset(true)}
@@ -564,26 +568,26 @@ export default function RestartScheduleDialog({
                     value={newPresetName}
                     onChange={(e) => setNewPresetName(e.target.value)}
                     placeholder="preset name"
-                    className="h-7 w-32 text-[11px] px-2 bg-background border-border"
+                    aria-label="preset name"
+                    className="h-7 w-32 text-base md:text-[11px] px-2 bg-background border-border"
                     autoFocus
                   />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer">
-                        <Save className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>save preset</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <button
-                    type="button"
+                  <IconButton
+                    type="submit"
+                    label="save preset"
+                    variant="ghost"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                  </IconButton>
+                  <IconButton
+                    label="cancel"
+                    variant="ghost"
                     onClick={() => { setSavingNewPreset(false); setNewPresetName(''); }}
-                    className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"
+                    className="size-7 text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3.5 w-3.5" />
-                  </button>
+                  </IconButton>
                 </form>
               )}
 
@@ -597,7 +601,7 @@ export default function RestartScheduleDialog({
                   <button
                     type="button"
                     onClick={handleConfirmReplace}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/40 hover:text-cyan-200 cursor-pointer transition-colors font-medium"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan-hover hover:bg-accent-cyan/20 dark:bg-accent-cyan/20 dark:hover:bg-accent-cyan/40 cursor-pointer transition-colors font-medium"
                   >
                     <Save className="h-3 w-3" /> yes, replace
                   </button>
@@ -642,6 +646,7 @@ export default function RestartScheduleDialog({
                   {/* Time + delete grouped together so they wrap as a unit, never split. */}
                   <div className="flex items-center gap-2 ml-auto">
                     <TimePicker
+                      label="restart time"
                       value={entry.time}
                       onChange={(time) => updateEntry(entry.id, { time })}
                     />
@@ -650,13 +655,14 @@ export default function RestartScheduleDialog({
                         {tzShort}
                       </span>
                     )}
-                    <button
-                      type="button"
+                    <IconButton
+                      label="remove restart"
+                      variant="ghost"
                       onClick={() => removeEntry(entry.id)}
-                      className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                      className="size-6 text-muted-foreground hover:text-destructive flex-shrink-0"
                     >
                       <X className="h-3.5 w-3.5" />
-                    </button>
+                    </IconButton>
                   </div>
                 </div>
               ))}
@@ -676,7 +682,7 @@ export default function RestartScheduleDialog({
             {enabled && entries.length > 0 && (
               <div className="text-sm text-muted-foreground">
                 next scheduled restart:{' '}
-                <span className="text-cyan-400">
+                <span className="text-accent-cyan">
                   {nextRestart === 'none' || !tzShort ? nextRestart : `${nextRestart} ${tzShort}`}
                 </span>
               </div>
@@ -707,7 +713,6 @@ export default function RestartScheduleDialog({
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="bg-cyan-600 hover:bg-cyan-700"
               >
                 {saving ? 'saving...' : 'save'}
               </Button>

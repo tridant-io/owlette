@@ -1,6 +1,7 @@
 import { FileSearch } from 'lucide-react'
 import { useCallback } from 'react'
 import { toast } from 'sonner'
+import { MissingPathDialog } from '@/components/MissingPathDialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -14,8 +15,10 @@ import { FormError } from '@/components/ui/form-error'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useMissingPath } from '@/hooks/useMissingPath'
 import type { ProcessEntryDraft } from '@/lib/dropClassifier'
 import { describeKind, type DropCard } from '@/lib/dropQueue'
+import { launchCopy } from '@/lib/launchCopy'
 import { pickExecutable } from '@/lib/pickers'
 
 interface DropConfirmProps {
@@ -49,116 +52,134 @@ export function DropConfirm({
   onSkip,
 }: DropConfirmProps) {
   const needsExe = card?.needsInput.includes('exe_path') ?? false
+  const exePath = card?.entry.exe_path
+  const copy = launchCopy()
+  const { warnings, check, dismiss } = useMissingPath()
+  // a warning about a card already accepted or skipped has nothing left to say.
+  const missing =
+    warnings.find((warning) => warning.subject === card?.path && warning.value === exePath?.trim()) ?? null
 
-  const browse = useCallback(async () => {
+  const browse = useCallback(async (from = exePath) => {
     try {
-      const picked = await pickExecutable(card?.entry.exe_path)
+      const picked = await pickExecutable(from)
       if (picked !== null) onChange({ exe_path: picked })
     } catch (cause) {
       toast.error('could not open the file picker', {
         description: cause instanceof Error ? cause.message : String(cause),
       })
     }
-  }, [card?.entry.exe_path, onChange])
+  }, [exePath, onChange])
 
   return (
-    <Dialog open={card !== null} onOpenChange={(open) => !open && onSkip()}>
-      <DialogContent className="sm:max-w-lg" showCloseButton={false} data-testid="drop-confirm">
-        <DialogHeader>
-          <DialogTitle>add process</DialogTitle>
-          <DialogDescription>
-            {card ? `owlette read this as ${describeKind(card.kind)}.` : ''}
-            {remaining > 1 && (
-              <span data-testid="drop-remaining">
-                {` ${remaining - 1} more ${remaining === 2 ? 'file is' : 'files are'} waiting.`}
-              </span>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        {card && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-3">
-              <Label htmlFor="drop-name" className="justify-end text-muted-foreground">
-                name
-              </Label>
-              <Input
-                id="drop-name"
-                value={card.entry.name}
-                autoFocus
-                onChange={(event) => onChange({ name: event.target.value })}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter' || blockedReason) return
-                  event.preventDefault()
-                  onConfirm()
-                }}
-              />
-
-              {needsExe ? (
-                <>
-                  <Label htmlFor="drop-exe" className="justify-end text-muted-foreground">
-                    exe
-                  </Label>
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={() => void browse()}
-                      aria-label="browse for an executable"
-                    >
-                      <FileSearch />
-                    </Button>
-                    <Input
-                      id="drop-exe"
-                      value={card.entry.exe_path}
-                      placeholder="the program that should open this file"
-                      className="font-mono text-xs"
-                      onChange={(event) => onChange({ exe_path: event.target.value })}
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <DerivedLabel>exe</DerivedLabel>
-                  <Derived value={card.entry.exe_path} />
-                </>
+    <>
+      <MissingPathDialog
+        missing={missing}
+        processName={card?.entry.name ?? ''}
+        onClose={() => missing && dismiss(missing)}
+        onBrowse={(warning) => {
+          dismiss(warning)
+          void browse(warning.folder ?? undefined)
+        }}
+      />
+      <Dialog open={card !== null} onOpenChange={(open) => !open && onSkip()}>
+        <DialogContent className="sm:max-w-lg" showCloseButton={false} data-testid="drop-confirm">
+          <DialogHeader>
+            <DialogTitle>add process</DialogTitle>
+            <DialogDescription>
+              {card ? `owlette read this as ${describeKind(card.kind)}.` : ''}
+              {remaining > 1 && (
+                <span data-testid="drop-remaining">
+                  {` ${remaining - 1} more ${remaining === 2 ? 'file is' : 'files are'} waiting.`}
+                </span>
               )}
+            </DialogDescription>
+          </DialogHeader>
 
-              {card.entry.file_path && (
-                <>
-                  <DerivedLabel>path / args</DerivedLabel>
-                  <Derived value={card.entry.file_path} />
-                </>
-              )}
+          {card && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-[5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-3">
+                <Label htmlFor="drop-name" className="justify-end text-muted-foreground">
+                  name
+                </Label>
+                <Input
+                  id="drop-name"
+                  value={card.entry.name}
+                  autoFocus
+                  onChange={(event) => onChange({ name: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' || blockedReason) return
+                    event.preventDefault()
+                    onConfirm()
+                  }}
+                />
 
-              <DerivedLabel>cwd</DerivedLabel>
-              <Derived value={card.entry.cwd} />
+                {needsExe ? (
+                  <>
+                    <Label htmlFor="drop-exe" className="justify-end text-muted-foreground">
+                      {copy.label}
+                    </Label>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        onClick={() => void browse()}
+                        aria-label={copy.browseAria}
+                      >
+                        <FileSearch />
+                      </Button>
+                      <Input
+                        id="drop-exe"
+                        value={card.entry.exe_path}
+                        placeholder="the program that should open this file"
+                        className="font-mono text-xs"
+                        onChange={(event) => onChange({ exe_path: event.target.value })}
+                        onBlur={(event) => check(card.path, [['exe_path', event.target.value]])}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <DerivedLabel>{copy.label}</DerivedLabel>
+                    <Derived value={card.entry.exe_path} />
+                  </>
+                )}
+
+                {card.entry.file_path && (
+                  <>
+                    <DerivedLabel>path / args</DerivedLabel>
+                    <Derived value={card.entry.file_path} />
+                  </>
+                )}
+
+                <DerivedLabel>cwd</DerivedLabel>
+                <Derived value={card.entry.cwd} />
+              </div>
+
+              {card.warnings.map((warning) => (
+                <InlineNotice key={warning} data-testid="drop-warning">
+                  <p className="text-sm leading-snug">{warning}</p>
+                </InlineNotice>
+              ))}
+
+              <FormError message={blockedReason} />
+
+              <p className="text-xs text-muted-foreground">
+                it is added with its launch mode off — set that once you have checked it.
+              </p>
             </div>
+          )}
 
-            {card.warnings.map((warning) => (
-              <InlineNotice key={warning} data-testid="drop-warning">
-                <p className="text-sm leading-snug">{warning}</p>
-              </InlineNotice>
-            ))}
-
-            <FormError message={blockedReason} />
-
-            <p className="text-xs text-muted-foreground">
-              it is added with its launch mode off — set that once you have checked it.
-            </p>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onSkip}>
-            skip
-          </Button>
-          <Button onClick={onConfirm} disabled={blockedReason !== null}>
-            add process
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <DialogFooter>
+            <Button variant="outline" onClick={onSkip}>
+              skip
+            </Button>
+            <Button onClick={onConfirm} disabled={blockedReason !== null}>
+              add process
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

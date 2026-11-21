@@ -224,26 +224,33 @@ describe('owlette site add-member', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('WARNS when the admin role was not honored', async () => {
-    // The membership landed but the elevated role did not. Silence here would
-    // read as unqualified success, which is the whole point of the warning.
-    installFetchStub({ uid: 'u-1', roleHonored: false, globalRole: 'member' });
-    const writes: string[] = [];
-    (process.stdout.write as unknown as jest.Mock).mockImplementation((chunk: string) => {
-      writes.push(chunk);
-      return true;
-    });
-    const program = buildProgram();
+  it.each(['admin', 'member'])(
+    'says an existing member keeps their role and points at set-role (--role %s)',
+    async (role) => {
+      // roleHonored false means nothing was written: the target was already a member.
+      installFetchStub({ uid: 'u-1', roleHonored: false, globalRole: 'member' });
+      const writes: string[] = [];
+      (process.stdout.write as unknown as jest.Mock).mockImplementation((chunk: string) => {
+        writes.push(chunk);
+        return true;
+      });
+      const program = buildProgram();
 
-    await program.parseAsync(
-      ['site', 'add-member', 'site-1', '--uid', 'u-1', '--role', 'admin'],
-      { from: 'user' },
-    );
+      await program.parseAsync(
+        ['site', 'add-member', 'site-1', '--uid', 'u-1', '--role', role],
+        { from: 'user' },
+      );
 
-    const out = writes.join('');
-    expect(out).toContain('WARNING');
-    expect(out).toContain('NOT honored');
-  });
+      const out = writes.join('');
+      // silence here would read as unqualified success; scripts grep for these two
+      expect(out).toContain('WARNING');
+      expect(out).toContain('NOT honored');
+      expect(out).toContain('already a member');
+      expect(out).toContain('owlette site set-role');
+      expect(out).not.toContain('added to');
+      expect(out).not.toContain('user promote');
+    },
+  );
 });
 
 describe('owlette site set-role', () => {

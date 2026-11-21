@@ -29,6 +29,8 @@ import shared_utils
 
 PINNED_SHA = 'a' * 64
 OTHER_SHA = 'b' * 64
+CLI_BYTES = b'cli-bytes'
+CLI_SHA = hashlib.sha256(CLI_BYTES).hexdigest()
 PINNED_VERSION = '2.1.121'
 DOWNLOAD_URL = 'https://storage.googleapis.com/bucket/cortex-cli/claude.exe?X-Goog-Signature=deadbeef'
 
@@ -205,28 +207,53 @@ class TestCacheHit:
     """The happy path: an already-verified binary is reused untouched."""
 
     def test_returns_cached_binary_without_downloading(self, cache_dir, no_bundled):
-        cli = write_cli(cache_dir)
-        write_sidecar(cache_dir, cli)
+        cli = write_cli(cache_dir, CLI_BYTES)
+        write_sidecar(cache_dir, cli, sha256=CLI_SHA)
 
         with patch('installer_utils.download_file') as mock_download:
-            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc(sha256=CLI_SHA)))
 
         assert result == cli
         mock_download.assert_not_called()
 
-    def test_does_not_rehash_the_cached_binary(self, cache_dir, no_bundled):
+    def test_rehashes_the_cached_binary_at_every_launch(self, cache_dir, no_bundled):
         cli = write_cli(cache_dir)
         write_sidecar(cache_dir, cli)
 
-        with patch('installer_utils.verify_checksum') as mock_verify:
+        with patch('installer_utils.verify_checksum', return_value=True) as mock_verify:
             result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
 
         assert result == cli
-        mock_verify.assert_not_called()
+        mock_verify.assert_called_once_with(cli, PINNED_SHA)
+
+    def test_a_same_size_swap_behind_a_verified_sidecar_is_not_run(self, cache_dir, no_bundled):
+        """The recorded size still matches; the bytes do not."""
+        cli = write_cli(cache_dir, CLI_BYTES)
+        write_sidecar(cache_dir, cli, sha256=CLI_SHA)
+        write_bytes(cli, b'x' * len(CLI_BYTES))
+
+        with patch('installer_utils.download_file', side_effect=fake_download(CLI_BYTES)):
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc(sha256=CLI_SHA)))
+
+        assert result == cli
+        assert read_bytes(result) == CLI_BYTES
+
+    def test_a_sidecar_naming_another_path_is_not_followed(self, cache_dir, no_bundled, tmp_path):
+        """The sidecar is a file in the cache like the binary: the path it
+        names is one of the CLI's own, or nothing."""
+        elsewhere = tmp_path / 'elsewhere' / cortex_cli_fetch.get_cli_filename()
+        elsewhere.parent.mkdir()
+        elsewhere.write_bytes(CLI_BYTES)
+        write_sidecar(cache_dir, str(elsewhere), sha256=CLI_SHA)
+
+        with patch('installer_utils.download_file', side_effect=fake_download(CLI_BYTES)):
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc(sha256=CLI_SHA)))
+
+        assert result == cli_path(cache_dir)
 
     def test_offline_metadata_still_uses_verified_cache(self, cache_dir, no_bundled):
-        cli = write_cli(cache_dir)
-        write_sidecar(cache_dir, cli)
+        cli = write_cli(cache_dir, CLI_BYTES)
+        write_sidecar(cache_dir, cli, sha256=CLI_SHA)
 
         db = Mock()
         db.get_document.side_effect = RuntimeError('no network')
@@ -412,7 +439,7 @@ class TestBundledCli:
             result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
 
         assert result == bundled
-        mock_verify.assert_not_called()
+        mock_verify.assert_called_once_with(bundled, PINNED_SHA)
         mock_download.assert_not_called()
 
     def test_mismatched_bundled_copy_falls_through_to_download(self, cache_dir, bundled):
@@ -425,12 +452,13 @@ class TestBundledCli:
         mock_download.assert_called_once()
         assert result == cli_path(cache_dir)
 
-    def test_bundled_copy_rescues_a_failed_fetch(self, cache_dir, bundled):
+    def test_a_bundled_copy_that_fails_the_pin_is_not_run_when_the_fetch_fails(
+            self, cache_dir, bundled):
         with patch('installer_utils.verify_checksum', return_value=False), \
              patch('installer_utils.download_file', return_value=(False, '')):
             result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc()))
 
-        assert result == bundled
+        assert result is None
 
     def test_bundled_copy_rescues_unreadable_metadata(self, cache_dir, bundled):
         with patch('installer_utils.download_file') as mock_download:
@@ -476,6 +504,28 @@ class TestFailurePath:
     def test_returns_none_when_everything_fails(self, cache_dir, no_bundled):
         with patch('installer_utils.download_file', return_value=(False, '')):
             assert cortex_cli_fetch.ensure_cli(make_db(pinned_doc())) is None
+
+    def test_a_cached_cli_that_fails_the_pin_is_not_run_when_its_delete_fails(
+            self, cache_dir, no_bundled):
+        cli = write_cli(cache_dir, b'not-the-pinned-build')
+
+        with patch('cortex_cli_fetch.os.remove', side_effect=PermissionError('in use')), \
+             patch('installer_utils.download_file', return_value=(False, '')):
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc(sha256=CLI_SHA)))
+
+        assert result is None
+        assert os.path.exists(cli)
+
+    def test_nor_while_the_fetch_backs_off(self, cache_dir, no_bundled):
+        write_cli(cache_dir, b'not-the-pinned-build')
+        cortex_cli_fetch._record_fetch_failure('earlier failure')
+
+        with patch('cortex_cli_fetch.os.remove', side_effect=PermissionError('in use')), \
+             patch('installer_utils.download_file') as mock_download:
+            result = cortex_cli_fetch.ensure_cli(make_db(pinned_doc(sha256=CLI_SHA)))
+
+        assert result is None
+        mock_download.assert_not_called()
 
     def test_missing_metadata_returns_none(self, cache_dir, no_bundled):
         assert cortex_cli_fetch.ensure_cli(make_db(None)) is None

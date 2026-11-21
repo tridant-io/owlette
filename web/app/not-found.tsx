@@ -3,9 +3,17 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { OwletteEye } from '@/components/landing/OwletteEye';
+import { EYE_HALO_DAY, EYE_HALO_GRADIENT, OwletteEye } from '@/components/landing/OwletteEye';
+import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 
-function RainCanvas() {
+// --muted-foreground is brighter than the slate the rain used to be drawn in;
+// this scale keeps dark's drops as faint as they were
+const RAIN_STRENGTH = 0.7;
+
+const rainColor = () => getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim();
+
+/** `still` paints one frame of the rain and stops there. */
+function RainCanvas({ still }: { still: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const initDrops = useCallback((width: number, height: number) => {
@@ -31,22 +39,30 @@ function RainCanvas() {
 
     let animId: number;
     let drops: ReturnType<typeof initDrops>;
+    let color = rainColor();
+
+    // a canvas can't follow css, so a theme switch (the class on <html>) re-reads the token
+    const themeObserver = new MutationObserver(() => {
+      color = rainColor();
+      if (still) draw();
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
     function resize() {
       canvas!.width = window.innerWidth;
       canvas!.height = window.innerHeight;
       drops = initDrops(canvas!.width, canvas!.height);
+      // resizing clears the canvas, so a still frame is painted again.
+      if (still) draw();
     }
-
-    resize();
-    window.addEventListener('resize', resize);
 
     function draw() {
       ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
+      ctx!.fillStyle = color;
       for (const drop of drops) {
         ctx!.beginPath();
         ctx!.arc(drop.x, drop.y, 1.35, 0, Math.PI * 2);
-        ctx!.fillStyle = `rgba(97, 112, 155, ${drop.opacity + 0.05})`;
+        ctx!.globalAlpha = (drop.opacity + 0.05) * RAIN_STRENGTH;
         ctx!.fill();
 
         drop.y += drop.speed;
@@ -55,15 +71,18 @@ function RainCanvas() {
           drop.opacity = 0.05 + Math.random() * 0.15;
         }
       }
-      animId = requestAnimationFrame(draw);
+      if (!still) animId = requestAnimationFrame(draw);
     }
 
-    draw();
+    resize();
+    window.addEventListener('resize', resize);
+    if (!still) draw();
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', resize);
+      themeObserver.disconnect();
     };
-  }, [initDrops]);
+  }, [initDrops, still]);
 
   return (
     <canvas
@@ -76,14 +95,17 @@ function RainCanvas() {
 
 export default function NotFound() {
   const [glitch, setGlitch] = useState(false);
+  // no rain and no glitch until hydration says motion is welcome.
+  const reducedMotion = usePrefersReducedMotion(true);
 
   useEffect(() => {
+    if (reducedMotion) return;
     const interval = setInterval(() => {
       setGlitch(true);
       setTimeout(() => setGlitch(false), 200);
     }, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [reducedMotion]);
 
   return (
     <div className="relative min-h-[100dvh] flex flex-col items-center justify-center overflow-hidden pb-24">
@@ -91,14 +113,12 @@ export default function NotFound() {
       <div className="absolute inset-0 dot-grid opacity-40" />
 
       {/* Raining dots */}
-      <RainCanvas />
+      <RainCanvas still={reducedMotion} />
 
       {/* Radial glow behind the eye */}
       <div
-        className="absolute w-[500px] h-[500px] rounded-full blur-3xl opacity-30"
-        style={{
-          background: 'radial-gradient(circle, oklch(0.70 0.14 30 / 0.4) 0%, oklch(0.72 0.16 55 / 0.15) 40%, transparent 70%)',
-        }}
+        className={`absolute w-[500px] h-[500px] rounded-full blur-3xl opacity-80 dark:opacity-30 ${EYE_HALO_DAY} dark:[--halo-core:color-mix(in_oklch,var(--accent-coral)_40%,transparent)] dark:[--halo-edge:color-mix(in_oklch,var(--accent-warm)_15%,transparent)]`}
+        style={{ background: EYE_HALO_GRADIENT }}
       />
 
       {/* Content */}
@@ -108,21 +128,22 @@ export default function NotFound() {
           <OwletteEye size={110} className="drop-shadow-2xl" animated />
         </div>
 
-        {/* 404 */}
-        <h1
+        <h1 className="sr-only">404: page not found</h1>
+        {/* the ghost numeral is decoration (wcag 1.4.3 exempts it); the sr-only h1
+            carries the meaning */}
+        <div
+          aria-hidden="true"
           className={`font-mono text-[5.5rem] sm:text-[8.5rem] font-bold leading-none tracking-tighter mb-6 transition-all duration-100 ${
             glitch
               ? 'text-accent-coral skew-x-2 scale-x-[1.02]'
               : 'text-foreground/10'
           }`}
           style={{
-            textShadow: glitch
-              ? '3px 0 oklch(0.75 0.18 195), -3px 0 oklch(0.70 0.14 30)'
-              : 'none',
+            textShadow: glitch ? '3px 0 var(--accent-cyan), -3px 0 var(--accent-coral)' : 'none',
           }}
         >
           404
-        </h1>
+        </div>
 
         {/* One-liner */}
         <p className="text-lg sm:text-xl text-muted-foreground font-light tracking-wide mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">

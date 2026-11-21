@@ -14,13 +14,21 @@ import { withAdvisor } from '@/lib/hoot/advisor';
 import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
-import { createModel, buildAutonomousSystemPrompt } from '@/lib/llm';
-import { getToolsByTier, EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
+import { createModel, buildAutonomousEventMessage, buildAutonomousSystemPrompt } from '@/lib/llm';
+import {
+  getToolsByTier,
+  withoutActiveHoursOverride,
+  EXISTING_COMMAND_MAPPINGS,
+  type McpToolDefinition,
+} from '@/lib/mcp-tools';
 import {
   resolveLlmConfig,
   resolveSiteKeyOwner,
   isMachineOnline,
   isHootEnabled,
+  getMachineSummary,
+  heldRestartRefusal,
+  HELD_RESTART_AUTONOMOUS_DETAIL,
   executeServerSideTool,
   SERVER_SIDE_TOOLS,
   type BuildExecutableToolsOptions,
@@ -31,8 +39,11 @@ import {
 } from '@/lib/hoot/dispatch.server';
 import { escalate } from '@/lib/hoot-escalation.server';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
-import { hootInternalSecret } from '@/lib/hootInternalSecret';
+import { hootInternalSecretMatches } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { requireEntitlement } from '@/lib/plan.server';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
+import { toolRefusal, UNATTENDED_EXCLUDED_TOOLS, unattendedRefusal } from '@/lib/hoot/launchChange';
 
 const MAX_STEPS = 15;
 const MAX_CONCURRENT_SESSIONS = 3;
@@ -84,17 +95,6 @@ function emitHootEventMetric(
 }
 
 /**
- * Tools an unattended investigator must never call: authoring a talon or
- * flipping its enabled state is standing fleet policy that outlives the
- * incident, so it stays a human decision regardless of tier. Read-only talon
- * tools are deliberately NOT excluded. Matched by name, not registry presence.
- */
-const AUTONOMOUS_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
-  'create_talon',
-  'set_talon_enabled',
-]);
-
-/**
  * Executable tools for autonomous mode (single machine, no streaming). Agent
  * dispatches go through `invokeAsSystem` so the cortex_autonomous audit rows
  * and system rate-limit bucket are honored. `SERVER_SIDE_TOOLS` have no
@@ -109,7 +109,9 @@ function buildAutonomousTools(
   machineId: string,
   chatId: string,
   eventId: string,
-  toolDefs: McpToolDefinition[]
+  toolDefs: McpToolDefinition[],
+  /** the machine's agent has the guard (`hasActiveHoursGuard`: the capability on 4.1.21 or later), so it can hold a restart. */
+  activeHoursGuard: boolean,
 ) {
   const dispatchCtx = { db, siteId, machineId, chatId, eventId };
   // No chatId/userId — an autonomous run has no session, so server-side
@@ -121,13 +123,20 @@ function buildAutonomousTools(
 
   for (const def of toolDefs) {
     const toolName = def.name;
-    if (AUTONOMOUS_EXCLUDED_TOOLS.has(toolName)) continue;
+    if (UNATTENDED_EXCLUDED_TOOLS.has(toolName)) continue;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools[toolName] = tool<any, any, any>({
       description: def.description,
-      inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
+      // nobody approves an unattended call, so it is never offered an
+      // active-hours override; `when: after_active_hours` stays.
+      inputSchema: jsonSchema(withoutActiveHoursOverride(def).parameters as Record<string, unknown>),
       execute: async (params) => {
+        // nobody can approve here, at any maxTier: what a machine runs stays as it is.
+        const refusal = unattendedRefusal(toolName, params);
+        if (refusal) return refusal;
+        const invalidParams = toolParamRefusal(toolName, params);
+        if (invalidParams) return toolRefusal('tool_params_invalid', invalidParams, 400);
         if (SERVER_SIDE_TOOLS.has(toolName)) {
           return executeServerSideTool(
             db,
@@ -140,6 +149,8 @@ function buildAutonomousTools(
         }
         const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
         if (existingCmd) {
+          const heldRefusal = heldRestartRefusal(toolName, params, activeHoursGuard, HELD_RESTART_AUTONOMOUS_DETAIL);
+          if (heldRefusal) return heldRefusal;
           return dispatchExistingCommandAsSystem(
             dispatchCtx,
             existingCmd,
@@ -156,9 +167,7 @@ function buildAutonomousTools(
 
 export async function POST(request: NextRequest) {
   try {
-    const secret = request.headers.get('x-cortex-secret');
-    const expectedSecret = hootInternalSecret();
-    if (!expectedSecret || secret !== expectedSecret) {
+    if (!hootInternalSecretMatches(request.headers.get('x-cortex-secret'))) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -179,6 +188,11 @@ export async function POST(request: NextRequest) {
 
     if (!settings.autonomousEnabled) {
       return NextResponse.json({ accepted: false, reason: 'autonomous_disabled' });
+    }
+
+    if (await requireEntitlement(siteId, 'owlette.hoot')) {
+      console.log(`[hoot/autonomous] Skipped ${sanitizeForLog(machineId)}:${sanitizeForLog(processName)}: the site's plan does not include owlette.hoot`);
+      return NextResponse.json({ accepted: false, reason: 'plan_required' });
     }
 
     // Dedup on machine+process within the cooldown window, and on nonce when
@@ -358,28 +372,28 @@ async function runAutonomousInvestigation(
     // No shared site key exists and a machine-triggered run has no author, so
     // it spends the SITE OWNER's key — the one uid durable for the site's life.
     const llmConfig = await resolveLlmConfig(db, await resolveSiteKeyOwner(db, siteId));
+    // a failed read is no reason to drop the investigation: utc, and a machine that holds nothing.
+    const machine = await getMachineSummary(db, siteId, machineId).catch(() => null);
+    const activeHoursGuard = machine?.activeHoursGuard === true;
 
     const maxTier = settings.maxTier ?? 2;
     const toolDefs = getToolsByTier(maxTier as 1 | 2 | 3);
-    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs);
+    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs, activeHoursGuard);
 
     const eventLabel = eventType === 'process_start_failed' ? 'failed to start' : 'crashed';
-    const eventContext = [
-      `Process "${processName}" ${eventLabel} on machine "${machineName}".`,
-      errorMessage ? `Error details: ${errorMessage}` : '',
-    ].filter(Boolean).join('\n');
-
     const systemPrompt = buildAutonomousSystemPrompt(
-      machineName,
       settings.directive || '',
-      eventContext
+      machine?.timezone,
+      activeHoursGuard,
     );
 
     const model = createModel(llmConfig);
     const result = await generateText({
       model,
       system: systemPrompt,
-      messages: [{ role: 'user', content: eventContext }],
+      messages: [
+        { role: 'user', content: buildAutonomousEventMessage({ eventLabel, processName, machineName, errorMessage }) },
+      ],
       // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
       ...withAdvisor(llmConfig, tools),
       stopWhen: stepCountIs(MAX_STEPS),

@@ -34,6 +34,20 @@ export function verifyTOTP(token: string, secret: string): boolean {
   }
 }
 
+/** The time step a valid code belongs to, or null, so a spent step can be refused. */
+export function totpStep(token: string, secret: string): number | null {
+  try {
+    const checker = authenticator.clone({ epoch: Date.now() });
+    const delta = checker.checkDelta(token, secret);
+    if (delta === null) return null;
+    const { epoch, step } = checker.allOptions();
+    return Math.floor(epoch / 1000 / step) + delta;
+  } catch (error) {
+    console.error('Error verifying TOTP:', error);
+    return null;
+  }
+}
+
 export function hashBackupCode(code: string): string {
   return crypto
     .createHash('sha256')

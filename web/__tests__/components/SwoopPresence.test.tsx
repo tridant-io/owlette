@@ -6,6 +6,8 @@
  * this browser's own pointer, which reads as lag that is not there, and
  * positioning against the stage instead of the picture, which is right on a
  * matching aspect ratio and wrong by a growing offset on every other one.
+ * who is in the session is the bar's to say (`SwoopToolbar`); here a pointer
+ * only carries its viewer's name.
  */
 
 import React from 'react';
@@ -32,17 +34,23 @@ interface Harness {
 
 /**
  * a 16:9 picture letterboxed inside a taller stage — the case that catches
- * anyone normalising against the element rect.
+ * anyone normalising against the element rect. its frame is 1000 px wide
+ * unless `picture` is false, a session still connecting.
  */
-function harness(): Harness {
+function harness(options: { picture?: boolean } = {}): Harness {
   const handlers = new Map<string, (data: unknown) => void>();
   const stage = document.createElement('div');
   stage.getBoundingClientRect = () => rect(0, 0, 1000, 800);
+  const video = document.createElement('video');
+  if (options.picture !== false) Object.defineProperty(video, 'videoWidth', { get: () => 1000 });
 
   const session = {
+    siteId: 'site-a',
+    machineId: 'machine-1',
+    sid: 'sid-1',
     viewerId: 'viewer-me',
     stage,
-    video: document.createElement('video'),
+    video,
     contentRect: () => rect(0, 81, 1000, 638),
     onChannelMessage: (label: string, incoming: (data: unknown) => void) => {
       handlers.set(label, incoming);
@@ -61,7 +69,18 @@ function harness(): Harness {
   };
 }
 
-afterEach(cleanup);
+// the session route, which names the viewers; unanswered unless a test answers it.
+const fetchMock = jest.fn();
+beforeEach(() => {
+  fetchMock.mockResolvedValue({ ok: false, json: async () => ({}) });
+  (globalThis as unknown as { fetch: unknown }).fetch = fetchMock;
+});
+
+afterEach(() => {
+  cleanup();
+  fetchMock.mockReset();
+  delete (globalThis as unknown as { fetch?: unknown }).fetch;
+});
 
 describe('SwoopPresence', () => {
   it('shows nothing without a session', () => {
@@ -77,15 +96,28 @@ describe('SwoopPresence', () => {
     h.detach();
   });
 
-  it('names everyone connected and says who is view only', () => {
+  it('keeps no list of who is here over the picture: the bar has it', () => {
     const h = harness();
-    render(<SwoopPresence session={h.session} />);
+    const { container } = render(<SwoopPresence session={h.session} />);
     h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
 
-    const lines = screen.getByLabelText('viewers').textContent ?? '';
-    expect(lines).toContain('uid_operator');
-    expect(lines).toContain('uid_watcher· view only');
-    expect(lines).toContain('uid_me (you)');
+    expect(screen.queryByLabelText('viewers')).toBeNull();
+    expect(container).toBeEmptyDOMElement();
+    h.detach();
+  });
+
+  it("draws another viewer's pointer in the colour of their pill, with no name on it", () => {
+    const h = harness();
+    const { container } = render(<SwoopPresence session={h.session} />);
+    h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
+    h.cursor(JSON.stringify({ t: 'vpos', viewer: 'viewer-a', x: 0.5, y: 0.5, tsUs: 2 }));
+
+    const cursor = container.querySelector<HTMLElement>('div[aria-hidden]');
+    expect(cursor).not.toBeNull();
+    // the bar names the person; the pointer only wears their colour
+    expect(cursor).toHaveTextContent('');
+    expect(cursor?.className).toContain(tintOf('viewer-a'));
+    expect(fetchMock).not.toHaveBeenCalled();
     h.detach();
   });
 
@@ -101,6 +133,15 @@ describe('SwoopPresence', () => {
     // convention is the one the rust injection side matches.
     expect(cursor?.style.left).toBe(`${0.5 * 999}px`);
     expect(cursor?.style.top).toBe(`${81 + 0.5 * 637}px`);
+    h.detach();
+  });
+
+  it('places no cursor before the first frame, with no picture to place it on', () => {
+    const h = harness({ picture: false });
+    const { container } = render(<SwoopPresence session={h.session} />);
+    h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
+    h.cursor(JSON.stringify({ t: 'vpos', viewer: 'viewer-a', x: 0.5, y: 0.5, tsUs: 2 }));
+    expect(container.querySelector('div[aria-hidden]')).toBeNull();
     h.detach();
   });
 

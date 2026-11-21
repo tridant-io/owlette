@@ -35,14 +35,23 @@ interface KeyRow {
   name: string | null;
   keyPrefix: string | null;
   scopes: Scope[] | null;
-  createdAt: number | null;
-  lastUsedAt: number | null;
-  expiresAt: number | null;
+  createdAt: unknown;
+  lastUsedAt: unknown;
+  expiresAt: unknown;
 }
 
-function formatDate(ms: number | null): string {
-  if (!ms) return '—';
-  return new Date(ms).toISOString().slice(0, 10);
+// the account route returns stored firestore timestamps, which serialise as
+// {_seconds,_nanoseconds} rather than epoch ms; anything that is not a date prints a dash
+function formatDate(value: unknown): string {
+  if (!value) return '—';
+  const seconds = (value as { _seconds?: unknown })._seconds;
+  const date =
+    typeof seconds === 'number'
+      ? new Date(seconds * 1000)
+      : typeof value === 'number' || typeof value === 'string'
+        ? new Date(value)
+        : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : '—';
 }
 
 function describeScopes(scopes: Scope[] | null): string {

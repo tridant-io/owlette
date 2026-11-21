@@ -14,6 +14,12 @@ variable "app_host" {
   default     = "owlette.app"
 }
 
+variable "lb_host" {
+  type        = string
+  description = "Hostname the load balancer is created on. Empty (the default) means app_host. Set it to a throwaway name such as lbtest.owlette.app to rehearse failover against the real origins and Host headers without touching app_host."
+  default     = ""
+}
+
 variable "railway_origin" {
   type        = string
   description = "Railway origin hostname (PRIMARY pool), e.g. owlette-prod-xxxx.up.railway.app — hostname only, no scheme."
@@ -22,6 +28,12 @@ variable "railway_origin" {
 variable "vercel_origin" {
   type        = string
   description = "Vercel origin hostname (STANDBY pool): vercel-origin.owlette.app, a DNS-only record pointing at Vercel. Also sent as that pool's Host header — Vercel holds a certificate for this name, not for owlette.app. Hostname only, no scheme."
+}
+
+variable "edge_shared_secret" {
+  type        = string
+  sensitive   = true
+  description = "Value of the X-Owlette-Edge request header; must equal EDGE_SHARED_SECRET on every origin. Supply it as TF_VAR_edge_shared_secret, never in terraform.tfvars."
 }
 
 variable "notification_email" {

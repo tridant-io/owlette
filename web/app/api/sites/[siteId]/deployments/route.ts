@@ -203,6 +203,8 @@ function validationErrorsFor(
             : 'must be string[]',
         ],
       };
+    case 'invalid_active_hours_override':
+      return { 'body.active_hours_override': [result.message] };
     default:
       return { body: [result.message] };
   }

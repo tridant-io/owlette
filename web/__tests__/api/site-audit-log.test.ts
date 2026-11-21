@@ -6,6 +6,8 @@ import {
   mockDbFactory,
   docSnapshot,
   querySnapshot,
+  seedMember,
+  seedSiteOwner,
 } from './helpers/firestore-mock';
 import {
   canonicalJson,
@@ -55,9 +57,18 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
+const mockRequireAuditLogCapability = jest.fn();
 jest.mock('@/app/api/_shared', () => ({
   applyAuthDeprecations: (response: Response) => response,
   requireSiteAuthAndScope: (...args: unknown[]) => mockRequireSiteAuthAndScope(...args),
+  requireAuditLogCapability: (...args: unknown[]) => mockRequireAuditLogCapability(...args),
+}));
+
+// read only by the real gate the machine scope cases run
+const mockResolveAuth = jest.fn();
+jest.mock('@/lib/apiAuth.server', () => ({
+  ...jest.requireActual('@/lib/apiAuth.server'),
+  resolveAuth: (...a: unknown[]) => mockResolveAuth(...a),
 }));
 
 import { GET as auditListGET } from '@/app/api/sites/[siteId]/audit-log/route';
@@ -93,6 +104,7 @@ beforeEach(() => {
     auth: { userId: 'admin-uid', keyContext: null },
     scopeCheck: { isLegacy: false },
   });
+  mockRequireAuditLogCapability.mockResolvedValue(null);
   mocks.get.mockResolvedValue(docSnapshot('any', {}));
   mocks.collectionGet.mockResolvedValue(querySnapshot([]));
 });
@@ -207,6 +219,68 @@ describe('GET /api/sites/{siteId}/audit-log/{recordHash}', () => {
       isGenesis: false,
       predecessorPresent: false,
       reason: 'predecessor_missing',
+    });
+  });
+});
+
+// the audit log spans every machine on the site, so the _shared gate refuses a
+// scoped member of any role (ADR 0016), and the rules give it to site admins and
+// owners only, so a whole-site member is refused too. the real gate, capability
+// check and site-access adapter run here, so standing is read off the member row.
+describe('who reads the audit log', () => {
+  const SCOPED_MEMBER = 'user-scoped-member';
+  const SCOPED_ADMIN = 'user-scoped-admin';
+  const MEMBER = 'user-member';
+  const ADMIN = 'user-admin';
+  const HASH = 'a'.repeat(64);
+  const shared = jest.requireActual('@/app/api/_shared');
+
+  beforeEach(() => {
+    mockRequireSiteAuthAndScope.mockImplementation(shared.requireSiteAuthAndScope);
+    mockRequireAuditLogCapability.mockImplementation(shared.requireAuditLogCapability);
+    seedSiteOwner(SITE);
+    for (const [uid, role] of [[SCOPED_MEMBER, 'member'], [SCOPED_ADMIN, 'admin']] as const) {
+      seedMember(SITE, uid, role);
+      const key = `${SITE}/${uid}`;
+      mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: ['machine-1'] });
+    }
+    seedMember(SITE, MEMBER, 'member');
+    seedMember(SITE, ADMIN, 'admin');
+    // a genesis record, so the control reads no predecessor
+    mocks.get.mockResolvedValue(docSnapshot(HASH, auditDoc(HASH).data));
+  });
+
+  describe.each([
+    ['the audit log', () => auditListGET(createMockRequest(`http://localhost/api/sites/${SITE}/audit-log`), routeContext())],
+    [
+      'an audit record',
+      () =>
+        auditDetailGET(createMockRequest(`http://localhost/api/sites/${SITE}/audit-log/${HASH}`), {
+          params: Promise.resolve({ siteId: SITE, recordHash: HASH }),
+        }),
+    ],
+  ] as const)('%s', (_route, call) => {
+    it.each([
+      ['a scoped member', SCOPED_MEMBER],
+      ['a scoped admin', SCOPED_ADMIN],
+      ['a whole-site member', MEMBER],
+    ])('refuses %s with 403 before reading it', async (_who, uid) => {
+      mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
+
+      const res = await call();
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ detail: 'capability not granted' });
+      expect(mocks.get).not.toHaveBeenCalled();
+      expect(mocks.collectionGet).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: still answers a whole-site admin 200', async () => {
+      mockResolveAuth.mockResolvedValue({ userId: ADMIN, keyContext: null });
+
+      const res = await call();
+
+      expect(res.status).toBe(200);
     });
   });
 });

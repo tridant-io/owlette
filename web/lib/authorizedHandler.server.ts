@@ -5,19 +5,28 @@
  *   1. resolveAuth → UserActor (api-key or session/id-token)
  *   2. site access + actor (site wrapper only) — resolveSiteAccess, the shared
  *      decision core in lib/sitePolicy.server.ts, in one batched read
- *   3. securityConfig.read() for kill-switch state
- *   4. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
+ *   3. machine scope (site wrapper only) — part of site access, so it runs
+ *      before the kill switch is read and is never bypassed. a scoped caller
+ *      gets 404 for a `params.machineId` outside their scope, and the
+ *      capability step's 403 on a route with no machineId or for a site-wide
+ *      capability.
+ *   4. securityConfig.read() for kill-switch state
+ *   5. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
  *      against a downgraded key gaining rights while capability enforcement
  *      is off.
- *   5. capability — skipped when `capability_enforcement === false`, EXCEPT for
+ *   6. capability — skipped when `capability_enforcement === false`, EXCEPT for
  *      BYPASS_EXEMPT_CAPABILITIES; bypass recorded in the audit row so the
  *      trail survives the kill switch.
- *   6. rate limit — skipped when `rate_limit_enforcement === false`, logged
+ *   7. rate limit — skipped when `rate_limit_enforcement === false`, logged
  *      the same way.
- *   7. allow audit — BLOCKING: an uncommittable row means 503 and no handler
+ *   8. plan lockout — writes (POST/PUT/PATCH) whose capability is in
+ *      PLAN_GATED_CAPABILITIES need that tridant key on the site's plan, and every
+ *      api-key request needs its `owlette.api_keys`, else 402. Not part of the
+ *      kill switch: it is billing, not authorization.
+ *   9. allow audit — BLOCKING: an uncommittable row means 503 and no handler
  *      call. Deny/error audits stay best-effort; they grant nothing.
- *   8. handler(`{ actor, siteId, correlationId }`)
- *   9. handler throw → error audit (best-effort) + re-throw
+ *  10. handler(`{ actor, siteId, correlationId }`)
+ *  11. handler throw → error audit (best-effort) + re-throw
  *
  * `siteIdParam: 'body'` is a compile error by design — siteId-from-body is
  * the confused-deputy surface this closes.
@@ -37,12 +46,15 @@ import { checkRoostVersion } from '@/lib/versionHeader';
 import {
   resolveSiteAccess,
   SITE_ID_RE,
+  standingOf,
   type SiteAccessOutcome,
 } from '@/lib/sitePolicy.server';
 import {
   problem,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
+  problemPlanRequired,
   problemRateLimited,
   problemScopeInsufficient,
   problemTokenExpired,
@@ -54,9 +66,10 @@ import {
   type Actor,
   Capability,
   type Role,
-  type SiteRole,
   type UserActor,
   hasCapability,
+  isMachineCapability,
+  siteStanding,
 } from '@/lib/capabilities';
 import {
   generateCorrelationId,
@@ -73,6 +86,12 @@ import {
   type RateLimitResult,
 } from '@/lib/rateLimit.server';
 import { securityConfig } from '@/lib/securityConfig.server';
+import {
+  entitled,
+  PLAN_REQUIRED_DETAIL,
+  resolveSitePlan,
+  type PlanFlag,
+} from '@/lib/plan.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
@@ -87,8 +106,9 @@ export type SiteIdSource = 'path' | 'query';
  * their own fleet — it fails towards availability. Handing every site member
  * live control of a machine's keyboard, or its screen and system audio, is the
  * wrong direction to fail in, so swoop's capabilities keep running
- * `hasCapability` while the switch is off. Everything else still bypasses and
- * still records `enforcement_bypassed` in its allow audit.
+ * `hasCapability` while the switch is off, as FLEET_SETTINGS_MANAGE does for a
+ * reason of its own (below). Everything else still bypasses and still records
+ * `enforcement_bypassed` in its allow audit.
  *
  * SWOOP_SETTINGS_MANAGE is in here for the same reason as the two it guards,
  * not as an afterthought: a member holds MACHINE_REMOTE_VIEW on merit, so if
@@ -100,12 +120,42 @@ export type SiteIdSource = 'path' | 'query';
  * MACHINE_CONFIG_WRITE, which cannot join this set: it gates process,
  * schedule, display and reboot config across the fleet, which is exactly what
  * the kill switch exists to keep reachable.
+ *
+ * FLEET_SETTINGS_MANAGE is not about the window itself: while the switch is off
+ * a member can already run commands through the bypass. It is that a grant
+ * written in the window outlives it: once enforcement is back, the machine it
+ * named still holds commands over the machines it names (ADR 0017) until a site
+ * admin removes the grant. Time-boxed break-glass, permanent grant.
+ *
+ * SITE_BILLING_MANAGE: with the switch off a member could otherwise put sites on
+ * the owner's card, and that charge outlives the window too.
  */
 export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
   Capability.SWOOP_SETTINGS_MANAGE,
+  // a grant written while the switch is off outlives the window (above)
+  Capability.FLEET_SETTINGS_MANAGE,
+  // the owner's card (above)
+  Capability.SITE_BILLING_MANAGE,
 ]);
+
+/**
+ * the tridant key a write under each capability needs on the site's plan.
+ * reads and DELETEs never need one, so a site whose plan lapsed keeps its
+ * dashboard and what was built on it can still be removed.
+ */
+export const PLAN_GATED_CAPABILITIES: ReadonlyMap<Capability, PlanFlag> = new Map<Capability, PlanFlag>([
+  [Capability.DEPLOYMENT_MANAGE, 'owlette.deployments'],
+  [Capability.ALERT_RULES_MANAGE, 'owlette.control'],
+  // only swoop's routes hold these two through this wrapper; commands, live view
+  // included, are gated in executeMachineCommand.
+  [Capability.MACHINE_REMOTE_CONTROL, 'owlette.swoop'],
+  [Capability.MACHINE_REMOTE_VIEW, 'owlette.swoop'],
+  [Capability.TALON_MANAGE, 'owlette.talons'],
+]);
+
+const PLAN_GATED_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH']);
 
 export interface SiteHandlerContext {
   actor: UserActor;
@@ -169,6 +219,12 @@ export interface SiteHandlerOptions {
    * unauthenticated, and moving it after auth would turn those into 401.
    */
   roostVersioned?: boolean;
+  /**
+   * skip the capability half of the plan lockout. only for a route that stops
+   * something already running: on a site whose plan lapsed mid-session it must
+   * still be stoppable. an api key still needs `owlette.api_keys`.
+   */
+  planExempt?: boolean;
 }
 
 export interface PlatformHandlerOptions {
@@ -207,22 +263,23 @@ function toPermissionList(
 }
 
 /**
- * `siteRoles` carries the caller's standing on the site this request names, and
- * is `{}` on platform routes where no site was resolved. An empty map denies
- * every site-scoped capability, which is the correct default: a route that never
+ * `standing` carries the caller's site role, swoop mode and machine scope on the
+ * site this request names, built by `siteStanding`, and is `siteStanding([])` on
+ * platform routes where no site was resolved. an empty map denies every
+ * site-scoped capability, which is the correct default: a route that never
  * resolved membership must not be able to act on a site.
  */
 function authToActor(
   auth: ResolvedAuth,
   role: Role,
-  siteRoles: Record<string, SiteRole>,
+  standing: ReturnType<typeof siteStanding>,
 ): UserActor {
   return {
     type: 'user',
     userId: auth.userId,
     ...(auth.keyContext ? { apiKeyId: auth.keyContext.keyId } : {}),
     role,
-    siteRoles,
+    ...standing,
   };
 }
 
@@ -241,7 +298,7 @@ async function loadUserActor(auth: ResolvedAuth): Promise<UserActor> {
   const role: Role = rawRole === 'superadmin' || rawRole === 'admin' ? rawRole : 'member';
   // No site is in scope on this path, so no per-site standing is resolved and
   // every site-scoped capability denies. Platform routes are the only callers.
-  return authToActor(auth, role, {});
+  return authToActor(auth, role, siteStanding([]));
 }
 
 function authErrorToResponse(err: ApiAuthError): NextResponse {
@@ -258,7 +315,7 @@ function authErrorToResponse(err: ApiAuthError): NextResponse {
     });
   }
   if (err.status === 401) return problemUnauthorized(err.message);
-  if (err.status === 403) return problemForbidden(err.message);
+  if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden(err.message);
   if (err.status === 404) return problemNotFound(err.message);
   return problem({
     type: ProblemType.Internal,
@@ -276,6 +333,25 @@ function serviceUnavailable(detail: string, instance?: string): NextResponse {
     detail,
     ...(instance ? { instance } : {}),
   });
+}
+
+/**
+ * the 403 for a capability the caller does not hold. swoop's viewer and lease
+ * end only on a coded refusal (`isWithdrawal`, lib/swoop/backoff.ts). a bare 403
+ * reads as an edge in front of the app, so a person set to none would retry
+ * every 30 s for the life of the tab and write a deny audit row each time.
+ */
+function capabilityRefusal(capability: Capability): NextResponse {
+  if (BYPASS_EXEMPT_CAPABILITIES.has(capability)) {
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: 403,
+      detail: 'capability not granted',
+      code: 'capability_missing',
+    });
+  }
+  return problemForbidden('capability not granted');
 }
 
 function denyAudit(
@@ -392,6 +468,7 @@ const PLATFORM_TARGET_ID = '__platform__';
 
 function auditActorRoleLabel(actor: AuditEntryInput['actor']): string {
   if (actor.type === 'system') return `system:${actor.name}`;
+  if (actor.type === 'machine') return 'machine';
   return actor.apiKeyId ? `api-key:${actor.role}` : actor.role;
 }
 
@@ -579,10 +656,46 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         outcome.facts.globalRole,
         // Reached only when the outcome is ok, so a superadmin may legitimately
         // have no membership; their capabilities short-circuit on global role.
-        outcome.facts.membershipRole
-          ? { [siteId]: outcome.facts.membershipRole }
-          : {},
+        siteStanding([[siteId, standingOf(outcome.facts)]]),
       );
+
+      // machine scope is part of site access, like membership: the kill switch
+      // never reaches it. it reads params.machineId itself, because
+      // targetIdParam and apiKeyScope.idParam miss the process verbs and uninstall.
+      const routeMachineId = await extractRouteParam(routeParamsPromise, 'machineId');
+      const machineScope = outcome.facts.machineIds;
+      if (machineScope !== null) {
+        if (routeMachineId !== null && !machineScope.includes(routeMachineId)) {
+          denyAudit(siteId, {
+            correlationId,
+            actor,
+            capability: options.capability,
+            target: { kind: targetKind, id: targetId } as AuditTarget,
+            outcome: 'deny',
+            denyReason: 'machine_out_of_scope',
+            metadata: { route: request.nextUrl.pathname, method: request.method, machineId: routeMachineId },
+          });
+          // no existence leak, as for the site: a machine that does not exist is out of scope too
+          return problemNotFound('machine not found or no access');
+        }
+        if (routeMachineId === null || !isMachineCapability(options.capability)) {
+          denyAudit(siteId, {
+            correlationId,
+            actor,
+            capability: options.capability,
+            target: { kind: targetKind, id: targetId } as AuditTarget,
+            outcome: 'deny',
+            denyReason: 'machine_scope_site_wide',
+            // uninstall's audit target is the site, so this is where its machine shows
+            metadata: {
+              route: request.nextUrl.pathname,
+              method: request.method,
+              ...(routeMachineId ? { machineId: routeMachineId } : {}),
+            },
+          });
+          return capabilityRefusal(options.capability);
+        }
+      }
 
       // 5. Read kill-switch config.
       const config = await securityConfig.read();
@@ -645,7 +758,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         // site. The matrix is keyed on per-site standing now, and `owner` is a
         // row in it — so ownership is granted by the matrix rather than routed
         // around it, and `sites/{siteId}.owner` is no longer read here at all.
-        const ok = hasCapability(actor as Actor, options.capability, siteId);
+        const ok = hasCapability(actor as Actor, options.capability, siteId, routeMachineId ?? undefined);
         if (!ok) {
           denyAudit(siteId, {
             correlationId,
@@ -656,7 +769,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
             denyReason: 'capability_missing',
             metadata: { route: request.nextUrl.pathname, method: request.method },
           });
-          return problemForbidden('capability not granted');
+          return capabilityRefusal(options.capability);
         }
       }
 
@@ -690,7 +803,36 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         rateLimitBypassed = true;
       }
 
-      // 9. Allow audit — BLOCKING. Failure -> 503, handler not called.
+      // 9. Plan lockout — after rate limiting, which is the cheaper guard against
+      // a locked-out client hammering the api, and before the allow audit so a
+      // 402 never leaves an "allow" row behind.
+      const capabilityPlanKey =
+        options.planExempt || !PLAN_GATED_METHODS.has(request.method.toUpperCase())
+          ? undefined
+          : PLAN_GATED_CAPABILITIES.get(options.capability);
+      const planKeys: PlanFlag[] = [
+        ...(auth.keyContext ? (['owlette.api_keys'] as const) : []),
+        ...(capabilityPlanKey ? [capabilityPlanKey] : []),
+      ];
+      if (planKeys.length > 0) {
+        // site data in hand, so the owner costs no read and enforcement off costs none at all.
+        const plan = await resolveSitePlan(siteId, outcome.facts.siteData);
+        const missing = planKeys.find((key) => !entitled(plan, key));
+        if (missing) {
+          denyAudit(siteId, {
+            correlationId,
+            actor,
+            capability: options.capability,
+            target: { kind: targetKind, id: targetId } as AuditTarget,
+            outcome: 'deny',
+            denyReason: 'plan_locked',
+            metadata: { route: request.nextUrl.pathname, method: request.method, entitlement: missing },
+          });
+          return problemPlanRequired(PLAN_REQUIRED_DETAIL[missing], missing);
+        }
+      }
+
+      // 10. Allow audit — BLOCKING. Failure -> 503, handler not called.
       const bypassMeta: Record<string, unknown> = { route: request.nextUrl.pathname, method: request.method };
       if (enforcementBypassed) bypassMeta.enforcement_bypassed = enforcementBypassed;
       else if (rateLimitBypassed) bypassMeta.enforcement_bypassed = 'rate_limit';
@@ -717,7 +859,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         return serviceUnavailable('audit log unavailable; refusing privileged action');
       }
 
-      // 10. Invoke handler.
+      // 11. Invoke handler.
       try {
         const ctx: SiteHandlerContext = { actor, siteId, correlationId, auth, scopeCheck };
         const response = await handler(request, ctx, { params: routeParamsPromise as Promise<TParams> });

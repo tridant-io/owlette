@@ -1,14 +1,14 @@
 /** @jest-environment node */
 
 /**
- * `/api/passkeys/[credentialId]` — removing a passkey factor.
+ * `/api/passkeys/[credentialId]` — renaming and removing a passkey factor.
  *
- * Removing the LAST factor is approved, never refused: the account re-arms to
- * `mfaEnrolled: false` + `requiresMfaSetup: true` rather than being held
- * hostage by a credential the user no longer has. Because it is momentarily
- * factor-less, every trusted-device record is purged (as `/api/mfa/disable`
- * does) and the cookie expired — otherwise a later re-enroll would inherit
- * trust granted against the deleted credential.
+ * both need a session that has cleared a challenge while the account holds a
+ * factor. on such a session, removing the last factor is approved: the account
+ * re-arms to `mfaEnrolled: false` + `requiresMfaSetup: true`. because it is
+ * momentarily factor-less, every trusted-device record is purged (as
+ * `/api/mfa/disable` does) and the cookie expired, otherwise a later re-enroll
+ * would inherit trust granted against the deleted credential.
  *
  * `lib/mfaFactors.server.ts` is deliberately NOT mocked: the assertions are
  * about fields that actually land on the user doc, so the real single writer
@@ -27,6 +27,14 @@ const mockDeletePasskey = jest.fn();
 const mockRenamePasskey = jest.fn();
 const mockRevokeAllTrustedDevices = jest.fn();
 const mockEmitMutation = jest.fn();
+const mockGetSessionData = jest.fn();
+const mockKeepSessionPastCutoff = jest.fn();
+
+const mockSendEmail = jest.fn();
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
+}));
 
 jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
@@ -53,6 +61,11 @@ jest.mock('@/lib/apiAuth.server', () => {
     requireSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
   };
 });
+
+jest.mock('@/lib/sessionManager.server', () => ({
+  getSessionData: (...a: unknown[]) => mockGetSessionData(...a),
+  keepSessionPastCutoff: (...a: unknown[]) => mockKeepSessionPastCutoff(...a),
+}));
 
 jest.mock('@/lib/webauthn.server', () => ({
   deletePasskey: (...a: unknown[]) => mockDeletePasskey(...a),
@@ -131,6 +144,7 @@ import { createMockRequest } from '../helpers/utils';
 
 const UID = 'user-1';
 const CRED = 'cred-1';
+const VERIFIED_SESSION = { userId: UID, mfaRequired: true, mfaVerified: true, mfaCompletedAt: 1 };
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -138,6 +152,7 @@ beforeEach(() => {
     [
       UID,
       {
+        email: 'owner@example.test',
         mfaFactors: { totp: false, passkeys: 1 },
         mfaEnrolled: true,
         requiresMfaSetup: false,
@@ -155,6 +170,8 @@ beforeEach(() => {
   });
   mockRenamePasskey.mockResolvedValue(undefined);
   mockRevokeAllTrustedDevices.mockResolvedValue(0);
+  mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
+  mockSendEmail.mockResolvedValue({ error: null });
 });
 
 function deleteReq(credentialId = CRED, userId: string | null = UID) {
@@ -270,8 +287,102 @@ describe('DELETE /api/passkeys/[credentialId] — a factor remains', () => {
       mfaFactors: { totp: false, passkeys: 1 },
       mfaEnrolled: true,
       requiresMfaSetup: false,
+      sessionsValidAfter: expect.any(Number),
     });
     expect(mockRevokeAllTrustedDevices).not.toHaveBeenCalled();
+    // the session that removed it outlives the cutoff the change set
+    expect(mockKeepSessionPastCutoff).toHaveBeenCalledWith(UID);
+  });
+});
+
+describe('/api/passkeys/[credentialId] — a session that has not cleared a challenge', () => {
+  const REFUSED_SESSIONS: Array<[string, unknown]> = [
+    ['challenge pending', { userId: UID, mfaRequired: true, mfaVerified: false }],
+    ['signed in before the account held a factor', { userId: UID, mfaRequired: false, mfaVerified: true }],
+    ['no session data', null],
+  ];
+
+  it.each(REFUSED_SESSIONS)('refuses DELETE: %s', async (_label, session) => {
+    mockGetSessionData.mockResolvedValue(session);
+
+    const res = await DELETE(deleteReq());
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(mockDeletePasskey).not.toHaveBeenCalled();
+    expect(setCalls).toEqual([]);
+    expect(mockRevokeAllTrustedDevices).not.toHaveBeenCalled();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+    expect(passkeys.get(UID)).toEqual([CRED]);
+  });
+
+  it.each(REFUSED_SESSIONS)('refuses PATCH: %s', async (_label, session) => {
+    mockGetSessionData.mockResolvedValue(session);
+
+    const res = await PATCH(
+      createMockRequest(`http://localhost/api/passkeys/${CRED}`, {
+        method: 'PATCH',
+        body: { userId: UID, friendlyName: 'work laptop' },
+      }),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(mockRenamePasskey).not.toHaveBeenCalled();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('accepts a session that proved a factor at /api/mfa/disable', async () => {
+    // that route leaves mfaRequired false until the next session create
+    mockGetSessionData.mockResolvedValue({
+      userId: UID,
+      mfaRequired: false,
+      mfaVerified: true,
+      mfaCompletedAt: Date.now(),
+    });
+
+    const res = await DELETE(deleteReq());
+    expect(res.status).toBe(200);
+    expect(mockDeletePasskey).toHaveBeenCalledWith(UID, CRED);
+  });
+
+  it('stays open when the account holds no factor', async () => {
+    users.set(UID, { mfaFactors: { totp: false, passkeys: 0 }, mfaEnrolled: false });
+    passkeys.set(UID, []);
+    mockGetSessionData.mockResolvedValue({ userId: UID, mfaRequired: false, mfaVerified: true });
+
+    const res = await DELETE(deleteReq());
+    expect(res.status).toBe(200);
+    // nothing was there to remove, so nothing to tell the owner about
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/passkeys/[credentialId] — notice email', () => {
+  it("tells the account's own address a passkey was removed", async () => {
+    const res = await DELETE(deleteReq());
+    expect(res.status).toBe(200);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      to: 'owner@example.test',
+      subject: 'passkey removed from your owlette account',
+    });
+  });
+
+  it('still succeeds when the send fails', async () => {
+    mockSendEmail.mockRejectedValue(new Error('resend down'));
+
+    const res = await DELETE(deleteReq());
+    expect(res.status).toBe(200);
+    expect(passkeys.get(UID)).toEqual([]);
+  });
+
+  it('sends nothing when the credential was already gone', async () => {
+    const res = await DELETE(deleteReq('cred-elsewhere'));
+    expect(res.status).toBe(200);
+    expect(mockSendEmail).not.toHaveBeenCalled();
   });
 });
 

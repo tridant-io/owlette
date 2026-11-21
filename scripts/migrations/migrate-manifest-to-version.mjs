@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 /**
+ * Status: done with. Step 2.4 of the 2.12.x promotion (docs/runbooks/upgrade-2.12.0.md),
+ * which reached prod in 073e031f; nothing reads `roosts/{id}/manifests` any more.
+ *
  * Firestore migration for the roost manifest → version rename
  * (rename-map.md §9): `roosts/{id}/manifests/*` → `roosts/{id}/versions/*`.
  *

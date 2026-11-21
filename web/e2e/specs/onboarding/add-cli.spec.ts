@@ -22,10 +22,15 @@ test.describe('add machine pairing', () => {
 
   test('prefills code from query and completes the authorize flow with a stubbed agent API', async ({ page }) => {
     await page.route('**/api/agent/auth/device-code/authorize', async (route) => {
+      const { preview } = route.request().postDataJSON() as { preview?: boolean };
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ success: true, machineId: 'e2e-paired-machine' }),
+        body: JSON.stringify(
+          preview
+            ? { machineId: 'e2e-paired-machine', existing: false }
+            : { success: true, machineId: 'e2e-paired-machine' },
+        ),
       });
     });
 
@@ -33,6 +38,9 @@ test.describe('add machine pairing', () => {
     await expect(page.getByText('add machine').first()).toBeVisible();
     await expect(page.getByLabel(/pairing phrase/i)).toHaveValue('silver-compass-drift');
 
+    // the machine is named before anything is approved
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect(page.getByTestId('add-machine-name')).toHaveText('e2e-paired-machine');
     await page.getByRole('button', { name: /authorize machine/i }).click();
     await expect(page.getByRole('heading', { name: /machine authorized/i })).toBeVisible();
     await expect(page.getByText(/e2e-paired-machine/)).toBeVisible();

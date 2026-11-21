@@ -17,15 +17,18 @@ with ``scripts/upload-cortex-cli.mjs``, which also keeps the unsuffixed
 at the Windows x64 payload.
 
 ``ensure_cli`` resolution order:
-1. Sidecar-verified binary (``cache/claude-cli/version.json``) — no hashing, no
-   network, provided size and pin still match.
+1. Sidecar-verified binary (``cache/claude-cli/version.json``) at one of the two
+   fixed CLI paths, re-hashed at every launch — no network, provided size, hash
+   and pin still match.
 2. Adopt a matching on-disk binary: hashing 241.5 MB beats downloading it. Covers
    a lost sidecar and the SDK copy left behind by an in-place 2.x upgrade. A
    cached binary that FAILS the pin is deleted — it can never satisfy it.
 3. Pinned download to ``.part``, verify, ``os.replace`` into place, write the
    sidecar. A checksum rejection deletes and retries once.
-4. Unverified fallback: any CLI on disk, with a warning. Deliberate fleet
-   resilience — an outage must not take Cortex offline on a working machine.
+4. Unverified fallback, only while the pin cannot be read: any CLI on disk,
+   with a warning. Deliberate fleet resilience — a metadata outage must not take
+   Cortex offline on a working machine. With the pin readable, a binary that
+   fails it is never returned, whether or not deleting it worked.
 5. Return None. Failures persist in ``fetch_state.json`` behind exponential
    backoff (5 min → 1 h), or the service's 30 s relaunch cooldown would turn a
    broken fetch into a 30 s download loop.
@@ -263,10 +266,17 @@ def read_pinned_metadata(db) -> Optional[Dict[str, Any]]:
 
 def _sidecar_binary(sidecar: Optional[Dict[str, Any]],
                     pinned: Optional[Dict[str, Any]]) -> Optional[str]:
-    """The recorded binary's path while it is still trustworthy: exists, still
-    the recorded size, and — when ``pinned`` is given — verified against the
-    current pin. ``pinned=None`` relaxes only the pin, never existence/size.
+    """The recorded binary's path while it is still trustworthy: one of the two
+    fixed CLI paths, still the recorded size and sha256, and — when ``pinned``
+    is given — recorded against the current pin. ``pinned=None`` relaxes only
+    the pin, never the path, size or hash.
+
+    The sidecar sits in the cache beside the binary, so neither is taken on its
+    word: the path must be the CLI's own, and the bytes are hashed at every
+    launch, which a same-size replacement does not survive.
     """
+    import installer_utils
+
     if not sidecar:
         return None
 
@@ -275,8 +285,14 @@ def _sidecar_binary(sidecar: Optional[Dict[str, Any]],
     recorded_sha = sidecar.get('sha256')
     recorded_version = sidecar.get('version')
 
-    if not isinstance(path, str) or not path or not isinstance(recorded_size, int):
+    if (not isinstance(path, str) or not path or not isinstance(recorded_size, int)
+            or not isinstance(recorded_sha, str)):
         logger.warning("CLI sidecar is malformed — re-verifying from scratch")
+        return None
+
+    fixed = (os.path.join(get_cache_dir(), get_cli_filename()), get_bundled_cli_path())
+    if os.path.normcase(path) not in {os.path.normcase(p) for p in fixed if p}:
+        logger.warning(f"CLI sidecar names {path}, not a CLI path — re-verifying from scratch")
         return None
 
     if not os.path.isfile(path):
@@ -301,6 +317,10 @@ def _sidecar_binary(sidecar: Optional[Dict[str, Any]],
                 f"Cached CLI is version {recorded_version}, pin is {pinned['version']} — re-fetching"
             )
             return None
+
+    if not installer_utils.verify_checksum(path, recorded_sha):
+        logger.warning(f"Cached CLI {path} no longer matches its sidecar — re-verifying")
+        return None
 
     return path
 
@@ -514,23 +534,24 @@ def ensure_cli(db=None) -> Optional[str]:
         _clear_fetch_failures()
         return adopted
 
-    # 3. Download, unless still backing off from earlier failures.
+    # 3. Download, unless still backing off from earlier failures. Whatever is
+    # on disk has failed the pin by now, so nothing else is returned.
     backoff = _fetch_backoff_remaining()
     if backoff > 0:
         logger.warning(
             f"Skipping the Claude CLI fetch — backing off for another {int(backoff)}s "
             "after repeated failures"
         )
-        return _unverified_fallback(cache_dir)
+        return None
 
     installed = _download_and_verify(pinned, cache_dir)
     if installed:
         _clear_fetch_failures()
         return installed
 
-    # 4. An unverified copy on disk beats no Cortex at all.
     _record_fetch_failure('download or checksum verification failed')
-    return _unverified_fallback(cache_dir)
+    logger.error("No Claude CLI matches the pin — Cortex cannot start until the download succeeds")
+    return None
 
 
 def _adopt_local_candidate(pinned: Dict[str, Any], cache_dir: str) -> Optional[str]:
@@ -571,7 +592,7 @@ def _adopt_local_candidate(pinned: Dict[str, Any], cache_dir: str) -> Optional[s
 
 def _unverified_fallback(cache_dir: str) -> Optional[str]:
     """Last resort: any on-disk binary, unmatched against the pin. Reached only
-    when the pin cannot be satisfied. The cached binary wins over the bundled
+    when the pin cannot be read. The cached binary wins over the bundled
     copy — it WAS verified when written, even if the sidecar is now gone.
     """
     for path, label in (

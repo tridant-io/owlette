@@ -1,6 +1,8 @@
 'use client';
 
+import { useId } from 'react';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,6 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Plus, Trash2 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   ALL_RESOURCES,
   type ApiKeyPermission,
@@ -22,6 +25,7 @@ import {
   SCOPE_PRESET_KEYS,
   SCOPE_PRESET_LABELS,
   SCOPE_PRESETS,
+  SUPERADMIN_ONLY_RESOURCES,
 } from '@/lib/apiKeyTypes';
 
 /**
@@ -32,7 +36,9 @@ import {
 
 export type ScopeSelection = ApiKeyScopePreset | 'custom';
 
-const RESOURCES: readonly ApiKeyResource[] = ALL_RESOURCES;
+const NON_SUPERADMIN_RESOURCES: readonly ApiKeyResource[] = ALL_RESOURCES.filter(
+  (r) => !SUPERADMIN_ONLY_RESOURCES.includes(r),
+);
 const PERMISSIONS: readonly ApiKeyPermission[] = [
   'read',
   'write',
@@ -121,6 +127,12 @@ export function ApiKeyScopeFields({
   onCustomScopesChange,
   disabled = false,
 }: Props) {
+  // create and edit can both be mounted, so the scope select's id must be unique
+  const scopeId = useId();
+  const { isSuperadmin } = useAuth();
+  // the server refuses these to everyone else; offering them only invited a 403
+  const resources = isSuperadmin ? ALL_RESOURCES : NON_SUPERADMIN_RESOURCES;
+
   function updateCustomScope(index: number, patch: Partial<ApiKeyScope>) {
     onCustomScopesChange(customScopes.map((s, i) => (i === index ? { ...s, ...patch } : s)));
   }
@@ -151,7 +163,7 @@ export function ApiKeyScopeFields({
   return (
     <>
       <div className="space-y-2">
-        <Label className="text-white">scope</Label>
+        <Label htmlFor={scopeId} className="text-foreground">scope</Label>
         <Select
           value={preset}
           onValueChange={(v) => {
@@ -162,7 +174,7 @@ export function ApiKeyScopeFields({
           }}
           disabled={disabled}
         >
-          <SelectTrigger className="bg-background border-border text-white">
+          <SelectTrigger id={scopeId} className="bg-background border-border text-foreground">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -182,7 +194,7 @@ export function ApiKeyScopeFields({
       {preset === 'custom' && (
         <div className="space-y-2 rounded-md border border-border bg-card/40 p-3">
           <div className="flex items-center justify-between">
-            <Label className="text-white text-sm">custom scopes</Label>
+            <p className="text-sm leading-none font-medium text-foreground">custom scopes</p>
             <Button
               type="button"
               size="sm"
@@ -194,66 +206,79 @@ export function ApiKeyScopeFields({
               <Plus className="h-3 w-3 mr-1" /> add
             </Button>
           </div>
-          {customScopes.map((s, i) => (
-            <div
-              key={i}
-              /* Stacks below sm: at 390px a 110px select leaves ~180px for the id — too narrow. */
-              className="grid grid-cols-1 sm:grid-cols-[110px_1fr_auto] gap-2 items-start rounded border border-border/50 bg-card/40 p-2"
-            >
-              <Select
-                value={s.resource}
-                onValueChange={(v) => updateCustomScope(i, { resource: v as ApiKeyResource })}
-                disabled={disabled}
+          {customScopes.map((s, i) => {
+            // a row this user may not grant (a superadmin added it) stays visible but read-only
+            const locked = !resources.includes(s.resource);
+            const rowDisabled = disabled || locked;
+            return (
+              <div
+                key={i}
+                /* Stacks below sm: at 390px a 110px select leaves ~180px for the id — too narrow. */
+                className="grid grid-cols-1 sm:grid-cols-[110px_1fr_auto] gap-2 items-start rounded border border-border/50 bg-card/40 p-2"
               >
-                <SelectTrigger className="h-8 text-xs bg-background border-border text-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {RESOURCES.map((r) => (
-                    <SelectItem key={r} value={r}>
-                      {r}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="space-y-2">
-                <Input
-                  type="text"
-                  value={s.id}
-                  onChange={(e) => updateCustomScope(i, { id: e.target.value })}
-                  placeholder="id (or * for all)"
-                  className="h-8 text-xs bg-background border-border text-white"
-                  disabled={disabled}
-                />
-                <div className="flex flex-wrap gap-2">
-                  {PERMISSIONS.map((p) => (
-                    <label
-                      key={p}
-                      className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer"
-                    >
-                      <Checkbox
-                        checked={s.permissions.includes(p)}
-                        onCheckedChange={() => togglePermission(i, p)}
-                        disabled={disabled}
-                        className="h-3.5 w-3.5"
-                      />
-                      {p}
-                    </label>
-                  ))}
+                <Select
+                  value={s.resource}
+                  onValueChange={(v) => updateCustomScope(i, { resource: v as ApiKeyResource })}
+                  disabled={rowDisabled}
+                >
+                  <SelectTrigger
+                    aria-label={`scope ${i + 1} resource`}
+                    className="h-8 text-xs bg-background border-border text-foreground"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(locked ? [s.resource] : resources).map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {r}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="space-y-2">
+                  <Input
+                    type="text"
+                    value={s.id}
+                    onChange={(e) => updateCustomScope(i, { id: e.target.value })}
+                    placeholder="id (or * for all)"
+                    aria-label={`scope ${i + 1} id`}
+                    className="h-8 text-base md:text-xs bg-background border-border text-foreground"
+                    disabled={rowDisabled}
+                  />
+                  <div role="group" aria-label={`scope ${i + 1} permissions`} className="flex flex-wrap gap-2">
+                    {PERMISSIONS.map((p) => (
+                      <label
+                        key={p}
+                        className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer"
+                      >
+                        <Checkbox
+                          checked={s.permissions.includes(p)}
+                          onCheckedChange={() => togglePermission(i, p)}
+                          disabled={rowDisabled}
+                          className="h-3.5 w-3.5"
+                        />
+                        {p}
+                      </label>
+                    ))}
+                  </div>
+                  {locked && (
+                    <p className="text-xs text-muted-foreground">only a superadmin can change this scope</p>
+                  )}
                 </div>
+                <IconButton
+                  label={`remove scope ${i + 1}`}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => removeScope(i)}
+                  disabled={rowDisabled || customScopes.length <= 1}
+                  className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </IconButton>
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() => removeScope(i)}
-                disabled={disabled || customScopes.length <= 1}
-                className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </>

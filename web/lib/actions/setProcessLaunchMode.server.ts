@@ -16,6 +16,7 @@ import {
 } from '@/lib/processConfig.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import logger from '@/lib/logger';
+import { validateScheduleBlocks } from '@/lib/processPayloadValidation';
 import { ActionInputError, type ActionContext } from './createProcess.server';
 
 export const VALID_LAUNCH_MODES = ['off', 'always', 'scheduled'] as const;
@@ -49,7 +50,8 @@ export async function setProcessLaunchMode(
   ctx: ActionContext,
   input: SetProcessLaunchModeInput,
 ): Promise<SetProcessLaunchModeResult> {
-  const { machineId, processId, mode, schedules, schedulePresetId } = input;
+  const { machineId, processId, mode, schedulePresetId } = input;
+  let { schedules } = input;
 
   if (!VALID_LAUNCH_MODES.includes(mode)) {
     throw new ActionInputError(
@@ -57,6 +59,15 @@ export async function setProcessLaunchMode(
       'invalid_mode',
       `Invalid mode. Must be one of: ${VALID_LAUNCH_MODES.join(', ')}`,
     );
+  }
+  // checked in every mode: the blocks are stored whatever the mode is, and the
+  // agent reads them again the moment the process is switched to scheduled.
+  if (schedules != null) {
+    const checked = validateScheduleBlocks(schedules);
+    if (!checked.ok) {
+      throw new ActionInputError(400, checked.error.code, checked.error.detail);
+    }
+    schedules = checked.value ?? schedules;
   }
   if (mode === 'scheduled' && (!Array.isArray(schedules) || schedules.length === 0)) {
     throw new ActionInputError(

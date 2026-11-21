@@ -84,6 +84,16 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from './helpers/planEnforcement';
 import { POST } from '@/app/api/cli/device-code/authorize/route';
 
 function request(body: Record<string, unknown>): NextRequest {
@@ -289,7 +299,7 @@ describe('POST /api/cli/device-code/authorize', () => {
     expect(body.type).toBe('https://owlette.app/problems/forbidden');
     expect(body.code).toBe('forbidden');
     expect(body.detail).toBe(
-      'superadmin access required to create user or installer scopes',
+      'superadmin access required to create user, installer or issue scopes',
     );
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockTxUpdate).not.toHaveBeenCalled();
@@ -314,5 +324,27 @@ describe('POST /api/cli/device-code/authorize', () => {
     expect(mockUserRoleDoc).not.toHaveBeenCalled();
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockTxUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/cli/device-code/authorize plan gate', () => {
+  const authorize = () =>
+    POST(
+      request({
+        code: 'PAIR-123',
+        name: 'CLI',
+        scopes: [{ resource: 'chat', id: 'site-1', permissions: ['read'] }],
+      }),
+    );
+
+  beforeEach(enforcePlans);
+  afterEach(stopEnforcingPlans);
+
+  it('authorizes on the authorizing user’s free plan: the site’s plan gates each request, not the mint', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+
+    expect((await authorize()).status).toBe(200);
+    expect(mockTxSet).toHaveBeenCalledTimes(2);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });

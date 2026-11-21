@@ -125,11 +125,13 @@ export function DayPillSelector({
       : `px-2.5 py-1 text-xs rounded-md border cursor-pointer transition-colors select-none`
 
   const defaultActive =
-    variant === 'pill' ? 'bg-cyan-600 text-white' : 'bg-cyan-600 border-cyan-500 text-white'
+    variant === 'pill'
+      ? 'bg-primary text-primary-foreground'
+      : 'bg-primary border-primary text-primary-foreground'
   const defaultInactive =
     variant === 'pill'
-      ? 'bg-muted text-muted-foreground hover:bg-muted/80'
-      : 'bg-secondary border-border text-muted-foreground hover:text-white hover:border-accent'
+      ? 'bg-card-sunken text-muted-foreground hover:bg-accent'
+      : 'bg-card-sunken border-border text-muted-foreground hover:text-foreground'
 
   const activeCls = activeClassName ?? defaultActive
   const inactiveCls = inactiveClassName ?? defaultInactive

@@ -264,7 +264,7 @@ export function ShareChatDialog({
               <CollapsibleTrigger asChild>
                 <button
                   type="button"
-                  className="cursor-pointer text-accent-cyan underline-offset-2 transition-colors hover:text-accent-cyan-hover hover:underline"
+                  className="hl-link cursor-pointer text-accent-cyan"
                 >
                   {detailsOpen ? 'less' : 'more'}
                 </button>
@@ -335,7 +335,7 @@ export function ShareChatDialog({
         {/* Under the preview, not above it: it is a caption on what was just
             read, and above it the warning was asking the owner to check
             something they hadn't been shown yet. */}
-        <p className="shrink-0 text-xs text-yellow-500">
+        <p className="shrink-0 text-xs text-warning">
           hoot&apos;s replies can quote machine details — hostnames, file paths, log lines.
           read the preview before you share.
         </p>
@@ -365,7 +365,7 @@ export function ShareChatDialog({
             role="status"
             aria-live="polite"
             className={cn(
-              'flex items-center gap-1.5 text-xs text-green-400',
+              'flex items-center gap-1.5 text-xs text-success',
               createdUrl && 'mt-1.5 h-4',
             )}
           >
@@ -392,8 +392,9 @@ export function ShareChatDialog({
             <p className="text-xs text-muted-foreground">no active links</p>
           ) : (
             // Its own scroll, capped at four rows, so a long list cannot starve
-            // the preview.
-            <ul className="max-h-[8.75rem] space-y-1 overflow-y-auto">
+            // the preview. -m-1 p-1 is room for the buttons' focus rings at the
+            // clipped edges, so the cap is four rows plus that 0.5rem.
+            <ul className="-m-1 max-h-[9.25rem] space-y-1 overflow-y-auto p-1">
               {shares.map((share) => {
                 const createdAt = formatDateTime(share.createdAt);
                 return (

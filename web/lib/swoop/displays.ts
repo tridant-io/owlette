@@ -11,8 +11,8 @@
  *
  * a rotated output is advertised transposed against its desktop rect (a 2160x3840
  * portrait panel arrives as 3840x2160) because the host encodes the un-rotated
- * texture and that is what this browser will draw. dpi is not on the wire at
- * all; a desktop rect is physical pixels whatever the monitor's scaling is.
+ * texture and that is what this browser will draw. `displays[]` carries no
+ * dpi; a desktop rect is physical pixels whatever the monitor's scaling is.
  *
  * the roster is shared state across every viewer, and a switch is gated on
  * `ctl` by the host. there is no host→viewer message announcing a switch, so

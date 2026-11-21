@@ -21,6 +21,7 @@ import { ExecuteMachineCommandError } from '@/lib/actions/executeMachineCommand.
 import { dispatchAndAwait } from '@/lib/jobs/talonRunner.server';
 import { createModel } from '@/lib/llm';
 import logger from '@/lib/logger';
+import { isMachineScreenshotPath, issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
 import {
   TalonAuthorError,
   resolveTalonAuthor,
@@ -216,21 +217,16 @@ export async function evaluateVisualCheck(
 
   const capture = await captureScreenshot(db, siteId, machineId, condition, correlationId);
 
-  const url = capture.url;
-  if (typeof url !== 'string' || url.length === 0) {
+  // signed here from this machine's path: the capture's own url is the
+  // dashboard's route, which a model provider cannot open
+  const storagePath = capture.storage_path;
+  const signed = isMachineScreenshotPath(storagePath, siteId, machineId)
+    ? await issueScreenshotReadUrl(storagePath)
+    : null;
+  if (!signed) {
     throw new TalonVisualCheckError(
       'capture_failed',
-      'screenshot capture returned no readable url to evaluate',
-    );
-  }
-
-  let imageUrl: URL;
-  try {
-    imageUrl = new URL(url);
-  } catch {
-    throw new TalonVisualCheckError(
-      'capture_failed',
-      'screenshot capture returned a malformed url',
+      "screenshot capture returned no path to this machine's screenshot",
     );
   }
 
@@ -248,7 +244,7 @@ export async function evaluateVisualCheck(
               type: 'text',
               text: `Operator expectation for this display:\n\n${condition.expectation}`,
             },
-            { type: 'image', image: imageUrl },
+            { type: 'image', image: new URL(signed.url) },
           ],
         },
       ],
@@ -274,8 +270,8 @@ export async function evaluateVisualCheck(
     verdict: verdict.verdict,
     confidence,
     reason: verdict.reason,
-    ...(capture.storage_path ? { screenshotPath: capture.storage_path } : {}),
-    screenshotUrl: url,
+    screenshotPath: storagePath,
+    screenshotUrl: signed.url,
   };
 }
 

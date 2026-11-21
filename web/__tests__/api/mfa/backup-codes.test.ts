@@ -59,6 +59,12 @@ jest.mock('@/lib/totp', () => {
   };
 });
 
+// the attempt budget and the spent-step record are covered in code-attempts.test.ts
+jest.mock('@/lib/mfaAttempts.server', () => ({
+  spendMfaAttempt: async () => ({ success: true }),
+  consumeTotpCode: async (_uid: string, code: string, secret: string) => mockVerifyTOTP(code, secret),
+}));
+
 jest.mock('@/lib/encryption.server', () => ({
   decrypt: (...a: unknown[]) => mockDecrypt(...a),
   isEncryptionConfigured: (...a: unknown[]) => mockIsEncryptionConfigured(...a),

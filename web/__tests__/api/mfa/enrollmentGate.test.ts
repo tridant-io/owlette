@@ -9,7 +9,9 @@
  * The rule pinned here:
  *   - zero factors -> enrollment OPEN. A user who never enrolled can never hold
  *     `mfaVerified`, so gating would deadlock them out of enrolling at all.
- *   - any factor   -> `mfaVerified === true`, else 403 `mfa_challenge_required`.
+ *   - any factor   -> a session that cleared a challenge, else 403
+ *     `mfa_challenge_required`. `mfaVerified` alone is not that: a sign-in from
+ *     before the account held a factor also carries it.
  *
  * Plus the per-factor rule that replaced verify-setup's blanket 409: a
  * passkey-only account may ADD TOTP, but a live TOTP secret is never
@@ -29,6 +31,12 @@ const mockVerifyTOTP = jest.fn();
 const mockHashBackupCode = jest.fn();
 const mockPendingSet = jest.fn();
 const mockPendingDelete = jest.fn();
+
+const mockSendEmail = jest.fn();
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
+}));
 
 jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
@@ -52,7 +60,7 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
+    requirePreMfaSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
   };
 });
 
@@ -115,13 +123,15 @@ import { POST as VERIFY_SETUP } from '@/app/api/mfa/verify-setup/route';
 import { createMockRequest } from '../helpers/utils';
 
 const USER_ID = 'user-1';
+const VERIFIED_SESSION = { userId: USER_ID, mfaRequired: true, mfaVerified: true, mfaCompletedAt: 1 };
 
 beforeEach(() => {
   jest.clearAllMocks();
 
   // Brand-new account, session that has NOT cleared a challenge.
   mockRequireSessionUser.mockResolvedValue(USER_ID);
-  mockAssertActiveUser.mockResolvedValue({});
+  mockAssertActiveUser.mockResolvedValue({ email: 'owner@example.test' });
+  mockSendEmail.mockResolvedValue({ error: null });
   mockGetSessionData.mockResolvedValue({ userId: USER_ID });
   mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
   mockApplyMfaFactorChange.mockResolvedValue({
@@ -205,10 +215,20 @@ describe('POST /api/mfa/setup — enrollment gate', () => {
     expect(mockPendingSet).not.toHaveBeenCalled();
   });
 
+  it('refuses a sign-in from before the account held a factor', async () => {
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 1 });
+    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaRequired: false, mfaVerified: true });
+
+    const res = await SETUP(setupReq());
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(mockPendingSet).not.toHaveBeenCalled();
+  });
+
   it('lets an MFA-verified session add a second factor', async () => {
     pendingDoc = null;
     mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 1 });
-    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await SETUP(setupReq());
     expect(res.status).toBe(200);
@@ -224,6 +244,27 @@ describe('POST /api/mfa/verify-setup — enrollment gate', () => {
     expect(mockMarkSessionMfaVerified).toHaveBeenCalledTimes(1);
   });
 
+  it("tells the account's own address, not the one in the setup body", async () => {
+    pendingDoc = { ...pendingDoc, email: 'someone-else@example.test' };
+
+    const res = await VERIFY_SETUP(verifySetupReq());
+    expect(res.status).toBe(200);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      to: 'owner@example.test',
+      subject: 'authenticator app added to your owlette account',
+    });
+  });
+
+  it('returns the backup codes when the send fails', async () => {
+    mockSendEmail.mockRejectedValue(new Error('resend down'));
+
+    const res = await VERIFY_SETUP(verifySetupReq());
+    expect(res.status).toBe(200);
+    expect((await res.json()).backupCodes).toEqual(['AAAA-BBBB']);
+  });
+
   it('returns 403 for a passkey-only account on an unverified session', async () => {
     // THE BYPASS THIS CLOSES: narrowing the blanket 409 to a per-factor check
     // would otherwise let a stolen session bolt its own TOTP onto a
@@ -236,11 +277,12 @@ describe('POST /api/mfa/verify-setup — enrollment gate', () => {
     expect(body.code).toBe('mfa_challenge_required');
     expect(mockApplyMfaFactorChange).not.toHaveBeenCalled();
     expect(mockMarkSessionMfaVerified).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
   });
 
   it('lets a verified passkey-only account add TOTP', async () => {
     mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 1 });
-    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await VERIFY_SETUP(verifySetupReq());
     expect(res.status).toBe(200);
@@ -261,7 +303,7 @@ describe('POST /api/mfa/verify-setup — enrollment gate', () => {
 
   it('still refuses to overwrite a live TOTP secret, verified or not', async () => {
     mockReadMfaFactors.mockResolvedValue({ totp: true, passkeys: 0 });
-    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await VERIFY_SETUP(verifySetupReq());
     expect(res.status).toBe(409);

@@ -435,6 +435,38 @@ class TestRepairAll:
             assert ah.repair_all(MagicMock()) == []
         apply_fn.assert_not_called()
 
+    def test_the_cli_cache_owned_by_another_account_is_given_to_administrators(self):
+        # its dacl can already be right: an owner keeps WRITE_DAC whatever the
+        # dacl says, so a folder an older hoot created stays its creator's to
+        # open again until the owner changes too.
+        entry = _find(os.path.join('cache', 'claude-cli'))
+        owner = {'sid': _OTHER_SID}
+        writes = []
+
+        def write(path, dacl, owner_sid=None):
+            writes.append((path, owner_sid))
+            if owner_sid is not None:
+                owner['sid'] = owner_sid
+
+        def repair():
+            with patch.object(ah, 'specs', return_value=[entry]), \
+                 patch.object(ah, '_is_plain_object', return_value=True), \
+                 patch.object(ah, 'dev_mode_enabled', return_value=False), \
+                 patch.object(ah, 'console_user_sid', return_value=None), \
+                 patch.object(ah.os.path, 'exists', return_value=True), \
+                 patch.object(ah, 'matches', return_value=True), \
+                 patch.object(ah, '_native_read_owner', side_effect=lambda path: owner['sid']), \
+                 patch.object(ah, '_native_write_dacl', side_effect=write):
+                return ah.repair_all(MagicMock())
+
+        assert repair() == [entry.path]
+        assert [(p, ws.ConvertSidToStringSid(o)) for p, o in writes] == [
+            (entry.path, 'S-1-5-32-544')]
+
+        # owned by administrators now: the next repair leaves it alone
+        assert repair() == []
+        assert len(writes) == 1
+
     def test_skips_absent_paths_silently(self):
         entry = _entry('A', _code_dir_spec())
         with patch.object(ah, 'specs', return_value=[entry]), \
@@ -644,10 +676,10 @@ class TestSessionChangeRepair:
         at_login.warning.assert_not_called()
 
 
-def test_follows_console_user_marks_the_token_file_and_the_cortex_queues():
+def test_follows_console_user_marks_the_token_file_the_cortex_queues_the_cli_cache_and_the_fleet_folder():
     names = sorted(os.path.basename(e.path) for e in ah.specs() if ah.follows_console_user(e))
-    assert names == ['.tokens.enc', '.tokens.enc.v1',
-                     'cortex_commands', 'cortex_events', 'cortex_results']
+    assert names == ['.tokens.enc', '.tokens.enc.v1', 'claude-cli',
+                     'cortex_commands', 'cortex_events', 'cortex_results', 'fleet']
 
 
 class TestInstalledTreeGate:
@@ -747,6 +779,27 @@ class TestSpecsTable:
             assert entry.app_root is False
             assert entry.aces[-1][0] is ah.CONSOLE_USER
             assert entry.aces[-1][1] == ah._MODIFY
+
+    def test_the_cli_cache_is_the_console_users_alone(self):
+        # hoot downloads and runs the claude cli as the console user; no other
+        # account may swap the binary or its sidecar between a hash and a spawn.
+        entry = _find(os.path.join('cache', 'claude-cli'))
+        assert entry.path == os.path.join(ah._DATA_ROOT, 'cache', 'claude-cli')
+        assert entry.app_root is False
+        assert _sids(entry.aces[:2]) == ['S-1-5-18', 'S-1-5-32-544']
+        assert entry.aces[-1][0] is ah.CONSOLE_USER
+        assert entry.aces[-1][1] == ah._MODIFY
+        assert len(entry.aces) == 3
+        assert all(flags == ah._INHERIT for _, _, flags in entry.aces)
+
+    def test_the_fleet_folder_is_the_services_to_write_and_the_console_users_to_read(self):
+        entry = _find(os.path.join('ipc', 'fleet'))
+        assert entry.path == os.path.join(ah._DATA_ROOT, 'ipc', 'fleet')
+        assert entry.app_root is False
+        assert _sids(entry.aces[:2]) == ['S-1-5-18', 'S-1-5-32-544']
+        assert [mask for _, mask, _ in entry.aces[:2]] == [ah._FULL, ah._FULL]
+        assert entry.aces[2] == (ah.CONSOLE_USER, ah._READ_EXECUTE, ah._INHERIT)
+        assert len(entry.aces) == 3
 
     def test_token_file_lives_under_data_root_with_console_marker(self):
         entry = _find('.tokens.enc')

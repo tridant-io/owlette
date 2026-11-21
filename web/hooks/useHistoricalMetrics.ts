@@ -173,12 +173,15 @@ export function useHistoricalMetrics(
   const [loading, setLoading] = useState(!demo);
   const [error, setError] = useState<string | null>(null);
   const lastFetchRef = useRef<number>(0);
+  // bumped when the site, machine or range changes, so a read for the old one never lands
+  const generation = useRef(0);
 
   const fetchData = useCallback(async (options?: { background?: boolean }) => {
     // A background refresh repaints in place: it never raises `loading` (which swaps the whole
     // panel body for a spinner) and never surfaces a transient error over a good chart — the
     // next tick retries.
     const background = options?.background === true;
+    const request = generation.current;
 
     if (demo && machineId) {
       setData(demo.getHistoricalData(machineId, timeRange));
@@ -364,18 +367,22 @@ export function useHistoricalMetrics(
       const downsampled = downsampleTimeUniform(allSamples, maxPoints, domainStart, now.getTime());
       const finalData = insertGapMarkers(downsampled, makeGapPoint);
 
+      if (request !== generation.current) return;
       setData(finalData);
       setError(null);
       lastFetchRef.current = Date.now();
     } catch (e: unknown) {
       console.error('Failed to fetch historical metrics:', e);
-      if (!background) setError(e instanceof Error ? e.message : 'Failed to load chart data');
+      if (!background && request === generation.current) {
+        setError(e instanceof Error ? e.message : 'Failed to load chart data');
+      }
     } finally {
-      if (!background) setLoading(false);
+      if (!background && request === generation.current) setLoading(false);
     }
   }, [siteId, machineId, timeRange, demo]);
 
   useEffect(() => {
+    generation.current += 1;
     fetchData();
   }, [fetchData]);
 

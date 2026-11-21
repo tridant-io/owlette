@@ -99,7 +99,68 @@ class TestProvisionCortexKey:
         svc._handle_provision_cortex_key = (
             OwletteService._handle_provision_cortex_key.__get__(svc, OwletteService)
         )
+        svc._storage = storage
         return svc, writes
+
+    @pytest.fixture
+    def fetch(self, provision, monkeypatch):
+        """A 4.2.0 command: a key id, and the key behind the agent's own token."""
+        import owlette_service
+        from owlette_service import OwletteService
+
+        svc, writes = provision
+        svc.firebase_client = SimpleNamespace(
+            site_id='site-a', machine_id='machine-a',
+            auth_manager=MagicMock(get_valid_token=MagicMock(return_value='agent-token-xyz')),
+        )
+        svc._fetch_cortex_key = OwletteService._fetch_cortex_key.__get__(svc, OwletteService)
+        monkeypatch.setattr(owlette_service.shared_utils, 'get_api_base_url',
+                            lambda *a, **k: 'https://owlette.example/api')
+        response = MagicMock()
+        response.json.return_value = {'apiKey': 'sk-ant-fetched'}
+        post = MagicMock(return_value=response)
+        monkeypatch.setattr(owlette_service.requests, 'post', post)
+        return svc, writes, post, response
+
+    def test_a_fetched_key_is_stored_as_before(self, fetch):
+        svc, writes, post, _response = fetch
+
+        result = svc._handle_provision_cortex_key(
+            {'key_id': 'key-1', 'provider': 'openai'})
+
+        assert result == "Cortex API key provisioned successfully"
+        (url,), kwargs = post.call_args
+        assert url == 'https://owlette.example/api/agent/hoot/key'
+        assert kwargs['json'] == {'siteId': 'site-a', 'machineId': 'machine-a', 'keyId': 'key-1'}
+        assert kwargs['headers'] == {'Authorization': 'Bearer agent-token-xyz'}
+        assert kwargs['timeout'] > 0
+        svc._storage.encrypt_value.assert_called_once_with('sk-ant-fetched')
+        keys, value = writes.call_args[0]
+        assert keys == ['cortex']
+        assert value['apiKeyEncrypted'] == 'encrypted-blob'
+        assert value['provider'] == 'openai'
+        assert value['enabled'] is True
+
+    def test_a_refused_fetch_stores_nothing_and_logs_no_secret(self, fetch, caplog):
+        import requests
+
+        svc, writes, _post, response = fetch
+        response.raise_for_status.side_effect = requests.HTTPError(
+            '404 Client Error: Not Found for url: https://owlette.example/api/agent/hoot/key')
+
+        result = svc._handle_provision_cortex_key({'key_id': 'key-1'})
+
+        assert result.startswith("Error:")
+        writes.assert_not_called()
+        assert 'agent-token-xyz' not in caplog.text
+        assert 'agent-token-xyz' not in result
+
+    def test_an_empty_fetched_key_is_rejected_before_any_write(self, fetch):
+        svc, writes, _post, response = fetch
+        response.json.return_value = {}
+
+        assert svc._handle_provision_cortex_key({'key_id': 'key-1'}) == "Error: No API key provided"
+        writes.assert_not_called()
 
     def test_the_key_is_actually_stored(self, provision):
         svc, writes = provision

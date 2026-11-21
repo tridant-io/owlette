@@ -416,8 +416,10 @@ class TestLocalConfigWatcher:
 
         monkeypatch.setattr(owlette_service, 'LOCAL_CONFIG_POLL_INTERVAL', 0.01)
         # the console look on each tick is covered in
-        # test_owlette_service_hardening.py.
-        svc = SimpleNamespace(is_alive=True, _check_console_session_acls=lambda: None)
+        # test_owlette_service_hardening.py, the swoop kill flag in
+        # test_tray_swoop_kill.py.
+        svc = SimpleNamespace(is_alive=True, _check_console_session_acls=lambda: None,
+                              _check_tray_swoop_kill=lambda: None)
         svc.start_local_config_watcher = (
             OwletteService.start_local_config_watcher.__get__(svc, OwletteService)
         )

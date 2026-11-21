@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -263,15 +264,15 @@ export function WebhookList({ siteId }: { siteId: string }) {
       return <Badge variant="outline" className="text-muted-foreground border-border">never triggered</Badge>;
     }
     if (webhook.failCount >= 10) {
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30">auto-disabled</Badge>;
+      return <Badge className="bg-danger-surface text-danger border-danger-border">auto-disabled</Badge>;
     }
     if (webhook.lastStatus >= 200 && webhook.lastStatus < 300) {
-      return <Badge className="bg-green-500/20 text-green-400 border-green-500/30"><CheckCircle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
+      return <Badge className="bg-success-surface text-success border-success-border"><CheckCircle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
     }
     if (webhook.lastStatus === 0) {
-      return <Badge className="bg-red-500/20 text-red-400 border-red-500/30"><XCircle className="h-3 w-3 mr-1" />network error</Badge>;
+      return <Badge className="bg-danger-surface text-danger border-danger-border"><XCircle className="h-3 w-3 mr-1" />network error</Badge>;
     }
-    return <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30"><AlertTriangle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
+    return <Badge className="bg-warning-surface text-warning border-warning-border"><AlertTriangle className="h-3 w-3 mr-1" />{webhook.lastStatus}</Badge>;
   };
 
   if (loading) {
@@ -298,15 +299,18 @@ export function WebhookList({ siteId }: { siteId: string }) {
       {webhooks.map((webhook) => (
         <div
           key={webhook.id}
-          className={`flex items-center gap-4 p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-50' : ''}`}
+          // on a phone the switch and details take the first row and the status and
+          // actions wrap under them, so nothing is pushed past the edge
+          className={`flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-2 p-3 sm:p-4 rounded-lg border border-border bg-card ${!webhook.enabled ? 'opacity-80' : ''}`}
         >
           <Switch
             checked={webhook.enabled}
             onCheckedChange={() => handleToggle(webhook)}
+            aria-label={`enable ${webhook.name}`}
           />
 
           {/* Left: name inline, url + pills stacked below */}
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 basis-[calc(100%-3.5rem)] sm:basis-0">
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-foreground font-medium">{webhook.name}</span>
               {webhook.url.includes('hooks.slack.com') && (
@@ -331,10 +335,10 @@ export function WebhookList({ siteId }: { siteId: string }) {
             <div className="text-right">
               <div>{getStatusBadge(webhook)}</div>
               {webhook.failCount > 0 && webhook.failCount < 10 && (
-                <p className="text-[10px] text-amber-400 mt-0.5">{webhook.failCount} failures</p>
+                <p className="text-[10px] text-warning mt-0.5">{webhook.failCount} failures</p>
               )}
             </div>
-            <span className="text-xs text-muted-foreground w-36 text-right">
+            <span className="text-xs text-muted-foreground sm:w-36 sm:text-right">
               {webhook.lastTriggered
                 ? webhook.lastTriggered.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })
                 : '—'}
@@ -342,29 +346,30 @@ export function WebhookList({ siteId }: { siteId: string }) {
           </div>
 
           {/* Right: actions */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0 ml-auto sm:ml-0">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => handleTest(webhook)}
               disabled={testingId === webhook.id || !webhook.enabled}
+              aria-label={`test ${webhook.name}`}
               className="text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
             >
-              test
+              <span className="hidden sm:inline">test</span>
               {testingId === webhook.id ? (
-                <Loader2 className="h-3.5 w-3.5 ml-1 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 sm:ml-1 animate-spin" />
               ) : (
-                <Send className="h-3.5 w-3.5 ml-1" />
+                <Send className="h-3.5 w-3.5 sm:ml-1" />
               )}
             </Button>
-            <Button
+            <IconButton
+              label={`edit ${webhook.name}`}
               variant="ghost"
-              size="icon"
               onClick={() => openEdit(webhook)}
               className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
             >
               <Pencil className="h-3.5 w-3.5" />
-            </Button>
+            </IconButton>
             {deleteConfirmId === webhook.id ? (
               <div className="flex items-center gap-1">
                 <Button
@@ -386,14 +391,14 @@ export function WebhookList({ siteId }: { siteId: string }) {
                 </Button>
               </div>
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
+              <IconButton
+                label={`delete ${webhook.name}`}
+                variant="ghost-destructive"
                 onClick={() => setDeleteConfirmId(webhook.id)}
-                className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                className="h-8 w-8 cursor-pointer"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              </IconButton>
             )}
           </div>
         </div>
@@ -401,7 +406,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
 
       {/* Edit webhook dialog */}
       <Dialog open={!!editingWebhook} onOpenChange={(open) => { if (!open) setEditingWebhook(null); }}>
-        <DialogContent className="bg-background border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <DialogContent className="border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Pencil className="h-5 w-5" />
@@ -434,8 +439,8 @@ export function WebhookList({ siteId }: { siteId: string }) {
             </div>
 
             <div className="space-y-2">
-              <Label>events</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <p id="webhook-edit-events-label" className="text-sm leading-none font-medium">events</p>
+              <div role="group" aria-labelledby="webhook-edit-events-label" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {SUPPORTED_EVENTS.map((evt) => (
                   <label
                     key={evt.id}
@@ -553,7 +558,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="bg-background border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <DialogContent className="border-border sm:max-w-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Webhook className="h-5 w-5" />
@@ -598,8 +603,8 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
             </div>
 
             <div className="space-y-2">
-              <Label>events</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <p id="webhook-add-events-label" className="text-sm leading-none font-medium">events</p>
+              <div role="group" aria-labelledby="webhook-add-events-label" className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {SUPPORTED_EVENTS.map((evt) => (
                   <label
                     key={evt.id}
@@ -642,7 +647,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
 
       {/* Generated secret dialog */}
       <Dialog open={!!generatedSecret} onOpenChange={() => setGeneratedSecret(null)}>
-        <DialogContent className="bg-background border-border">
+        <DialogContent className="border-border">
           <DialogHeader>
             <DialogTitle>webhook created</DialogTitle>
             <DialogDescription>
@@ -650,7 +655,7 @@ export default function AddWebhookDialog({ siteId, open, onOpenChange }: AddWebh
               use it to verify webhook signatures on the receiving end.
             </DialogDescription>
           </DialogHeader>
-          <div className="p-3 bg-muted rounded-lg">
+          <div className="p-3 bg-card-sunken rounded-lg">
             <code className="text-sm font-mono text-foreground break-all">{generatedSecret}</code>
           </div>
           <DialogFooter>

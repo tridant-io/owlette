@@ -1,75 +1,92 @@
 ---
 title: "roost"
-description: "a roost is a content-addressed bundle of files (a touchdesigner project, a media payload, a build artifact — anything) that the cli pushes once and the agent then pulls atomically onto target machines. every roost is site-scoped: every verb on this page requires --site . tier: [ready] for all six verbs."
+description: "a roost is a content-addressed bundle of files — a TouchDesigner project, a media payload, a build — that you push once and agents pull onto target machines. every verb on this page takes --site."
+keywords: ["upload project", "sync files", "file distribution"]
 ---
 
 verbs:
 
-- [`roost push`](#roost-push) — chunk + dedup + upload + publish a directory as a new version
-- [`roost list`](#roost-list) — list roosts on a site (auto-paginates)
-- [`roost get`](#roost-get) — print the detail record for one roost
-- [`roost diff`](#roost-diff) — diff two versions on a roost
-- [`roost versions`](#roost-versions) — list all versions published on a roost
-- [`roost deploy`](#roost-deploy) — trigger a targeted fan-out (canary then fleet)
+- [`roost push`](#push) — chunk, de-duplicate, upload and publish a directory as a new version
+- [`roost list`](#list) — list roosts on a site
+- [`roost get`](#get) — print one roost's record
+- [`roost diff`](#diff) — compare two versions of a roost
+- [`roost versions`](#versions) — list a roost's published versions
+- [`roost deploy`](#deploy) — roll a version out, canary first and then the fleet
 
-> **disambiguation**: `owlette roost deploy` is the **content-addressed** fan-out documented here. `owlette deploy` is the **classic agent-installer** deploy group (silent exe / msi pushes) — see [deploy.md](/docs/cli/reference/deploy). same word, different surfaces.
+to go back a version, use the top-level [`owlette rollback`](/docs/cli/reference/rollback).
+
+> **disambiguation**: `owlette roost deploy` ships a roost version. [`owlette deploy`](/docs/cli/reference/deploy) runs classic installer deployments. same word, different surfaces.
+
+<Callout type="warn" title={"write --version=<ref>, with an equals sign"}>
+
+`roost diff` and `roost deploy` take a `--version` flag, but `--version` is also the global flag that prints the CLI version, and it is matched anywhere on the command line. `owlette roost deploy rst_x --site site-1 --version vrs_abc` prints `1.0.0-rc.0`, deploys nothing, and exits `0`. write `--version=vrs_abc` so the value reaches the command.
+
+</Callout>
 
 ---
 
-## roost push
+## push
 
-walks `<dir>`, content-addresses every non-empty file into 4 MiB sha-256 chunks, asks the server which chunks it doesn't already have, uploads only the missing ones via signed urls, then publishes a new immutable version on `<roostId>` with optimistic concurrency on the head pointer.
+walks `<dir>`, splits every non-empty file into 4 MiB chunks addressed by SHA-256, asks the server which chunks it lacks, uploads only those through signed URLs, then publishes a new version on `<roostId>`.
 
 ```bash
-owlette roost push <dir> --to <roostId> --site <siteId> [flags]
+owlette roost push <dir> --to <roostId> --site <siteId> [--name <name>] [-m <text>] [--targets <csv>] [--extract-path <path>] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--to <roostId>` | string | yes | target roost id |
-| `--site <siteId>` | string | yes | site id that owns the roost |
-| `--name <name>` | string | no | human-readable display name for the roost |
-| `-m, --description <text>` | string | no | commit-message-style summary for this version (≤ 500 chars; client + server both enforce) |
-| `--targets <machineIds>` | csv string | no | comma-separated machine ids; overrides `roost.targets` for this version |
-| `--extract-path <path>` | string | no | extract root override |
+| `--to <roostId>` | string | yes | roost to publish to |
+| `--site <siteId>` | string | yes | site that owns the roost |
+| `--name <name>` | string | no | set the roost's display name |
+| `-m, --description <text>` | string | no | summary of this version, at most 500 characters |
+| `--targets <csv>` | string | no | machine IDs, comma-separated; replaces the roost's targets |
+| `--extract-path <path>` | string | no | set the roost's extract root on the machines |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` for the publish request (default `cli-push-<uuid>`) |
+
+the walk skips `.git` and `node_modules` directories and zero-byte files, follows symlinks only when they stay inside `<dir>`, and does not read `.gitignore`. progress goes to stderr. pushing content identical to the current version publishes nothing new.
+
+the publish is a compare-and-swap on the roost's current version. if another push lands first the server answers `412`; the CLI re-reads the current version and retries, up to 5 attempts in all, adding `-1`, `-2`, … to the idempotency key.
+
+human mode ends with `owlette: published <versionId> (#<n>)` and the previous version ID. `--json` prints `{ "versionId", "versionNumber", "currentVersionId", "previousVersionId" }` on stdout and suppresses the progress lines.
 
 ### examples
 
 ```bash
-# first push of a new project
 owlette roost push ./my-project --to rst_my_project --site site-1
 ```
 
 ```bash
-# subsequent push with a release note + machine override
+# a summary, and a new target list
 owlette roost push ./dist --to rst_my_project --site site-1 \
   -m "fix: signage scaling on 4k panels" \
   --targets m_lobby_01,m_lobby_02
 ```
 
 ```bash
-# json-mode push for ci pipelines
-owlette --json roost push ./build --to rst_ci_build --site site-1 | jq '.versionId'
+# ci: capture the new version id
+owlette --json roost push ./build --to rst_ci_build --site site-1 | jq -r '.versionId'
 ```
 
-backing: multi-call — `POST /api/chunks/check` → `POST /api/chunks/upload-urls` → parallel `PUT` to signed r2 urls → `POST /api/roosts/{roostId}/versions` (with `expectedCurrentVersionId` for compare-and-swap; on `412` the cli refreshes head + retries up to 5 times).
+backing: `POST /api/chunks/check` and `POST /api/chunks/upload-urls` in batches of 900 hashes, a signed `PUT` per missing chunk (8 at a time), `GET /api/roosts/{roostId}?siteId=` for the current version, then `POST /api/roosts/{roostId}/versions` with `expectedCurrentVersionId`.
 
 ---
 
-## roost list
+## list
 
-cursor-paged list of roosts on a site. walks the server's pagination until exhausted (or `--limit` is reached), so the default output is the full list.
+lists the roosts on a site. the CLI follows the server's pages until there are none left or `--limit` is reached.
 
 ```bash
-owlette roost list --site <siteId> [flags]
+owlette roost list --site <siteId> [--page-size <n>] [--limit <n>] [--include-deleted] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id to list roosts for |
-| `--page-size <n>` | integer | no | server-side page size (default `20`, max `100`) |
-| `--limit <n>` | integer | no | stop after fetching this many roosts in total |
-| `--include-deleted` | boolean | no | include tombstoned roosts in the result |
+| `--site <siteId>` | string | yes | site to list |
+| `--page-size <n>` | integer | no | roosts per request, clamped to 1–100 (default 20) |
+| `--limit <n>` | integer | no | stop after this many roosts in total |
+| `--include-deleted` | boolean | no | include tombstoned roosts |
+
+the table has `id`, `name`, `current`, `targets` (a count), `status` (`active` or `tombstoned`) and `updated`, or prints `(no roosts)`. `--json` prints `{ "roosts": [...] }`.
 
 ### examples
 
@@ -78,30 +95,30 @@ owlette roost list --site site-1
 ```
 
 ```bash
-# include tombstoned + cap at 50 results
 owlette roost list --site site-1 --include-deleted --limit 50
 ```
 
 ```bash
-# script-friendly json output (legacy unwrapped envelope: { "roosts": [...] })
-owlette --json roost list --site site-1 | jq '.roosts[].roostId'
+owlette --json roost list --site site-1 | jq -r '.roosts[].roostId'
 ```
 
-backing: `GET /api/roosts?siteId=<s>&limit=<page-size>&cursor=<...>&includeDeleted=<bool>`.
+backing: `GET /api/roosts?siteId=&limit=&cursor=&includeDeleted=`.
 
 ---
 
-## roost get
+## get
 
-prints the full detail record for one roost, including the resolved current + previous version summaries (description, file count, byte size, createdBy / createdAt).
+prints one roost: ID, name, site, extract path, targets, current and previous version IDs, timestamps, and a summary of the current version (number, ID, description, file count, size, author).
 
 ```bash
-owlette roost get <roostId> --site <siteId>
+owlette roost get <roostId> --site <siteId> [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id that owns the roost |
+| `--site <siteId>` | string | yes | site that owns the roost |
+
+`--json` prints the raw record, including `currentVersion` and `previousVersion` summaries and `versionUrl`.
 
 ### examples
 
@@ -110,62 +127,76 @@ owlette roost get rst_my_project --site site-1
 ```
 
 ```bash
-# pull the current version id straight out for use in another command
 owlette --json roost get rst_my_project --site site-1 | jq -r '.currentVersionId'
 ```
 
-backing: `GET /api/roosts/{roostId}?siteId=<s>`.
+backing: `GET /api/roosts/{roostId}?siteId=`.
 
 ---
 
-## roost diff
+## diff
 
-shows the file-level diff between two versions on a roost: added, removed, and modified entries plus a summary line with net byte delta. when `--version` is omitted the "to" version defaults to the roost's current version.
+shows which files were added, removed or modified between two versions, with a summary line and the net change in bytes.
 
 ```bash
-owlette roost diff <roostId> --site <siteId> --against <versionRef> [--version <versionRef>]
+owlette roost diff <roostId> --site <siteId> --against <versionRef> [--version=<versionRef>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id that owns the roost |
-| `--against <versionRef>` | string | yes | "from" version ref to diff against (id, `#N`, `vN`, `current`, `previous`, or `first`) |
-| `--version <versionRef>` | string | no | "to" version ref; defaults to the roost's current version |
+| `--site <siteId>` | string | yes | site that owns the roost |
+| `--against <versionRef>` | string | yes | the "from" version |
+| `--version=<versionRef>` | string | no | the "to" version (default: the roost's current version); write it with `=` |
+
+a version ref is a version ID (`vrs_…`), a number (`3`, `#3`, `v3`), or `current`, `previous` or `first`. the server resolves it.
+
+human output:
+
+```text
+diff vrs_2f1c0a9b… → vrs_9ab04e17… (roost rst_my_project)
+  summary: +1 -0 ~2 =140 (+3.12 MiB)
+
+  + media/intro.mp4   3.00 MiB
+  ~ project.toe   1.20 MiB → 1.32 MiB (+122.9 KiB)
+```
+
+`--json` prints the raw diff: `versionId`, `fromVersion`, `toVersion`, `against`, `roostId`, `siteId`, `summary` (`added`, `removed`, `changed`, `unchanged`, `hasChanges`, `netBytesDelta`), and the `added`, `removed` and `modified` file lists.
 
 ### examples
 
 ```bash
-# what changed in the most recent push
+# what the latest push changed
 owlette roost diff rst_my_project --site site-1 --against previous
 ```
 
 ```bash
-# diff between two explicit version numbers
-owlette roost diff rst_my_project --site site-1 --against '#3' --version '#5'
+# two explicit version numbers
+owlette roost diff rst_my_project --site site-1 --against '#3' --version='#5'
 ```
 
 ```bash
-# json output for tooling
 owlette --json roost diff rst_my_project --site site-1 --against previous | jq '.summary'
 ```
 
-backing: `GET /api/roosts/{roostId}/versions/{toRef}/diff?siteId=<s>&against=<fromRef>`. when `--version` is omitted the cli first calls `GET /api/roosts/{roostId}` to resolve the current version id.
+backing: `GET /api/roosts/{roostId}/versions/{toRef}/diff?siteId=&against=<fromRef>`. without `--version` the CLI first calls `GET /api/roosts/{roostId}` to find the current version.
 
 ---
 
-## roost versions
+## versions
 
-cursor-paged list of every version ever published on a roost, newest first. like `list`, the cli auto-paginates until exhausted (or `--limit`).
+lists every version published on a roost, newest first. like `list`, it follows pages until there are none left or `--limit` is reached.
 
 ```bash
-owlette roost versions <roostId> --site <siteId> [flags]
+owlette roost versions <roostId> --site <siteId> [--page-size <n>] [--limit <n>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id that owns the roost |
-| `--page-size <n>` | integer | no | server-side page size (default `20`, max `100`) |
-| `--limit <n>` | integer | no | stop after fetching this many versions in total |
+| `--site <siteId>` | string | yes | site that owns the roost |
+| `--page-size <n>` | integer | no | versions per request, clamped to 1–100 (default 20) |
+| `--limit <n>` | integer | no | stop after this many versions in total |
+
+the table has `#`, `versionId`, `description` and `createdAt`, or prints `(no versions)`. `--json` prints `{ "versions": [...] }`, each with `versionId`, `versionNumber`, `description`, `versionUrl`, `createdAt`, `createdBy`, `totalSize`, `totalFiles` and `parentVersionId`.
 
 ### examples
 
@@ -174,75 +205,74 @@ owlette roost versions rst_my_project --site site-1
 ```
 
 ```bash
-# last 10 versions only
 owlette roost versions rst_my_project --site site-1 --limit 10
 ```
 
 ```bash
-# pull every version id as a flat list
 owlette --json roost versions rst_my_project --site site-1 | jq -r '.versions[].versionId'
 ```
 
-backing: `GET /api/roosts/{roostId}/versions?siteId=<s>&limit=<page-size>&cursor=<...>`.
+backing: `GET /api/roosts/{roostId}/versions?siteId=&limit=&cursor=`.
 
 ---
 
-## roost deploy
+## deploy
 
-triggers a targeted fan-out for a roost: the server computes a canary / fleet split, queues `sync_pull` commands for the canary wave, and (with `--at`) defers a future rollout. this is the **real fan-out command** for content-addressed deploys — distinct from the `owlette deploy` group (classic installer pushes).
+rolls a version out to the roost's targets, or to `--machines`: the server splits the machines into a canary wave and the rest of the fleet and queues the pull commands for the canary wave. `--dry-run` returns the plan and writes nothing.
 
-a deferred rollout comes back as `stage scheduled` and is fired by a sweep that runs every 5 minutes, which queues exactly the commands an immediate deploy would have. one more than 30 minutes past its instant is written off as missed (`stage aborted`) instead of firing late — re-run the deploy to retry. see [scheduled rollouts](/docs/api/versions#scheduled-rollouts).
-
-non-dry-run invocations auto-attach an `Idempotency-Key` header so a network blip or accidental retry returns the original rollout instead of starting a second one. dry-run does not mutate state and is not auto-keyed.
+with `--at` more than 60 seconds in the future, the rollout is stored with stage `scheduled`. a sweep that runs every 5 minutes fires it, queueing exactly the commands an immediate deploy would have; a rollout found more than 30 minutes past its time is marked `aborted` instead of firing late — run the deploy again. see [scheduled rollouts](/docs/api/versions#scheduled-rollouts).
 
 ```bash
-owlette roost deploy <roostId> --site <siteId> [flags]
+owlette roost deploy <roostId> --site <siteId> [--version=<versionId>] [--machines <csv>] [--dry-run] [--at <iso8601>] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--site <siteId>` | string | yes | site id that owns the roost |
-| `--version <versionId>` | string | no | version to deploy (default: the roost's `currentVersionId`) |
-| `--machines <ids>` | csv string | no | comma-separated machine ids; overrides `roost.targets` |
-| `--dry-run` | boolean | no | compute + print the rollout plan without writing |
-| `--at <iso8601>` | string | no | schedule the rollout for a future timestamp (parsed with `Date.parse`); the scheduler sweep fires it within 5 minutes of that instant |
-| `--idempotency-key <key>` | string | no | explicit `Idempotency-Key` header (auto-generated for non-dry-run if omitted) |
+| `--site <siteId>` | string | yes | site that owns the roost |
+| `--version=<versionId>` | string | no | version to deploy (default: the roost's current version); write it with `=` |
+| `--machines <csv>` | string | no | machine IDs, comma-separated; replaces the roost's targets for this rollout |
+| `--dry-run` | boolean | no | return the plan without writing anything |
+| `--at <iso8601>` | string | no | schedule the rollout; anything `Date.parse` accepts, sent as ISO 8601 |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-deploy-<uuid>`; none on a dry run) |
+
+a real deploy always carries an `Idempotency-Key`, so a retry returns the original rollout instead of starting another. deploying a version whose rollout is still running returns that rollout, and the CLI prints `rollout already in flight`.
+
+human mode prints a label (`dry-run plan`, `rollout started`, `scheduled` or `rollout already in flight`), the version, stage, extract root and version URL, then the canary and fleet machine lists. `--json` prints the raw response: `rolloutId`, `versionId`, `siteId`, `roostId`, `stage`, `canary`, `fleet`, `extractRoot`, `versionUrl`, and `dryRun`, `alreadyRunning` or `scheduled` (`{ at, warning }`) when they apply.
 
 ### examples
 
 ```bash
-# preview the canary / fleet split before committing
+# preview the canary and fleet split
 owlette roost deploy rst_my_project --site site-1 --dry-run
 ```
 
 ```bash
-# real fan-out using the roost's current version + targets
+# deploy the current version to the roost's targets
 owlette roost deploy rst_my_project --site site-1
 ```
 
 ```bash
-# pinned version, scheduled overnight, json output for ci
+# a pinned version, overnight, for ci
 owlette --json roost deploy rst_my_project --site site-1 \
-  --version vrs_abc123 \
-  --at 2026-05-01T03:00:00Z | jq '.rolloutId'
+  --version=vrs_abc123 \
+  --at 2026-05-01T03:00:00Z | jq -r '.rolloutId'
 ```
 
-backing: `POST /api/roosts/{roostId}/deploy` with body `{ siteId, versionId?, machines?, scheduleAt?, dryRun? }`. the server returns the resolved `versionUrl`, `extractRoot`, and the canary + fleet machine lists.
+backing: `POST /api/roosts/{roostId}/deploy` with body `{ siteId, versionId?, machines?, scheduleAt?, dryRun? }`.
 
 ---
 
 ## exit codes
 
-- `0` — success (push published, list returned, deploy queued, dry-run plan printed)
-- `1` — network failure, non-2xx api response, or `412` precondition exhaustion on `roost push` (head changed 5 times mid-flight)
-- `2` — usage error: `<dir>` is not a directory, missing required flag, `--description` over 500 chars, no token configured
+- `0` — success; also `roost diff` or `roost deploy` with `--version <ref>` written with a space, which prints the CLI version and does nothing (see the warning above)
+- `1` — network failure, a non-2xx response, a missing required flag, a chunk upload that failed after its retry, or a publish still conflicting after 5 attempts
+- `2` — `push`: `<dir>` is not a directory, it holds no non-empty files, or `--description` is over 500 characters; `diff`: the roost has no current version and no `--version`; `deploy`: an empty `--machines` or an unparseable `--at`; any verb: no token configured
 
 ---
 
 ## notes
 
-- **scope**: every verb is site-scoped; `--site <siteId>` is required on all six
-- **tier**: `[ready]` — every endpoint is fully public
-- **rollback**: `owlette rollback <roostId> --site <siteId>` is a top-level helper that diffs the current version against the rollback target, prompts for confirmation, then flips the head pointer. see [rollback.md](/docs/cli/reference/rollback)
-- **chunk size**: 4 MiB content-addressed via sha-256; dedupe is global per site
-- **related**: [overview](/docs/cli/overview) (config precedence, json envelope, exit codes), [site](/docs/cli/reference/site) (resolve site ids), [quota](/docs/cli/reference/quota) (storage usage)
+- **scope**: `list` needs `site=<id>:read`; `get`, `diff` and `versions` need `roost=<id>:read`; `push` needs `site=<id>:write` for the chunk routes and `roost=<id>:write` to publish; `deploy` needs `roost=<id>:deploy`
+- **chunks**: 4 MiB, addressed by SHA-256, and de-duplicated across the whole site
+- **JSON**: raw objects with no `{ ok, data }` wrapper
+- **related**: [`rollback`](/docs/cli/reference/rollback), [roost versions API](/docs/api/versions), [chunks API](/docs/api/chunks), [quota](/docs/cli/reference/quota) for storage use, [`machine deployments`](/docs/cli/reference/machine) for each machine's reported version

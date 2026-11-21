@@ -141,9 +141,40 @@ def test_idempotent_skip_when_target_already_present(tmp_path):
         result = assemble_all(
             distribution_id=dist_id, files=[f], extract_root=str(extract),
             state=state, allowlist=allowlist, content_store=str(content),
+            unchanged_paths={'a.toe'},
         )
         assert result.assembled == 0
         assert result.skipped == 1
+    finally:
+        state.close()
+
+
+def test_a_changed_file_of_the_same_size_is_written(tmp_path):
+    """a size match alone is not "unchanged": a re-exported texture or a
+    same-length config edit has to land, on rollout and on rollback."""
+    state = SyncState(str(tmp_path / 'state.db'))
+    try:
+        content = tmp_path / 'content'
+        extract = tmp_path / 'extract'
+        extract.mkdir()
+        allowlist = DestinationAllowlist([str(extract)])
+
+        old, new = b'version one!', b'version two!'
+        assert len(old) == len(new)
+        (extract / 'a.toe').write_bytes(old)
+        _put_chunk(content, new)
+        f = _mk_version_file('a.toe', [new])
+
+        dist_id = state.start_distribution(
+            site_id='s', roost_id='f', version_id='m', version_url='u',
+            files=[{'path': f.path, 'size': f.size}], chunks=[],
+        )
+        result = assemble_all(
+            distribution_id=dist_id, files=[f], extract_root=str(extract),
+            state=state, allowlist=allowlist, content_store=str(content),
+        )
+        assert result.assembled == 1
+        assert (extract / 'a.toe').read_bytes() == new
     finally:
         state.close()
 
@@ -606,6 +637,7 @@ def test_chunks_kept_when_only_skips(tmp_path):
         result = assemble_all(
             distribution_id=dist_id, files=[f], extract_root=str(extract),
             state=state, allowlist=allowlist, content_store=str(content),
+            unchanged_paths={'a.toe'},
         )
         assert result.assembled == 0
         assert result.skipped == 1
@@ -1125,6 +1157,7 @@ def test_a_resync_reapplies_the_mode_of_a_file_it_skipped(tmp_path):
             result = assemble_all(
                 distribution_id=dist_id, files=[f], extract_root=str(extract),
                 state=state, allowlist=allowlist, content_store=str(content),
+                unchanged_paths={'run.sh'},
             )
 
         assert result.skipped == 1
@@ -1218,6 +1251,7 @@ def test_assemble_chowns_the_target(tmp_path):
             assemble_all(
                 distribution_id=dist_id, files=[f], extract_root=str(extract),
                 state=state, allowlist=allowlist, content_store=str(content),
+                unchanged_paths={f.path},
             )
             assert mock_chown.call_count == 1
     finally:
@@ -1262,6 +1296,7 @@ def test_assemble_chowns_the_directories_under_the_extract_root(tmp_path):
             assemble_all(
                 distribution_id=dist_id, files=[f], extract_root=str(extract),
                 state=state, allowlist=allowlist, content_store=str(content),
+                unchanged_paths={f.path},
             )
             re_owned = [call.args[0] for call in mock_chown.call_args_list]
 
@@ -1272,6 +1307,7 @@ def test_assemble_chowns_the_directories_under_the_extract_root(tmp_path):
             assemble_all(
                 distribution_id=dist_id, files=[f], extract_root=str(extract),
                 state=state, allowlist=allowlist, content_store=str(content),
+                unchanged_paths={f.path},
             )
             assert str(extract / 'show1') not in [
                 call.args[0] for call in no_user_chown.call_args_list

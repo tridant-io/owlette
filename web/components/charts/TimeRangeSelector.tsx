@@ -31,7 +31,8 @@ const ranges: { value: TimeRange; label: string }[] = [
 
 export function TimeRangeSelector({ value, onChange, className }: TimeRangeSelectorProps) {
   return (
-    <div className={cn('flex gap-1.5', className)}>
+    // tighter below sm so all six fit one row at 390px; wraps rather than clips if not
+    <div role="group" aria-label="time range" className={cn('flex flex-wrap gap-1 sm:gap-1.5', className)}>
       {ranges.map((range) => {
         const isSelected = value === range.value;
         return (
@@ -39,8 +40,9 @@ export function TimeRangeSelector({ value, onChange, className }: TimeRangeSelec
             key={range.value}
             variant="ghost"
             size="sm"
+            aria-pressed={isSelected}
             className={cn(
-              'h-8 px-3 text-xs transition-colors',
+              'h-8 px-2.5 sm:px-3 text-xs transition-colors',
               isSelected
                 ? 'bg-accent text-foreground border-transparent ring-1 ring-primary/40 hover:bg-accent'
                 : 'bg-card text-muted-foreground border border-border hover:bg-accent/40 hover:text-foreground'

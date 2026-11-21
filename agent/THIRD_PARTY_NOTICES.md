@@ -20,7 +20,7 @@ the GNU Lesser General Public License 2.1.**
 | DiskInfoToolkit | (bundled with LibreHardwareMonitorLib) | MPL-2.0 | https://github.com/LibreHardwareMonitor |
 | RAMSPDToolkit-NDD | (bundled with LibreHardwareMonitorLib) | MPL-2.0 | https://github.com/LibreHardwareMonitor |
 | HidSharp | (bundled with LibreHardwareMonitorLib) | Apache-2.0 | https://www.zer7.com/software/hidsharp |
-| pythonnet | 3.1.0 | MIT | https://github.com/pythonnet/pythonnet |
+| pythonnet | 3.2.1 | MIT | https://github.com/pythonnet/pythonnet |
 
 License texts installed with the agent:
 

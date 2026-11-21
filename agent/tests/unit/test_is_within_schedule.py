@@ -238,6 +238,45 @@ class TestTheUnscheduledCases:
         # The good range still decides the verdict.
         assert shared_utils.is_within_schedule(schedules, 'America/Los_Angeles') is True
 
+    @pytest.mark.parametrize('bad_range', [
+        {'start': '24:00', 'stop': '17:00'},  # an hour no clock has
+        {'start': '09:00', 'stop': '17:60'},  # a minute no clock has
+        {'start': 900, 'stop': '17:00'},      # not a string
+        '09:00-17:00',                        # not a mapping
+    ])
+    def test_a_range_no_clock_can_hold_is_skipped_not_fatal(self, frozen_clock, bad_range):
+        # A raise here leaves the main loop and ends the agent, and owlette-host
+        # (launchd, systemd) relaunches it into the same config: one bad value
+        # would stop every process on the machine from being supervised.
+        frozen_clock(
+            datetime_module.datetime(2026, 6, 10, 17, 0, tzinfo=datetime_module.timezone.utc),
+            ZoneInfo('America/Los_Angeles'),
+        )
+        schedules = [{
+            'days': ['wed'],
+            'ranges': [bad_range, {'start': '09:00', 'stop': '17:00'}],
+        }]
+
+        assert shared_utils.is_within_schedule(schedules, 'America/Los_Angeles') is True
+
+    @pytest.mark.parametrize('bad_block', [
+        'mon-fri 09:00-17:00',  # not a mapping
+        {'days': None, 'ranges': [{'start': '00:00', 'stop': '23:59'}]},
+        {'days': ['wed'], 'ranges': None},
+    ])
+    def test_a_malformed_block_is_skipped_not_fatal(self, frozen_clock, bad_block):
+        frozen_clock(
+            datetime_module.datetime(2026, 6, 10, 17, 0, tzinfo=datetime_module.timezone.utc),
+            ZoneInfo('America/Los_Angeles'),
+        )
+        good_block = {'days': ['wed'], 'ranges': [{'start': '09:00', 'stop': '17:00'}]}
+
+        assert shared_utils.is_within_schedule([bad_block, good_block], 'America/Los_Angeles') is True
+        assert shared_utils.is_within_schedule([bad_block], 'America/Los_Angeles') is False
+
+    def test_schedules_that_are_not_a_list_fall_back_like_none_at_all(self):
+        assert shared_utils.is_within_schedule(7, 'America/Los_Angeles') is True
+
     def test_a_block_with_no_days_defaults_to_every_day(self, frozen_clock):
         frozen_clock(
             datetime_module.datetime(2026, 6, 13, 17, 0, tzinfo=datetime_module.timezone.utc),

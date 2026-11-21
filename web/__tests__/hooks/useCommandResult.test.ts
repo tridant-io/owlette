@@ -13,7 +13,7 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 // Override the global `{ db: null }` mock — the hook early-returns on null db.
 jest.mock('@/lib/firebase', () => ({ db: {} }));
 
-type CompletedDoc = Record<string, { status?: string; result?: unknown }>;
+type CompletedDoc = Record<string, { status?: string; result?: unknown; error?: unknown }>;
 type DocListener = (snap: { exists: () => boolean; data: () => CompletedDoc }) => void;
 
 let listener: DocListener | null = null;
@@ -29,7 +29,7 @@ jest.mock('firebase/firestore', () => ({
   }),
 }));
 
-import { useCommandResult } from '@/hooks/useCommandResult';
+import { useCommandOutcome, useCommandResult } from '@/hooks/useCommandResult';
 import { onSnapshot } from 'firebase/firestore';
 
 /** Emit a completed-commands doc into the live listener. */
@@ -113,5 +113,58 @@ describe('useCommandResult', () => {
 
     emit({ 'cmd-1': { status: 'completed', result: 'first' }, 'cmd-2': { status: 'completed', result: 'second' } });
     await waitFor(() => expect(result.current).toBe('second'));
+  });
+
+  it('stays null for a failed command, which has no result', () => {
+    const { result } = renderHook(() => useCommandResult('site1', 'kiosk-01', 'cmd-1'));
+
+    emit({ 'cmd-1': { status: 'failed', error: 'Error: helper unreachable' } });
+    expect(result.current).toBeNull();
+  });
+});
+
+// the agent writes a failed command's text to `error`, not `result`
+// (firebase_client._mark_command_failed); a refused restart lands there.
+describe('useCommandOutcome', () => {
+  it('reads a completed command with its result', async () => {
+    const { result } = renderHook(() => useCommandOutcome('site1', 'kiosk-01', 'cmd-1'));
+
+    emit({ 'cmd-1': { status: 'completed', result: 'Reboot scheduled in 60 seconds' } });
+    await waitFor(() =>
+      expect(result.current).toEqual({ status: 'completed', result: 'Reboot scheduled in 60 seconds' }),
+    );
+  });
+
+  it('reads a failed command with its error and drops the listener', async () => {
+    const { result } = renderHook(() => useCommandOutcome('site1', 'kiosk-01', 'cmd-1'));
+
+    emit({ 'cmd-1': { status: 'pending' } });
+    expect(result.current).toBeNull();
+
+    emit({
+      'cmd-1': {
+        status: 'failed',
+        error: 'Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00',
+      },
+    });
+    await waitFor(() =>
+      expect(result.current).toEqual({
+        status: 'failed',
+        error: 'Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00',
+      }),
+    );
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it('reads a failed command with no error string as "no error"', async () => {
+    const { result } = renderHook(() => useCommandOutcome('site1', 'kiosk-01', 'cmd-1'));
+
+    emit({ 'cmd-1': { status: 'failed' } });
+    await waitFor(() => expect(result.current).toEqual({ status: 'failed', error: 'no error' }));
+  });
+
+  it('holds no subscription without a machine', () => {
+    renderHook(() => useCommandOutcome('site1', '', 'cmd-1'));
+    expect(onSnapshot).not.toHaveBeenCalled();
   });
 });

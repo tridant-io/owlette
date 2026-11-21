@@ -1,73 +1,72 @@
 /**
- * Sites — what each PER-SITE role is offered, end to end (wave 6.5).
+ * sites — what each per-site role is offered on the site settings pages, end to end.
  *
- * The suite was a role monoculture: most specs run `roleState('superadmin')`,
- * and superadmin returns true from `hasCapability` before the site is ever
- * considered. That is why two access regressions reached production — neither
- * was reachable by any test in the suite.
+ * most specs run as a superadmin, for whom `hasCapability` answers before the site is
+ * ever considered, which is how two access regressions reached production. these run
+ * as the roles that have boundaries. `owner` is a global `member` who owns a site,
+ * which is what every self-serve customer is. `admin` administers a site it does not own.
  *
- * These run as the two roles that actually have boundaries. `owner` is a global
- * `member` who owns a site, which is what every self-serve customer is
- * (`bootstrapUser.server.ts` creates them as `member`, and `POST /api/sites` has
- * no capability gate). `admin` administers a site it does not own.
+ * one capability separates the two: SITE_DELETE, on the owner row of
+ * `SiteRoleCapabilityMatrix` and nowhere else. so an owner gets all four sections and a
+ * site admin gets three, with no danger zone. a plain member administers nothing: the
+ * header offers them only new site, and the admin panel turns them away. a member who
+ * administers another site, on a site they only belong to, is `delete-site-owner.spec.ts`.
  *
- * The line between them is exactly one capability: SITE_DELETE sits on the owner
- * row of `SiteRoleCapabilityMatrix` and nowhere else. Renaming is
- * SITE_MEMBER_MANAGE, which both hold. So an owner sees both controls, a site
- * admin sees only edit, and a plain member sees neither — the last of which is
- * covered by `delete-site-owner.spec.ts`.
- *
- * NON-DESTRUCTIVE by design: these assert what is OFFERED. Actually deleting a
- * site is covered by `delete-site-owner.spec.ts` against a site it seeds itself,
- * so nothing here can strip a baseline site out from under a later spec.
+ * non-destructive by design: these assert what is offered. deleting is covered by
+ * `delete-site-owner.spec.ts` against a site it seeds itself, so nothing here can strip
+ * a baseline site out from under a later spec.
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { roleState } from '../../helpers/roles';
-import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/seed';
-import { getAdminDb } from '../../helpers/emulator';
 import { FieldValue } from 'firebase-admin/firestore';
+import { roleState } from '../../helpers/roles';
+import { getAdminDb } from '../../helpers/emulator';
+import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/seed';
 
-/** Owned by the `owner` fixture in the baseline. */
+/** owned by the `owner` fixture in the baseline. */
 const OWNED_SITE_ID = 'site-C';
 const OWNED_SITE_NAME = 'Site C (Owned)';
 
-async function openManageSitesDialog(page: Page) {
-  await page.goto('/dashboard');
-  await page.getByTestId('site-switcher-trigger').click();
-  await page.getByRole('menuitem', { name: /manage sites/i }).click();
-  const dialog = page.getByRole('dialog', { name: /manage sites/i });
-  await expect(dialog).toBeVisible();
-  return dialog;
+const ADMIN_SECTIONS = ['general', 'members', 'machines'];
+const OWNER_SECTIONS = [...ADMIN_SECTIONS, 'danger zone'];
+
+function sectionButtons(page: Page) {
+  return page.getByRole('group', { name: 'site settings sections' }).getByRole('button');
+}
+
+function gear(page: Page, siteName: string) {
+  return page
+    .getByRole('list', { name: 'sites' })
+    .getByRole('link', { name: `settings for ${siteName}`, exact: true });
 }
 
 test.describe('per-site role — owner', () => {
   test.use(roleState('owner'));
 
-  test('an owner is offered both edit and delete on the site they own', async ({ page }) => {
-    const dialog = await openManageSitesDialog(page);
-
-    await expect(dialog.getByRole('button', { name: `edit ${OWNED_SITE_NAME}` })).toBeVisible();
-    await expect(dialog.getByRole('button', { name: `delete ${OWNED_SITE_NAME}` })).toBeVisible();
-  });
-
-  test('the owner reaches the site despite a global role of member', async ({ page }) => {
-    // The membership row is the entire grant. If this ever fails while the row
-    // exists, something has started consulting the global role again.
+  test('an owner has a gear on the site they own, with a global role of member', async ({
+    page,
+  }) => {
+    // the member row is the entire grant. if this ever fails while the row exists,
+    // something has started consulting the global role again.
     expect(TEST_USERS.owner.role).toBe('member');
 
-    const dialog = await openManageSitesDialog(page);
-    await expect(dialog.getByText(OWNED_SITE_NAME)).toBeVisible();
+    await page.goto('/admin/sites');
+    await expect(gear(page, OWNED_SITE_NAME)).toBeVisible();
+  });
+
+  test('an owner gets all four sections, danger zone included', async ({ page }) => {
+    await page.goto(`/admin/sites/${OWNED_SITE_ID}`);
+    await expect(sectionButtons(page)).toHaveText(OWNER_SECTIONS);
   });
 });
 
-test.describe('membership ALONE grants access', () => {
+test.describe('membership alone grants access', () => {
   test.use(roleState('owner'));
 
   const OWNER_UID = TEST_USERS.owner.uid;
 
-  // Strip the legacy `users/{uid}.sites[]` entry, leaving ONLY the member row.
-  // Restored afterwards so later specs see the baseline they expect.
+  // strip the legacy `users/{uid}.sites[]` entry, leaving only the member row, and
+  // restore it afterwards so later specs see the baseline they expect
   test.beforeAll(async () => {
     await getAdminDb()
       .collection('users')
@@ -82,19 +81,16 @@ test.describe('membership ALONE grants access', () => {
       .update({ sites: FieldValue.arrayUnion(OWNED_SITE_ID) });
   });
 
-  test('the site is still reachable with no legacy sites[] entry at all', async ({ page }) => {
-    // THE test wave 6.1 needs before it strips that field, and the one thing the
-    // suite could not previously say. Every other fixture writes BOTH the member
-    // row and the legacy array, so the suite is satisfied by the array alone —
-    // it would stay green even if the collectionGroup listener broke outright,
-    // and would only fail in production, after the strip, for every user at once.
-    //
-    // With the array entry gone, the only thing that can put this site on screen
-    // is `useSiteMemberships`' collectionGroup query resolving the member row.
-    const dialog = await openManageSitesDialog(page);
+  test('the site and its gear are listed with no legacy sites[] entry at all', async ({ page }) => {
+    // every other fixture writes both the member row and the legacy array, so the suite
+    // would stay green on the array alone, even with the collectionGroup listener broken.
+    // here only `useSiteMemberships` resolving the member row can put the site on screen.
+    await page.goto('/admin/sites');
 
-    await expect(dialog.getByText(OWNED_SITE_NAME)).toBeVisible();
-    await expect(dialog.getByRole('button', { name: `delete ${OWNED_SITE_NAME}` })).toBeVisible();
+    await expect(
+      page.getByRole('list', { name: 'sites' }).getByText(OWNED_SITE_NAME, { exact: true })
+    ).toBeVisible();
+    await expect(gear(page, OWNED_SITE_NAME)).toBeVisible();
   });
 });
 
@@ -103,9 +99,8 @@ test.describe('per-site role — site admin', () => {
 
   const ADMIN_UID = TEST_USERS.admin.uid;
 
-  // The admin fixture does not hold site-C in the baseline. Borrow it, then hand
-  // it back: a grant left behind makes site auto-selection prefer it for every
-  // later spec, which is the contamination `releaseFixtureSite` exists for.
+  // the admin fixture does not hold site-C in the baseline. a grant left behind makes
+  // site auto-selection prefer it in every later spec.
   test.beforeAll(async () => {
     await grantMembership(OWNED_SITE_ID, ADMIN_UID, 'admin');
   });
@@ -114,29 +109,53 @@ test.describe('per-site role — site admin', () => {
     await revokeMembership(OWNED_SITE_ID, ADMIN_UID);
   });
 
-  test('a site admin is offered edit but NOT delete', async ({ page }) => {
-    const dialog = await openManageSitesDialog(page);
+  // site-A is the fixture's own baseline site, owned by someone else: if the danger zone
+  // were keyed on anything but the owner row, the two sites would disagree
+  for (const site of [
+    { id: OWNED_SITE_ID, name: OWNED_SITE_NAME },
+    { id: 'site-A', name: 'Site A (Assigned)' },
+  ]) {
+    test(`a site admin gets three sections and no danger zone on ${site.name}`, async ({ page }) => {
+      await page.goto(`/admin/sites/${site.id}`);
+      await expect(sectionButtons(page)).toHaveText(ADMIN_SECTIONS);
 
-    // Renaming is SITE_MEMBER_MANAGE, which a site admin holds.
-    await expect(dialog.getByRole('button', { name: `edit ${OWNED_SITE_NAME}` })).toBeVisible();
-    // Destroying the site is not. This is the one capability separating the two
-    // rows, and the reason SITE_DELETE is absent from SITE_ADMIN_CAPABILITIES.
-    await expect(
-      dialog.getByRole('button', { name: `delete ${OWNED_SITE_NAME}` })
-    ).toHaveCount(0);
-  });
+      // a danger link typed by hand renders general, never the delete
+      await page.goto(`/admin/sites/${site.id}?section=danger`);
+      await expect(
+        page
+          .getByRole('region', { name: 'general', exact: true })
+          .getByRole('button', { name: 'save', exact: true })
+      ).toBeVisible();
+      await expect(page.getByRole('button', { name: 'delete site', exact: true })).toHaveCount(0);
+    });
+  }
+});
 
-  test('the same holds on every site it administers, not just the borrowed one', async ({
+test.describe('per-site role — member', () => {
+  // read-only: the shared member fixture only looks, so its auth state is untouched.
+  test.use(roleState('member'));
+
+  test('the switcher offers a member new site, and neither site settings nor manage sites', async ({
     page,
   }) => {
-    // site-A is this fixture's own baseline site, owned by someone else. If the
-    // delete gate were keyed on anything but ownership, the two sites would
-    // disagree — which is what makes this worth asserting twice.
-    const dialog = await openManageSitesDialog(page);
+    await page.goto('/dashboard');
+    await page.getByTestId('site-switcher-trigger').click();
 
-    await expect(dialog.getByRole('button', { name: 'edit Site A (Assigned)' })).toBeVisible();
-    await expect(
-      dialog.getByRole('button', { name: 'delete Site A (Assigned)' })
-    ).toHaveCount(0);
+    await expect(page.getByRole('menuitem', { name: 'new site', exact: true })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: 'site settings', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('menuitem', { name: 'manage sites', exact: true })).toHaveCount(0);
   });
+
+  for (const route of ['/admin/sites', '/admin/sites/site-A']) {
+    test(`${route} sends a member to the dashboard with access denied`, async ({ page }) => {
+      await page.goto(route);
+
+      // the toast before the url: it fires as the guard decides, so a slow navigation
+      // can't outlast it
+      await expect(
+        page.locator('[data-sonner-toast]').filter({ hasText: 'access denied' })
+      ).toBeVisible();
+      await expect(page).toHaveURL(/\/dashboard$/);
+    });
+  }
 });

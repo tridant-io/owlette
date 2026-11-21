@@ -24,6 +24,7 @@ import crypto from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import {
   problem,
+  mfaChallengeProblem,
   problemForbidden,
   problemFromError,
   problemUnauthorized,
@@ -37,6 +38,7 @@ import {
 import {
   Capability,
   hasCapability,
+  siteStanding,
   type Actor,
   type Role,
   type UserActor,
@@ -59,9 +61,7 @@ interface ActorRecord {
 async function resolveSelfActor(request: NextRequest): Promise<ActorRecord> {
   // requireSessionOrIdToken already ignores `owk_*` bearers; an explicit 401 here
   // helps callers diagnose a misconfigured CLI.
-  const apiHeader =
-    request.headers.get('x-api-key') ||
-    request.nextUrl.searchParams.get('api_key');
+  const apiHeader = request.headers.get('x-api-key');
   if (apiHeader && apiHeader.startsWith('owk_')) {
     throw new ApiAuthError(401, 'self-delete requires a session or id-token, not an api key');
   }
@@ -77,7 +77,7 @@ async function resolveSelfActor(request: NextRequest): Promise<ActorRecord> {
     rawRole === 'superadmin' || rawRole === 'admin' ? rawRole : 'member';
   // No site is in scope: USER_SELF_DELETE is a platform capability, so no
   // per-site standing is resolved and nothing site-scoped is reachable here.
-  const actor: UserActor = { type: 'user', userId, role, siteRoles: {} };
+  const actor: UserActor = { type: 'user', userId, role, ...siteStanding([]) };
   return { actor, userId, role };
 }
 
@@ -160,7 +160,7 @@ export async function DELETE(request: NextRequest) {
   } catch (err) {
     if (err instanceof ApiAuthError) {
       if (err.status === 401) return problemUnauthorized(err.message);
-      if (err.status === 403) return problemForbidden(err.message);
+      if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden(err.message);
       return problem({
         type: ProblemType.Internal,
         title: 'authorization error',

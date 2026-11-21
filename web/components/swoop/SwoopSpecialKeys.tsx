@@ -1,20 +1,231 @@
 'use client';
 
 /**
- * the key combinations the browser swallows — ctrl+alt+del, win, alt+tab and
- * esc. task 6.1 fills it.
- *
- * they travel on the same input channel as every other key; ctrl+alt+del is the
- * one the host turns into a real secure-attention sequence, and only for a
- * viewer whose verified jwt carries `ctl`.
+ * the keyboard menu: the modifier setting (shortcuts match, or keys match)
+ * with a legend of what the three modifiers do on this machine under it; the
+ * combinations the browser or the viewer's own windows keeps for itself, sent
+ * as chords on the input channel, and ctrl+alt+del as the secure-attention
+ * control message; and, outside fullscreen, a sticky super key, since the
+ * viewer's own system keeps that key until keyboard lock is held. the list is
+ * the host's own, by its system. all of it needs `ctl`; a view-only session
+ * sees the menu disabled rather than absent, so the affordance is learnable.
  */
 
-import type { SwoopSession } from '@/lib/swoop/features';
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+  type SVGAttributes,
+} from 'react';
+import { ArrowBigUp, ChevronUp, Command, Keyboard, Option } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import type { MachineOsFamily } from '@/lib/machineOs';
+import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
+import { isMacViewer, modifierSwap, type ModifierMapping, type ModifierSwap } from '@/lib/swoop/keymap';
+import { modifierLegend } from '@/lib/swoop/modifierLegend';
+import { decodeControlMessage } from '@/lib/swoop/protocol';
+import { sendSpecialKey, specialKeysFor } from '@/lib/swoop/specialKeys';
+import { useViewerAppNativeKeys } from '@/hooks/useViewerAppPlatform';
+import { useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
+
+/** the two settings, named for what each keeps the same. */
+const SETTING_LABELS: Readonly<Record<ModifierSwap, Readonly<Record<ModifierMapping, string>>>> = {
+  'ctrl-to-cmd': {
+    swap: 'shortcuts match: ctrl acts as cmd',
+    passthrough: 'keys match: ctrl is control',
+  },
+  'cmd-to-ctrl': {
+    swap: 'shortcuts match: cmd acts as ctrl',
+    passthrough: 'keys match: cmd is the windows key',
+  },
+};
+
+/** the windows logo key's four panes, in the text's own colour. */
+function WindowsKeyGlyph(props: SVGAttributes<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" {...props}>
+      <path d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z" />
+    </svg>
+  );
+}
+
+/** the glyph printed on a key the menu names. a pc's ctrl and alt carry none. */
+const KEY_GLYPHS: Readonly<Record<string, ComponentType<SVGAttributes<SVGSVGElement>>>> = {
+  'windows key': WindowsKeyGlyph,
+  win: WindowsKeyGlyph,
+  cmd: Command,
+  control: ChevronUp,
+  option: Option,
+  shift: ArrowBigUp,
+};
+// one capture group, so `split` leaves each name at an odd index.
+const GLYPH_NAMES = new RegExp(`\\b(${Object.keys(KEY_GLYPHS).join('|')})\\b`);
+
+/** menu copy, each key it names led by that key's glyph. */
+function WithKeyGlyphs({ text }: { text: string }) {
+  return text.split(GLYPH_NAMES).map((part, index) => {
+    const Glyph = index % 2 === 1 ? KEY_GLYPHS[part] : undefined;
+    if (!Glyph) return part;
+    return (
+      <span key={index} className="inline-flex items-center gap-1">
+        <Glyph aria-hidden className="size-[0.85em]" />
+        {part}
+      </span>
+    );
+  });
+}
+
+const subscribeNever = (): (() => void) => () => {};
+const onServer = (): boolean => false;
+const subscribeFullscreen = (listener: () => void): (() => void) => {
+  document.addEventListener('fullscreenchange', listener);
+  return () => document.removeEventListener('fullscreenchange', listener);
+};
+// a browser without the api has no element, which is not fullscreen either
+const inFullscreen = (): boolean => Boolean(document.fullscreenElement);
 
 export interface SwoopSpecialKeysProps {
   session: SwoopSession | null;
+  /** the machine's system; windows when it reports none. */
+  osFamily: MachineOsFamily;
 }
 
-export function SwoopSpecialKeys(_props: SwoopSpecialKeysProps) {
-  return null;
+export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
+  const menuPlacement = useBarMenuPlacement();
+  const [note, setNote] = useState<string | null>(null);
+  const [mapping, setMapping] = useState<ModifierMapping>('swap');
+  const viewerIsMac = useSyncExternalStore(subscribeNever, isMacViewer, onServer);
+  const keyboardLock = useSyncExternalStore(subscribeNever, hasKeyboardLock, onServer);
+  const nativeKeys = useViewerAppNativeKeys();
+  const fullscreen = useSyncExternalStore(subscribeFullscreen, inFullscreen, onServer);
+  const swap = modifierSwap(osFamily, viewerIsMac);
+  const legend = modifierLegend(osFamily, viewerIsMac, mapping);
+  const superKey = viewerIsMac ? 'cmd' : 'the windows key';
+  const ownSystem = viewerIsMac ? 'mac' : 'windows';
+  const holdItem = `"hold ${superKey} for the next key"`;
+  // a sent key is the machine's, so the keyboard goes back to the picture with
+  // it. a closing menu hands focus to its own button, where the "next key" of
+  // a hold would land and never reach the machine.
+  const sent = useRef(false);
+
+  useEffect(() => {
+    if (!session) return;
+    return session.onChannelMessage('swoop-control', (data) => {
+      const decoded = decodeControlMessage(data);
+      if (!decoded.ok || decoded.value.t !== 'sas-result') return;
+      setNote(decoded.value.ok ? null : 'ctrl + alt + del was refused by the machine.');
+    });
+  }, [session]);
+
+  useEffect(() => {
+    swoopInputCapture(session)?.setModifierMapping(osFamily, mapping);
+  }, [session, osFamily, mapping]);
+
+  const enabled = session !== null && session.ctl;
+
+  return (
+    <DropdownMenu>
+      <BarTooltip label="send a key combination" short="keys">
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label="send a key combination" disabled={!enabled}>
+            <Keyboard aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+      </BarTooltip>
+      <DropdownMenuContent
+        {...menuPlacement}
+        align="end"
+        className="w-72"
+        onCloseAutoFocus={(event) => {
+          if (!sent.current) return;
+          sent.current = false;
+          event.preventDefault();
+          session?.stage.focus();
+        }}
+      >
+        {swap && (
+          <>
+            <DropdownMenuLabel>modifier keys</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={mapping}
+              onValueChange={(value) => setMapping(value === 'passthrough' ? 'passthrough' : 'swap')}
+            >
+              <DropdownMenuRadioItem value="swap">{SETTING_LABELS[swap].swap}</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="passthrough">{SETTING_LABELS[swap].passthrough}</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </>
+        )}
+        {/* the legend only where a key is converted: on a machine with the
+            viewer's own system every key arrives as itself, and three rows
+            saying so read as a puzzle. */}
+        {swap && (
+          <dl
+            className="grid grid-cols-[auto_auto_1fr] gap-x-2 px-2 py-1.5 text-xs text-muted-foreground"
+            aria-label="what your keys do on the machine"
+            data-testid="modifier-legend"
+          >
+            {legend.map((row) => (
+              <Fragment key={row.press}>
+                <dt>
+                  <WithKeyGlyphs text={row.press} />
+                </dt>
+                <dd aria-hidden>→</dd>
+                <dd>
+                  <WithKeyGlyphs text={row.gets} />
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+        )}
+        {!fullscreen && (
+          <p className="px-2 py-1.5 text-xs text-muted-foreground" data-testid="super-key-note">
+            {keyboardLock || nativeKeys
+              ? `outside fullscreen your own ${ownSystem} keeps ${superKey}. go fullscreen, or use ${holdItem} below.`
+              : `this browser never hands ${superKey} to a page. use ${holdItem} below.`}
+          </p>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>send keys</DropdownMenuLabel>
+        {specialKeysFor(osFamily, fullscreen).map((key) => (
+          <DropdownMenuItem
+            key={key.id}
+            className="cursor-pointer justify-between"
+            onSelect={() => {
+              if (!session) return;
+              setNote(null);
+              sent.current = sendSpecialKey({ send: session.send, capture: swoopInputCapture(session) }, key);
+              if (!sent.current) setNote('that key could not be sent right now.');
+            }}
+          >
+            <span>
+              <WithKeyGlyphs text={key.label} />
+            </span>
+            {key.hint && <span className="text-xs text-muted-foreground">{key.hint}</span>}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <p className="px-2 py-1.5 text-xs text-muted-foreground" data-testid="special-keys-footer">
+          {nativeKeys
+            ? `in fullscreen the app hands every shortcut it can to the machine; hold esc to come back.${viewerIsMac ? ' cmd+tab stays on this mac.' : ''}`
+            : 'these are the shortcuts your browser or your own windows keeps. in fullscreen most others reach the machine directly.'}
+        </p>
+        {note && <p className="px-2 pb-1.5 text-xs text-destructive">{note}</p>}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }

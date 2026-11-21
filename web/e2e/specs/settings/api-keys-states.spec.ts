@@ -16,6 +16,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { TEST_USERS } from '../../helpers/seed';
+import { recordSlides } from '../../helpers/slide';
 import type {
   ApiKeyEnvironment,
   ApiKeyLookup,
@@ -163,7 +164,7 @@ test('active key row renders the green "active" badge', async ({ page }) => {
 
   const badge = row.locator('[data-slot="badge"]', { hasText: /^active$/ });
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveClass(/text-green-400/);
+  await expect(badge).toHaveClass(/text-success/);
 });
 
 test('rotated-in-grace row renders amber "rotated (grace)" badge with retire-by hint', async ({
@@ -179,9 +180,32 @@ test('rotated-in-grace row renders amber "rotated (grace)" badge with retire-by 
 
   const badge = row.locator('[data-slot="badge"]', { hasText: /^rotated \(grace\)$/ });
   await expect(badge).toBeVisible();
-  await expect(badge).toHaveClass(/text-amber-400/);
+  await expect(badge).toHaveClass(/text-warning/);
 
   await expect(row.getByText(/old key stops working /i)).toBeVisible();
+});
+
+test('a row\'s details slide open and closed, as the other expandable panels do', async ({ page }) => {
+  await page.goto('/settings/api-keys');
+  await expect(
+    page.getByRole('heading', { name: 'api keys', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  // the rotated row: a line under the details, so they slide in between the two
+  const row = rowFor(page, 'e2e state rotated');
+  await expect(row).toBeVisible();
+  const slides = await recordSlides(row);
+  // named for what a click does next: show, then hide
+  const toggle = row.getByRole('button', { name: /^(show|hide) details for e2e state rotated$/ });
+  const prefix = row.locator('code');
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(prefix).toBeVisible();
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(prefix).toHaveCount(0);
 });
 
 test(
@@ -197,7 +221,7 @@ test(
     const row = rowFor(page, 'e2e state expired');
     const badge = row.locator('[data-slot="badge"]', { hasText: /^expired$/ });
     await expect(badge).toBeVisible();
-    await expect(badge).toHaveClass(/text-red-400/);
+    await expect(badge).toHaveClass(/text-danger/);
   },
 );
 

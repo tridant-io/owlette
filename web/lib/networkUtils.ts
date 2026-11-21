@@ -43,9 +43,9 @@ export function formatThroughputShort(bytesPerSec: number): string {
 
 /** Per-NIC chart colors, [TX, RX]. */
 export const NIC_COLORS: [string, string][] = [
-  ['rgb(251, 146, 60)', 'rgb(74, 222, 128)'],    // orange-400 / green-400
-  ['rgb(245, 158, 11)', 'rgb(45, 212, 191)'],    // amber-500 / teal-400
-  ['rgb(244, 63, 94)', 'rgb(96, 165, 250)'],     // rose-500 / blue-400
+  ['var(--series-nic-tx-1)', 'var(--series-nic-rx-1)'],
+  ['var(--series-nic-tx-2)', 'var(--series-nic-rx-2)'],
+  ['var(--series-nic-tx-3)', 'var(--series-nic-rx-3)'],
 ];
 
 /** TX/RX pair by NIC index; wraps past the end of the table. */
@@ -56,11 +56,11 @@ export function getNicColors(index: number): { tx: string; rx: string } {
 
 /** Per-disk chart colors. */
 const DISK_COLORS = [
-  'oklch(0.72 0.14 155)',  // green (like current disk but per-device)
-  'oklch(0.68 0.16 185)',  // teal
-  'oklch(0.65 0.14 280)',  // purple
-  'oklch(0.70 0.16 85)',   // amber
-  'oklch(0.62 0.12 230)',  // slate blue
+  'var(--series-disk-1)',
+  'var(--series-disk-2)',
+  'var(--series-disk-3)',
+  'var(--series-disk-4)',
+  'var(--series-disk-5)',
 ];
 
 /** Disk color by index; wraps past the end of the table. */
@@ -70,9 +70,9 @@ export function getDiskColors(index: number): string {
 
 /** Per-GPU chart colors, [usage (warm), temperature (cool)]. */
 const GPU_COLORS: { usage: string; temp: string }[] = [
-  { usage: 'oklch(0.72 0.19 55)',  temp: 'oklch(0.65 0.22 25)' },   // orange / red-orange
-  { usage: 'oklch(0.70 0.18 130)', temp: 'oklch(0.63 0.20 100)' },  // green / yellow-green
-  { usage: 'oklch(0.68 0.20 270)', temp: 'oklch(0.60 0.22 300)' },  // purple / magenta
+  { usage: 'var(--series-gpu-usage-1)', temp: 'var(--series-gpu-temp-1)' },
+  { usage: 'var(--series-gpu-usage-2)', temp: 'var(--series-gpu-temp-2)' },
+  { usage: 'var(--series-gpu-usage-3)', temp: 'var(--series-gpu-temp-3)' },
 ];
 
 /** Usage/temp pair by GPU index; wraps past the end of the table. */

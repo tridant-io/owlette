@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { TERMINAL_DEPLOYMENT_STATUSES } from '@/lib/deploymentStatuses';
 
 interface Software {
   name: string;
@@ -99,6 +100,12 @@ export function useUninstall() {
     try {
       console.log('[useUninstall] Creating uninstall:', { siteId, softwareName, machineIds, deploymentId });
 
+      // the server refuses a deployment_id whose target on that machine is still
+      // installing, so only finished targets carry it; other machines go untied.
+      const finishedTargets = deploymentId
+        ? await fetchFinishedTargets(siteId, deploymentId)
+        : new Set<string>();
+
       for (const machineId of machineIds) {
         const response = await fetch(
           `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/uninstall`,
@@ -120,7 +127,9 @@ export function useUninstall() {
             },
             body: JSON.stringify({
               software_name: softwareName,
-              ...(deploymentId ? { deployment_id: deploymentId } : {}),
+              ...(deploymentId && finishedTargets.has(machineId)
+                ? { deployment_id: deploymentId }
+                : {}),
             }),
           },
         );
@@ -196,6 +205,18 @@ export function useUninstall() {
     createUninstall,
     cancelUninstall,
   };
+}
+
+async function fetchFinishedTargets(siteId: string, deploymentId: string): Promise<Set<string>> {
+  const snap = await getDoc(doc(db!, 'sites', siteId, 'deployments', deploymentId));
+  const targets: unknown = snap.exists() ? snap.data().targets : undefined;
+  return new Set(
+    (Array.isArray(targets) ? targets : [])
+      .map((target) => target as { machineId?: unknown; status?: unknown } | null)
+      .filter((target) => typeof target?.status === 'string' && TERMINAL_DEPLOYMENT_STATUSES.has(target.status))
+      .map((target) => target?.machineId)
+      .filter((machineId): machineId is string => typeof machineId === 'string'),
+  );
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {

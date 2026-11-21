@@ -1,17 +1,17 @@
 /**
- * Sites — two-step delete flow (C2.3): trash -> nested confirm dialog; confirming
- * writes to Firestore and toasts, cancelling does neither. `site-to-delete` is
- * re-seeded in beforeEach so the shared baseline is untouched and the cancel
- * test can assert existence without depending on order.
+ * sites: delete from a site's danger zone (C2.3)
  *
- * Not covered: the single-site delete block — the baseline always has >=3 sites,
- * so exercising it needs per-test emulator isolation we don't have yet.
+ * superadmin opens /admin/sites/site-to-delete?section=danger and presses delete
+ * site. the confirm dialog names the site; confirming deletes it, toasts, and lands
+ * on /admin/sites, because a superadmin still administers other sites. cancelling
+ * does none of that. the site is re-seeded before every test, so the shared baseline
+ * is untouched and the cancel test does not depend on order.
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite } from '../../helpers/seed';
+import { releaseFixtureSite, seedSite } from '../../helpers/seed';
 
 test.use(roleState('superadmin'));
 
@@ -28,59 +28,47 @@ test.beforeEach(async () => {
   });
 });
 
-async function openManageSitesDialog(page: import('@playwright/test').Page) {
-  await page.goto('/dashboard');
-  await page.getByTestId('site-switcher-trigger').click();
-  await page.getByRole('menuitem', { name: /manage sites/i }).click();
-  const dialog = page.getByRole('dialog', { name: /manage sites/i });
-  await expect(dialog).toBeVisible();
-  return dialog;
+// a superadmin's sites sort by name and this one sorts ahead of site-A, so the copy
+// the cancel test keeps would become the current site of later superadmin specs
+test.afterAll(async () => {
+  await releaseFixtureSite(DELETEABLE_SITE_ID, 'someone-else');
+});
+
+async function openDangerZone(page: Page) {
+  await page.goto(`/admin/sites/${DELETEABLE_SITE_ID}?section=danger`);
+  await expect(page.getByRole('heading', { level: 1, name: DELETEABLE_SITE_NAME, exact: true })).toBeVisible();
+  return page.getByRole('region', { name: 'danger zone' }).getByRole('button', { name: 'delete site', exact: true });
 }
 
-test('superadmin can delete a site via manage-sites confirmation', async ({ page }) => {
-  const manageDialog = await openManageSitesDialog(page);
+test('superadmin deletes a site from its danger zone', async ({ page }) => {
+  const deleteButton = await openDangerZone(page);
+  await deleteButton.click();
 
-  // second icon button on the row; disambiguated by the C2.2 aria-label
-  await manageDialog
-    .getByRole('button', { name: `delete ${DELETEABLE_SITE_NAME}` })
-    .click();
-
-  // scope by title: the manage-sites dialog is still open behind this one
-  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/i });
+  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/ });
   await expect(confirmDialog).toBeVisible();
   await expect(confirmDialog).toContainText(DELETEABLE_SITE_NAME);
 
-  // exact match: "delete {site name}" rows behind would match the substring
-  await confirmDialog
-    .getByRole('button', { name: 'delete site', exact: true })
-    .click();
+  await confirmDialog.getByRole('button', { name: 'delete site', exact: true }).click();
 
-  await expect(page.getByText(/deleted successfully/i)).toBeVisible();
+  await expect(page.getByText(/site deleted/i)).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/sites$/);
 
-  const db = getAdminDb();
-  const snap = await db.collection('sites').doc(DELETEABLE_SITE_ID).get();
+  const snap = await getAdminDb().collection('sites').doc(DELETEABLE_SITE_ID).get();
   expect(snap.exists).toBe(false);
 });
 
-test('cancelling the delete-confirmation keeps the site', async ({ page }) => {
-  const manageDialog = await openManageSitesDialog(page);
+test('cancelling the delete keeps the site', async ({ page }) => {
+  const deleteButton = await openDangerZone(page);
+  await deleteButton.click();
 
-  await manageDialog
-    .getByRole('button', { name: `delete ${DELETEABLE_SITE_NAME}` })
-    .click();
-
-  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/i });
+  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/ });
   await expect(confirmDialog).toBeVisible();
-
-  await confirmDialog.getByRole('button', { name: /^cancel$/i }).click();
+  await confirmDialog.getByRole('button', { name: 'cancel', exact: true }).click();
 
   await expect(confirmDialog).toBeHidden();
-  await expect(
-    manageDialog.getByRole('button', { name: `delete ${DELETEABLE_SITE_NAME}` }),
-  ).toBeVisible();
+  await expect(deleteButton).toBeVisible();
 
-  const db = getAdminDb();
-  const snap = await db.collection('sites').doc(DELETEABLE_SITE_ID).get();
+  const snap = await getAdminDb().collection('sites').doc(DELETEABLE_SITE_ID).get();
   expect(snap.exists).toBe(true);
   expect(snap.data()!.name).toBe(DELETEABLE_SITE_NAME);
 });

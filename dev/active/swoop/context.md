@@ -197,6 +197,10 @@ D1–D17 in plan.md. Owner rulings are listed at the top of plan.md. Gate memos 
   ("via `CreateProcessAsUser` with the session bundle on stdin") still holds; the token is the service's SYSTEM
   token retargeted to the console session, and the file fallback is dropped on Windows — amend C2 when
   tri-platform is next touched.
+- **`dev/active/swoop-macos`**: executes Task 9.1 and tri-platform Wave 8 for macOS; Linux is still to come.
+  Its names join this plan's: the streamer verb `selfcheck` (macOS only), the encoder backend `videotoolbox`
+  (in `BackendCaps::backend`, `select::CHAIN`, `status.encoder` and `probe`) and the cargo feature
+  `encode-videotoolbox`. The rest are in its `context.md`, "Names this plan adds".
 
 ## Research index (`research/`)
 

@@ -10,27 +10,36 @@
  *
  * Three mutually exclusive paths:
  *   - site mode (`SITE_TARGET_ID`): server-side llm + fan-out tools, over the
- *     machines that are online AND have the hoot kill switch on (D-A)
- *   - single machine, local hoot + site-admin caller: the agent runs the llm and
- *     streams via firestore onSnapshot
+ *     machines that are online AND have the hoot kill switch on (D-A), within
+ *     the caller's machine scope
+ *   - single machine, local hoot + site-admin caller, on an agent whose local hoot
+ *     can't change a launch: the agent runs the llm and streams via firestore onSnapshot
  *   - single machine, fallback: server-side llm + tool relay
+ *
+ * None of them has an approval card a caller can answer, so a launch change is
+ * refused on the server-side paths (`launchChangeApprovable` stays off).
  */
 
-import { streamText, stepCountIs, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, type ModelMessage, type UIMessageChunk } from 'ai';
 import { withAdvisor } from '@/lib/hoot/advisor';
 import { SITE_TARGET_ID } from '@/lib/hoot/target';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
+import { getSiteTimezone } from '@/lib/talons/store.server';
+import { scopeCovers } from '@/lib/machineAccess';
+import { compareVersions, LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION } from '@/lib/versionUtils';
 import {
   resolveLlmConfig,
   verifyUserSiteAccess,
   resolveHootMaxTier,
   isMachineOnline,
   isHootEnabled,
+  getMachineSummary,
   listSiteMachines,
   getHootRequireTier3Approval,
   buildExecutableTools,
+  type SiteMachineSummary,
 } from '@/lib/hoot-utils.server';
 
 // Re-exported, not redefined: both conversation routes import the sentinel from
@@ -62,8 +71,12 @@ export interface HootStreamRequest {
   /** Public-API cap: api-key callers are held at tier 1 so a chat-scoped key
    *  can't inherit the owner's admin role and run destructive tools. */
   maxToolTier?: ToolTier;
-  /** Fired with the accumulated assistant text at stream end. Throwing is safe:
-   *  errors are logged, never surfaced to the client. */
+  /** Called once with hoot's reply text when the turn finished: on the server-side
+   *  paths after a `finish` frame with no `error` frame, awaited before the response
+   *  closes; on local hoot when the agent marks the reply complete, as it closes.
+   *  Never called for an error, an empty reply, a turn that could not start, a
+   *  local-hoot timeout, or a client that hung up before the whole reply was
+   *  queued. Throwing is safe: errors are logged, never surfaced to the client. */
   onAssistantText?: (text: string) => Promise<void> | void;
 }
 
@@ -83,9 +96,11 @@ export async function runHootStream(
   const isSiteMode = machineId === SITE_TARGET_ID;
   const access = await verifyUserSiteAccess(db, userId, siteId);
   const maxToolTier = req.maxToolTier ?? resolveHootMaxTier(access);
+  const machineScope = access.standing.machineIds;
 
   if (isSiteMode) {
-    const machines = await listSiteMachines(db, siteId);
+    // a scoped caller's site is the machines in their scope
+    const machines = await listSiteMachines(db, siteId, machineScope);
     const online = machines.filter((machine) => machine.online);
     if (online.length === 0) {
       return {
@@ -100,9 +115,7 @@ export async function runHootStream(
     // path below. Offline is classified first, so a machine that is both keeps
     // its 503 and the "turn hoot back on" fix stays visible when it is the only
     // thing in the way.
-    const dispatchMachines = online
-      .filter((machine) => machine.hootEnabled)
-      .map((machine) => machine.id);
+    const dispatchMachines = online.filter((machine) => machine.hootEnabled);
     if (dispatchMachines.length === 0) {
       return {
         ok: false,
@@ -123,6 +136,7 @@ export async function runHootStream(
         maxToolTier,
         dispatchMachines,
         access.role,
+        machineScope,
         req.onAssistantText,
       ),
     };
@@ -130,6 +144,12 @@ export async function runHootStream(
 
   if (!machineId) {
     return { ok: false, status: 400, error: 'machineId is required for single-machine mode' };
+  }
+
+  // before any machine read, so a scoped caller never learns whether a machine
+  // outside their scope exists or is online
+  if (!scopeCovers(machineScope, machineId)) {
+    return { ok: false, status: 404, error: 'machine not found or no access' };
   }
 
   const online = await isMachineOnline(db, siteId, machineId);
@@ -180,6 +200,7 @@ export async function runHootStream(
       chatId,
       maxToolTier,
       access.role,
+      machineScope,
       req.onAssistantText,
     ),
   };
@@ -201,6 +222,12 @@ async function isHootLocal(
     if (!machineDoc.exists) return false;
 
     const data = machineDoc.data();
+    // A fielded agent's local hoot can still set a launch mode with nobody to ask,
+    // so it gets no conversation from here: the turn runs on the server, gated.
+    if (data?.capabilities?.localHootLaunchGate !== 1) return false;
+    const version = typeof data.agent_version === 'string' ? data.agent_version : null;
+    if ((compareVersions(version, LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION) ?? -1) < 0) return false;
+
     // Wire field keeps the legacy `cortex` spelling — the agent writes it.
     const hootStatus = data?.cortexStatus;
     if (!hootStatus?.online) return false;
@@ -341,6 +368,18 @@ function handleLocalHoot(
           const complete: boolean = response.complete || false;
           const status: string = data.status;
 
+          // the agent writes an error as complete, with its message as the content:
+          // answer it as an error before either branch below takes it for hoot's reply
+          if (status === 'error') {
+            controller.enqueue(
+              encoder.encode(`3:${JSON.stringify(content || 'hoot error')}\n`),
+            );
+            if (timeoutId) clearTimeout(timeoutId);
+            unsubscribe?.();
+            controller.close();
+            return;
+          }
+
           if (content.length > lastContent.length) {
             const delta = content.slice(lastContent.length);
             controller.enqueue(encoder.encode(`0:${JSON.stringify(delta)}\n`));
@@ -355,15 +394,6 @@ function handleLocalHoot(
             unsubscribe?.();
             controller.close();
             void fireAssistantTap(onAssistantText, lastContent);
-          }
-
-          if (status === 'error') {
-            controller.enqueue(
-              encoder.encode(`3:${JSON.stringify(content || 'hoot error')}\n`),
-            );
-            if (timeoutId) clearTimeout(timeoutId);
-            unsubscribe?.();
-            controller.close();
           }
         },
         (error) => {
@@ -401,10 +431,11 @@ function handleServerSideLLM(
   chatId: string,
   maxToolTier: ToolTier,
   userRole: string | null,
+  machineScope: readonly string[] | null,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole),
+    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole, machineScope),
     onAssistantText,
   );
 }
@@ -419,12 +450,16 @@ async function runServerSideLLM(
   chatId: string,
   maxToolTier: ToolTier,
   userRole: string | null,
+  machineScope: readonly string[] | null,
 ): Promise<Response> {
-  const [llmConfig, processes, requireTier3Approval] = await Promise.all([
+  const [llmConfig, processes, requireTier3Approval, machine] = await Promise.all([
     resolveLlmConfig(db, userId),
     fetchProcessSummaries(db, siteId, machineId),
     getHootRequireTier3Approval(db, siteId),
+    // a failed read is no reason to fail the turn: utc, and a machine that holds nothing.
+    getMachineSummary(db, siteId, machineId).catch(() => null),
   ]);
+  const activeHoursGuardIds = machine?.activeHoursGuard === true ? [machineId] : [];
 
   const toolDefs = conversationsToolDefs(maxToolTier);
   const executableTools = buildExecutableTools(
@@ -435,14 +470,20 @@ async function runServerSideLLM(
     toolDefs,
     false,
     [],
-    { userId, userRole, requireTier3Approval },
+    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
 
   const result = streamText({
     model,
-    system: buildSystemPrompt(machineName || machineId, false, processes),
+    system: buildSystemPrompt(
+      machineName || machineId,
+      false,
+      processes,
+      { scope: 'machine', timeZone: machine?.timezone },
+      { machineIds: [machineId], guardedIds: activeHoursGuardIds },
+    ),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),
@@ -459,12 +500,13 @@ function handleSiteWideMode(
   messages: ModelMessage[],
   chatId: string,
   maxToolTier: ToolTier,
-  dispatchMachines: string[],
+  dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
+  machineScope: readonly string[] | null,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole),
+    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole, machineScope),
     onAssistantText,
   );
 }
@@ -477,13 +519,19 @@ async function runSiteWideMode(
   chatId: string,
   maxToolTier: ToolTier,
   /** Online AND hoot-enabled — the kill switch is applied before we get here. */
-  dispatchMachines: string[],
+  dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
+  machineScope: readonly string[] | null,
 ): Promise<Response> {
-  const [llmConfig, requireTier3Approval] = await Promise.all([
+  const [llmConfig, requireTier3Approval, siteTimeZone] = await Promise.all([
     resolveLlmConfig(db, userId),
     getHootRequireTier3Approval(db, siteId),
+    getSiteTimezone(db, siteId),
   ]);
+  const machineIds = dispatchMachines.map((machine) => machine.id);
+  const activeHoursGuardIds = dispatchMachines
+    .filter((machine) => machine.activeHoursGuard)
+    .map((machine) => machine.id);
   const toolDefs = conversationsToolDefs(maxToolTier);
   const executableTools = buildExecutableTools(
     db,
@@ -492,15 +540,21 @@ async function runSiteWideMode(
     chatId,
     toolDefs,
     true,
-    dispatchMachines,
-    { userId, userRole, requireTier3Approval },
+    machineIds,
+    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
 
   const result = streamText({
     model,
-    system: buildSystemPrompt('', true),
+    system: buildSystemPrompt(
+      '',
+      true,
+      undefined,
+      { scope: 'site', timeZone: siteTimeZone },
+      { machineIds, guardedIds: activeHoursGuardIds },
+    ),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),
@@ -511,17 +565,14 @@ async function runSiteWideMode(
 }
 
 /**
- * Tee a streaming Response: forward bytes to the client while accumulating text
- * for `onAssistantText`. A Promise upstream (server-side LLM) resolves lazily
+ * Tee a streaming Response: forward bytes to the client while reading the reply's
+ * text for `onAssistantText`. A Promise upstream (server-side LLM) resolves lazily
  * inside the teed stream so the caller still gets a synchronous Response.
  */
 function wrapWithAssistantTap(
   upstreamPromise: Response | Promise<Response>,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
-  const decoder = new TextDecoder();
-  let accumulated = '';
-
   const stream = new ReadableStream({
     async start(controller) {
       let upstream: Response;
@@ -540,20 +591,22 @@ function wrapWithAssistantTap(
         return;
       }
 
+      const reply = onAssistantText ? replyTextReader() : null;
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           if (value) {
+            // throws once the client has hung up, before `push` sees these bytes, so
+            // a reply is saved only when every byte of it was queued for the client
             controller.enqueue(value);
-            if (onAssistantText) {
-              accumulated += extractTextDeltas(decoder.decode(value, { stream: true }));
-            }
+            reply?.push(value);
           }
         }
+        // saved before the close, so the reply is stored by the time the response ends
+        if (reply) await fireAssistantTap(onAssistantText, reply.text());
       } finally {
         controller.close();
-        void fireAssistantTap(onAssistantText, accumulated);
       }
     },
   });
@@ -567,22 +620,65 @@ function wrapWithAssistantTap(
 }
 
 /**
- * Text out of AI-SDK protocol frames. Only `0:"..."` (text delta) frames count;
- * tool-call/finish frames pass through to the client but are not accumulated.
+ * The reply's text, read out of the AI SDK UI message stream the server-side
+ * paths return: one `data: {json}` frame per line. Each `text-start` opens a
+ * part, as in the dashboard's own message, and the parts are joined the way the
+ * dashboard's copy button joins them; tool calls and reasoning are not text.
+ *
+ * The text counts only when the turn reached `finish` with no `error` frame.
+ * The SDK still sends `finish` after an error, and a half reply stored as hoot's
+ * answer would reach the model on the next turn as if it were whole.
  */
-function extractTextDeltas(chunk: string): string {
-  let out = '';
-  for (const line of chunk.split('\n')) {
-    if (!line.startsWith('0:')) continue;
-    const json = line.slice(2);
+function replyTextReader() {
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  const partById = new Map<string, number>();
+  let pendingLine = '';
+  let finished = false;
+  let failed = false;
+
+  function readFrame(line: string): void {
+    if (!line.startsWith('data: ')) return;
+    const data = line.slice('data: '.length);
+    if (data === '[DONE]') return;
+    let frame: UIMessageChunk;
     try {
-      const parsed = JSON.parse(json);
-      if (typeof parsed === 'string') out += parsed;
+      frame = JSON.parse(data);
     } catch {
-      // ignore partial frames — the next chunk will resync.
+      // a frame that cannot be read may have carried text
+      failed = true;
+      return;
+    }
+    switch (frame.type) {
+      case 'text-start':
+        partById.set(frame.id, parts.push('') - 1);
+        break;
+      case 'text-delta': {
+        const index = partById.get(frame.id);
+        if (index !== undefined) parts[index] += frame.delta;
+        break;
+      }
+      case 'error':
+        failed = true;
+        break;
+      case 'finish':
+        finished = true;
+        break;
     }
   }
-  return out;
+
+  return {
+    push(bytes: Uint8Array): void {
+      // a frame, or a multi-byte character, can arrive cut across two chunks
+      pendingLine += decoder.decode(bytes, { stream: true });
+      const lines = pendingLine.split('\n');
+      pendingLine = lines.pop() ?? '';
+      for (const line of lines) readFrame(line);
+    },
+    text(): string {
+      return finished && !failed ? parts.join('\n\n').trim() : '';
+    },
+  };
 }
 
 async function fireAssistantTap(

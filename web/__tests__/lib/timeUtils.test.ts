@@ -7,7 +7,39 @@
  * which is the whole point of the helper.
  */
 
-import { formatHeartbeatTime, zonedTimeToUtcMs } from '@/lib/timeUtils';
+import { formatDay, formatHeartbeatTime, zonedTimeToUtcMs } from '@/lib/timeUtils';
+
+describe('formatDay', () => {
+  // local noon, so the day reads the same in any timezone
+  const NOV_25 = new Date(2026, 10, 25, 12).getTime();
+
+  it('writes a day lowercase with its year, or without', () => {
+    expect(formatDay(NOV_25)).toBe('nov 25, 2026');
+    expect(formatDay(NOV_25, { year: false })).toBe('nov 25');
+  });
+
+  it('writes a UTC day as the UTC calendar has it, whatever the viewer zone', () => {
+    // a billing period's first instant, and its last
+    expect(formatDay(Date.UTC(2026, 10, 1), { utc: true })).toBe('nov 1, 2026');
+    expect(formatDay(Date.UTC(2026, 11, 1) - 1, { utc: true })).toBe('nov 30, 2026');
+    expect(formatDay(Date.UTC(2026, 10, 1), { utc: true, year: false })).toBe('nov 1');
+  });
+
+  it('asks for en-US whatever the browser language, and for UTC only when told to', () => {
+    const spy = jest.spyOn(Date.prototype, 'toLocaleDateString');
+    try {
+      formatDay(NOV_25);
+      formatDay(NOV_25, { utc: true });
+
+      expect(spy.mock.calls[0][0]).toBe('en-US');
+      expect(spy.mock.calls[0][1]?.timeZone).toBeUndefined();
+      expect(spy.mock.calls[1][0]).toBe('en-US');
+      expect(spy.mock.calls[1][1]?.timeZone).toBe('UTC');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
 
 describe('zonedTimeToUtcMs', () => {
   it('treats UTC components as UTC', () => {

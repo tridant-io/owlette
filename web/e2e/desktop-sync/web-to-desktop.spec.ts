@@ -19,8 +19,8 @@
  * writes — so the row is located by its SEEDED name throughout, exactly as the
  * web-only roundtrip spec does. What changes on screen is the DESKTOP app.
  *
- * NOT EXECUTED as part of the change that introduced it: running this kills the
- * operator's tray (the app is single-instance). See README.md.
+ * the app is single-instance, so this needs its own build beside a live install,
+ * and refuses to run otherwise. see README.md.
  */
 
 import { expect as playwrightExpect, type Locator, type Page } from '@playwright/test'

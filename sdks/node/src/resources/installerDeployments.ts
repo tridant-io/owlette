@@ -82,6 +82,28 @@ export interface CreateInstallerDeploymentOptions {
   close_processes?: readonly string[];
   suppress_projects?: readonly string[];
   parallel_install?: boolean;
+  /**
+   * Install inside the machines' active hours anyway. The server writes it onto
+   * every install with your key as the approver, and the agent logs the reason.
+   * Without it, a Windows agent with `capabilities.activeHoursGuard` fails a
+   * target inside active hours with an `error` starting `Error: active_hours:`.
+   */
+  activeHoursOverride?: { reason: string };
+  idempotencyKey?: string;
+}
+
+export interface RetryInstallerDeploymentOptions {
+  /** As for `create`. The deployment's own override does not carry over to a retry. */
+  activeHoursOverride?: { reason: string };
+  idempotencyKey?: string;
+}
+
+export interface UninstallInstallerDeploymentOptions {
+  /**
+   * The program's exact name in the machines' software list. Each finished
+   * target that lists it runs its uninstaller; the rest come back in `skipped`.
+   */
+  softwareName: string;
   idempotencyKey?: string;
 }
 
@@ -101,6 +123,8 @@ export interface InstallerDeploymentMutationResult {
   cancelled?: number;
   queued?: number;
   machine_ids?: string[];
+  /** uninstall only: targets not queued, with why. */
+  skipped?: Array<{ machineId: string; reason: string }>;
 }
 
 export interface InstallerDeploymentDeleteResult {
@@ -156,6 +180,9 @@ export class InstallerDeployments {
     if (opts.close_processes !== undefined) body.close_processes = [...opts.close_processes];
     if (opts.suppress_projects !== undefined) body.suppress_projects = [...opts.suppress_projects];
     if (opts.parallel_install) body.parallel_install = true;
+    if (opts.activeHoursOverride) {
+      body.active_hours_override = { reason: opts.activeHoursOverride.reason };
+    }
 
     const res = await this.client.request<CreateInstallerDeploymentResult>(
       `/api/sites/${encodeURIComponent(siteId)}/deployments`,
@@ -172,13 +199,15 @@ export class InstallerDeployments {
   async retry(
     siteId: string,
     deploymentId: string,
-    opts: { idempotencyKey?: string } = {},
+    opts: RetryInstallerDeploymentOptions = {},
   ): Promise<InstallerDeploymentMutationResult> {
     const res = await this.client.request<InstallerDeploymentMutationResult>(
       `/api/sites/${encodeURIComponent(siteId)}/deployments/${encodeURIComponent(deploymentId)}/retry`,
       {
         method: 'POST',
-        body: {},
+        body: opts.activeHoursOverride
+          ? { active_hours_override: { reason: opts.activeHoursOverride.reason } }
+          : {},
         idempotencyKey:
           opts.idempotencyKey ?? `sdk-installer-deployments-retry-${randomUUID()}`,
       },
@@ -206,15 +235,16 @@ export class InstallerDeployments {
   async uninstall(
     siteId: string,
     deploymentId: string,
-    opts: { idempotencyKey?: string } = {},
+    opts: UninstallInstallerDeploymentOptions,
   ): Promise<InstallerDeploymentMutationResult> {
     const res = await this.client.request<InstallerDeploymentMutationResult>(
       `/api/sites/${encodeURIComponent(siteId)}/deployments/${encodeURIComponent(deploymentId)}/uninstall`,
       {
         method: 'POST',
-        body: {},
+        // `?.`: a plain-JS caller that passes no options gets the server's 400, not a TypeError.
+        body: { software_name: opts?.softwareName },
         idempotencyKey:
-          opts.idempotencyKey ?? `sdk-installer-deployments-uninstall-${randomUUID()}`,
+          opts?.idempotencyKey ?? `sdk-installer-deployments-uninstall-${randomUUID()}`,
       },
     );
     return res.data;

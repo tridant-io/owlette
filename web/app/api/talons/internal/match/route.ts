@@ -7,8 +7,7 @@
  * only observer and forwards catalog matches here. The other three dispatchers
  * already hold a Firestore handle and tap the matcher in-process.
  *
- * Auth: `x-internal-secret` vs `CORTEX_INTERNAL_SECRET`, constant-time —
- * deliberately not the `!==` the older `/api/alerts/trigger` still uses.
+ * Auth: `x-internal-secret` vs `CORTEX_INTERNAL_SECRET`, constant-time.
  *
  * Not public; registered in `INTERNAL_ROUTES` in scripts/validate-openapi.ts.
  *
@@ -18,32 +17,17 @@
  * caller's 10s timeout firing first is a non-event — the run continues here and
  * the function does not retry.
  */
-import { timingSafeEqual } from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 import { problem, problemFromError, problemValidation, ProblemType } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { hootInternalSecret } from '@/lib/hootInternalSecret';
+import { hootInternalSecret, hootInternalSecretMatches } from '@/lib/hootInternalSecret';
 import { matchAndRunTalons } from '@/lib/talons/matcher.server';
 import { TALON_EVENT_TYPES, type TalonEventType } from '@/lib/talons/types';
 
-// `timingSafeEqual` and the run engine's webhook signing are both node:crypto.
+// the secret check and the run engine's webhook signing are both node:crypto.
 export const runtime = 'nodejs';
-
-/**
- * Constant-time secret check. The length pre-check leaks nothing new —
- * `timingSafeEqual` throws on unequal lengths anyway, and the secret is a
- * fixed-length deployment value.
- */
-function secretMatches(supplied: string, expected: string): boolean {
-  if (supplied.length === 0 || supplied.length !== expected.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
-  } catch {
-    return false;
-  }
-}
 
 function isCatalogEvent(value: unknown): value is TalonEventType {
   return (
@@ -77,8 +61,7 @@ async function readBody(
 
 export async function POST(request: NextRequest) {
   try {
-    const expected = hootInternalSecret();
-    if (!expected) {
+    if (!hootInternalSecret()) {
       // 503, not 401: a missing server secret would send the caller hunting a
       // credential problem that doesn't exist.
       return problem({
@@ -91,7 +74,7 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (!secretMatches(request.headers.get('x-internal-secret') ?? '', expected)) {
+    if (!hootInternalSecretMatches(request.headers.get('x-internal-secret'))) {
       return problem({
         type: ProblemType.Unauthorized,
         title: 'unauthorized',

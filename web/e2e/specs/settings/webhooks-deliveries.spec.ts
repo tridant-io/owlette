@@ -14,6 +14,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { FieldValue } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 
 test.use(roleState('admin'));
 
@@ -137,6 +139,12 @@ async function gotoExpandedWebhook(page: Page): Promise<void> {
   await expect(
     page.getByRole('heading', { name: 'recent deliveries' }),
   ).toBeVisible();
+  // a click on a delivery still sliding into view can miss it
+  await slideSettled(webhookCard(page));
+}
+
+function webhookCard(page: Page) {
+  return page.locator('[data-slot="card"]').filter({ hasText: WEBHOOK_URL });
 }
 
 test.beforeEach(async () => {
@@ -218,6 +226,34 @@ test('expanded row lists deliveries newest-first with state icons, attempts, and
   ).toHaveCount(1);
   await expect(succeededRow.getByText('200', { exact: true })).toBeVisible();
   await expect(succeededRow.getByText('att 1', { exact: true })).toBeVisible();
+});
+
+test('the deliveries slide open and closed, as the other expandable panels do', async ({ page }) => {
+  await page.goto('/settings/webhooks');
+  await expect(
+    page.getByRole('heading', { name: 'webhooks', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  const card = webhookCard(page);
+  await expect(card).toBeVisible();
+  const slides = await recordSlides(card);
+  // named for what a click does next: expand, then collapse
+  const toggle = card.getByRole('button', { name: /^(expand|collapse)$/ });
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(deliveryRows(page)).toHaveCount(3);
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(deliveryRows(page)).toHaveCount(0);
+
+  // the slide clips the deliveries, so the outlines of refresh and retry must stay
+  // inside it. last, because the check turns animation off for the rest of the page
+  await toggle.click();
+  await expect(deliveryRows(page)).toHaveCount(3);
+  await slideSettled(card);
+  expect(await clippedFocusRings(page, card.locator('[data-slot="collapsible-content"]'))).toEqual([]);
 });
 
 test('retrying a failed delivery posts /retry and seeds a pending delivery with retryOf set', async ({

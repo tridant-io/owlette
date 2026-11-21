@@ -26,6 +26,15 @@ export type SwoopStepUpProof =
   | { credential: AuthenticationResponseJSON; challengeId: string };
 
 /**
+ * the step-up was passed somewhere else — owlette swoop's "verify in your
+ * browser" — and the window is open on the server, so the retry carries no
+ * proof. never a request body: the hook sends nothing for it.
+ */
+export const STEP_UP_WINDOW_OPEN = { kind: 'window' } as const;
+
+export type SwoopStepUpAnswer = SwoopStepUpProof | typeof STEP_UP_WINDOW_OPEN;
+
+/**
  * the step-up dialog's props, frozen at task 4.2 so later waves fill the dialog
  * without touching the page or the hook.
  */
@@ -34,8 +43,65 @@ export interface SwoopStepUpProps {
   /** false when the account holds no second factor at all — it cannot control. */
   enrolled: boolean;
   /** resolves when the retry has been made; rejects with the reason to show. */
-  onProof: (proof: SwoopStepUpProof) => Promise<void>;
+  onProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   onCancel: () => void;
+}
+
+function stepUpRoute(siteId: string, machineId: string): string {
+  return `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/step-up`;
+}
+
+/** the browser page where owlette swoop's step-up is passed, absolute so the app hands it to the system browser. */
+export function stepUpVerifyUrl(siteId: string, machineId: string, origin = window.location.origin): string {
+  return new URL(`/swoop/${encodeURIComponent(siteId)}/${encodeURIComponent(machineId)}/verify`, origin).toString();
+}
+
+/**
+ * is the caller's window on this machine open for this sign-in, and could it
+ * ever be? `sessionPassedCeremony: false` means this sign-in skipped the second
+ * factor, so a check passed elsewhere never reaches it. throws on any non-2xx.
+ */
+export async function readStepUpWindow(
+  siteId: string,
+  machineId: string,
+): Promise<{ open: boolean; sessionPassedCeremony: boolean }> {
+  const res = await fetch(stepUpRoute(siteId, machineId));
+  if (!res.ok) throw new Error(`step-up status failed (${res.status})`);
+  const { data } = (await res.json()) as { data: { open: boolean; sessionPassedCeremony: boolean } };
+  return data;
+}
+
+// the ceremony's refusals in plain words; the route's own detail covers the policy ones
+const PROOF_REFUSALS: Record<string, string> = {
+  invalid_mfa_proof: "that code didn't work. try again.",
+  invalid_totp_code: 'an authenticator code is 6 digits.',
+  totp_not_enrolled: 'this account has no authenticator app. use a passkey or a backup code.',
+  challenge_not_found: 'the passkey check expired. try again.',
+  assertion_failed: "that passkey didn't check out. try again.",
+  passkey_not_found: "that passkey isn't on this account.",
+};
+
+/** the browser half: post a proof, which opens the caller's window on the machine. */
+export async function submitStepUpProof(
+  siteId: string,
+  machineId: string,
+  proof: SwoopStepUpProof,
+): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(stepUpRoute(siteId, machineId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mfaProof: proof }),
+    });
+  } catch {
+    throw new SwoopStepUpError("that didn't go through. check your connection and try again.");
+  }
+  if (res.ok) return;
+  const body = (await res.json().catch(() => ({}))) as { code?: string; detail?: string };
+  if (res.status === 429) throw new SwoopStepUpError('too many tries. wait a minute, then try again.');
+  const refusal = (body.code && PROOF_REFUSALS[body.code]) || body.detail;
+  throw new SwoopStepUpError(refusal || "that didn't go through. try again.");
 }
 
 /**

@@ -2,8 +2,9 @@
 sync_scrub — periodic on-disk integrity verification for roost.
 
 Re-hashes every assembled file's CONTENTS, not size+mtime: mtime alone misses
-silent bit-rot on never-modified files. Drift is reported to firestore so the
-dashboard can surface "machine X has corrupted file Y".
+silent bit-rot on never-modified files. Drift is written to a local report
+(logs/roost_scrub_reports) and counted in the service log; nothing sends it to
+firestore.
 
 - driven by a separate scheduler, never the main loop
 - only CURRENT, committed versions; older versions may legitimately have been
@@ -313,6 +314,12 @@ def reap_orphan_chunks(
         logger.debug(f"sync_scrub: content store {store} does not exist — nothing to reap")
         return report
 
+    # a sync an earlier process left in flight pins its chunks for good; a dry
+    # run changes nothing, so it still counts them as referenced.
+    if not dry_run:
+        retired = state.retire_interrupted()
+        if retired:
+            logger.info(f"sync_scrub: retired {retired} distribution(s) a restart interrupted")
     referenced = state.list_referenced_chunk_hashes()
     cutoff = time.time() - max(0, min_age_seconds)
 

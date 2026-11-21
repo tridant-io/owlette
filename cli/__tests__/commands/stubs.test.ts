@@ -6,7 +6,7 @@
  * Asserts exit code 3, human-mode stderr carrying the dashboard url +
  * future-plan path + verb name, and the `--json` envelope
  * `{ ok, stub, noun, reason, dashboard_url, future_plan }` — snake_case per
- * docs/cli/overview.md#json-envelope-schema.
+ * "JSON output shapes" in web/content/docs/cli/overview.mdx.
  *
  * `process.exit` is mocked to throw a sentinel so the synchronous exit(3) in
  * `stubExit` is observable without killing the jest worker.
@@ -142,7 +142,7 @@ describe.each(FIXTURES)('owlette $noun $verb (stub)', (fix) => {
     expect(parsed.future_plan as string).toContain(fix.futurePlanSubstr);
     expect(typeof parsed.reason).toBe('string');
     expect(parsed.reason as string).toContain(fix.reasonSubstr);
-    // snake_case is load-bearing per command-surface.md; guard the flip to camelCase
+    // snake_case is the documented envelope; guard the flip to camelCase
     expect(parsed.dashboardUrl).toBeUndefined();
     expect(parsed.futurePlan).toBeUndefined();
   });

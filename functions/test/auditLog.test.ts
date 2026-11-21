@@ -17,9 +17,11 @@ import {
   type AuditEvent,
   type AuditRecord,
 } from '../src/lib/auditLogLogic';
+import type { ScheduledEvent } from 'firebase-functions/v2/scheduler';
 import {
   appendAudit,
   exportAllSites,
+  exportAuditDaily,
   verifySiteChain,
   type AppendDeps,
   type AuditExporter,
@@ -417,6 +419,16 @@ describe('exportAllSites', () => {
     // only 'ok' makes it into the results; 'bad' logs + is skipped
     assert.equal(res.length, 1);
     assert.equal(res[0].siteId, 'ok');
+  });
+});
+
+describe('exportAuditDaily', () => {
+  it('reads no audit record while no sink is wired', async () => {
+    // no firebase app is initialised in this process, so any firestore read throws
+    await assert.doesNotReject(
+      async () => exportAuditDaily.run({ scheduleTime: NOW.toISOString() } as ScheduledEvent),
+      'the nightly export read firestore with nowhere to export to',
+    );
   });
 });
 

@@ -1,11 +1,11 @@
 /**
- * Docs screenshot — installer download + copy-link button cluster, captured
- * from the `dashboard-mixed-states` scenario.
+ * Docs screenshot — installer download + platform menu + copy-link button
+ * cluster, captured from the `dashboard-mixed-states` scenario.
  *
  * Out: `web/public/docs-screens/getting-started-install-buttons.png`
  * Used by: `web/content/docs/getting-started.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
@@ -13,6 +13,8 @@ import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
 import {
   installFixedClock,
   pinAdminSiteContext,
+  test,
+  themedPath,
 } from './docs-helpers';
 
 test.use({ ...roleState('admin'), viewport: { width: 1440, height: 900 } });
@@ -50,6 +52,7 @@ test('getting-started install buttons docs screenshot', async ({ page }) => {
         }
 
         [aria-label="download owlette agent"],
+        [aria-label="choose installer platform"],
         [aria-label="copy owlette agent download link"] {
           outline: 2px solid #22d3ee !important;
           outline-offset: 3px !important;
@@ -64,10 +67,12 @@ test('getting-started install buttons docs screenshot', async ({ page }) => {
     await page.waitForTimeout(500);
 
     const downloadButton = page.getByLabel('download owlette agent');
+    const platformButton = page.getByLabel('choose installer platform');
     const copyButton = page.getByLabel('copy owlette agent download link');
     const header = page.locator('header').first();
 
-    await expect(downloadButton).toBeVisible();
+    await expect(downloadButton).toBeEnabled();
+    await expect(platformButton).toBeVisible();
     await expect(copyButton).toBeVisible();
     await expect(page.getByLabel('help')).toBeVisible();
     await expect(page.getByTestId('user-menu-trigger')).toBeVisible();
@@ -82,7 +87,7 @@ test('getting-started install buttons docs screenshot', async ({ page }) => {
     const clipX = Math.floor(headerBox.x + headerBox.width - cropWidth);
 
     await page.screenshot({
-      path: 'public/docs-screens/getting-started-install-buttons.png',
+      path: themedPath('public/docs-screens/getting-started-install-buttons.png'),
       clip: {
         x: clipX,
         y: Math.floor(headerBox.y),

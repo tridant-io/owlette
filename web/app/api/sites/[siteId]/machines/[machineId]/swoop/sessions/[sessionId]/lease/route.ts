@@ -11,9 +11,8 @@
  * is deliberately NOT re-run — the window covers it, and a ceremony every five
  * minutes is how operators end up turning the feature off.
  *
- * The 12-hour cap is absolute and is not moved by a renewal. Reaching it ends
- * the session rather than merely refusing this call, so the record is closed
- * here with `session_cap` — nothing else ever would.
+ * there is no absolute cap: a session lives as long as its tab keeps renewing,
+ * and every refusal here is recoverable, so none of them closes the record.
  */
 
 import { NextResponse } from 'next/server';
@@ -21,13 +20,8 @@ import { problemFromError, problemNotFound, problemValidation } from '@/lib/apiE
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
-import logger from '@/lib/logger';
 import { evaluateLeaseRenewal, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
-import {
-  endSwoopSession,
-  getSwoopSession,
-  renewSwoopViewerLease,
-} from '@/lib/swoop/sessionStore.server';
+import { getSwoopSession, renewSwoopViewerLease } from '@/lib/swoop/sessionStore.server';
 import { canonicalizeFingerprint, mintViewerToken } from '@/lib/swoop/tokens.server';
 import { recordSwoopDenied } from '@/lib/swoop/audit.server';
 import {
@@ -103,7 +97,7 @@ const leaseHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { 
       machineId,
       intent: viewer.ctl ? 'control' : 'view',
     });
-    const decision = evaluateLeaseRenewal({ ...gate, startedAt: session.startedAt });
+    const decision = evaluateLeaseRenewal(gate);
     if (!decision.ok) {
       recordSwoopDenied({
         ...auditBase,
@@ -111,33 +105,6 @@ const leaseHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { 
         denyReason: decision.code,
         ctl: viewer.ctl,
       });
-      // The cap is absolute and no renewal moves it, so this refusal is the
-      // session's end rather than a retry — close the record on the way out.
-      // Every other refusal here is recoverable (a membership restored, a site
-      // switched back on) and leaves the session alone.
-      //
-      // Best effort: the 403 IS the enforcement, and the retention sweep closes
-      // a record this misses, so a store failure must not turn a refusal into
-      // a 500 the viewer reads as "try again".
-      if (decision.code === 'session_cap_reached') {
-        try {
-          await endSwoopSession({
-            siteId,
-            machineId,
-            sid: sessionId,
-            endReason: 'session_cap',
-          });
-        } catch (err) {
-          logger.warn('[swoop/lease] session record could not be closed at the cap', {
-            context: 'swoop/lease',
-            data: {
-              siteId,
-              machineId,
-              err: err instanceof Error ? err.message : String(err),
-            },
-          });
-        }
-      }
       return decisionProblem(decision);
     }
 

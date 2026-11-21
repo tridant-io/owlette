@@ -6,7 +6,7 @@ import asyncio
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import httpx
 
@@ -16,6 +16,13 @@ if TYPE_CHECKING:
 
 CommandType = Literal["reboot_machine", "shutdown_machine", "capture_screenshot"]
 CommandStatus = Literal["pending", "in_progress", "completed", "failed"]
+
+
+class ActiveHoursOverride(TypedDict):
+    """Act inside the machine's active hours anyway; ``reason`` goes to the site log."""
+
+    reason: str
+
 
 # Polling cadence for `capture_screenshot` — 1.5s × 40 = 60s wall-clock
 # matches the cli's `machine screenshot` command.
@@ -150,6 +157,54 @@ class Machines:
         payload = envelope.get("data") if isinstance(envelope.get("data"), dict) else envelope
         return payload if isinstance(payload, dict) else {}
 
+    async def reboot(
+        self,
+        site_id: str,
+        machine_id: str,
+        *,
+        after_active_hours: bool = False,
+        active_hours_override: ActiveHoursOverride | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue ``reboot_machine``; returns ``{commandId, status}``.
+
+        A Windows agent of 4.1.21 or later (``capabilities.activeHoursGuard``)
+        refuses inside the machine's active hours: ``get_command`` then
+        reports ``failed`` with an ``error`` starting ``Error: active_hours:``.
+        ``after_active_hours`` restarts once they end (now when outside them);
+        older agents, a machine rolled back below 4.1.21 (which keeps the
+        capability), macOS and Linux can't hold it, so the API refuses it with
+        409 ``held_restart_unsupported``.
+        ``active_hours_override`` restarts inside them anyway. Not both.
+        """
+        params = _active_hours_params(active_hours_override)
+        if after_active_hours:
+            params["when"] = "after_active_hours"
+        return await self.dispatch_command(
+            site_id, machine_id, "reboot_machine", params, idempotency_key=idempotency_key
+        )
+
+    async def shutdown(
+        self,
+        site_id: str,
+        machine_id: str,
+        *,
+        active_hours_override: ActiveHoursOverride | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue ``shutdown_machine``; returns ``{commandId, status}``.
+
+        Refused inside active hours like ``reboot``, unless
+        ``active_hours_override`` carries a reason.
+        """
+        return await self.dispatch_command(
+            site_id,
+            machine_id,
+            "shutdown_machine",
+            _active_hours_params(active_hours_override),
+            idempotency_key=idempotency_key,
+        )
+
     async def get_command(
         self,
         site_id: str,
@@ -253,7 +308,14 @@ class Machines:
         return bytes_
 
 
+def _active_hours_params(override: ActiveHoursOverride | None) -> dict[str, Any]:
+    if override is None:
+        return {}
+    return {"active_hours_override": {"reason": override["reason"]}}
+
+
 __all__ = [
+    "ActiveHoursOverride",
     "CommandStatus",
     "CommandType",
     "MachineDeployment",

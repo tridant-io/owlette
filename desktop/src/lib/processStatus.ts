@@ -10,6 +10,8 @@
  * behind, and Windows recycles pids), so every lookup must pick one deliberately.
  */
 
+import type { RecordedIdentity } from '@/lib/ipc'
+
 export const PROCESS_STATUSES = [
   'RUNNING',
   'LAUNCHING',
@@ -154,6 +156,18 @@ export function candidatePidsForProcess(states: AppStates, processId: string): n
   return [...live, ...rest].map(([pid]) => pid)
 }
 
+/**
+ * What a row says the service recorded about its pid's process, for
+ * `terminate_pid` to prove the pid still runs it. Null when the row has no
+ * usable `create_time` (written before 3.3.0, or a LAUNCH_FAILED row, which the
+ * service strips): the host's name check is then all there is.
+ */
+export function recordedIdentity(state: AppState | undefined): RecordedIdentity | null {
+  const createTime = state?.create_time
+  if (typeof createTime !== 'number' || !Number.isFinite(createTime)) return null
+  return { createTime, exe: typeof state?.exe === 'string' ? state.exe : null }
+}
+
 /** The single most likely pid, or null — see {@link candidatePidsForProcess}. */
 export function livePidForProcess(states: AppStates, processId: string): number | null {
   return candidatePidsForProcess(states, processId)[0] ?? null
@@ -194,31 +208,32 @@ export function restoreState(states: AppStates, pid: number, previous: AppState)
 }
 
 /**
- * Dot colours — the same tailwind steps as the dashboard's process badges.
+ * dot colours, on the dashboard's status tokens. stalled and queued keep a
+ * warmer step of their own, where the dashboard draws them as launching.
  * INACTIVE is a hollow ring, as in the legacy GUI.
  */
 export const STATUS_DOT: Record<ProcessStatus, string> = {
-  RUNNING: 'bg-green-500',
-  LAUNCHING: 'bg-yellow-400',
-  RESTARTING: 'bg-yellow-400',
-  STALLED: 'bg-orange-400',
-  QUEUED: 'bg-orange-400',
-  LAUNCH_FAILED: 'bg-red-500',
-  KILLED: 'bg-red-400',
-  STOPPED: 'bg-red-400',
-  INACTIVE: 'bg-transparent border border-slate-400/80',
+  RUNNING: 'bg-success',
+  LAUNCHING: 'bg-warning',
+  RESTARTING: 'bg-warning',
+  STALLED: 'bg-accent-warm',
+  QUEUED: 'bg-accent-warm',
+  LAUNCH_FAILED: 'bg-danger',
+  KILLED: 'bg-danger',
+  STOPPED: 'bg-danger',
+  INACTIVE: 'bg-transparent border border-muted-foreground/80',
 }
 
 /** Text colour for the status word in the detail panel. */
 export const STATUS_TEXT: Record<ProcessStatus, string> = {
-  RUNNING: 'text-green-500',
-  LAUNCHING: 'text-yellow-400',
-  RESTARTING: 'text-yellow-400',
-  STALLED: 'text-orange-400',
-  QUEUED: 'text-orange-400',
-  LAUNCH_FAILED: 'text-red-500',
-  KILLED: 'text-red-400',
-  STOPPED: 'text-red-400',
+  RUNNING: 'text-success',
+  LAUNCHING: 'text-warning',
+  RESTARTING: 'text-warning',
+  STALLED: 'text-accent-warm',
+  QUEUED: 'text-accent-warm',
+  LAUNCH_FAILED: 'text-danger',
+  KILLED: 'text-danger',
+  STOPPED: 'text-danger',
   INACTIVE: 'text-muted-foreground',
 }
 

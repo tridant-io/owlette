@@ -2,11 +2,14 @@
  * PATCH  /api/passkeys/:credentialId — rename
  * DELETE /api/passkeys/:credentialId — delete
  *
- * REMOVAL IS NEVER REFUSED. Deleting the last factor is an allowed outcome:
- * `applyMfaFactorChange` re-arms `requiresMfaSetup` so the account lands back in
- * mandatory setup rather than being held hostage by a lost credential. DELETE is
- * therefore not behind the register/* enrollment gate, which exists to stop an
- * unchallenged session ADDING a factor it can then step up with.
+ * while the account holds a factor, both need a session that has cleared a
+ * challenge (`checkMfaFactorChangeGate`), the same rule as enrolling one. such a
+ * session may remove the last factor: `applyMfaFactorChange` re-arms
+ * `requiresMfaSetup` so the account lands back in mandatory setup.
+ *
+ * someone who can no longer clear a challenge doesn't recover here: a backup code
+ * clears it at /verify-2fa, and a superadmin's `/api/users/{uid}/mfa-reset` covers
+ * a lost credential with no backup codes left.
  *
  * The inventory (`mfaFactors`, `mfaEnrolled`, `requiresMfaSetup`) is written
  * exclusively through `applyMfaFactorChange` — never by this route.
@@ -22,6 +25,9 @@ import {
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
 import { applyMfaFactorChange } from '@/lib/mfaFactors.server';
+import { checkMfaFactorChangeGate } from '@/lib/mfaEnrollmentGate.server';
+import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
+import { keepSessionPastCutoff } from '@/lib/sessionManager.server';
 import {
   revokeAllTrustedDevices,
   DEVICE_TRUST_COOKIE,
@@ -54,6 +60,9 @@ export const PATCH = withRateLimit(async (request: NextRequest) => {
     await requireSessionUser(request, userId);
     await assertActiveUser(userId);
 
+    const gate = await checkMfaFactorChangeGate(userId);
+    if (gate.denied) return gate.denied;
+
     await renamePasskey(userId, credentialId, friendlyName.trim());
 
     // Audit even though a rename touches no factor inventory: the audit scanner
@@ -75,7 +84,7 @@ export const PATCH = withRateLimit(async (request: NextRequest) => {
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ApiAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     }
     return apiError(error, 'passkeys/rename');
   }
@@ -95,7 +104,10 @@ export const DELETE = withRateLimit(async (request: NextRequest) => {
     }
 
     await requireSessionUser(request, userId);
-    await assertActiveUser(userId);
+    const userData = await assertActiveUser(userId);
+
+    const gate = await checkMfaFactorChangeGate(userId);
+    if (gate.denied) return gate.denied;
 
     await deletePasskey(userId, credentialId);
 
@@ -104,6 +116,7 @@ export const DELETE = withRateLimit(async (request: NextRequest) => {
     const factorsAfter = await applyMfaFactorChange(userId, {
       recountPasskeys: true,
     });
+    await keepSessionPastCutoff(userId);
 
     // Last factor gone: mirror /api/mfa/disable and purge trusted-device records
     // so a later re-enroll can't inherit trust from the removed credential. They
@@ -140,6 +153,10 @@ export const DELETE = withRateLimit(async (request: NextRequest) => {
       },
     });
 
+    if (factorsAfter.factors.passkeys < gate.factors.passkeys) {
+      await sendMfaFactorNotice(userData.email, { change: 'removed', factor: 'passkey' });
+    }
+
     const response = NextResponse.json({ success: true });
     if (clearedLastFactor) {
       // Expire the client copy too — the server-side records are gone.
@@ -151,7 +168,7 @@ export const DELETE = withRateLimit(async (request: NextRequest) => {
     return response;
   } catch (error) {
     if (error instanceof ApiAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     }
     return apiError(error, 'passkeys/delete');
   }

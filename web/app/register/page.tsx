@@ -244,7 +244,7 @@ export default function RegisterPage() {
             onFocus={() => setEmailFormOpen(true)}
             required
             disabled={loading}
-            className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+            className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
           />
         </div>
 
@@ -261,7 +261,7 @@ export default function RegisterPage() {
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   disabled={loading}
-                  className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                  className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
                 />
               </div>
               <div className="space-y-2">
@@ -273,7 +273,7 @@ export default function RegisterPage() {
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   disabled={loading}
-                  className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                  className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
                 />
               </div>
             </div>
@@ -288,7 +288,7 @@ export default function RegisterPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
               />
               <p className="text-xs text-muted-foreground">
                 must be 8+ characters with at least 2 of: lowercase, uppercase, numbers, special characters
@@ -305,7 +305,7 @@ export default function RegisterPage() {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
               />
             </div>
             <div className="flex items-start space-x-2">
@@ -314,7 +314,9 @@ export default function RegisterPage() {
                 checked={agreedToTerms}
                 onCheckedChange={(checked) => setAgreedToTerms(checked === true)}
                 disabled={loading}
-                className="mt-0.5 border-border data-[state=checked]:bg-accent-cyan data-[state=checked]:border-accent-cyan"
+                // the hairline is dark-only (it vanishes on the light card) and
+                // unchecked-only, or the dark: variant would outrank the checked cyan.
+                className="mt-0.5 dark:data-[state=unchecked]:border-border"
               />
               {/* Label defaults to flex, which makes each inline child a
                   flex item and breaks "terms of service" mid-phrase in a

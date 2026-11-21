@@ -4,7 +4,8 @@
  * Http-shape coverage for POST /api/hoot/cancel-tool (hoot-async-turns wave 2.4).
  *
  * Authz matrix: unauthenticated → 401; api-key without chat=<siteId>:write → 403
- * scope_insufficient; no site access → 403; chat missing or wrong site → 404; non-owner
+ * scope_insufficient; no site access → 403; a machine outside the caller's machine scope →
+ * 404, before any chat read; chat missing or wrong site → 404; non-owner
  * chat → 403; commandId absent from stream/current.toolCommands, or recorded for another
  * machine → 400.
  *
@@ -91,8 +92,8 @@ function buildFakeDb(
   const setCalls: SetCall[] = [];
   const updateCalls: Array<{ path: string; payload: Record<string, unknown> }> = [];
 
-  function pendingCommandId(): string | null {
-    const pendingSet = setCalls.find((c) => c.path === PENDING_PATH);
+  function pendingCommandId(pendingPath: string): string | null {
+    const pendingSet = setCalls.find((c) => c.path === pendingPath);
     return pendingSet ? Object.keys(pendingSet.payload)[0] : null;
   }
 
@@ -101,8 +102,9 @@ function buildFakeDb(
       path: docPath,
       collection: (sub: string) => makeCollectionRef(`${docPath}/${sub}`),
       get: async () => {
-        if (docPath === COMPLETED_PATH && completedAck) {
-          const cancelId = pendingCommandId();
+        // any machine's completed doc acks the cancel queued on that machine
+        if (docPath.endsWith('/commands/completed') && completedAck) {
+          const cancelId = pendingCommandId(docPath.replace(/completed$/, 'pending'));
           if (cancelId) {
             return { exists: true, data: () => ({ [cancelId]: completedAck }) };
           }
@@ -196,13 +198,21 @@ beforeEach(() => {
   jest.clearAllMocks();
   fake = buildFakeDb(baseDocs());
   mockResolveAuth.mockResolvedValue(authedSession());
-  mockVerifyAccess.mockResolvedValue({
+  mockVerifyAccess.mockResolvedValue(siteAccess(null));
+});
+
+/** verifyUserSiteAccess's answer for a site admin; `machineIds` null is the whole site. */
+function siteAccess(machineIds: readonly string[] | null) {
+  return {
     role: 'admin',
+    siteRole: 'admin',
+    swoopMode: null,
+    standing: { role: 'admin', swoopMode: null, machineIds },
     isSuperadmin: false,
     isSiteAdmin: true,
     isSiteOwner: false,
-  });
-});
+  };
+}
 
 // authz matrix
 
@@ -405,6 +415,61 @@ describe('POST /api/hoot/cancel-tool — dispatch', () => {
     const res = await POST(cancelRequest());
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe('machine_offline');
+  });
+});
+
+// machine scope
+
+describe('POST /api/hoot/cancel-tool — machine scope', () => {
+  const OTHER = 'mach-2';
+
+  /** a chat whose turn did record a command on OTHER, so only the scope stands in the way */
+  function docsWithOtherMachine(): Record<string, Record<string, unknown> | null> {
+    const docs = baseDocs();
+    docs[`chats/${CHAT}/stream/current`] = {
+      status: 'running',
+      toolCommands: {
+        toolcall_fanout: {
+          [MACHINE]: { commandId: TARGET_CMD },
+          [OTHER]: { commandId: 'cmd_on_other' },
+        },
+      },
+    };
+    docs[`sites/${SITE}/machines/${OTHER}`] = { online: true };
+    return docs;
+  }
+
+  it('404 for a machine outside the scope, with nothing queued or written', async () => {
+    mockVerifyAccess.mockResolvedValue(siteAccess([MACHINE]));
+    fake = buildFakeDb(docsWithOtherMachine(), { status: 'completed' });
+
+    const res = await POST(cancelRequest({ machineId: OTHER, commandId: 'cmd_on_other' }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'machine not found or no access' });
+    expect(fake.setCalls).toHaveLength(0);
+    expect(fake.updateCalls).toHaveLength(0);
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('dispatches as before on a machine inside the scope', async () => {
+    mockVerifyAccess.mockResolvedValue(siteAccess([MACHINE]));
+    fake = buildFakeDb(docsWithOtherMachine(), { status: 'completed' });
+
+    const res = await POST(cancelRequest());
+    expect(res.status).toBe(200);
+    expect((await res.json()).accepted).toBe(true);
+    expect(fake.setCalls.some((c) => c.path === PENDING_PATH)).toBe(true);
+  });
+
+  it('leaves a whole-site caller free to cancel on any machine of the site', async () => {
+    fake = buildFakeDb(docsWithOtherMachine(), { status: 'completed' });
+
+    const res = await POST(cancelRequest({ machineId: OTHER, commandId: 'cmd_on_other' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).accepted).toBe(true);
+    expect(
+      fake.setCalls.some((c) => c.path === `sites/${SITE}/machines/${OTHER}/commands/pending`),
+    ).toBe(true);
   });
 });
 

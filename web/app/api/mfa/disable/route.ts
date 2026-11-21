@@ -21,15 +21,16 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyTOTP, verifyBackupCode } from '@/lib/totp';
+import { verifyBackupCode } from '@/lib/totp';
 import { decrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { withRateLimit } from '@/lib/withRateLimit';
+import { rateLimitedResponse, withRateLimit } from '@/lib/withRateLimit';
+import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/mfaAttempts.server';
 import {
   ApiAuthError,
   assertActiveUser,
-  requireSession,
+  requirePreMfaSession,
 } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaDisabled } from '@/lib/sessionManager.server';
@@ -40,6 +41,7 @@ import {
 } from '@/lib/deviceTrust.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import { applyMfaFactorChange } from '@/lib/mfaFactors.server';
+import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
@@ -65,7 +67,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     // The session is authoritative — no userId from the body, so this route can
     // never be redirected against another account.
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
 
     const userData = await assertActiveUser(userId);
     const db = getAdminDb();
@@ -76,6 +78,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { error: 'MFA is not enrolled for this account' },
         { status: 400 }
       );
+    }
+
+    const attempt = await spendMfaAttempt(userId);
+    if (!attempt.success) {
+      return rateLimitedResponse(attempt, 'endpoint-rate', MFA_ATTEMPTS_EXCEEDED);
     }
 
     let backupCodeUsed = false;
@@ -135,7 +142,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         secret = encryptedSecret;
       }
 
-      if (!verifyTOTP(code, secret)) {
+      if (!(await consumeTotpCode(userId, code, secret))) {
         return NextResponse.json(
           { error: 'Invalid verification code' },
           { status: 400 }
@@ -192,6 +199,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         stillEnrolled: factorResult.mfaEnrolled,
         setupReArmed: factorResult.requiresMfaSetup,
       },
+    });
+
+    // a passkey-only account reaches here on a backup code, and loses only the sheet
+    await sendMfaFactorNotice(userData.email, {
+      change: 'removed',
+      factor: userData.mfaSecret ? 'authenticator app' : 'backup codes',
     });
 
     // Expire the device-trust cookie; the server-side records are already gone.

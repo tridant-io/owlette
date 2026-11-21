@@ -12,10 +12,17 @@
  * See `web/lib/hoot/WIRE_NAMES.md` for the full survivor inventory.
  */
 
+import { secretMatches } from '@/lib/secretMatches.server';
+
 /** The deployed env-var name. Referenced in operator-facing diagnostics. */
 export const HOOT_INTERNAL_SECRET_ENV = 'CORTEX_INTERNAL_SECRET';
 
 /** The configured internal secret, or `undefined` when the env is unset. */
 export function hootInternalSecret(): string | undefined {
   return process.env.CORTEX_INTERNAL_SECRET;
+}
+
+/** the caller presented the internal secret; false whenever it is unset. */
+export function hootInternalSecretMatches(presented: string | null): boolean {
+  return secretMatches(presented, hootInternalSecret());
 }

@@ -6,8 +6,7 @@
  *     role === 'superadmin'
  *   - the "admin panel" link inside the user-menu dropdown, visible for
  *     role === 'admin' and role === 'superadmin' (hidden for members), landing
- *     on the first section each role can reach — /admin/members for admins,
- *     /admin/installers for superadmins
+ *     on /admin/sites for admins and /admin/installers for superadmins
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -46,11 +45,11 @@ test.describe('PageHeader — admin (site-scoped middle tier)', () => {
     await expect(page.getByRole('menuitem', { name: /admin panel/i })).toBeVisible();
   });
 
-  test('admin panel link lands on /admin/members', async ({ page }) => {
+  test('admin panel link lands on /admin/sites', async ({ page }) => {
     await page.goto('/dashboard');
     await openUserMenu(page);
     await page.getByRole('menuitem', { name: /admin panel/i }).click();
-    await expect(page).toHaveURL(/\/admin\/members/, { timeout: 10_000 });
+    await expect(page).toHaveURL(/\/admin\/sites/, { timeout: 10_000 });
   });
 });
 

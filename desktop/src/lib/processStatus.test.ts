@@ -7,6 +7,7 @@ import {
   markKilled,
   markRestarting,
   parseAppStates,
+  recordedIdentity,
   restoreState,
   statusForProcess,
   statusLabel,
@@ -195,6 +196,31 @@ describe('picking a pid to act on', () => {
     }
 
     expect(candidatePidsForProcess(states, 'a')).toEqual([5516, 100])
+  })
+})
+
+describe('what the service recorded about a pid', () => {
+  it('carries the creation time and image the service read at launch or adoption', () => {
+    const exe = 'c:\\apps\\player.exe'
+    expect(recordedIdentity({ id: 'a', status: 'RUNNING', create_time: 1788367385.5616167, exe })).toEqual({
+      createTime: 1788367385.5616167,
+      exe,
+    })
+  })
+
+  it('checks the creation time alone when no image was recorded', () => {
+    expect(recordedIdentity({ id: 'a', create_time: 1788367385.5, exe: 42 })).toEqual({
+      createTime: 1788367385.5,
+      exe: null,
+    })
+  })
+
+  it('has nothing for a row with no usable creation time', () => {
+    // older agents, and a LAUNCH_FAILED row the service strips, write none
+    expect(recordedIdentity({ id: 'a', status: 'RUNNING', exe: 'c:\\apps\\player.exe' })).toBeNull()
+    expect(recordedIdentity({ id: 'a', create_time: null })).toBeNull()
+    expect(recordedIdentity({ id: 'a', create_time: '1788367385.5' })).toBeNull()
+    expect(recordedIdentity(undefined)).toBeNull()
   })
 })
 

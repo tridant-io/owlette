@@ -6,8 +6,26 @@
  * concurrent deletes can't both see "3 active"; 409 `min_versions_violated`
  * otherwise.
  *
+ * A version registered with tridant id is yanked there; the outcome is
+ * `tridant`, and a tridant id failure never fails the delete.
+ *
  * Auth: api key with `installer=*:admin`, or a superadmin session/id-token.
  * Idempotent — re-deleting returns the same 200 shape, deletedAt unchanged.
+ *
+ * PATCH /api/installer/{version} — sets a published version's `release_notes`,
+ * and the latest pointer's when it points at this version; nothing else on
+ * either doc changes. the upload writes notes only when it creates a version,
+ * so this is how notes that went out stale are corrected. a soft-deleted
+ * version is 404, like a missing one.
+ *
+ * the version is synced with tridant id again, as the delete does: the import
+ * upserts by version, so a listed release takes the new notes (null clears them
+ * there too), while one a rollback yanked keeps its old copy until it is listed
+ * again. the outcome is `tridant`, and a tridant id failure never fails the change.
+ *
+ * auth: api key with `installer=*:write` (what the upload that first sets the
+ * notes needs), or a superadmin session/id-token. no Idempotency-Key: setting
+ * the same notes again changes nothing.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -19,10 +37,26 @@ import {
 } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
-import { applyAuthDeprecations, requirePlatformAuthAndScope } from '../../_shared';
+import { syncInstallerRelease } from '@/lib/tridantRelease.server';
+import {
+  applyAuthDeprecations,
+  readAndParseJsonBody,
+  requirePlatformAuthAndScope,
+} from '../../_shared';
 
 const VERSION_REGEX = /^\d+\.\d+\.\d+$/;
 const MIN_ACTIVE_VERSIONS = 2;
+
+/** the answer to a version that is missing or soft-deleted, the same from every method. */
+function versionNotFound(version: string) {
+  return problem({
+    type: ProblemType.NotFound,
+    title: 'version not found',
+    status: 404,
+    detail: `installer version ${version} does not exist`,
+    instance: `/api/installer/${version}`,
+  });
+}
 
 interface RouteParams {
   params: Promise<{ version: string }>;
@@ -92,13 +126,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     });
 
     if (result.kind === 'not_found') {
-      return problem({
-        type: ProblemType.NotFound,
-        title: 'version not found',
-        status: 404,
-        detail: `installer version ${version} does not exist`,
-        instance: `/api/installer/${version}`,
-      });
+      return versionNotFound(version);
     }
 
     if (result.kind === 'latest_protected') {
@@ -142,15 +170,99 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       });
     }
 
+    const tridant = await syncInstallerRelease(version);
+
     return applyAuthDeprecations(
       NextResponse.json({
         version,
         deletedAt: result.deletedAt,
         alreadyDeleted: result.kind === 'already_deleted',
+        tridant,
       }),
       auth.scopeCheck,
     );
   } catch (err) {
     return problemFromError(err, 'installer/[version]:DELETE');
+  }
+}
+
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
+  try {
+    const { version } = await params;
+    if (!VERSION_REGEX.test(version)) {
+      return problemValidation('version must match X.Y.Z', {
+        'path.version': ['must be a semver string like "2.2.1"'],
+      });
+    }
+
+    const parsed = await readAndParseJsonBody(request);
+    if (!parsed.ok) return parsed.response;
+
+    const auth = await requirePlatformAuthAndScope(request, 'installer', 'write');
+    if (!auth.ok) return auth.response;
+
+    if (!parsed.body || typeof parsed.body !== 'object') {
+      return problemValidation('request body must be a json object');
+    }
+    const releaseNotes = (parsed.body as { releaseNotes?: unknown }).releaseNotes;
+    if (releaseNotes !== null && typeof releaseNotes !== 'string') {
+      return problemValidation('releaseNotes is required and must be a string or null', {
+        'body.releaseNotes': ['must be a string or null'],
+      });
+    }
+
+    const db = getAdminDb();
+    const versionRef = db
+      .collection('installer_metadata')
+      .doc('data')
+      .collection('versions')
+      .doc(version);
+    const latestRef = db.collection('installer_metadata').doc('latest');
+
+    const result = await db.runTransaction(async (tx) => {
+      const versionSnap = await tx.get(versionRef);
+      if (!versionSnap.exists || typeof versionSnap.data()?.deletedAt === 'number') {
+        return { kind: 'not_found' as const };
+      }
+      const latestSnap = await tx.get(latestRef);
+      const latest = latestSnap.exists && latestSnap.data()?.version === version;
+
+      tx.update(versionRef, { release_notes: releaseNotes });
+      if (latest) tx.update(latestRef, { release_notes: releaseNotes });
+      return { kind: 'updated' as const, latest };
+    });
+
+    if (result.kind === 'not_found') {
+      return versionNotFound(version);
+    }
+
+    emitMutation({
+      kind: 'installer_mutated',
+      siteId: '',
+      actor: auth.auth.keyContext
+        ? `apiKey:${auth.auth.keyContext.keyId}`
+        : `user:${auth.userId}`,
+      targetId: version,
+      attributes: {
+        endpoint: `/api/installer/${version}`,
+        method: 'PATCH',
+        verb: 'notes_updated',
+        latest: result.latest,
+      },
+    });
+
+    const tridant = await syncInstallerRelease(version);
+
+    return applyAuthDeprecations(
+      NextResponse.json({
+        version,
+        release_notes: releaseNotes,
+        latest: result.latest,
+        tridant,
+      }),
+      auth.scopeCheck,
+    );
+  } catch (err) {
+    return problemFromError(err, 'installer/[version]:PATCH');
   }
 }

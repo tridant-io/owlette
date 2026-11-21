@@ -401,6 +401,55 @@ mod tests {
         assert_eq!(error.reaction(), Reaction::Backoff);
     }
 
+    /// A room that takes the dial and sends one text frame.
+    fn room_sending(text: String) -> u16 {
+        use tungstenite::handshake::server::{Request, Response};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().expect("bound").port();
+        thread::spawn(move || {
+            let Ok((stream, _)) = listener.accept() else { return };
+            // the error type is tungstenite's handshake callback's, not ours.
+            #[allow(clippy::result_large_err)]
+            let echo = |_: &Request, mut response: Response| {
+                let value = SUBPROTOCOL.parse().expect("a header value");
+                response.headers_mut().insert("sec-websocket-protocol", value);
+                Ok(response)
+            };
+            let Ok(mut socket) = tungstenite::accept_hdr(stream, echo) else { return };
+            let _ = socket.send(Message::text(text));
+            // held open until the host has read the frame and gone.
+            let _ = socket.read();
+        });
+        port
+    }
+
+    /// §2's 64 KiB, counted in utf-8 bytes on the frame as the room forwards
+    /// it, its own fields included, is the most the room sends
+    /// (`infra/swoop-signal/src/room.ts`). The host reads a frame of exactly
+    /// that whole, and a room that sends more is still dropped.
+    #[test]
+    fn the_largest_frame_the_room_forwards_is_read_whole() {
+        // two bytes a character, so a cap counted in characters would let
+        // twice this through.
+        let at_cap = "é".repeat(MAX_MESSAGE_BYTES / 2);
+        assert_eq!(at_cap.len(), MAX_MESSAGE_BYTES);
+        let bundle = bundle_at(room_sending(at_cap.clone()));
+        let mut socket = RoomSocket::dial(&Handshake::new(&bundle).expect("dialable"))
+            .expect("the room accepts the dial");
+        assert_eq!(next(&mut socket, std::time::Duration::from_secs(5)), Incoming::Text(at_cap));
+        assert!(socket.is_open());
+
+        let bundle = bundle_at(room_sending(format!("{}x", "é".repeat(MAX_MESSAGE_BYTES / 2))));
+        let mut socket = RoomSocket::dial(&Handshake::new(&bundle).expect("dialable"))
+            .expect("the room accepts the dial");
+        assert_eq!(
+            next(&mut socket, std::time::Duration::from_secs(5)),
+            Incoming::Closed { code: CLOSE_ABNORMAL, reason: String::new() }
+        );
+        assert!(!socket.is_open());
+    }
+
     /// The refusal word comes from a server we do not control and ends up in a
     /// log line, so it is bounded before it gets there.
     #[test]

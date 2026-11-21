@@ -24,6 +24,12 @@ const mockMarkSessionMfaDisabled = jest.fn();
 const mockRevokeAllTrustedDevices = jest.fn();
 const mockEmitMutation = jest.fn();
 
+const mockSendEmail = jest.fn();
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
+}));
+
 jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
   captureMessage: jest.fn(),
@@ -46,13 +52,19 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSession: (...a: unknown[]) => mockRequireSession(...a),
+    requirePreMfaSession: (...a: unknown[]) => mockRequireSession(...a),
   };
 });
 
 jest.mock('@/lib/totp', () => ({
   verifyTOTP: (...a: unknown[]) => mockVerifyTOTP(...a),
   verifyBackupCode: (...a: unknown[]) => mockVerifyBackupCode(...a),
+}));
+
+// the attempt budget and the spent-step record are covered in code-attempts.test.ts
+jest.mock('@/lib/mfaAttempts.server', () => ({
+  spendMfaAttempt: async () => ({ success: true }),
+  consumeTotpCode: async (_uid: string, code: string, secret: string) => mockVerifyTOTP(code, secret),
 }));
 
 jest.mock('@/lib/encryption.server', () => ({
@@ -176,7 +188,9 @@ import { createMockRequest } from '../helpers/utils';
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockSendEmail.mockResolvedValue({ error: null });
   userData = {
+    email: 'owner@example.test',
     mfaEnrolled: true,
     mfaSecret: 'iv:cipher', // encrypted secret form
     backupCodes: ['hash-bk-1', 'hash-bk-2', 'hash-bk-3'],
@@ -424,6 +438,51 @@ describe('POST /api/mfa/disable — backup-code path', () => {
     expect(
       updateCalls.find((c) => Array.isArray(c.payload.backupCodes)),
     ).toBeUndefined();
+  });
+});
+
+describe('POST /api/mfa/disable — notice email', () => {
+  it("tells the account's own address the authenticator app was removed", async () => {
+    const res = await POST(disableReq({ code: '123456' }));
+    expect(res.status).toBe(200);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      to: 'owner@example.test',
+      subject: 'authenticator app removed from your owlette account',
+    });
+  });
+
+  it('names backup codes when the account held no authenticator app', async () => {
+    userData = {
+      email: 'owner@example.test',
+      mfaEnrolled: true,
+      mfaFactors: { totp: false, passkeys: 1 },
+      backupCodes: ['hash-bk-1'],
+    };
+    passkeyCount = 1;
+    mockVerifyBackupCode.mockReturnValue(true);
+
+    const res = await POST(disableReq({ code: 'ABCDEF12', isBackupCode: true }));
+    expect(res.status).toBe(200);
+    expect(mockSendEmail.mock.calls[0][0].subject).toBe(
+      'backup codes removed from your owlette account',
+    );
+  });
+
+  it('sends nothing for a wrong code', async () => {
+    mockVerifyTOTP.mockReturnValue(false);
+
+    const res = await POST(disableReq({ code: '000000' }));
+    expect(res.status).toBe(400);
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it('still succeeds when the send fails', async () => {
+    mockSendEmail.mockRejectedValue(new Error('resend down'));
+
+    const res = await POST(disableReq({ code: '123456' }));
+    expect(res.status).toBe(200);
   });
 });
 

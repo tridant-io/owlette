@@ -2,8 +2,8 @@
 
 **Last updated**: 2026-04-29 | **moved** 2026-09-05 from `docs/api/launch-runbook.md` | **reviewed** 2026-09-05
 
-**INTERNAL — keep inside `docs/internal/`**, which the fumadocs migration excludes from
-publishing (`excludedPrefixes` in `web/scripts/migrate-docs-to-fumadocs.mjs`). This page was
+**INTERNAL — keep inside `docs/internal/`**, which is never published (only
+`web/content/docs` is). This page was
 written for the MkDocs site that was deleted 2026-05-20 and never reached a published docs
 route; it is an operator process, not customer reference material.
 
@@ -30,7 +30,7 @@ Track one launch ticket with exactly one state.
 
 | state | meaning | allowed public posture |
 |---|---|---|
-| `preview` | Internal consumers can use dev/staging with scoped test keys. | Docs may mention developer preview; no public announcement or registry-live claims. |
+| `preview` | Internal consumers can use dev with scoped keys. | Docs may mention developer preview; no public announcement or registry-live claims. |
 | `launch_ready` | All Wave 5 gates are signed off, but the launch has not been announced. | Public pages can be staged; support and monitoring are staffed. |
 | `launched` | Public docs, packages, examples, status page, and support channels are active. | Public announcement and external onboarding can proceed. |
 | `paused` | Launch communication or onboarding is stopped because a gate regressed or an incident is active. | Existing API auth remains intact; use rollback or incident playbooks as needed. |
@@ -88,11 +88,12 @@ Move from `launch_ready` to `launched` only after the support owner confirms the
 
 - Confirm owners, backup owners, launch window, and decision deadline.
 - Recheck the public site, signup path, pricing copy, docs path, download path, status page, package links, and example workflow.
-  > **stale (2026-09-05):** "pricing copy" was written when a billing system was being built.
-  > That system was removed end to end in `adbfd06f` — there is no `web/lib/billing`, no Stripe
-  > integration, and the landing page's `PricingSection` quotes post-beta rates from
-  > `web/lib/product-facts.ts` while the tiers read "free during beta". Recheck the copy for
-  > honesty, not for a live checkout.
+  > **note:** the billing system this was written against was removed in `adbfd06f`. Plans and
+  > checkout now run through tridant id, per site (ADR 0018: `web/lib/siteBilling.server.ts`,
+  > `/api/billing/checkout`), and nothing is enforced unless `PLAN_ENFORCEMENT` is `on`
+  > (`web/lib/plan.server.ts`). The landing page's `PricingSection` quotes post-beta rates from
+  > `web/lib/product-facts.ts` while the paid tiers read "free during beta". Recheck the copy
+  > against what the launch environment actually enforces and bills.
 - Confirm registry access, package owner 2FA, and rollback permissions.
 - Freeze non-launch changes unless they fix a launch gate.
 
@@ -139,7 +140,7 @@ Ask for this payload before triage unless the incident is already obvious:
 - `requestId` from the body and `X-Request-Id` from the response headers.
 - `RateLimit-*`, `Retry-After`, and `Roost-Rate-Limited-Reason` headers when present.
 - Package name and version for CLI, Node SDK, or Python SDK issues.
-- Base URL, key prefix only (`owk_live` or `owk_test`), site id, machine id, roost id, version id, and workflow run URL when relevant.
+- Base URL, key prefix only (`owk_live_` plus the next few characters; every key is minted `live`, and an old `owk_test_` key is no sandbox), site id, machine id, roost id, version id, and workflow run URL when relevant.
 - Expected result, actual result, and whether retry changed the outcome.
 
 Never ask for full API keys, Firebase tokens, private package credentials, or customer secrets. If a secret is pasted into support, rotate it before continuing diagnosis.
@@ -192,7 +193,7 @@ Check these signals each time:
 - Request p95 and p99 against the launch SLO targets.
 - Auth failures, `scope_insufficient`, `rate_limited`, and idempotency errors.
 - Webhook delivery success rate and retry volume.
-- hoot conversation list (`GET /api/cortex/conversations` — the wire path keeps the `cortex` spelling) and request success if hoot is advertised in launch material.
+- hoot conversation list (`GET /api/hoot/conversations`; `/api/cortex/conversations` is its deprecated alias) and request success if hoot is advertised in launch material.
 - npm and PyPI install smoke status for the current RC versions.
 - GitHub Action example smoke status.
 - Support inbox volume by severity, top route, and top problem `code`.

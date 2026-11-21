@@ -5,8 +5,8 @@
  * Contract (useFirestore.ts::shutdownMachine):
  *   1. `sendMachineCommand` writes `shutdown_machine_{Date.now()}` to
  *      `commands/pending`.
- *   2. `updateDoc` sets `{ shutdownScheduledAt: now+30s, configChangeFlag: true }`
- *      on the machine status doc.
+ *   2. `updateDoc` sets `{ shutdownScheduledAt: now+60s, configChangeFlag: true }`
+ *      on the machine status doc: the agent's own 60s countdown.
  */
 
 import { test, expect } from '@playwright/test';
@@ -47,7 +47,7 @@ test('admin can dispatch shutdown — command written + shutdownScheduledAt popu
 
   // Confirm returns immediately while the Promise.all writes are in flight, so
   // reading Firestore before this toast races them.
-  await expect(page.getByText('Shutdown command sent to', { exact: false })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('shutdown command sent to', { exact: false })).toBeVisible({ timeout: 10_000 });
 
   // The cancel-countdown pill renders for shutdownScheduledAt > now too.
   await expect(card.getByTestId('machine-status-cancel-pill')).toBeVisible({ timeout: 5_000 });
@@ -66,5 +66,5 @@ test('admin can dispatch shutdown — command written + shutdownScheduledAt popu
   const cmd = pending[shutdownKeys[0]];
   expect(cmd.type).toBe('shutdown_machine');
   expect(cmd.status).toBe('pending');
-  expect(cmd.delay_seconds).toBe(30);
+  expect(cmd.delay_seconds).toBe(60);
 });

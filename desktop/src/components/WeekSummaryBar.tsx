@@ -75,7 +75,7 @@ export function WeekSummaryBar({ schedules, className, tall }: WeekSummaryBarPro
         // Use the first block's color for the label, or default
         const labelColor = isActive
           ? BLOCK_COLORS[ranges[0].colorIndex % BLOCK_COLORS.length].label
-          : 'text-muted-foreground/50'
+          : 'text-muted-foreground/80 dark:text-muted-foreground/50'
         return (
           <div key={day} className="flex flex-col items-center gap-0.5">
             <div

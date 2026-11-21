@@ -8,15 +8,17 @@ state; only durable conclusions are committed.
 
 ```
 dev/
-├── active/            # In-flight initiatives (gitignored)
+├── active/            # In-flight initiatives (gitignored; some plans are force-added and tracked)
 │   └── [feature]/
 │       ├── plan.md    # Strategic plan (waves, success criteria)
 │       ├── context.md # Key files, decisions, integration points
 │       └── tasks.md   # Wave-by-wave checklist
 ├── planned/           # Approved but not started (tracked)
-├── completed/         # Archived finished/superseded initiatives (gitignored)
+├── completed/         # Archived finished/superseded initiatives (gitignored; some force-added)
+├── handoff/           # Plan copies handed to another machine, e.g. the Mac (tracked)
+├── scratch/           # Throwaway working files (gitignored)
 ├── video-tutorials/   # Tutorial video production pipeline (tracked)
-├── findings-ledger.md # Whole-app review ledger — OWL-xx findings + triage state
+├── findings-ledger.md # Whole-app review ledger: OWL-xx findings + triage state (local-only, gitignored)
 └── codeql-triage.md   # CodeQL alert triage record
 ```
 
@@ -27,7 +29,8 @@ dev/
 2. **`/execute`** — run the next wave of tasks in parallel (fresh agent context
    per task), or **`/next`** — execute the next single task in the current
    context.
-3. **`/verify`** — check completed work against the plan's success criteria.
+3. **`/verify`** — run the checks, then a standards reviewer and a spec reviewer
+   in parallel on the diff, plus evidence from where the owner looks.
 4. **`/save`** — persist progress to the dev docs before context compaction;
    **`/resume`** — restore context in a new session.
 5. When an initiative is fully shipped, move its folder to `dev/completed/`.
@@ -40,11 +43,12 @@ fix all errors. Skip `/plan` for single-file tweaks or small fixes.
 - Keep `tasks.md` checkboxes and status headers honest — stale "in progress"
   headers on shipped work are how initiatives get re-audited months later.
 - Raw agent transcripts/logs are scratch: they are gitignored and get deleted
-  when an initiative is archived. Durable conclusions belong in the synthesis
-  `.md`s, `findings-ledger.md`, or commits.
+  when an initiative is archived. Durable conclusions belong in commits (code,
+  docs, an ADR) or a tracked plan. `findings-ledger.md` holds accepted-risk
+  security triage, so it stays local and is never committed.
 - One-off review dispatches live and die inside their initiative folder; do not
   create new loose folders at `dev/` root.
 
 ---
 
-**Last Updated**: 2026-09-03
+**Last Updated**: 2026-11-10

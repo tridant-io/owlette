@@ -41,7 +41,7 @@ on:
 # cancelled run reads as neither pass nor fail, which is the one outcome a gate
 # must never produce.
 concurrency:
-  group: security-preflight-${{ github.ref }}-${{ github.event_name }}
+  group: security-preflight-${{ inputs.ref || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -61,12 +61,12 @@ jobs:
     # publicly readable log. Neither is acceptable; skip instead.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref || (github.event_name == 'schedule' && 'dev') || '' }}
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
 
@@ -80,12 +80,6 @@ jobs:
       - name: resolve open alerts against this checkout
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A scheduled run checks out `dev`, so the code-scanning feed must be
-          # asked about `dev` too — GITHUB_REF would still say `main` here.
-          GITHUB_REF: >-
-            ${{ github.event_name == 'schedule' && 'refs/heads/dev'
-                || (inputs.ref && format('refs/heads/{0}', inputs.ref))
-                || github.ref }}
         # Standing waivers (currently just the Linux-only glib transitive) live
         # in .github/security-acks.json, where they are reviewable in a PR and
         # expire on a date. The script reads that file itself.

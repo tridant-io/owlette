@@ -195,7 +195,7 @@ export function FolderDropzone({
       <div
         className={`rounded-md border bg-muted/30 text-sm transition-colors ${
           isDragOver && canAppend
-            ? 'border-cyan-500 bg-cyan-500/5'
+            ? 'border-accent-cyan bg-accent-cyan/5'
             : 'border-border'
         }`}
         onDragOver={
@@ -219,7 +219,7 @@ export function FolderDropzone({
         <div className="flex items-center justify-between gap-2 px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">
             <FolderUp className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="text-white">
+            <span className="text-foreground">
               {summary.fileCount.toLocaleString()} file{summary.fileCount !== 1 ? 's' : ''}
             </span>
             <span className="text-xs text-muted-foreground shrink-0">
@@ -326,14 +326,14 @@ export function FolderDropzone({
       onDrop={handleDrop}
       className={`space-y-3 rounded-md border border-dashed px-4 py-8 text-center text-sm transition-colors ${
         isDragOver
-          ? 'border-cyan-500 bg-cyan-500/5'
+          ? 'border-accent-cyan bg-accent-cyan/5'
           : 'border-border bg-muted/20'
       } ${disabled ? 'opacity-50' : ''}`}
       role="region"
       aria-label="folder drop zone"
     >
       <FolderUp className="mx-auto h-6 w-6 text-muted-foreground" />
-      <div className="font-medium text-white">
+      <div className="font-medium text-foreground">
         {enumerating ? 'reading…' : 'drag a folder or files here to upload'}
       </div>
       <p className="text-xs text-muted-foreground">
@@ -361,7 +361,7 @@ export function FolderDropzone({
               size="sm"
               onClick={handleFsaPick}
               disabled={disabled || enumerating}
-              className="border-border bg-background/50 text-white transition-colors cursor-pointer hover:bg-cyan-500/10 hover:border-cyan-500/40 hover:text-cyan-100"
+              className="border-border bg-background/50 text-foreground transition-colors cursor-pointer hover:bg-accent-cyan/10 hover:border-accent-cyan/40"
             >
               {enumerating ? (
                 <>
@@ -381,7 +381,7 @@ export function FolderDropzone({
               size="sm"
               onClick={handleFsaFilesPick}
               disabled={disabled || enumerating}
-              className="border-border bg-background/50 text-white transition-colors cursor-pointer hover:bg-cyan-500/10 hover:border-cyan-500/40 hover:text-cyan-100"
+              className="border-border bg-background/50 text-foreground transition-colors cursor-pointer hover:bg-accent-cyan/10 hover:border-accent-cyan/40"
             >
               <Files className="h-3.5 w-3.5 mr-1" />
               browse files
@@ -390,10 +390,10 @@ export function FolderDropzone({
         ) : (
           <>
             <label
-              className={`inline-flex items-center justify-center gap-1 h-8 px-3 py-1.5 rounded-md text-sm font-medium border border-border bg-background/50 text-white transition-colors select-none ${
+              className={`inline-flex items-center justify-center gap-1 h-8 px-3 py-1.5 rounded-md text-sm font-medium border border-border bg-background/50 text-foreground transition-colors select-none ${
                 disabled || enumerating
                   ? 'opacity-50 cursor-not-allowed'
-                  : 'cursor-pointer hover:bg-cyan-500/10 hover:border-cyan-500/40 hover:text-cyan-100'
+                  : 'cursor-pointer hover:bg-accent-cyan/10 hover:border-accent-cyan/40'
               }`}
             >
               {enumerating ? (
@@ -418,10 +418,10 @@ export function FolderDropzone({
               />
             </label>
             <label
-              className={`inline-flex items-center justify-center gap-1 h-8 px-3 py-1.5 rounded-md text-sm font-medium border border-border bg-background/50 text-white transition-colors select-none ${
+              className={`inline-flex items-center justify-center gap-1 h-8 px-3 py-1.5 rounded-md text-sm font-medium border border-border bg-background/50 text-foreground transition-colors select-none ${
                 disabled || enumerating
                   ? 'opacity-50 cursor-not-allowed'
-                  : 'cursor-pointer hover:bg-cyan-500/10 hover:border-cyan-500/40 hover:text-cyan-100'
+                  : 'cursor-pointer hover:bg-accent-cyan/10 hover:border-accent-cyan/40'
               }`}
             >
               <Files className="h-3.5 w-3.5 mr-1" />

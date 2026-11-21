@@ -4,7 +4,7 @@
  * Every Firestore and Auth handle the suite uses comes from here. `init()` reads the
  * service account and refuses to build a client unless it belongs to
  * `owlette-dev-3838a` — the check runs before `initializeApp`, so no read or write can
- * reach another project. Mirrors e2e-machine/lib/admin.mjs:39-58.
+ * reach another project.
  *
  * Credentials are gitignored and resolved at runtime only:
  *   SMOKE_SA_PATH   service account JSON  (default <repo>/agent/config/firebase-creds-dev.json)

@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ApiAuthError, requireAdmin } from '@/lib/apiAuth.server';
-import { getResend, FROM_EMAIL, ENV_LABEL, isProduction } from '@/lib/resendClient.server';
+import { getResend, FROM_EMAIL, ENV_LABEL, isProduction, trustedBaseUrl } from '@/lib/resendClient.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import {
   wrapEmailLayout,
   emailDataTable,
   emailTimestamp,
   buildApiKeyExpiryEmail,
+  buildIssueEmail,
+  buildActivityFindingEmail,
+  buildActivityDigestEmail,
+  type ActivityEmailFinding,
   EMAIL_COLORS,
   SEVERITY_COLORS,
   METRIC_LABELS,
@@ -27,6 +31,9 @@ export const EMAIL_TEMPLATES = [
   { id: 'machines_offline', label: 'machines offline', description: 'stale heartbeat detected by health check' },
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
+  { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
+  { id: 'activity_finding', label: 'activity finding', description: 'superadmin notified of a high-severity finding' },
+  { id: 'activity_digest', label: 'activity digest', description: 'daily superadmin digest of flagged activity' },
   { id: 'welcome', label: 'welcome email', description: 'sent to new users on signup' },
   { id: 'user_signup', label: 'admin signup notification', description: 'admin notified of new user registration' },
 ] as const;
@@ -215,6 +222,66 @@ function buildTemplateEmail(templateId: string): { subject: string; html: string
       };
     }
 
+    case 'issue': {
+      // the real builder, so the preview cannot drift from what bug-report sends
+      return buildIssueEmail({
+        number: 42,
+        categoryLabel: 'something broke',
+        title: 'swoop viewer goes black after the machine reconnects',
+        text:
+          'we lost wifi in the lobby for about a minute this morning. when LOBBY-PC-01 came back online the swoop viewer reconnected but the picture stayed black, even though the status said connected and the cursor still moved.\n\n' +
+          'closing the viewer and opening it again fixed it straight away. it happened twice today, both times right after the network dropped. the installation itself kept running fine, it is only the remote view.\n\n' +
+          'steps: 1. open swoop on LOBBY-PC-01 2. pull the network cable for 30 seconds 3. plug it back in. the viewer says connected, the picture never comes back. happy to send more logs if that helps.',
+        from: 'dana@studio.example',
+        host: 'LOBBY-PC-01',
+        siteId: 'downtown-gallery',
+        appVersion: '4.1.13',
+        source: 'agent',
+        envLabel: ENV_LABEL,
+        attachments: { screenshots: 3, videos: 1, logs: true },
+        issueUrl: `${trustedBaseUrl()}/admin/issues/42`,
+      });
+    }
+
+    case 'activity_finding':
+    case 'activity_digest': {
+      // the real builders, so the preview cannot drift from what the cron sends
+      const high: ActivityEmailFinding = {
+        title: 'second factor burst',
+        severity: 'high',
+        summary: 'dana@studio.example failed 6 second-factor checks in 4 minutes.',
+        subject: 'dana@studio.example',
+        facts: [
+          ['user', 'dana@studio.example'],
+          ['attempts', '6 in 4 minutes'],
+          ['network', 'AS7922 comcast'],
+        ],
+        at: Date.now() - 20 * 60 * 1000,
+      };
+      const activityUrl = `${trustedBaseUrl()}/admin/activity`;
+      if (templateId === 'activity_finding') {
+        return buildActivityFindingEmail({ envLabel: ENV_LABEL, finding: high, activityUrl });
+      }
+      const digestItem = (title: string, subject: string, summary: string, hoursAgo: number): ActivityEmailFinding => ({
+        title,
+        severity: 'digest',
+        summary,
+        subject,
+        facts: [],
+        at: Date.now() - hoursAgo * 60 * 60 * 1000,
+      });
+      return buildActivityDigestEmail({
+        envLabel: ENV_LABEL,
+        findings: [
+          digestItem('new network sign in', 'dana@studio.example', 'first sign in from AS7922 comcast.', 3),
+          digestItem('refusal burst', 'key owk_live_9f2c1ab', '12 refused calls in 10 minutes.', 7),
+        ],
+        alreadyEmailed: [high],
+        periodEnd: Date.now(),
+        activityUrl: `${activityUrl}?view=flagged`,
+      });
+    }
+
     case 'welcome': {
       const linkStyle = `color:${EMAIL_COLORS.cyan};text-decoration:none;font-weight:600;`;
       const content = `
@@ -344,7 +411,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     if (error instanceof ApiAuthError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     }
     return apiError(error, 'test-email');
   }

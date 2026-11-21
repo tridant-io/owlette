@@ -280,7 +280,7 @@ async function assertSessionIs(page: Page, role: LoginRole, uid: string): Promis
 /** Sign `user` in through /login as a person would. Closes its own context when it fails. */
 async function signIn(browser: Browser, role: LoginRole, user: Credentials, pin: DevWebApiKeyPin): Promise<SignedInSession> {
   // The specs' device profile (playwright.live.config.ts), so dev sees one kind of client.
-  const context = await browser.newContext({ ...devices['Desktop Chrome'], baseURL: DEV_ORIGIN });
+  const context = await browser.newContext({ ...devices['Desktop Chrome'], baseURL: DEV_ORIGIN, colorScheme: 'dark' });
   const close = async (): Promise<void> => {
     // Drop the key guard first: a Firebase call still waiting on it must not outlive the context.
     await context.unrouteAll({ behavior: 'ignoreErrors' });

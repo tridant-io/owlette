@@ -77,7 +77,7 @@ jest.mock('@/lib/apiAuth.server', () => {
     ApiAuthError: ApiAuthErrorMock,
     resolveAuth: jest.fn(async () => ({ userId: resolveAuthUserId, keyContext: null })),
     requireScope: jest.fn(() => ({ isLegacy: false })),
-    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: '', siteData: {} })),
+    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: '', siteData: {}, machineIds: null })),
   };
 });
 

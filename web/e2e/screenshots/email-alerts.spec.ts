@@ -4,7 +4,7 @@
  * Output: `web/public/docs-screens/email-alerts.png`
  * Used by: `web/content/docs/dashboard/admin/email-alerts.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
@@ -13,6 +13,7 @@ import {
   installFixedClock,
   saveDocsScreenshot,
   settleForDocsScreenshot,
+  test,
 } from './docs-helpers';
 
 test.use({ ...roleState('superadmin'), viewport: { width: 1440, height: 1000 } });

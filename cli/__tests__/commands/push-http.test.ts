@@ -1,5 +1,10 @@
-import { _internals as pushInternals } from '../../src/commands/push';
+import { Command } from 'commander';
 import { createHash } from 'crypto';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { _internals as pushInternals, registerPushCommand } from '../../src/commands/push';
+import { _resetConfigCache } from '../../src/config';
 import { buildVersion, versionIdForVersion } from '../../src/lib/versionBuilder';
 
 interface FetchCall {
@@ -23,7 +28,7 @@ function publishInput() {
     token: 'owk_live_testtoken',
     siteId: 'site-1',
     roostId: 'rst_new',
-    version: buildVersion({ files: [], cliVersion: 'test' }),
+    version: buildVersion([]),
   };
 }
 
@@ -344,5 +349,79 @@ describe('push publishWithRetry', () => {
     expect(replayed).toBe(true);
     expect(result.versionId).toBe(deterministicVersionId);
     expect(calls.filter((call) => call.url.endsWith('/versions'))).toHaveLength(2);
+  });
+});
+
+describe('push version identity', () => {
+  // the real module object, so any host or platform lookup during a push sees the spies
+  const nodeOs = jest.requireActual<typeof import('os')>('os');
+
+  beforeEach(() => {
+    _resetConfigCache();
+    process.env.OWLETTE_TOKEN = 'owk_live_testtoken';
+    process.env.OWLETTE_API_URL = 'https://dev.test';
+    process.env.OWLETTE_PROFILE = 'default';
+  });
+
+  afterEach(() => {
+    delete process.env.OWLETTE_TOKEN;
+    delete process.env.OWLETTE_API_URL;
+    delete process.env.OWLETTE_PROFILE;
+  });
+
+  async function pushFrom(
+    dir: string,
+    host: string,
+    osName: NodeJS.Platform,
+  ): Promise<ReturnType<typeof buildVersion>> {
+    jest.spyOn(nodeOs, 'hostname').mockReturnValue(host);
+    jest.spyOn(nodeOs, 'platform').mockReturnValue(osName);
+    jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let published: ReturnType<typeof buildVersion> | undefined;
+    (global as unknown as { fetch: jest.Mock }).fetch = jest.fn(
+      async (url: string, init: RequestInit = {}) => {
+        if (url === 'https://dev.test/api/chunks/check') {
+          return jsonResponse(200, { missing: [] });
+        }
+        if (url === 'https://dev.test/api/roosts/rst_ci?siteId=site-1') {
+          return jsonResponse(404, { detail: 'roost not found' });
+        }
+        if (url === 'https://dev.test/api/roosts/rst_ci/versions') {
+          published = JSON.parse(String(init.body)).version;
+          return jsonResponse(201, {
+            versionId: 'vrs_ci',
+            versionNumber: 1,
+            currentVersionId: 'vrs_ci',
+            previousVersionId: null,
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+    const program = new Command()
+      .name('owlette')
+      .exitOverride()
+      .option('--profile <name>')
+      .option('--json');
+    registerPushCommand(program);
+    await program.parseAsync(
+      ['--json', 'roost', 'push', dir, '--to', 'rst_ci', '--site', 'site-1'],
+      { from: 'user' },
+    );
+    jest.restoreAllMocks();
+    if (!published) throw new Error('push published nothing');
+    return published;
+  }
+
+  it('publishes the same files under one id from any host, os or cli release', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'owlette-cli-push-'));
+    writeFileSync(join(dir, 'main.toe'), 'same bytes on every runner');
+
+    const fromRunnerA = await pushFrom(dir, 'ci-runner-a', 'linux');
+    const fromRunnerB = await pushFrom(dir, 'ci-runner-b', 'win32');
+
+    expect(versionIdForVersion(fromRunnerB)).toBe(versionIdForVersion(fromRunnerA));
+    // the server hashes all of `config`, so the cli's own release must stay out of it too
+    expect(fromRunnerA.config).toEqual({});
   });
 });

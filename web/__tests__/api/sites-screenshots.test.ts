@@ -109,6 +109,7 @@ jest.mock('@/lib/rateLimit', () => {
   };
 });
 jest.mock('@/lib/screenshotStorage.server', () => ({
+  ...jest.requireActual('@/lib/screenshotStorage.server'),
   issueScreenshotUploadUrl: async (siteId: string, machineId: string) => ({
     uploadUrl: `https://storage.example/${siteId}/${machineId}`,
     storagePath: `screenshots/${siteId}/${machineId}/x.png`,
@@ -143,6 +144,42 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/screenshots', () => {
     expect(await res.json()).toEqual({ success: true, deleted: 1 });
     expect(store.get('sites/site-a/machines/m1/screenshots/shot-1')).toBeNull();
     expect(deletedStoragePaths).toEqual(['screenshots/site-a/m1/shot-1.jpg']);
+  });
+
+  it('deletes the object a screenshot document records by path', async () => {
+    store.set('sites/site-a/machines/m1/screenshots/shot-2', {
+      path: 'screenshots/site-a/m1/shot-2.jpg',
+      url: '/api/sites/site-a/machines/m1/screenshots/image?path=screenshots%2Fsite-a%2Fm1%2Fshot-2.jpg',
+    });
+
+    const res = await DELETE(
+      new NextRequest('http://localhost/api/sites/site-a/machines/m1/screenshots?screenshotId=shot-2', {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ siteId: 'site-a', machineId: 'm1' }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(deletedStoragePaths).toEqual(['screenshots/site-a/m1/shot-2.jpg']);
+  });
+
+  it('clears every recorded object and the latest one', async () => {
+    store.set('sites/site-a/machines/m1/screenshots/shot-3', { path: 'screenshots/site-a/m1/shot-3.jpg' });
+    store.set('sites/site-a/machines/m1/screenshots/shot-4', {
+      url: 'https://storage.googleapis.com/bucket.example/screenshots/site-a/m1/shot-4.jpg?t=1',
+    });
+
+    const res = await DELETE(
+      new NextRequest('http://localhost/api/sites/site-a/machines/m1/screenshots', { method: 'DELETE' }),
+      { params: Promise.resolve({ siteId: 'site-a', machineId: 'm1' }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(deletedStoragePaths).toEqual([
+      'screenshots/site-a/m1/shot-3.jpg',
+      'screenshots/site-a/m1/shot-4.jpg',
+      'screenshots/site-a/m1/latest.jpg',
+    ]);
   });
 });
 

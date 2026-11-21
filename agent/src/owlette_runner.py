@@ -106,7 +106,12 @@ if __name__ == '__main__':
     sys.excepthook = _handle_unhandled_exception
     threading.excepthook = _handle_thread_exception
 
-    logging.info("Running under owlette-host")
+    # what hosts this process: owlette-host on windows, launchd or systemd
+    # elsewhere (the line said owlette-host everywhere until the first posix runs).
+    logging.info(
+        "Running under owlette-host" if sys.platform == 'win32'
+        else "Running as an init-system job"
+    )
 
     from owlette_service import OwletteService, Util
 
@@ -156,8 +161,12 @@ if __name__ == '__main__':
 
             if firebase_enabled:
                 try:
+                    # a switch cut short between the token store and
+                    # config.json, finished before the site is read
+                    import site_move_commands
+                    site_move_commands.reconcile()
                     site_id = shared_utils.read_config(['firebase', 'site_id'])
-                    project_id = shared_utils.read_config(['firebase', 'project_id'])
+                    project_id = shared_utils.get_configured_project_id()
                     api_base = shared_utils.get_configured_api_base()
                     cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 
@@ -179,7 +188,8 @@ if __name__ == '__main__':
                     except Exception as e:
                         logging.warning(f"Network gate error (proceeding anyway): {e}")
 
-                    auth_manager = AuthManager(api_base=api_base)
+                    auth_manager = AuthManager(
+                        api_base=api_base, on_revoked=_service_instance.unpair)
 
                     if not auth_manager.is_authenticated():
                         logging.error("Agent not authenticated - no refresh token found in encrypted storage")

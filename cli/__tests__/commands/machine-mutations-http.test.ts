@@ -2,9 +2,10 @@
  * HTTP-shape tests for `owlette machine reboot | shutdown | screenshot`, driving
  * POST/GET on `/api/sites/:siteId/machines/:machineId/commands[/:commandId]`.
  *
- * Asserts: reboot/shutdown send `{type, params:{delay_seconds?}}` with an
- * auto-generated Idempotency-Key; 409 machine_offline surfaces the canonical
- * hint; screenshot is queue → poll → download (the signed `screenshot_url` is
+ * Asserts: reboot/shutdown send `{type, params:{delay_seconds?, when?,
+ * active_hours_override?}}` with an auto-generated Idempotency-Key, then poll
+ * the outcome and print an active-hours refusal plainly; 409 machine_offline
+ * surfaces the canonical hint; screenshot is queue → poll → download (the signed `screenshot_url` is
  * fetched and written to `--output` or a default name); and the poll loop bails
  * on `failed` and times out after MAX_ATTEMPTS.
  */
@@ -99,17 +100,46 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-const COMMANDS_URL = 'https://dev.test/api/sites/site-1/machines/m-1/commands';
+const MACHINE_URL = 'https://dev.test/api/sites/site-1/machines/m-1';
+const COMMANDS_URL = `${MACHINE_URL}/commands`;
+const ACTIVE_HOURS_REFUSAL =
+  'Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00';
+const GUARDED_MACHINE = { id: 'm-1', osFamily: 'windows', agentVersion: '4.1.21', capabilities: { activeHoursGuard: 1 } };
+
+/** POST queues cmd_abc; the command poll answers `poll`; the machine read answers `machine`. */
+function powerStub(
+  poll: { status: number; payload: unknown },
+  machine: { status: number; payload: unknown } = { status: 200, payload: GUARDED_MACHINE },
+): FetchCall[] {
+  return installFetchStub((call) => {
+    if (call.url === COMMANDS_URL) {
+      return { status: 202, payload: { ok: true, data: { commandId: 'cmd_abc', status: 'pending' } } };
+    }
+    if (call.url === `${COMMANDS_URL}/cmd_abc`) return poll;
+    if (call.url === MACHINE_URL) return machine;
+    throw new Error(`unexpected fetch url ${call.url}`);
+  });
+}
+
+function finished(data: Record<string, unknown>): { status: number; payload: unknown } {
+  return { status: 200, payload: { ok: true, data: { commandId: 'cmd_abc', ...data } } };
+}
+
+function captureStream(stream: NodeJS.WriteStream): string[] {
+  const out: string[] = [];
+  (stream.write as unknown as jest.Mock).mockImplementation((chunk: string) => {
+    out.push(chunk);
+    return true;
+  });
+  return out;
+}
 
 describe.each([
   ['reboot', 'reboot_machine'],
   ['shutdown', 'shutdown_machine'],
 ] as const)('owlette machine %s', (verb, commandType) => {
   it(`POSTs /commands with body {type:'${commandType}', params:{}} and an Idempotency-Key`, async () => {
-    const calls = installFetchStub(() => ({
-      status: 202,
-      payload: { ok: true, data: { commandId: 'cmd_abc', status: 'pending' } },
-    }));
+    const calls = powerStub(finished({ status: 'completed' }));
     const program = buildProgram();
 
     await program.parseAsync(
@@ -126,10 +156,7 @@ describe.each([
   });
 
   it('forwards --delay-seconds as params.delay_seconds', async () => {
-    const calls = installFetchStub(() => ({
-      status: 202,
-      payload: { ok: true, data: { commandId: 'cmd_abc', status: 'pending' } },
-    }));
+    const calls = powerStub(finished({ status: 'completed' }));
     const program = buildProgram();
 
     await program.parseAsync(
@@ -178,6 +205,267 @@ describe.each([
     expect(errOut).toContain('machine appears offline; check the dashboard heartbeat');
     expect(process.exitCode).toBe(1);
     process.exitCode = 0;
+  });
+
+  it('sends --override-active-hours --reason as params.active_hours_override', async () => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const program = buildProgram();
+
+    await program.parseAsync(
+      ['machine', verb, 'm-1', '--site', 'site-1', '--override-active-hours', '--reason', '  hotfix for the show  '],
+      { from: 'user' },
+    );
+
+    expect(calls[0]!.url).toBe(COMMANDS_URL);
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body).toEqual({ type: commandType, params: { active_hours_override: { reason: 'hotfix for the show' } } });
+    expect(process.exitCode).toBe(0);
+  });
+
+  it.each([
+    [['--override-active-hours']],
+    [['--override-active-hours', '--reason', '   ']],
+    [['--reason', 'hotfix']],
+  ])('refuses %j before any http', async (flags) => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1', ...flags], { from: 'user' });
+
+    expect(calls).toHaveLength(0);
+    expect(stderr.join('')).toContain('--override-active-hours');
+    expect(process.exitCode).toBe(2);
+    process.exitCode = 0;
+  });
+
+  it('waits for the agent and says it accepted the command', async () => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(calls.map((c) => c.url)).toEqual([COMMANDS_URL, `${COMMANDS_URL}/cmd_abc`]);
+    expect(stdout.join('')).toContain(`owlette: ${verb} accepted by machine m-1 (commandId=cmd_abc)`);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("puts the agent's answer on the accepted line", async () => {
+    const answer = verb === 'reboot' ? 'Reboot scheduled in 60 seconds' : 'Shutdown scheduled in 60 seconds';
+    powerStub(finished({ status: 'completed', result: answer }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(stdout.join('')).toContain(`owlette: ${verb} accepted by machine m-1 (commandId=cmd_abc): ${answer}\n`);
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("prints the agent's active-hours refusal plainly and exits 1", async () => {
+    powerStub(finished({ status: 'failed', error: ACTIVE_HOURS_REFUSAL }));
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    const errOut = stderr.join('');
+    expect(errOut).toContain(
+      `owlette: ${verb} refused by machine m-1: inside active hours 08:00–17:00 (machine time); they end at 17:00`,
+    );
+    expect(errOut).not.toContain('Error: active_hours');
+    expect(errOut).toContain('--override-active-hours --reason <text>');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('--json prints the refused command and exits 1', async () => {
+    powerStub(finished({ status: 'failed', error: ACTIVE_HOURS_REFUSAL }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(['--json', 'machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(JSON.parse(stdout.join(''))).toEqual({
+      commandId: 'cmd_abc',
+      status: 'failed',
+      error: ACTIVE_HOURS_REFUSAL,
+    });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('surfaces any other agent failure and exits 1', async () => {
+    powerStub(finished({ status: 'failed', error: `Error: ${verb} failed: access denied` }));
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(stderr.join('')).toContain(`owlette: ${verb} failed on machine m-1: Error: ${verb} failed: access denied`);
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('stays queued (exit 0) when the key cannot read the outcome', async () => {
+    powerStub({
+      status: 403,
+      payload: { status: 403, code: 'scope_insufficient', detail: 'API key is missing machine=m-1:read scope' },
+    });
+    const stdout = captureStream(process.stdout);
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(stdout.join('')).toContain(`owlette: ${verb} queued for machine m-1 (commandId=cmd_abc)`);
+    expect(stderr.join('')).toContain('machine=m-1:read');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('stays queued (exit 0) when the agent does not report back in time', async () => {
+    const calls = powerStub(finished({ status: 'pending' }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', verb, 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(calls).toHaveLength(1 + machineInternals.COMMAND_POLL_MAX_ATTEMPTS);
+    expect(stdout.join('')).toContain(`owlette: ${verb} queued for machine m-1 (commandId=cmd_abc)`);
+    expect(process.exitCode).toBe(0);
+  });
+});
+
+describe('owlette machine reboot --after-active-hours', () => {
+  const ARGS = ['machine', 'reboot', 'm-1', '--site', 'site-1', '--after-active-hours'];
+
+  it('checks the machine honours it, then sends params.when', async () => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    expect(calls[0]!.url).toBe(MACHINE_URL);
+    expect(calls[1]!.url).toBe(COMMANDS_URL);
+    const body = JSON.parse(String(calls[1]!.init.body));
+    expect(body).toEqual({ type: 'reboot_machine', params: { when: 'after_active_hours' } });
+    expect(stdout.join('')).toContain('when its active hours end, or now if it is outside them');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it("says when the restart happens once the agent answers with it", async () => {
+    powerStub(finished({ status: 'completed', result: 'Reboot deferred until 17:00 (machine time)' }));
+    const stdout = captureStream(process.stdout);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    const out = stdout.join('');
+    expect(out).toContain(
+      'owlette: reboot accepted by machine m-1 (commandId=cmd_abc): Reboot deferred until 17:00 (machine time)\n',
+    );
+    expect(out).not.toContain('or now if it is outside them');
+  });
+
+  it.each([
+    ['a windows agent without the guard', { id: 'm-1', osFamily: 'windows', capabilities: { keepAwake: 1 } }],
+    ['a pre-3.4 agent', { id: 'm-1', osFamily: null, capabilities: null }],
+    // no active hours to wait for; the API refuses the held restart there too.
+    ['macOS', { id: 'm-1', osFamily: 'macos', capabilities: null }],
+    ['linux', { id: 'm-1', osFamily: 'linux', capabilities: { keepAwake: 1 } }],
+    // an older agent never clears the capability its newer self wrote
+    ['a machine rolled back to 3.3.7', { ...GUARDED_MACHINE, agentVersion: '3.3.7' }],
+    ['a capability with no agent version', { ...GUARDED_MACHINE, agentVersion: null }],
+  ])('refuses on %s, which cannot hold the restart', async (_label, machine) => {
+    const calls = powerStub(finished({ status: 'completed' }), { status: 200, payload: machine });
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    expect(calls.map((c) => c.url)).toEqual([MACHINE_URL]);
+    expect(stderr.join('')).toContain("machine m-1 can't hold a restart for active hours");
+    expect(stderr.join('')).toContain('drop the flag to restart now');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('warns and goes ahead when the machine cannot be read', async () => {
+    const calls = powerStub(finished({ status: 'completed' }), {
+      status: 403,
+      payload: { status: 403, code: 'scope_insufficient', detail: 'API key is missing site=site-1:read scope' },
+    });
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    expect(calls[1]!.url).toBe(COMMANDS_URL);
+    expect(stderr.join('')).toContain('could not check that machine m-1 honours --after-active-hours');
+    // the API is the backstop, so going ahead is safe.
+    expect(stderr.join('')).toContain('the API refuses it if the machine cannot hold the restart');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('reports the API refusing a held restart the machine cannot hold', async () => {
+    installFetchStub((call) => {
+      if (call.url === MACHINE_URL) return { status: 403, payload: { status: 403, code: 'scope_insufficient' } };
+      if (call.url === COMMANDS_URL) {
+        return {
+          status: 409,
+          payload: {
+            status: 409,
+            code: 'held_restart_unsupported',
+            detail: "this machine's agent can't hold a restart for active hours",
+          },
+        };
+      }
+      throw new Error(`unexpected fetch url ${call.url}`);
+    });
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    expect(stderr.join('')).toContain('held_restart_unsupported');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+  });
+
+  it('cannot be combined with --override-active-hours', async () => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const program = buildProgram();
+
+    await program.parseAsync([...ARGS, '--override-active-hours', '--reason', 'hotfix'], { from: 'user' });
+
+    expect(calls).toHaveLength(0);
+    expect(process.exitCode).toBe(2);
+    process.exitCode = 0;
+  });
+
+  it('the refusal hint offers it on reboot', async () => {
+    powerStub(finished({ status: 'failed', error: ACTIVE_HOURS_REFUSAL }));
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(['machine', 'reboot', 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(stderr.join('')).toContain('--after-active-hours');
+    process.exitCode = 0;
+  });
+
+  it('is not an option on shutdown', async () => {
+    const calls = powerStub(finished({ status: 'completed' }));
+    const program = buildProgram();
+
+    await expect(
+      program.parseAsync(['machine', 'shutdown', 'm-1', '--site', 'site-1', '--after-active-hours'], {
+        from: 'user',
+      }),
+    ).rejects.toMatchObject({ code: 'commander.unknownOption' });
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -455,7 +743,7 @@ describe('owlette machine screenshot', () => {
     );
 
     // 1 POST + MAX_ATTEMPTS polls.
-    expect(calls.length).toBe(1 + machineInternals.SCREENSHOT_POLL_MAX_ATTEMPTS);
+    expect(calls.length).toBe(1 + machineInternals.COMMAND_POLL_MAX_ATTEMPTS);
     const errOut = stderr.join('');
     expect(errOut).toContain('screenshot timed out');
     expect(process.exitCode).toBe(1);

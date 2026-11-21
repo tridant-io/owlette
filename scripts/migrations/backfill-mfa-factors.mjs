@@ -599,20 +599,19 @@ async function main() {
    * only pre-image, and a later dry run on the same path would destroy it.
    */
   function writeLog() {
-    if (existsSync(logPath)) {
-      try {
-        const existing = JSON.parse(readFileSync(logPath, 'utf8'));
-        if (existing?.dryRun === false && Array.isArray(existing.applied) && existing.applied.length > 0) {
-          // A custom --log-file need not end in `.log.json`; then the substitution is a no-op and
-          // the rename would silently self-cancel.
-          const substituted = logPath.replace(/\.log\.json$/, '.prev.log.json');
-          const backup = substituted === logPath ? `${logPath}.prev` : substituted;
-          renameSync(logPath, backup);
-          console.log(`preserved previous committed log as ${backup}`);
-        }
-      } catch {
-        // An unparseable log isn't worth aborting for; the fresh log replaces it either way.
+    // Read straight away rather than check first: an exists-check leaves a gap before the use.
+    try {
+      const existing = JSON.parse(readFileSync(logPath, 'utf8'));
+      if (existing?.dryRun === false && Array.isArray(existing.applied) && existing.applied.length > 0) {
+        // A custom --log-file need not end in `.log.json`; then the substitution is a no-op and
+        // the rename would silently self-cancel.
+        const substituted = logPath.replace(/\.log\.json$/, '.prev.log.json');
+        const backup = substituted === logPath ? `${logPath}.prev` : substituted;
+        renameSync(logPath, backup);
+        console.log(`preserved previous committed log as ${backup}`);
       }
+    } catch {
+      // No log yet, or an unparseable one: the fresh log replaces it either way.
     }
     writeFileSync(logPath, JSON.stringify(logDoc, null, 2));
   }

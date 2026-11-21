@@ -3,11 +3,14 @@
 import { useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+
+// one option row, a label around a Checkbox and its text. the site switcher's list draws
+// its rows with it when it takes several, so the two pickers cannot drift apart
+export const CHECKBOX_ROW = 'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent/50';
 
 export interface MultiSelectGroup {
   /** Section heading, or `null` for options that need none. */
@@ -168,13 +171,7 @@ export function MultiSelect({
                   <p className="px-2 py-1 text-xs text-muted-foreground">{group.group}</p>
                 )}
                 {group.options.map((option) => (
-                  <label
-                    key={option.value}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm',
-                      'hover:bg-accent/50',
-                    )}
-                  >
+                  <label key={option.value} className={CHECKBOX_ROW}>
                     <Checkbox
                       checked={selectedSet.has(option.value)}
                       onCheckedChange={() => toggle(option.value)}

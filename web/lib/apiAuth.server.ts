@@ -1,17 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { getSessionFromRequest } from '@/lib/sessionManager.server';
+import type { DecodedIdToken } from 'firebase-admin/auth';
+import type { IronSession } from 'iron-session';
+import { getSessionFromRequest, type SessionData } from '@/lib/sessionManager.server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { resolveSiteAccess } from '@/lib/sitePolicy.server';
-import { type Actor, type Capability, hasCapability } from '@/lib/capabilities';
+import {
+  MFA_CHALLENGE_REQUIRED,
+  MFA_SETUP_REQUIRED,
+  sessionClearedMfaChallenge,
+} from '@/lib/mfaEnrollmentGate.server';
+import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
+import { sessionRevoked, tokensRevokedAt } from '@/lib/sessionCutoff.server';
+import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
+import { type Actor, type Capability, hasCapability, siteStanding } from '@/lib/capabilities';
 import {
   type ApiKeyEnvironment,
   type ApiKeyLookup,
   type ApiKeyPermission,
   type ApiKeyResource,
   type ApiKeyScope,
+  normalizeMaxToolTier,
   scopeMatches,
 } from '@/lib/apiKeyTypes';
+import type { ToolTier } from '@/lib/mcp-tools';
 import { emitApiKeyUsed, scopeFingerprint } from '@/lib/auditLogClient';
 
 export class ApiAuthError extends Error {
@@ -35,6 +46,8 @@ export interface ApiKeyContext {
   keyId: string;
   /** Empty when a temporarily allowlisted legacy key has no explicit scopes. */
   scopes: ApiKeyScope[] | null;
+  /** The highest tool tier this key may run. Absent reads as 1. */
+  maxToolTier?: ToolTier;
   environment: ApiKeyEnvironment | null;
   expiresAt: number | null;
   /** Deprecated: resolved keys no longer bypass scope checks. */
@@ -55,9 +68,8 @@ export interface ScopeCheckResult {
   missingVersion?: boolean;
 }
 
-// Module-level memos to log each deprecated key path only once per process.
+// Module-level memo to log each legacy key only once per process.
 const LEGACY_LOGGED = new Set<string>();
-const QUERY_LOGGED = new Set<string>();
 
 function hashApiKey(rawKey: string): string {
   return crypto.createHash('sha256').update(rawKey).digest('hex');
@@ -86,17 +98,57 @@ function warnLegacyOnce(keyHash: string): void {
   );
 }
 
-function warnQueryStringKeyOnce(keyHash: string): void {
-  if (QUERY_LOGGED.has(keyHash)) return;
-  QUERY_LOGGED.add(keyHash);
-  console.warn(
-    `[apiAuth] DEPRECATED: API key ${keyHash.slice(0, 8)}... supplied via query string. ` +
-      'Migrate to Authorization: Bearer or x-api-key header. ' +
-      'Query-string keys leak via logs, referrers, browser history.',
-  );
+function mfaChallengeError(): ApiAuthError {
+  return new ApiAuthError(403, 'complete two-factor verification first', {
+    code: MFA_CHALLENGE_REQUIRED,
+  });
 }
 
-export async function requireSession(request: NextRequest): Promise<string> {
+function mfaSetupError(): ApiAuthError {
+  return new ApiAuthError(403, 'set up two-factor authentication first', {
+    code: MFA_SETUP_REQUIRED,
+  });
+}
+
+/**
+ * Mandatory setup with no factor enrolled, ANDed the way `resolveMfaStateForUser` does so a
+ * hand-edited document can't hold an enrolled account here.
+ */
+function accountOwesMfaSetup(account: FirebaseFirestore.DocumentData | undefined): boolean {
+  return account?.requiresMfaSetup === true && account.mfaEnrolled !== true;
+}
+
+/** a failed read counts as holding one: the same fail-closed call `evaluateSessionMfa` makes. */
+async function accountHoldsSecondFactor(uid: string): Promise<boolean> {
+  try {
+    return deriveMfaEnrolled(await readMfaFactors(uid));
+  } catch (err) {
+    console.error('[apiAuth] factor lookup failed, treating the account as enrolled', err);
+    return true;
+  }
+}
+
+/** The users doc, or undefined before bootstrap. */
+async function readAccount(uid: string): Promise<FirebaseFirestore.DocumentData | undefined> {
+  const snap = await getAdminDb().collection('users').doc(uid).get();
+  return snap.exists ? snap.data() : undefined;
+}
+
+/** Refuses a cookie minted before the account's `sessionsValidAfter` or its Firebase revocation. */
+export function assertSessionCurrent(
+  session: { issuedAt?: number; expiresAt?: number },
+  account: FirebaseFirestore.DocumentData | undefined,
+  revokedAt: number | null,
+): void {
+  if (sessionRevoked(session, account?.sessionsValidAfter, revokedAt)) {
+    throw new ApiAuthError(401, 'Unauthorized: Session revoked', { code: 'session_revoked' });
+  }
+}
+
+async function requireLiveSession(request: NextRequest): Promise<{
+  session: IronSession<SessionData>;
+  account: FirebaseFirestore.DocumentData | undefined;
+}> {
   const session = await getSessionFromRequest(request);
 
   if (!session.userId || !session.expiresAt) {
@@ -108,15 +160,57 @@ export async function requireSession(request: NextRequest): Promise<string> {
     throw new ApiAuthError(401, 'Unauthorized: Session expired');
   }
 
+  // the cookie can't know about a cutoff set after it was minted: one read per request, and an
+  // Auth lookup at most once a minute
+  const [account, revokedAt] = await Promise.all([
+    readAccount(session.userId),
+    tokensRevokedAt(session.userId),
+  ]);
+  assertSessionCurrent(session, account, revokedAt);
+  return { session, account };
+}
+
+/**
+ * A live session that cleared its challenge, or whose account holds no second factor and owes
+ * no setup. Anything else the cookie says is a snapshot from sign-in, older than a factor added
+ * since, so the account decides: that is a second read for an account with no factor.
+ */
+export async function requireSession(request: NextRequest): Promise<string> {
+  const { session, account } = await requireLiveSession(request);
+  if (accountOwesMfaSetup(account)) throw mfaSetupError();
+  if (!sessionClearedMfaChallenge(session) && (await accountHoldsSecondFactor(session.userId))) {
+    throw mfaChallengeError();
+  }
   return session.userId;
+}
+
+/**
+ * For the routes that complete the challenge or enroll a factor, and nothing else: a session
+ * that still owes its second factor gets through. Each caller carries its own gate or proof.
+ */
+export async function requirePreMfaSession(request: NextRequest): Promise<string> {
+  return (await requireLiveSession(request)).session.userId;
+}
+
+/**
+ * A user id token proves the password and nothing more, so it answers only for an account with
+ * no second factor and no setup owed. Agent tokens are not users: no factor to pass, no user
+ * document to read.
+ */
+export async function assertIdTokenPassesMfa(decoded: DecodedIdToken): Promise<void> {
+  if (decoded.role === 'agent') return;
+  if (await accountHoldsSecondFactor(decoded.uid)) throw mfaChallengeError();
+  if (accountOwesMfaSetup(await readAccount(decoded.uid))) throw mfaSetupError();
 }
 
 export async function requireSessionOrIdToken(
   request: NextRequest,
-  options: { rejectAgentTokens?: boolean } = {}
+  options: { rejectAgentTokens?: boolean; allowPreMfa?: boolean } = {}
 ): Promise<string> {
   try {
-    return await requireSession(request);
+    return options.allowPreMfa
+      ? await requirePreMfaSession(request)
+      : await requireSession(request);
   } catch (error) {
     const bearer = extractBearer(request);
     if (!bearer) {
@@ -126,19 +220,19 @@ export async function requireSessionOrIdToken(
       throw new ApiAuthError(401, 'Unauthorized: No valid session');
     }
 
+    let decoded: DecodedIdToken;
     try {
-      const adminAuth = getAdminAuth();
-      const decoded = await adminAuth.verifyIdToken(bearer);
-      // Agents (role='agent', custom token) must never mint user-scoped API
-      // keys. Opt-in per call; only the ID-token branch can be an agent.
-      if (options.rejectAgentTokens && decoded.role === 'agent') {
-        throw new ApiAuthError(403, 'Forbidden: agent credentials cannot create api keys');
-      }
-      return decoded.uid;
-    } catch (e) {
-      if (e instanceof ApiAuthError) throw e; // preserve the 403 above
+      decoded = await getAdminAuth().verifyIdToken(bearer);
+    } catch {
       throw new ApiAuthError(401, 'Unauthorized: Invalid ID token');
     }
+    // Agents (role='agent', custom token) must never mint user-scoped API
+    // keys. Opt-in per call; only the ID-token branch can be an agent.
+    if (options.rejectAgentTokens && decoded.role === 'agent') {
+      throw new ApiAuthError(403, 'Forbidden: agent credentials cannot create api keys');
+    }
+    if (!options.allowPreMfa) await assertIdTokenPassesMfa(decoded);
+    return decoded.uid;
   }
 }
 
@@ -152,17 +246,10 @@ function extractBearer(request: NextRequest): string | null {
   return match ? match[1] : null;
 }
 
+// headers only: a key in the url would sit in proxy and access logs
 function extractApiKey(request: NextRequest): string | null {
-  const queryKey = request.nextUrl.searchParams.get('api_key');
-  if (queryKey) {
-    if (queryKey.startsWith('owk_')) {
-      warnQueryStringKeyOnce(hashApiKey(queryKey));
-      return queryKey;
-    }
-  } else {
-    const headerKey = request.headers.get('x-api-key');
-    if (headerKey && headerKey.startsWith('owk_')) return headerKey;
-  }
+  const headerKey = request.headers.get('x-api-key');
+  if (headerKey && headerKey.startsWith('owk_')) return headerKey;
 
   const bearer = extractBearer(request);
   if (bearer && bearer.startsWith('owk_')) return bearer;
@@ -230,6 +317,7 @@ async function resolveApiKeyContext(
   const keyContext: ApiKeyContext = {
     keyId: data.keyId,
     scopes,
+    maxToolTier: normalizeMaxToolTier(data.maxToolTier),
     environment: (data.environment as ApiKeyEnvironment) ?? null,
     expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
     isLegacy: false,
@@ -389,6 +477,18 @@ export async function requireSessionUser(
   return sessionUserId;
 }
 
+/** `requireSessionUser` for the `requirePreMfaSession` routes. */
+export async function requirePreMfaSessionUser(
+  request: NextRequest,
+  userId: string
+): Promise<string> {
+  const sessionUserId = await requirePreMfaSession(request);
+  if (sessionUserId !== userId) {
+    throw new ApiAuthError(403, 'Forbidden: User mismatch');
+  }
+  return sessionUserId;
+}
+
 function assertUserDataActive(
   userData: FirebaseFirestore.DocumentData | null
 ): asserts userData is FirebaseFirestore.DocumentData {
@@ -416,9 +516,8 @@ export async function assertActiveUser(
  * implementation could serve both wrappers. This function keeps its signature
  * and its throw behaviour exactly, because two routes call it directly
  * (`app/api/cli/device-code/authorize`, `app/api/keys/_shared`) and much of the
- * suite mocks it. The three enrolment routes that used to call it —
- * setup/generate-token, agent/generate-installer, agent device-code authorize —
- * moved to `assertUserHasSiteCapability` in 77edefde. Preserve both when touching
+ * suite mocks it. The enrolment route that used to call it, agent device-code
+ * authorize, moved to `assertUserHasSiteCapability` in 77edefde. Preserve both when touching
  * this: the statuses and messages below are asserted across the suite, and
  * `code: 'user_inactive'` is specifically what lets `authorizedSiteHandler`
  * answer 403 instead of collapsing to 404.
@@ -426,7 +525,12 @@ export async function assertActiveUser(
 export async function assertUserHasSiteAccess(
   userId: string,
   siteId: string
-): Promise<{ siteId: string; siteData: Record<string, unknown> | null }> {
+): Promise<{
+  siteId: string;
+  siteData: Record<string, unknown> | null;
+  /** the caller's machine scope on the site; null for the whole site */
+  machineIds: readonly string[] | null;
+}> {
   const outcome = await resolveSiteAccess(userId, siteId);
 
   if (!outcome.ok) {
@@ -442,7 +546,7 @@ export async function assertUserHasSiteAccess(
     }
   }
 
-  return { siteId, siteData: outcome.facts.siteData };
+  return { siteId, siteData: outcome.facts.siteData, machineIds: outcome.facts.machineIds };
 }
 
 /**
@@ -466,9 +570,7 @@ export async function assertUserHasSiteCapability(
     type: 'user',
     userId,
     role: outcome.facts.globalRole,
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding([[siteId, standingOf(outcome.facts)]]),
   };
   if (!hasCapability(actor, capability, siteId)) {
     throw new ApiAuthError(403, 'Forbidden: capability not granted');

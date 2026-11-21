@@ -639,7 +639,12 @@ class FirestoreRestClient:
             ])
         """
         try:
-            url = f"{self.base_url}:batchWrite"
+            # `:commit`, not `:batchWrite`: the latter is for service accounts and
+            # answers 403 to the agent's user token, so every batch fell back to
+            # one request per document (1,754 of them for a linux package list,
+            # kiosk vm, 2026-10-03). `:commit` takes the same `writes` array, up
+            # to 500, atomically, which is what the callers already assume.
+            url = f"{self.base_url}:commit"
 
             batch_writes = []
 
@@ -691,10 +696,12 @@ class FirestoreRestClient:
             logger.debug(f"Batch write completed: {len(writes)} operations")
 
         except Exception as e:
+            # a commit is all or nothing: one document the rules refuse fails
+            # the whole batch, and the caller falls back to single writes.
             is_403 = hasattr(e, 'response') and e.response is not None and e.response.status_code == 403
 
             if is_403:
-                logger.debug(f"Batch write forbidden (expected with OAuth tokens): {e}")
+                logger.warning(f"Batch write refused by the rules: {e}")
                 if hasattr(e, 'response'):
                     try:
                         error_details = e.response.json()

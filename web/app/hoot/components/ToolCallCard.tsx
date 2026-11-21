@@ -2,10 +2,11 @@
 
 import React, { useState } from 'react';
 import { ChevronRight, Wrench, CheckCircle2, AlertCircle, Loader2, ShieldAlert, Ban, Check } from 'lucide-react';
-import { getToolByName } from '@/lib/mcp-tools';
+import { getToolByName, namedCallMachines } from '@/lib/mcp-tools';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { CopyButton } from './CopyButton';
+import { launchChangeInputs } from '@/lib/hoot/launchChange';
 
 /**
  * How many machines an approval prompt spells out before it collapses the rest
@@ -49,8 +50,12 @@ interface ToolCallCardProps {
   args: Record<string, unknown>;
   result?: unknown;
   isLoading?: boolean;
-  /** Tier-3 human-in-the-loop gate; absent for tier-1/2 and executed calls. */
-  approvalState?: 'requested' | 'denied';
+  /**
+   * Human-in-the-loop gate; absent for calls that need no approval and for
+   * executed calls. 'expired' is an approval a later message left behind: the
+   * server would refuse it, so nothing is offered to press.
+   */
+  approvalState?: 'requested' | 'denied' | 'expired';
   /**
    * FALLBACK for where the tool will run, e.g. a machine name or "all machines" —
    * used only for turns with no per-turn metadata (chats written before hoot
@@ -98,11 +103,33 @@ export function ToolCallCard({
   const tierLabel = toolDef ? `tier ${toolDef.tier}` : '';
   const awaitingApproval = approvalState === 'requested';
   const denied = approvalState === 'denied';
+  const expired = approvalState === 'expired';
+  // the lock a click takes belongs to that offer of the approval. a refused
+  // answer reloads the chat's saved history, where the same card is awaiting
+  // approval again, so the lock is dropped as soon as the card stops awaiting:
+  // it used to outlive the refusal and spin with both buttons dead.
+  if (submitting && !awaitingApproval) setSubmitting(false);
+  // in a turn on several machines a call names its own, and approving runs it on
+  // those alone. a list is believed only where the server honours one: in such a
+  // turn, and wholly inside it.
+  const named = namedCallMachines(args);
+  const turnMachineIds = approvalTargetMachineIds ?? [];
+  const callMachineIds =
+    named && turnMachineIds.length > 1 && named.every((id) => turnMachineIds.includes(id)) ? named : null;
   // An empty list falls back rather than erasing the target: a prompt that names
   // no machine at all is worse than one naming the selector's.
-  const approvalTarget = approvalTargetMachineIds?.length
-    ? formatApprovalTargets(approvalTargetMachineIds, approvalTargetDynamic)
-    : approvalTargetLabel;
+  const approvalTarget = callMachineIds
+    ? formatApprovalTargets(callMachineIds)
+    : turnMachineIds.length
+      ? formatApprovalTargets(turnMachineIds, approvalTargetDynamic)
+      : approvalTargetLabel;
+  // Approving this lets the call act inside the machine's active hours, so the
+  // banner says so up front rather than leaving it in the collapsed input.
+  const overrideReason = args.override_active_hours === true
+    ? (typeof args.reason === 'string' && args.reason.trim()) || 'no reason given'
+    : null;
+  // What this approval would make the machine run belongs on the card itself.
+  const launchInputs = awaitingApproval ? launchChangeInputs(toolName, args) : [];
 
   // Prefer the uploaded Firebase URL; fall back to inline base64 if upload failed.
   let screenshotSrc: string | null = null;
@@ -116,15 +143,15 @@ export function ToolCallCard({
   }
 
   const statusIcon = awaitingApproval ? (
-    <ShieldAlert className="h-4 w-4 text-amber-400" />
+    <ShieldAlert className="h-4 w-4 text-warning" />
   ) : isLoading ? (
     <Loader2 className="h-4 w-4 text-accent-cyan animate-spin" />
-  ) : denied ? (
+  ) : denied || expired ? (
     <Ban className="h-4 w-4 text-muted-foreground" />
   ) : hasError ? (
-    <AlertCircle className="h-4 w-4 text-red-400" />
+    <AlertCircle className="h-4 w-4 text-danger" />
   ) : (
-    <CheckCircle2 className="h-4 w-4 text-green-400" />
+    <CheckCircle2 className="h-4 w-4 text-success" />
   );
 
   return (
@@ -132,7 +159,7 @@ export function ToolCallCard({
       open={expanded}
       onOpenChange={setExpanded}
       className={`my-2 rounded-lg border overflow-hidden ${
-        awaitingApproval ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-secondary/50'
+        awaitingApproval ? 'border-warning-border bg-warning-solid/5' : 'border-border bg-secondary/50'
       }`}
     >
       {/* Cancel is a sibling of the expand toggle, never nested inside it —
@@ -147,23 +174,25 @@ export function ToolCallCard({
             <span className="font-mono text-xs text-foreground truncate">{toolName}</span>
 
             {tierLabel && (
-              /* `--muted-foreground` on `--accent` is 4.40:1 in the app's forced-dark
-                 theme — under the 4.5:1 axe enforces on /hoot, and this is 10px text,
-                 so it is held to the normal-text threshold with no large-text relief.
-                 `--accent-foreground` at 70% composites to rgb(178,194,208) for 6.22:1,
-                 while staying quieter than the tool name beside it — which is what keeps
-                 the chip reading as metadata. (Work that ratio in GAMMA-ENCODED sRGB, the
-                 space the browser actually blends in: computing the same blend in linear
-                 light flatters it to 7.87:1.) The accent fill stays — against the card it
-                 is what makes the chip a chip, where `--secondary` would all but vanish. */
+              /* `--muted-foreground` on `--accent` is 4.40:1 in dark — under the 4.5:1
+                 axe enforces on /hoot, and this is 10px text, so it is held to the
+                 normal-text threshold with no large-text relief. `--accent-foreground`
+                 at 70% composites to rgb(178,194,208) for 6.22:1 while staying quieter
+                 than the tool name beside it, which keeps the chip reading as metadata.
+                 by day the same class lands at rgb(77,86,99) on the light accent, 5.87:1.
+                 (work these ratios in gamma-encoded srgb, the space the browser blends
+                 in: linear light flatters the dark blend to 7.87:1.) the accent fill
+                 stays: against the card it is what makes the chip a chip, where
+                 `--secondary` would all but vanish. */
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-accent-foreground/70 flex-shrink-0">
                 {tierLabel}
               </span>
             )}
 
             <span className="ml-auto flex items-center gap-1 text-muted-foreground flex-shrink-0">
-              {awaitingApproval && <span className="text-xs text-amber-400">awaiting approval</span>}
+              {awaitingApproval && <span className="text-xs text-warning">awaiting approval</span>}
               {denied && <span className="text-xs">denied</span>}
+              {expired && <span className="text-xs">approval expired</span>}
               {isLoading && !awaitingApproval && <span className="text-xs">executing...</span>}
               <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
             </span>
@@ -191,11 +220,26 @@ export function ToolCallCard({
       {/* Approval banner. Payload stays collapsed so it isn't duplicated here
           and in the expanded view. */}
       {awaitingApproval && (
-        <div className="border-t border-amber-500/30 px-3 py-2.5 space-y-2.5">
+        <div className="border-t border-warning-solid/30 px-3 py-2.5 space-y-2.5">
           <p className="text-xs text-foreground">
             hoot wants to run the privileged <span className="font-mono">{toolName}</span> tool
             {approvalTarget ? <> on <span className="font-medium">{approvalTarget}</span></> : null}. approve to continue, or expand to inspect the input.
           </p>
+          {overrideReason !== null && (
+            <p className="text-xs text-foreground break-words">
+              <span className="font-medium text-warning">override active hours:</span> {overrideReason}
+            </p>
+          )}
+          {launchInputs.length > 0 && (
+            <div className="text-xs text-foreground space-y-0.5">
+              <p className="font-medium text-warning">this changes what the machine runs:</p>
+              {launchInputs.map(([field, value]) => (
+                <p key={field} className="font-mono break-all">
+                  {field}: {value}
+                </p>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -220,6 +264,14 @@ export function ToolCallCard({
               deny
             </Button>
           </div>
+        </div>
+      )}
+
+      {expired && (
+        <div className="border-t border-border px-3 py-2.5">
+          <p className="text-xs text-muted-foreground">
+            this approval expired: a later message was sent in this chat. ask hoot again to run it.
+          </p>
         </div>
       )}
 
@@ -281,7 +333,7 @@ export function ToolCallCard({
                 <pre
                   className={`mt-1 text-xs font-mono rounded p-2 overflow-x-auto max-h-64 ${
                     hasError
-                      ? 'text-red-300 bg-red-950/30'
+                      ? 'text-danger bg-danger-surface'
                       : 'text-foreground bg-background'
                   }`}
                 >

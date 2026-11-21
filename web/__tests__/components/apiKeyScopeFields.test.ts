@@ -1,10 +1,29 @@
+/// <reference types="@testing-library/jest-dom" />
+import { createElement } from 'react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import {
+  ApiKeyScopeFields,
   customScopesForSelection,
   presetForScopes,
   resolveScopes,
   validateScopeSelection,
 } from '@/components/ApiKeyScopeFields';
-import { SCOPE_PRESETS, type ApiKeyScope } from '@/lib/apiKeyTypes';
+import {
+  SCOPE_PRESETS,
+  SUPERADMIN_ONLY_RESOURCES,
+  type ApiKeyScope,
+} from '@/lib/apiKeyTypes';
+
+let mockIsSuperadmin = false;
+jest.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ isSuperadmin: mockIsSuperadmin }),
+}));
+
+// radix select drives its trigger with pointer capture and scrolls the active item into view
+window.HTMLElement.prototype.scrollIntoView = jest.fn();
+window.HTMLElement.prototype.hasPointerCapture = jest.fn();
 
 /**
  * The pure half of the shared scope builder. `presetForScopes` is the piece
@@ -147,5 +166,79 @@ describe('customScopesForSelection', () => {
     expect(customScopesForSelection('custom', 'operator', keyScopes)).toEqual(
       SCOPE_PRESETS.operator,
     );
+  });
+});
+
+describe('ApiKeyScopeFields resource picker', () => {
+  function renderFields(customScopes: ApiKeyScope[]) {
+    render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(ApiKeyScopeFields, {
+          preset: 'custom',
+          onPresetChange: jest.fn(),
+          customScopes,
+          onCustomScopesChange: jest.fn(),
+        }),
+      ),
+    );
+  }
+
+  async function offeredResources(row: number): Promise<string[]> {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('combobox', { name: `scope ${row} resource` }));
+    return (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+  }
+
+  const siteRow: ApiKeyScope = { resource: 'site', id: '*', permissions: ['read'] };
+
+  it('offers a superadmin every superadmin-only resource', async () => {
+    mockIsSuperadmin = true;
+    renderFields([siteRow]);
+
+    const offered = await offeredResources(1);
+    expect(offered).toEqual(expect.arrayContaining(['site', 'user', 'installer']));
+    for (const r of SUPERADMIN_ONLY_RESOURCES) expect(offered).toContain(r);
+  });
+
+  it('hides superadmin-only resources from everyone else', async () => {
+    mockIsSuperadmin = false;
+    renderFields([siteRow]);
+
+    const offered = await offeredResources(1);
+    expect(offered).toContain('site');
+    for (const r of SUPERADMIN_ONLY_RESOURCES) expect(offered).not.toContain(r);
+  });
+
+  it.each(SUPERADMIN_ONLY_RESOURCES)(
+    'still shows an existing %s row to a non-superadmin, read-only',
+    (resource) => {
+      mockIsSuperadmin = false;
+      renderFields([siteRow, { resource, id: '*', permissions: ['read', 'write'] }]);
+
+      const trigger = screen.getByRole('combobox', { name: 'scope 2 resource' });
+      expect(trigger).toHaveTextContent(resource);
+      expect(trigger).toBeDisabled();
+      expect(screen.getByRole('textbox', { name: 'scope 2 id' })).toBeDisabled();
+      const perms = within(screen.getByRole('group', { name: 'scope 2 permissions' }));
+      expect(perms.getByRole('checkbox', { name: 'read' })).toBeChecked();
+      expect(perms.getByRole('checkbox', { name: 'write' })).toBeChecked();
+      for (const box of perms.getAllByRole('checkbox')) expect(box).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'remove scope 2' })).toBeDisabled();
+      expect(screen.getByText('only a superadmin can change this scope')).toBeInTheDocument();
+
+      // the row beside it stays editable
+      expect(screen.getByRole('combobox', { name: 'scope 1 resource' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'remove scope 1' })).toBeEnabled();
+    },
+  );
+
+  it('lets a superadmin edit a superadmin-only row like any other', () => {
+    mockIsSuperadmin = true;
+    renderFields([siteRow, { resource: SUPERADMIN_ONLY_RESOURCES[0], id: '*', permissions: ['read'] }]);
+
+    expect(screen.getByRole('combobox', { name: 'scope 2 resource' })).toBeEnabled();
+    expect(screen.queryByText('only a superadmin can change this scope')).not.toBeInTheDocument();
   });
 });

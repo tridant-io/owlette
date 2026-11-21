@@ -56,22 +56,7 @@ interface MutationResponse {
 }
 
 export function registerChatCommands(program: Command): void {
-  const chat =
-    (program.commands.find((c) => c.name() === 'chat') as Command | undefined) ??
-    program.command('chat').description('hoot ai chat');
-
-  // Overwrite an earlier stub so help text is order-independent.
-  chat.description('hoot ai chat');
-
-  // Drop earlier registrations (stubs) so a re-register can't double-list verbs.
-  for (const verb of ['new', 'list', 'send', 'delete', 'rename'] as const) {
-    const existing = chat.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = chat.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const chat = program.command('chat').description('hoot ai chat');
 
   chat
     .command('new')

@@ -50,14 +50,6 @@ export function registerRoostDeployCommand(program: Command): void {
     (program.commands.find((c) => c.name() === 'roost') as Command | undefined) ??
     program.command('roost').description('manage roosts + versions');
 
-  // Drop any earlier deploy stub registered under roost.
-  const existing = roost.commands.find((c) => c.name() === 'deploy');
-  if (existing) {
-    const list = roost.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
-
   roost
     .command('deploy <roostId>')
     .description('trigger a targeted fan-out (canary → fleet)')

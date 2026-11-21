@@ -1,6 +1,7 @@
 /**
  * Dispatch — reboot flow (D2.1): click reboot -> confirm -> command doc written
- * -> 30s countdown pill. Tick / lockout / revert are E1.x.
+ * -> 60s countdown pill, the agent's own. Tick / lockout / revert are E1.x;
+ * the active-hours choice is active-hours.spec.ts.
  *
  * Contract (useFirestore.ts::restartMachine): POST the command via the API, which
  * lands a `reboot_machine` entry in `.../commands/pending`; the countdown itself
@@ -50,7 +51,7 @@ test('admin can dispatch restart — command written + rebootScheduledAt populat
 
   // The dialog only closes once both Firestore writes resolve; without this wait
   // the Admin SDK reads below race the client writes.
-  await expect(page.getByText('Restart command sent to', { exact: false })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText('restart command sent to', { exact: false })).toBeVisible({ timeout: 10_000 });
 
   // rebootScheduledAt > now flips the status pill to the countdown. Only admin
   // gets the cancel variant with a testid; member's text-only badge is B3.2.
@@ -69,5 +70,5 @@ test('admin can dispatch restart — command written + rebootScheduledAt populat
   const cmd = pending[rebootKeys[0]];
   expect(cmd.type).toBe('reboot_machine');
   expect(cmd.status).toBe('pending');
-  expect(cmd.delay_seconds).toBe(30);
+  expect(cmd.delay_seconds).toBe(60);
 });

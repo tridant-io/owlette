@@ -10,8 +10,9 @@
  * full 12h ttl through session end, kill and membership revocation. Wiring it
  * up needs somewhere to keep the username handle first — both call sites
  * discard it, and `assertNoKeyMaterial` would reject a field named for a
- * credential. Tracked with the metering (task 8.4) and the host-side
- * allocation (task 7.4); until then a relay allocation outlives its session.
+ * credential. Tracked with the metering (task 8.4). The host releases its own
+ * allocation when a peer goes (agent 4.1.8), so what outlives a session is the
+ * credential, not an allocation; the browser's allocation ends with the tab.
  */
 
 import logger from '@/lib/logger';
@@ -21,7 +22,10 @@ const TURN_API_BASE = 'https://rtc.live.cloudflare.com/v1/turn/keys';
 /** Cloudflare's documented ceiling: "up to 48 hours in the future". */
 export const TURN_MAX_TTL_SECONDS = 48 * 60 * 60;
 
-/** A session's cap is 12 h (plan.md D10), so this is the default we ask for. */
+/**
+ * 12 h. a session has no cap any more, so a relayed one outlives these
+ * credentials only once re-minted ones reach both ends (task 7.4).
+ */
 export const TURN_DEFAULT_TTL_SECONDS = 12 * 60 * 60;
 
 const TURN_TIMEOUT_MS = 5000;
@@ -31,6 +35,13 @@ export interface SwoopIceServer {
   username?: string;
   credential?: string;
 }
+
+/**
+ * what both ends get when the mint fails: p2p first (plan.md D13), relays only
+ * from a minted list. the viewer and the host streamer must gather the same
+ * kind of candidate, or a nat on either side leaves no pair.
+ */
+export const STUN_ONLY: SwoopIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
 
 export type TurnFailureReason =
   | 'not_configured'

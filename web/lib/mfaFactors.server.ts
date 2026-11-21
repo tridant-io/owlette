@@ -217,6 +217,9 @@ async function applyInTx(
     mfaFactors: next,
     mfaEnrolled,
     requiresMfaSetup,
+    // a factor change ends every login session minted before it (lib/sessionCutoff.server.ts);
+    // the route that made the change re-stamps its own
+    sessionsValidAfter: Date.now(),
     ...extraUpdate,
   };
 

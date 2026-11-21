@@ -84,6 +84,19 @@ export async function failCommand(
   await pendingRef.update({ [commandId]: FieldValue.delete() });
 }
 
+/**
+ * The error a guarded agent fails a restart, shutdown or deployment with
+ * inside active hours (`owlette_service._active_hours_block`), for
+ * `failCommand`.
+ */
+export function activeHoursRefusal(window: { start: number; end: number }): string {
+  const clock = (hour: number) => `${String(hour).padStart(2, '0')}:00`;
+  return (
+    `Error: active_hours: inside active hours ${clock(window.start)}–${clock(window.end)} ` +
+    `(machine time); they end at ${clock(window.end)}`
+  );
+}
+
 /** Pending command IDs — specs grab the generated commandId before stubbing. */
 export async function getPendingCommandIds(
   siteId: string,

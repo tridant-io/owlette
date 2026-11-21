@@ -202,6 +202,28 @@ def test_add_poll_includes_machine_id_and_version():
     }
 
 
+def test_the_add_path_saves_the_pairing_in_one_write_that_ends_a_site_move():
+    """A new pairing wins over a site move a stale store still holds: saved with
+    no move, save_credentials drops the stored one (test_secure_storage proves
+    that), and reconcile has nothing left to act on."""
+    auth_manager = MagicMock()
+    auth_manager.machine_id = "TEST-MACHINE"
+    auth_manager.storage = _storage()
+
+    with patch("auth_manager.AuthManager", return_value=auth_manager):
+        result, _mock_post = _run_add_flow()
+
+    assert result == (True, "Configuration successful", "site-abc")
+    storage = auth_manager.storage
+    storage.save_credentials.assert_called_once()
+    refresh, access, _expiry, site_id = storage.save_credentials.call_args.args
+    assert (refresh, access, site_id) == ("refresh-456", "access-123", "site-abc")
+    assert storage.save_credentials.call_args.kwargs.get("move") is None
+    storage.save_refresh_token.assert_not_called()
+    storage.save_access_token.assert_not_called()
+    storage.save_site_id.assert_not_called()
+
+
 @pytest.mark.skipif(sys.platform == 'win32',
                     reason='the POSIX arm of the clipboard affordance')
 def test_the_clipboard_copy_is_a_no_op_off_windows():
@@ -242,3 +264,16 @@ def test_machine_id_uses_the_persisted_identity(monkeypatch):
     assert auth_manager.machine_id == sentinel
     assert firebase_client.machine_id == sentinel
     assert mock_post.call_args.kwargs["json"]["machineId"] == sentinel
+
+
+def test_the_installer_console_path_never_asks_for_hoot_unless_told(tmp_path):
+    _result, auth_manager, _save = _run_interactive_flow(tmp_path)
+    auth_manager.request_device_code.assert_called_once_with(wants_hoot=False)
+
+    _result, auth_manager, _save = _run_interactive_flow(tmp_path, wants_hoot=True)
+    auth_manager.request_device_code.assert_called_once_with(wants_hoot=True)
+
+
+def test_the_add_path_never_sends_wants_hoot():
+    _result, mock_post = _run_add_flow()
+    assert all("wantsHoot" not in call.kwargs["json"] for call in mock_post.call_args_list)

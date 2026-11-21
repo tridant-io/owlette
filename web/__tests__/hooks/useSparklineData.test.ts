@@ -31,7 +31,7 @@ jest.mock('firebase/firestore', () => ({
   ),
 }));
 
-import { useSparklineData, useAllSparklineData } from '@/hooks/useSparklineData';
+import { useAllSparklineData } from '@/hooks/useSparklineData';
 
 const sample = (t: number, c: number, m: number, d: number, g?: number) => ({
   t,
@@ -128,16 +128,5 @@ describe('useAllSparklineData — hourly bucket reads (prod regression)', () => 
     const { result } = renderHook(() => useAllSparklineData(null, null));
     expect(result.current.loading).toBe(true);
     expect(result.current.cpu).toEqual([]);
-  });
-});
-
-describe('useSparklineData (single metric)', () => {
-  it('extracts one metric series from an hourly bucket', async () => {
-    queryDocs = [bucketDoc('2026-05-24-17', [sample(100, 10, 20, 90, 50)])];
-
-    const { result } = renderHook(() => useSparklineData('node-pa', 'INF-CONTROL', 'cpu'));
-    await waitFor(() => expect(result.current.loading).toBe(false));
-
-    expect(result.current.data).toEqual([{ t: 100, v: 10 }]);
   });
 });

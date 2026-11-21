@@ -4,6 +4,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { ROOST_ENABLED_FIELD } from '@/lib/roostKillSwitch';
 import { apiError } from '@/lib/apiErrorResponse';
 import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/apiErrors';
+import { readMove } from '@/lib/machineMoves.server';
 
 /**
  * GET /api/agent/site — the metadata an agent is allowed to learn about the site
@@ -16,10 +17,15 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  * firestore.rules grants an agent its machine subtree only
  * (`agentCanAccessMachine`), so a direct read of `sites/{siteId}` 403s.
  *
- * 200 `{ name: string | null, timezone: string | null, roostEnabled: boolean | null }`.
+ * 200 `{ name: string | null, timezone: string | null, roostEnabled: boolean | null,
+ * keepAwake: boolean, move: { moveId: string } | null }`.
  * `name` is null when the site has no name, so the caller falls back to the id
  * rather than rendering "null". 401 missing/invalid bearer, 403 non-agent token
  * or no `site_id` claim, 404 site gone.
+ *
+ * `keepAwake` comes from `sites/{siteId}/settings/display`, the one read here
+ * outside the site document. It is on by default: only an explicit `false`
+ * turns it off, so a site that never touched the switch keeps its screens awake.
  *
  * `roostEnabled` is passed through verbatim, including null for unset, because
  * the agent's kill-switch helper fails OPEN on a missing field and must be able
@@ -30,7 +36,14 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  * fail-open for the full TTL — so the kill switch had never once been observed
  * by an agent, while the changelog said it was checked before every sync_pull.
  *
- * PROJECTION, not the raw document: the three fields above are the whole contract.
+ * `move` is the calling machine's move to another site (`machine_moves`, read
+ * for the token's `machine_id`), as its id alone: the agent fetches the target's
+ * credentials with its own refresh token, never from here. It is the backstop
+ * for the `site_move` command, should that be lost before the agent runs it
+ * (a deleted requester's commands are swept). Null when the token names no machine.
+ *
+ * PROJECTION, not the raw documents: the fields above are the contract, and a
+ * field is only ever added (older agents ignore keys they do not know).
  * `timezone` is gated on `schedulesFollowSiteTime === true` because a non-null
  * timezone flips schedule evaluation for every process on every machine at the
  * site from machine-local to site time. The field is three-state — absent means
@@ -40,8 +53,8 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  *
  * The site comes from the token's own `site_id` claim (minted by
  * /api/agent/auth/device-code/poll), never from query or body, so a token can
- * only resolve its own site. `machine_id` is irrelevant — both fields are
- * site-scoped. No cache headers; the agent refreshes on its own schedule.
+ * only resolve its own site, and `machine_id` only its own move. No cache
+ * headers; the agent refreshes on its own schedule.
  */
 export const GET = withRateLimit(
   async (request: NextRequest) => {
@@ -70,7 +83,15 @@ export const GET = withRateLimit(
         return problemForbidden('agent token carries no site_id claim');
       }
 
-      const siteDoc = await getAdminDb().collection('sites').doc(siteId).get();
+      const machineId = typeof decodedToken.machine_id === 'string' ? decodedToken.machine_id.trim() : '';
+
+      const db = getAdminDb();
+      const siteRef = db.collection('sites').doc(siteId);
+      const [siteDoc, displayDoc, move] = await Promise.all([
+        siteRef.get(),
+        siteRef.collection('settings').doc('display').get(),
+        machineId ? readMove(db, siteId, machineId) : null,
+      ]);
       if (!siteDoc.exists) {
         return problemNotFound('site not found');
       }
@@ -93,7 +114,16 @@ export const GET = withRateLimit(
       const roostEnabled =
         typeof rawRoostEnabled === 'boolean' ? rawRoostEnabled : null;
 
-      return NextResponse.json({ name, timezone, roostEnabled });
+      // Default on — see the keepAwake note in the header.
+      const keepAwake = displayDoc.data()?.keepAwake !== false;
+
+      return NextResponse.json({
+        name,
+        timezone,
+        roostEnabled,
+        keepAwake,
+        move: move ? { moveId: move.moveId } : null,
+      });
     } catch (error: unknown) {
       return apiError(error, 'agent/site');
     }

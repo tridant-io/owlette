@@ -54,7 +54,7 @@ export function LandingFooter() {
             </nav>
 
             {/* Credits / license line — quietest tier */}
-            <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1.5 text-xs text-muted-foreground/55">
+            <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1.5 text-xs text-muted-foreground/80">
               <span className="flex items-center gap-1.5">
                 made with
                 <span className="text-sm leading-none">{emoji}</span>

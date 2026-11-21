@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Clock, Minus, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { DayPillSelector } from '@/components/DayPillSelector'
 import { WeekSummaryBar } from '@/components/WeekSummaryBar'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,8 @@ interface TimePickerProps {
   value: string // "HH:MM" 24-hour format
   onChange: (value: string) => void
   compact?: boolean
+  /** Accessible name of the field; the ±15 steppers are named after it. */
+  label?: string
 }
 
 function formatTimeDisplay(value: string, use24h: boolean): string {
@@ -109,9 +111,10 @@ function parseTimeInput(input: string, use24h: boolean, currentHour24?: number):
 }
 
 /** Not exported (unlike the web's): the dashboard schedule popover has no counterpart here. */
-function TimePicker({ value, onChange, compact }: TimePickerProps) {
+function TimePicker({ value, onChange, compact, label = 'time' }: TimePickerProps) {
   const use24h = USE_24H
   const [draft, setDraft] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const [h, m] = value.split(':').map(Number)
 
@@ -130,6 +133,12 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
     setDraft(null)
   }
 
+  const step = (deltaMinutes: number) => {
+    const next = adjust(deltaMinutes)
+    // mid-edit the field shows its draft, so the draft follows the step
+    if (document.activeElement === inputRef.current) setDraft(formatTimeDisplay(next, use24h))
+  }
+
   const displayed = formatTimeDisplay(value, use24h)
   const inputWidth = use24h ? 'w-14' : 'w-[4.5rem]'
   const inputPy = compact ? 'py-0.5 text-[11px]' : 'py-1 text-sm'
@@ -137,7 +146,9 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
   return (
     <div className="flex items-center gap-0.5">
       <input
+        ref={inputRef}
         type="text"
+        aria-label={label}
         value={draft ?? displayed}
         onChange={(e) => setDraft(e.target.value)}
         onFocus={(e) => {
@@ -166,25 +177,23 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
         className={`${inputPy} ${inputWidth} rounded-md border border-border bg-background text-foreground font-medium text-center cursor-text outline-none focus:border-muted-foreground transition-colors`}
         title="type a time (e.g. 9:00, 5pm, 17:00) or use ↑↓ arrows"
       />
+      {/* pointerdown is cancelled so a mouse step leaves focus, and any draft, in the
+          field; the step itself runs on click, which the keyboard also fires */}
       <div className="flex flex-col">
         <button
           type="button"
-          aria-label="+15 min"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setDraft(formatTimeDisplay(adjust(15), use24h))
-          }}
+          aria-label={`${label}, 15 minutes later`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(15)}
           className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
         >
           <ChevronUp className="h-2.5 w-2.5" />
         </button>
         <button
           type="button"
-          aria-label="-15 min"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setDraft(formatTimeDisplay(adjust(-15), use24h))
-          }}
+          aria-label={`${label}, 15 minutes earlier`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(-15)}
           className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
         >
           <ChevronDown className="h-2.5 w-2.5" />
@@ -280,10 +289,11 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                 <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.pill}`} />
                 <input
                   type="text"
+                  aria-label="block name"
                   value={block.name || ''}
                   onChange={(e) => updateBlockName(blockIndex, e.target.value)}
                   placeholder={`block ${blockIndex + 1}`}
-                  className="text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/50 w-full min-w-0 outline-none focus:border-muted-foreground transition-colors"
+                  className="text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground dark:placeholder:text-muted-foreground/50 w-full min-w-0 outline-none focus:border-muted-foreground transition-colors"
                 />
               </div>
               {blocks.length > 1 && (
@@ -292,7 +302,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                   size="sm"
                   onClick={() => removeBlock(blockIndex)}
                   aria-label={`remove block ${blockIndex + 1}`}
-                  className="h-6 w-6 p-0 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer flex-shrink-0"
+                  className="h-6 w-6 p-0 text-danger hover:text-danger hover:bg-danger-surface cursor-pointer flex-shrink-0"
                 >
                   <Trash2 className="h-3 w-3" />
                 </Button>
@@ -316,18 +326,20 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                   <div key={rangeIndex} className="space-y-1">
                     <div className="flex items-center gap-2">
                       <TimePicker
+                        label="start time"
                         value={range.start}
                         onChange={(v) => updateRange(blockIndex, rangeIndex, 'start', v)}
                         compact={compact}
                       />
                       <span className="text-muted-foreground text-xs">to</span>
                       <TimePicker
+                        label="stop time"
                         value={range.stop}
                         onChange={(v) => updateRange(blockIndex, rangeIndex, 'stop', v)}
                         compact={compact}
                       />
                       {isOvernight && (
-                        <span className="text-[10px] font-medium text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-1.5 py-0.5 whitespace-nowrap">
+                        <span className="text-[10px] font-medium text-warning bg-warning-surface border border-warning-border/75 rounded px-1.5 py-0.5 whitespace-nowrap">
                           +1 day
                         </span>
                       )}
@@ -338,7 +350,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                               type="button"
                               onClick={() => removeRange(blockIndex, rangeIndex)}
                               aria-label="remove time range"
-                              className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                              className="h-6 w-6 rounded-md text-muted-foreground hover:text-danger hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
                             >
                               <Minus className="h-3 w-3" />
                             </button>
@@ -368,7 +380,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                       )}
                     </div>
                     {isOvernight && (
-                      <p className="text-[11px] text-amber-400/80 pl-0.5">
+                      <p className="text-[11px] text-warning dark:text-warning/80 pl-0.5">
                         ends the following day — schedule days control when it <em>starts</em>
                       </p>
                     )}
@@ -469,10 +481,10 @@ export function ScheduleEditor({
               that has not answered the dashboard's banner. */}
           <DialogDescription>{scheduleClockDescription(scheduleTimezone)}</DialogDescription>
 
-          <div className="space-y-3 rounded-lg border border-blue-600/30 bg-blue-950/10 p-3">
+          <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3">
             <div className="flex items-center gap-2">
-              <Clock className="h-3.5 w-3.5 text-blue-400" />
-              <span className="text-xs font-medium text-blue-400">week at a glance</span>
+              <Clock className="h-3.5 w-3.5 text-info" />
+              <span className="text-xs font-medium text-info">week at a glance</span>
             </div>
             <div className="flex justify-center">
               <WeekSummaryBar schedules={blocks} tall />
@@ -481,7 +493,7 @@ export function ScheduleEditor({
         </div>
 
         <div className="flex min-h-0 flex-col gap-3">
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-blue-600/30 bg-blue-950/10 p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-info-border bg-info-surface p-3">
             <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} compact />
           </div>
           <DialogFooter>

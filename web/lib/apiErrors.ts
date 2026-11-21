@@ -19,6 +19,7 @@ export const ProblemType = {
   PayloadTooLarge: 'https://owlette.app/problems/payload-too-large',
   RateLimited: 'https://owlette.app/problems/rate-limited',
   QuotaExceeded: 'https://owlette.app/problems/quota-exceeded',
+  PlanRequired: 'https://owlette.app/problems/plan-required',
   Internal: 'https://owlette.app/problems/internal-error',
   ServiceUnavailable: 'https://owlette.app/problems/service-unavailable',
 } as const;
@@ -37,6 +38,7 @@ const PROBLEM_CODES: Record<ProblemTypeUri, string> = {
   [ProblemType.PayloadTooLarge]: 'payload_too_large',
   [ProblemType.RateLimited]: 'rate_limited',
   [ProblemType.QuotaExceeded]: 'quota_exceeded',
+  [ProblemType.PlanRequired]: 'plan_required',
   [ProblemType.Internal]: 'internal_error',
   [ProblemType.ServiceUnavailable]: 'service_unavailable',
 };
@@ -162,6 +164,23 @@ export function problemForbidden(detail = 'access denied'): NextResponse {
   });
 }
 
+/**
+ * The answer for a session or id token that still owes its second factor, or has to set one up,
+ * null for any other error. Routes that collapse auth errors to a bare 401 or 403 check here
+ * first, because the client keys off the code to send the user to /verify-2fa or /setup-2fa.
+ */
+export function mfaChallengeProblem(err: unknown): NextResponse | null {
+  const { code, message } = (err ?? {}) as { code?: unknown; message?: string };
+  if (code !== 'mfa_challenge_required' && code !== 'mfa_setup_required') return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    detail: message,
+    code,
+  });
+}
+
 export function problemNotFound(detail = 'resource not found'): NextResponse {
   return problem({
     type: ProblemType.NotFound,
@@ -199,6 +218,27 @@ export function problemQuotaExceeded(detail: string, upgradeUrl?: string): NextR
     status: 402,
     detail,
     ...(upgradeUrl ? { upgradeUrl } : {}),
+  });
+}
+
+/**
+ * the site's plan lacks `entitlement`, a tridant key such as `owlette.control`
+ * (docs/adr/0018). agent routes never answer this: agents read `error`.
+ * `extra` adds fields to the body, and can point `upgradeUrl` elsewhere.
+ */
+export function problemPlanRequired(
+  detail: string,
+  entitlement: string,
+  extra: Record<string, unknown> = {},
+): NextResponse {
+  return problem({
+    type: ProblemType.PlanRequired,
+    title: 'plan required',
+    status: 402,
+    detail,
+    entitlement,
+    upgradeUrl: '/settings/plan',
+    ...extra,
   });
 }
 

@@ -52,6 +52,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 jest.mock('@/lib/adminUtils.server', () => ({
   getSiteAlertRecipients: (...args: unknown[]) => getSiteAlertRecipientsMock(...args),
   getSiteLabel: async (siteId: string) => siteId,
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 
 jest.mock('@/lib/resendClient.server', () => ({
@@ -73,7 +74,7 @@ jest.mock('@/lib/talons/matcher.server', () => ({
   tapTalonMatcher: (...args: unknown[]) => tapTalonMatcherMock(...args),
 }));
 
-import { GET, classifyMachineHealth, stalePlannedDowntime } from '@/app/api/cron/health-check/route';
+import { GET, classifyMachineHealth, sleepNotice, stalePlannedDowntime } from '@/app/api/cron/health-check/route';
 import type { MachineHealthSnapshot } from '@/app/api/cron/health-check/route';
 
 // Helpers
@@ -91,6 +92,9 @@ function snapshot(overrides: Partial<MachineHealthSnapshot> = {}): MachineHealth
     shuttingDown: false,
     rebootScheduledAtSec: 0,
     shutdownScheduledAtSec: 0,
+    asleep: false,
+    asleepSinceMs: 0,
+    asleepNotifiedAtMs: 0,
     ...overrides,
   };
 }
@@ -210,6 +214,84 @@ describe('classifyMachineHealth', () => {
     });
     expect(classifyMachineHealth(m, NOW)).toEqual({ action: 'alert', heartbeatAgeMinutes: 70 });
   });
+
+  it('never alerts a machine its agent marked asleep, however stale', () => {
+    const m = snapshot({ asleep: true, lastHeartbeatMs: NOW - 90 * MIN, staleSinceMs: NOW - 85 * MIN });
+    expect(classifyMachineHealth(m, NOW)).toEqual({ action: 'asleep' });
+  });
+
+  it('keeps a dark wake (fresh heartbeat that still says asleep) asleep', () => {
+    expect(classifyMachineHealth(snapshot({ asleep: true, lastHeartbeatMs: NOW - 10 * 1000 }), NOW)).toEqual({
+      action: 'asleep',
+    });
+  });
+
+  it('leaves an asleep flag on a machine reported offline to the offline flag', () => {
+    expect(classifyMachineHealth(snapshot({ online: false, asleep: true }), NOW)).toEqual({
+      action: 'ignore',
+      reason: 'offline-flag',
+    });
+  });
+});
+
+describe('sleepNotice', () => {
+  it('sends nothing for a sleep shorter than the offline threshold', () => {
+    expect(sleepNotice(snapshot({ asleep: true, asleepSinceMs: NOW - 4 * MIN }), NOW)).toBeNull();
+  });
+
+  it('sends the asleep email once the machine has slept past the threshold', () => {
+    expect(sleepNotice(snapshot({ asleep: true, asleepSinceMs: NOW - 5 * MIN }), NOW)).toBe('asleep');
+  });
+
+  it('sends the asleep email only once, dark wakes included', () => {
+    const m = snapshot({
+      asleep: true,
+      asleepSinceMs: NOW - 60 * MIN,
+      lastHeartbeatMs: NOW - 10 * 1000,
+      asleepNotifiedAtMs: NOW - 55 * MIN,
+    });
+    expect(sleepNotice(m, NOW)).toBeNull();
+  });
+
+  it('times the sleep from asleepSince alone, which every asleep write carries', () => {
+    // a heartbeat time would date a sleep from its last dark wake, not its start
+    expect(sleepNotice(snapshot({ asleep: true, lastHeartbeatMs: NOW - 60 * MIN }), NOW)).toBeNull();
+  });
+
+  it('sends no asleep email for a machine marked offline', () => {
+    expect(sleepNotice(snapshot({ asleep: true, online: false, asleepSinceMs: NOW - 60 * MIN }), NOW)).toBeNull();
+  });
+
+  it('sends the awake email at the first awake heartbeat after an asleep email', () => {
+    const m = snapshot({
+      lastHeartbeatMs: NOW - 30 * 1000,
+      asleepSinceMs: NOW - 60 * MIN,
+      asleepNotifiedAtMs: NOW - 55 * MIN,
+    });
+    expect(sleepNotice(m, NOW)).toBe('awake');
+  });
+
+  it('sends no awake email for a sleep that never sent an asleep one', () => {
+    expect(sleepNotice(snapshot({ lastHeartbeatMs: NOW - 30 * 1000, asleepSinceMs: NOW - 3 * MIN }), NOW)).toBeNull();
+  });
+
+  it('sends the awake email for a machine that woke, then went quiet or shut down before the scan', () => {
+    // only an awake heartbeat clears asleep; holding the email to the next boot
+    // would report days of sleep
+    const told = { asleepSinceMs: NOW - 60 * MIN, asleepNotifiedAtMs: NOW - 55 * MIN };
+    expect(sleepNotice(snapshot({ ...told, lastHeartbeatMs: NOW - 10 * MIN }), NOW)).toBe('awake');
+    expect(sleepNotice(snapshot({ ...told, online: false, lastHeartbeatMs: NOW - 30 * 1000 }), NOW)).toBe('awake');
+  });
+
+  it('holds the awake email while the machine is still asleep, though quiet', () => {
+    const m = snapshot({
+      asleep: true,
+      asleepSinceMs: NOW - 9 * 60 * MIN,
+      lastHeartbeatMs: NOW - 8 * 60 * MIN,
+      asleepNotifiedAtMs: NOW - 9 * 60 * MIN,
+    });
+    expect(sleepNotice(m, NOW)).toBeNull();
+  });
 });
 
 // Stale-latch clearing (Fix A, server-side authoritative clear)
@@ -307,7 +389,7 @@ describe('GET /api/cron/health-check', () => {
     knownSites.add('node-pa');
     setSite({ name: 'node-pa' });
     getSiteAlertRecipientsMock.mockResolvedValue([
-      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
   });
 
@@ -365,6 +447,31 @@ describe('GET /api/cron/health-check', () => {
     );
   });
 
+  it("lists only a scoped recipient's machines in their email, and skips one with none down", async () => {
+    setSite({
+      name: 'node-pa',
+      health: { offlineAlert: { pendingIds: ['LOBBY-1', 'STAGE-2'], pendingUpdatedAt: ts(now - 8 * MIN) } },
+    });
+    mockMachinesGet.mockResolvedValue({ size: 2, docs: [alertDoc('LOBBY-1'), alertDoc('STAGE-2')] });
+    getSiteAlertRecipientsMock.mockResolvedValue([
+      { userId: 'whole', email: 'whole@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'scoped', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['LOBBY-1'] },
+      { userId: 'elsewhere', email: 'elsewhere@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER-9'] },
+    ]);
+
+    await GET(request('cron-secret'));
+
+    expect(emailSend).toHaveBeenCalledTimes(2);
+    const sent = Object.fromEntries(
+      emailSend.mock.calls.map(([mail]: [{ to: string[]; subject: string; html: string }]) => [mail.to[0], mail]),
+    );
+    expect(sent['whole@node-pa.test'].subject).toBe('2 machine(s) offline in node-pa');
+    expect(sent['scoped@node-pa.test'].subject).toBe('1 machine(s) offline in node-pa');
+    expect(sent['scoped@node-pa.test'].html).toContain('LOBBY-1');
+    expect(sent['scoped@node-pa.test'].html).not.toContain('STAGE-2');
+    expect(sent['elsewhere@node-pa.test']).toBeUndefined();
+  });
+
   it('taps the talon matcher once per not-responding machine (talons 2.3)', async () => {
     // This cron is the ONLY dispatcher of `machine_offline` — an offline machine cannot
     // report that it is — so a subscribed talon can only ever fire from here, and only
@@ -384,12 +491,45 @@ describe('GET /api/cron/health-check', () => {
 
     expect(tapTalonMatcherMock).toHaveBeenCalledTimes(2);
     for (const machineId of ['SILENT-1', 'SILENT-2']) {
-      expect(tapTalonMatcherMock).toHaveBeenCalledWith(expect.anything(), 'node-pa', {
-        kind: 'event',
-        eventType: 'machine_offline',
-        machineId,
-      });
+      expect(tapTalonMatcherMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'node-pa',
+        { kind: 'event', eventType: 'machine_offline', machineId },
+        expect.anything(),
+      );
     }
+    // one plan memo for the whole run, so each payer is resolved once
+    const [first, second] = tapTalonMatcherMock.mock.calls.map((call: unknown[]) => call[3]);
+    expect(first).toBe(second);
+  });
+
+  it('still fires the webhook and the talon when nobody on the site takes the email', async () => {
+    // A site that routes offline alerts to a webhook or a talon and has turned the
+    // email off for every user has no recipients, and must still hear about it.
+    getSiteAlertRecipientsMock.mockResolvedValue([]);
+    setSite({
+      name: 'node-pa',
+      health: {
+        offlineAlert: { pendingIds: ['SILENT-1'], pendingUpdatedAt: ts(now - 8 * MIN) },
+      },
+    });
+    mockMachinesGet.mockResolvedValue({ size: 1, docs: [alertDoc('SILENT-1')] });
+
+    await GET(request('cron-secret'));
+
+    expect(fireWebhooksMock).toHaveBeenCalledWith(
+      'node-pa',
+      expect.anything(),
+      'machine.offline',
+      expect.objectContaining({ machine: expect.objectContaining({ id: 'SILENT-1' }) }),
+      expect.anything(),
+    );
+    expect(tapTalonMatcherMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'node-pa',
+      { kind: 'event', eventType: 'machine_offline', machineId: 'SILENT-1' },
+      expect.anything(),
+    );
   });
 
   it('does NOT email while the pending set is still settling (records pending, no email)', async () => {
@@ -752,5 +892,121 @@ describe('GET /api/cron/health-check', () => {
       { shuttingDown: false, shutdownScheduledAt: { __op: 'delete' } },
       { merge: true }
     );
+  });
+
+  describe('asleep machines', () => {
+    const asleepDoc = (id: string, extra: Record<string, unknown> = {}) =>
+      machineDoc(id, {
+        online: true,
+        asleep: true,
+        asleepSince: ts(now - 20 * MIN),
+        lastHeartbeat: ts(now - 20 * MIN),
+        machine_timezone_iana: 'America/Los_Angeles',
+        ...extra,
+      });
+
+    it('emails asleep once, stamped before the send, and never pages it as offline', async () => {
+      // stale long enough, with a settled pending set, to have paged before
+      setSite({
+        name: 'node-pa',
+        health: { offlineAlert: { pendingIds: ['TEC-MBA'], pendingUpdatedAt: ts(now - 8 * MIN) } },
+      });
+      mockMachinesGet.mockResolvedValue({
+        size: 1,
+        docs: [asleepDoc('TEC-MBA', { health: { staleSince: ts(now - 15 * MIN) } })],
+      });
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body.alertsSent).toBe(0);
+      expect(body.sleepNoticesSent).toBe(1);
+      expect(emailSend).toHaveBeenCalledTimes(1);
+      const email = emailSend.mock.calls[0][0];
+      expect(email.subject).toBe('1 machine(s) asleep in node-pa');
+      expect(email.html).toContain('machines asleep');
+      expect(email.html).toContain('TEC-MBA');
+      expect(machineRefSet).toHaveBeenCalledWith(
+        { health: { asleepNotifiedAt: { __op: 'serverTimestamp' } } },
+        { merge: true }
+      );
+      expect(machineRefSet).toHaveBeenCalledWith({ health: { staleSince: { __op: 'delete' } } }, { merge: true });
+      // out of the offline pending set, and no outage webhook or talon
+      expect(siteRefSet).toHaveBeenCalledWith(
+        { health: { offlineAlert: { pendingIds: [], pendingUpdatedAt: { __op: 'delete' } } } },
+        { merge: true }
+      );
+      expect(fireWebhooksMock).not.toHaveBeenCalled();
+      expect(tapTalonMatcherMock).not.toHaveBeenCalled();
+    });
+
+    it('sends nothing more while the machine sleeps on', async () => {
+      mockMachinesGet.mockResolvedValue({
+        size: 1,
+        docs: [asleepDoc('TEC-MBA', { health: { asleepNotifiedAt: ts(now - 15 * MIN) } })],
+      });
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body.sleepNoticesSent).toBe(0);
+      expect(emailSend).not.toHaveBeenCalled();
+    });
+
+    it('emails awake once, with how long it slept, and clears the stamp first', async () => {
+      mockMachinesGet.mockResolvedValue({
+        size: 1,
+        docs: [
+          machineDoc('TEC-MBA', {
+            online: true,
+            asleep: false,
+            asleepSince: ts(now - 62 * MIN),
+            lastHeartbeat: ts(now - 2 * MIN),
+            health: { asleepNotifiedAt: ts(now - 55 * MIN) },
+          }),
+        ],
+      });
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body.sleepNoticesSent).toBe(1);
+      const email = emailSend.mock.calls[0][0];
+      expect(email.subject).toBe('1 machine(s) awake in node-pa');
+      expect(email.html).toContain('60 minute(s)');
+      expect(machineRefSet).toHaveBeenCalledWith(
+        { health: { asleepNotifiedAt: { __op: 'delete' } } },
+        { merge: true }
+      );
+    });
+
+    it('sends nothing when the stamp fails, so the next scan retries it rather than repeating it', async () => {
+      machineRefSet.mockImplementation((payload: { health?: { asleepNotifiedAt?: unknown } }) =>
+        payload.health?.asleepNotifiedAt !== undefined ? Promise.reject(new Error('firestore down')) : Promise.resolve()
+      );
+      const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockMachinesGet.mockResolvedValue({ size: 1, docs: [asleepDoc('TEC-MBA')] });
+
+        const body = await (await GET(request('cron-secret'))).json();
+
+        expect(body.sleepNoticesSent).toBe(0);
+        expect(emailSend).not.toHaveBeenCalled();
+      } finally {
+        quiet.mockRestore();
+        machineRefSet.mockResolvedValue(undefined);
+      }
+    });
+
+    it('skips a recipient whose scope leaves the machine out', async () => {
+      getSiteAlertRecipientsMock.mockResolvedValue([
+        { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
+        { userId: 'u2', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER'] },
+      ]);
+      mockMachinesGet.mockResolvedValue({ size: 1, docs: [asleepDoc('TEC-MBA')] });
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body.sleepNoticesSent).toBe(1);
+      expect(emailSend).toHaveBeenCalledTimes(1);
+      expect(emailSend.mock.calls[0][0].to).toEqual(['admin@node-pa.test']);
+    });
   });
 });

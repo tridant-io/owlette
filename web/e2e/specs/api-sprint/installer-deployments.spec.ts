@@ -12,6 +12,7 @@ import { test, expect } from '@playwright/test';
 import { mintApiKey, revokeApiKey, authHeaders, type MintedApiKey } from '../../helpers/apiKey';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedMachine, seedMemberRow } from '../../helpers/seed';
+import { getPendingCommandIds } from '../../helpers/stubAgent';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const SITE_ID = `e2e-deploy-${SUFFIX}`;
@@ -293,8 +294,25 @@ test('POST /api/sites/{s}/deployments/{id}/cancel — cancels pending targets', 
   expect(body.machine_ids).toEqual([MACHINE_ID_A]);
 });
 
-test('POST /api/sites/{s}/deployments/{id}/uninstall — site:admin queues uninstall', async ({ request }) => {
+// what the agent reports in a machine's software list; the uninstall takes its command from here.
+const UNINSTALL_APP = {
+  name: 'E2E Uninstall App',
+  uninstall_command: 'msiexec.exe /x {00000000-0000-0000-0000-0000000000e2} /qn',
+  installer_type: 'msi',
+  install_location: 'C:\\Program Files\\E2E Uninstall App',
+};
+
+async function seedUninstallTest(targetMachines: string[]): Promise<string> {
   const db = getAdminDb();
+  await Promise.all(targetMachines.map(clearMachineCommands));
+  await db
+    .collection('sites')
+    .doc(SITE_ID)
+    .collection('machines')
+    .doc(MACHINE_ID_A)
+    .collection('installed_software')
+    .doc('e2e-uninstall-app')
+    .set(UNINSTALL_APP);
   const id = `deploy-${Date.now()}`;
   await db
     .collection('sites')
@@ -303,23 +321,78 @@ test('POST /api/sites/{s}/deployments/{id}/uninstall — site:admin queues unins
     .doc(id)
     .set({
       name: 'uninstall-test',
-      installer_name: 'uninstall.exe',
-      installer_url: 'https://example.com/uninstall.exe',
-      silent_flags: '/S',
-      targets: [{ machineId: MACHINE_ID_A, status: 'completed' }],
+      installer_name: 'e2e-uninstall-app.msi',
+      installer_url: 'https://example.com/e2e-uninstall-app.msi',
+      silent_flags: '/qn',
+      targets: targetMachines.map((machineId) => ({ machineId, status: 'completed' })),
       status: 'completed',
       createdAt: new Date(),
       createdBy: 'admin-uid',
     });
+  return id;
+}
+
+async function pendingUninstalls(machineId: string): Promise<Array<Record<string, unknown>>> {
+  const ids = (await getPendingCommandIds(SITE_ID, machineId)).filter((cmdId) =>
+    cmdId.startsWith('uninstall-'),
+  );
+  const pending = await getAdminDb()
+    .collection('sites')
+    .doc(SITE_ID)
+    .collection('machines')
+    .doc(machineId)
+    .collection('commands')
+    .doc('pending')
+    .get();
+  return ids.map((cmdId) => pending.data()![cmdId] as Record<string, unknown>);
+}
+
+test('POST /api/sites/{s}/deployments/{id}/uninstall — site:admin queues the named program, tied to the deployment', async ({ request }) => {
+  const id = await seedUninstallTest([MACHINE_ID_A]);
 
   const res = await request.post(`/api/sites/${SITE_ID}/deployments/${id}/uninstall`, {
     headers: authHeaders(writeKey),
-    data: {},
+    data: { software_name: UNINSTALL_APP.name },
   });
   expect(res.status()).toBe(200);
-  const body = await res.json();
-  expect(body.queued).toBe(1);
-  expect(body.machine_ids).toEqual([MACHINE_ID_A]);
+  expect(await res.json()).toMatchObject({
+    deploymentId: id,
+    queued: 1,
+    machine_ids: [MACHINE_ID_A],
+    skipped: [],
+  });
+
+  // the command every agent from 3.3.x up runs, carrying the deployment for the reconciler.
+  const commands = await pendingUninstalls(MACHINE_ID_A);
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({
+    type: 'uninstall_software',
+    software_name: UNINSTALL_APP.name,
+    uninstall_command: UNINSTALL_APP.uninstall_command,
+    installer_type: 'msi',
+    verify_paths: [UNINSTALL_APP.install_location],
+    deployment_id: id,
+  });
+  // the route writes no deployment status: the reconciler does, from the agent's result.
+  const after = await getAdminDb().collection('sites').doc(SITE_ID).collection('deployments').doc(id).get();
+  expect(after.data()?.status).toBe('completed');
+});
+
+test('POST /api/sites/{s}/deployments/{id}/uninstall — a target whose machine does not list the program is skipped and reported', async ({ request }) => {
+  const id = await seedUninstallTest([MACHINE_ID_A, MACHINE_ID_B]);
+
+  const res = await request.post(`/api/sites/${SITE_ID}/deployments/${id}/uninstall`, {
+    headers: authHeaders(writeKey),
+    data: { software_name: UNINSTALL_APP.name },
+  });
+  expect(res.status()).toBe(200);
+  expect(await res.json()).toMatchObject({
+    queued: 1,
+    machine_ids: [MACHINE_ID_A],
+    skipped: [{ machineId: MACHINE_ID_B, reason: 'software_not_found' }],
+  });
+  expect(await pendingUninstalls(MACHINE_ID_A)).toHaveLength(1);
+  expect(await pendingUninstalls(MACHINE_ID_B)).toHaveLength(0);
 });
 
 test('DELETE /api/sites/{s}/deployments/{id} - deletes terminal deployment record', async ({ request }) => {

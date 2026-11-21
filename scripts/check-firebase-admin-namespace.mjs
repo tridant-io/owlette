@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Fail on the `firebase-admin` ROOT namespace under scripts/ and e2e-machine/.
+ * Fail on the `firebase-admin` ROOT namespace under scripts/.
  *
  * firebase-admin 14 removed it. The root module now exports only
  * initializeApp/getApp/getApps/deleteApp/applicationDefault/cert/refreshToken,
@@ -8,11 +8,10 @@
  * script using them throws the moment it authenticates.
  *
  * This exists because the v14 upgrade (a454e4cd) swept web/ and functions/ and
- * missed these two directories entirely — 10 files stayed broken for two weeks,
- * including scripts/upload-cortex-cli.mjs, which is the documented remedy for a
- * Cortex CLI failure the runbook labels SILENT per machine, and
- * e2e-machine/lib/admin.mjs, the shared cloud spine of the full-machine e2e
- * gate. Nothing in CI runs any of them, so nothing noticed.
+ * missed scripts/ and the since-removed e2e-machine/ entirely — 10 files stayed
+ * broken for two weeks, including scripts/upload-cortex-cli.mjs, which is the
+ * documented remedy for a hoot CLI failure the runbook labels SILENT per
+ * machine. Nothing in CI runs any of them, so nothing noticed.
  *
  * web/ and functions/ are NOT scanned: they are covered by their own typecheck
  * and lint, and web/lib/firebase-admin.ts legitimately re-exports.
@@ -27,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SCAN_DIRS = ['scripts', 'e2e-machine'];
+const SCAN_DIRS = ['scripts'];
 const EXTS = ['.mjs', '.js', '.cjs', '.ts'];
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next']);
 
@@ -119,5 +118,5 @@ if (process.argv.includes('--test')) {
     );
     process.exit(1);
   }
-  console.log('ok — no firebase-admin root-namespace usage under scripts/ or e2e-machine/');
+  console.log('ok — no firebase-admin root-namespace usage under scripts/');
 }

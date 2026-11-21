@@ -74,12 +74,12 @@ const STATES: [string, CardProps][] = [
   ],
   [
     'a denied tier-3 call',
-    { toolName: 'run_powershell', args: { path: INPUT_MARKER }, approvalState: 'denied' },
+    { toolName: 'read_file', args: { path: INPUT_MARKER }, approvalState: 'denied' },
   ],
   [
     'a tier-3 call awaiting approval',
     {
-      toolName: 'run_powershell',
+      toolName: 'read_file',
       args: { path: INPUT_MARKER },
       approvalState: 'requested',
       onApprove: () => {},
@@ -155,7 +155,7 @@ describe('ToolCallCard', () => {
       const onApprove = jest.fn();
       const onDeny = jest.fn();
       const view = renderCard({
-        toolName: 'run_powershell',
+        toolName: 'read_file',
         args: { command: 'hostname' },
         approvalState: 'requested',
         approvalTargetLabel: 'STUDIO-01',
@@ -167,11 +167,11 @@ describe('ToolCallCard', () => {
 
     it('keeps the approval banner outside the collapse, open or shut', async () => {
       const { user } = renderAwaiting();
-      const toggle = toggleFor('run_powershell');
+      const toggle = toggleFor('read_file');
       expect(toggle).toHaveTextContent('tier 3');
       expect(toggle).toHaveTextContent('awaiting approval');
       expect(screen.getByText(/hoot wants to run the privileged/)).toHaveTextContent(
-        'hoot wants to run the privileged run_powershell tool on STUDIO-01.',
+        'hoot wants to run the privileged read_file tool on STUDIO-01.',
       );
       expect(screen.getByRole('button', { name: 'approve' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'deny' })).toBeEnabled();
@@ -187,7 +187,7 @@ describe('ToolCallCard', () => {
 
     it('approves once, then locks both buttons', async () => {
       const { user, onApprove, onDeny } = renderAwaiting();
-      await user.click(toggleFor('run_powershell'));
+      await user.click(toggleFor('read_file'));
 
       await user.click(screen.getByRole('button', { name: 'approve' }));
       expect(onApprove).toHaveBeenCalledTimes(1);
@@ -205,13 +205,108 @@ describe('ToolCallCard', () => {
       expect(screen.getByRole('button', { name: 'approve' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'deny' })).toBeDisabled();
     });
+
+    it('offers both buttons again when the answer was refused and the approval comes back', async () => {
+      // the server refused the resume (a 409, or the request never arrived): the
+      // chat reloads its saved history, where the call is awaiting approval again.
+      // the card is the same instance, so a lock it took on the click must not
+      // outlive that: it used to spin with both buttons dead for good.
+      const { user, onApprove, onDeny, rerender } = renderAwaiting();
+      const awaiting: CardProps = {
+        toolName: 'run_powershell',
+        args: { command: 'hostname' },
+        approvalState: 'requested',
+        approvalTargetLabel: 'STUDIO-01',
+        onApprove,
+        onDeny,
+      };
+      const show = (props: CardProps) =>
+        rerender(
+          <TooltipProvider>
+            <ToolCallCard {...props} />
+          </TooltipProvider>,
+        );
+
+      await user.click(screen.getByRole('button', { name: 'approve' }));
+      // answered: the call reads as running while the resume is in flight
+      show({ toolName: 'run_powershell', args: { command: 'hostname' }, isLoading: true });
+      expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+      // refused: the saved history says it is awaiting approval again
+      show(awaiting);
+
+      expect(screen.getByRole('button', { name: 'approve' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'deny' })).toBeEnabled();
+      await user.click(screen.getByRole('button', { name: 'approve' }));
+      expect(onApprove).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('an approval that expired', () => {
+    it('says so and offers nothing to press', () => {
+      renderCard({
+        toolName: 'run_powershell',
+        args: { command: 'hostname' },
+        approvalState: 'expired',
+        approvalTargetLabel: 'STUDIO-01',
+      });
+
+      expect(toggleFor('run_powershell')).toHaveTextContent('approval expired');
+      expect(screen.getByText(/this approval expired/)).toHaveTextContent(
+        'this approval expired: a later message was sent in this chat. ask hoot again to run it.',
+      );
+      expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'deny' })).toBeNull();
+    });
+  });
+
+  it('spells out what a launch change would run, without expanding', () => {
+    renderCard({
+      toolName: 'update_process',
+      args: { process_name: 'Lobby Wall', name: 'Lobby', exe_path: 'C:/builds/wall-2.exe' },
+      approvalState: 'requested',
+      onApprove: jest.fn(),
+      onDeny: jest.fn(),
+    });
+
+    expect(screen.getByText('process_name: Lobby Wall')).toBeInTheDocument();
+    expect(screen.getByText('exe_path: C:/builds/wall-2.exe')).toBeInTheDocument();
+    expect(screen.queryByText('name: Lobby')).toBeNull();
+  });
+
+  describe('an approval that overrides active hours', () => {
+    function renderOverride(args: Record<string, unknown>) {
+      return renderCard({
+        toolName: 'reboot_machine',
+        args,
+        approvalState: 'requested',
+        approvalTargetMachineIds: ['kiosk-01'],
+        onApprove: () => {},
+        onDeny: () => {},
+      });
+    }
+
+    it('says so, with the reason, without expanding', () => {
+      renderOverride({ override_active_hours: true, reason: 'the show ended early' });
+
+      expectCollapsed(toggleFor('reboot_machine'));
+      // The label rides in a span, so read the whole line.
+      expect(screen.getByText(/override active hours:/).closest('p')).toHaveTextContent(
+        'override active hours: the show ended early',
+      );
+    });
+
+    it('says nothing about active hours for a plain call', () => {
+      renderOverride({ when: 'after_active_hours', reason: 'not an override' });
+
+      expect(screen.queryByText(/override active hours/)).toBeNull();
+    });
   });
 
   describe('who an approval prompt names', () => {
     /** The banner sentence; the target rides in a span, so read the whole line. */
     function banner(props: Partial<CardProps>) {
       renderCard({
-        toolName: 'run_powershell',
+        toolName: 'read_file',
         args: { command: 'hostname' },
         approvalState: 'requested',
         onApprove: () => {},
@@ -294,7 +389,39 @@ describe('ToolCallCard', () => {
     });
 
     it('names no target at all when neither is given', () => {
-      expect(banner({})).toHaveTextContent('hoot wants to run the privileged run_powershell tool.');
+      expect(banner({})).toHaveTextContent('hoot wants to run the privileged read_file tool.');
+    });
+
+    describe('for a call that names its own machines, in a turn on several', () => {
+      const TURN = ['kiosk-01', 'kiosk-02', 'kiosk-03'];
+
+      it('names those machines, not the whole turn', () => {
+        const line = banner({
+          args: { command: 'hostname', machines: ['kiosk-02'] },
+          approvalTargetMachineIds: TURN,
+          approvalTargetDynamic: true,
+        });
+        expect(line).toHaveTextContent('on kiosk-02.');
+        expect(line).not.toHaveTextContent('every machine in this site');
+      });
+
+      it('names the whole turn for a call that asks for every machine', () => {
+        const line = banner({
+          args: { command: 'hostname', machines: ['*'] },
+          approvalTargetMachineIds: TURN,
+          approvalTargetDynamic: true,
+        });
+        expect(line).toHaveTextContent('on every machine in this site (3 reachable).');
+      });
+
+      it.each([
+        ['a turn on one machine, where the call runs on that machine whatever it carries', ['kiosk-01'], ['kiosk-02'], 'on kiosk-01.'],
+        ['a list that reaches outside the turn, which the server refuses', TURN, ['kiosk-02', 'kiosk-09'], 'on 3 machines: kiosk-01, kiosk-02, kiosk-03.'],
+      ])('keeps to the turn for %s', (_label, turn, machines, expected) => {
+        expect(
+          banner({ args: { command: 'hostname', machines }, approvalTargetMachineIds: turn }),
+        ).toHaveTextContent(expected);
+      });
     });
   });
 
