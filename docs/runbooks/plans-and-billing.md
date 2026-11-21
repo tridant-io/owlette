@@ -17,8 +17,15 @@ and the four server-only collections described under [what owlette stores](#what
 ## current state
 
 Every gate is shipped. As of 2026-11-12, plans are enforced on dev (since 19:13 UTC that day) and
-ship off on prod, where every gate is dormant. A gate enforces for a site only when **all** of
-these hold on the origin that answers the request:
+ship off on prod, where every gate is dormant.
+
+Prod's `PLAN_ENFORCEMENT` stays off until 2027-04-01 00:00 UTC (Rosco, 2026-11-20), so nobody is
+billed before then: the public copy says owlette is free until 1 April 2027
+(`PRICING_FACTS.freeUntil`). [The bulk trial start](#the-bulk-trial-start) and [the flip](#the-flip)
+happen on or after that date, in that order, so the first possible charge comes after the 14-day
+trials.
+
+A gate enforces for a site only when **all** of these hold on the origin that answers the request:
 
 1. `PLAN_ENFORCEMENT` is exactly `on`. `On`, `true` and `1` all count as off.
 2. `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY` are both set (non-blank).
@@ -366,9 +373,12 @@ switch, and `trial.status: "active"` after it.
 
   Until then railway-prod and vercel-prod hold no `TRIDANT_LICENSE_KEY` and no `TRIDANT_OIDC_*`,
   and `node scripts/sync-env.mjs check` listing them as missing there is expected.
-- [ ] The pricing copy no longer says "free during beta". That covers `STATUS`, `PRICE_LINE`,
-  `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "applies after beta" framing in
-  the plans docs. The change is on `main` and deployed.
+- [ ] It is 2027-04-01 00:00 UTC or later: the public copy promises owlette free until then
+  (`PRICING_FACTS.freeUntil`).
+- [ ] The pricing copy no longer presents the free period as current. That covers `STATUS`,
+  `PRICE_LINE`, `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "not enforced
+  before 1 April 2027" framing in the docs, `web/openapi.yaml` and the cli and sdk READMEs. The
+  change is on `main` and deployed.
 - [ ] `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY` and the three `TRIDANT_OIDC_*` are set on
   railway-prod (service `owlette-prod`, environment `dev`: both Railway services live in the one
   `dev` environment). `PLAN_ENFORCEMENT` is still off.

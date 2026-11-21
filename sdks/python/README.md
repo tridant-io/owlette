@@ -61,8 +61,8 @@ Roost(
 
 ### plan refusals
 
-Plans are not enforced during the beta. Once they apply, a request that the
-site's plan does not cover raises `RoostApiError` with
+Plans are not enforced before 1 April 2027. Once they apply, a request that
+the site's plan does not cover raises `RoostApiError` with
 `code == "plan_required"` and `status == 402`, and is not retried.
 `error.problem["entitlement"]` names what the plan lacks — `owlette.api_keys`
 for every request made with a key on a site whose plan lacks API keys. See

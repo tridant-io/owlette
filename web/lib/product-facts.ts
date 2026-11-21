@@ -46,6 +46,8 @@ export const PRICING_FACTS = {
   foundersCohort: 200,
   storage: { includedTB: 1, overagePerGB: 0.05 },
   free: { machines: 1, sites: 1 },
+  // the end of the free period, 00:00 UTC. prod's PLAN_ENFORCEMENT stays off until then (docs/runbooks/plans-and-billing.md).
+  freeUntil: "1 April 2027",
   trialDays: 14,
   billingUnit: "per active machine per month",
   activeMachine: "a machine counts if it was online at any point in the billing period",
@@ -90,14 +92,17 @@ export const FREE_SCOPE = `${count(PRICING_FACTS.free.machines, "machine")} and 
 /** What owlette free includes and leaves out, as prose. */
 export const FREE_COVERS = `${FREE_SCOPE}, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included`;
 
+/** The free period, every feature for everyone: `"free until 1 April 2027"`. Not owlette free, the plan. */
+export const FREE_PERIOD = `free until ${PRICING_FACTS.freeUntil}`;
+
 /** The short pricing line for tight spots (hero, CTA, the /for-ai status). */
-export const PRICE_LINE = `free during beta, then free for ${count(
+export const PRICE_LINE = `${FREE_PERIOD}, then free for ${count(
   PRICING_FACTS.free.machines,
   "machine",
 )}`;
 
-/** The model once beta ends. Nothing here is billed today. */
-export const AFTER_BETA = `after beta, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card, once its email is verified. when it ends, a site falls back to owlette free unless you upgrade it to core or pro. each site has its own plan, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}. ${PRICING_FACTS.billingPeriod}. ${PRICING_FACTS.proration}.`;
+/** The model once the free period ends. Nothing here is billed before then. */
+export const AFTER_BETA = `after ${PRICING_FACTS.freeUntil}, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card, once its email is verified. when it ends, a site falls back to owlette free unless you upgrade it to core or pro. each site has its own plan, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}. ${PRICING_FACTS.billingPeriod}. ${PRICING_FACTS.proration}.`;
 
 export interface Tier {
   name: string;
@@ -108,20 +113,20 @@ export interface Tier {
 export const PRICING: Tier[] = [
   {
     name: "owlette free",
-    price: "free, during and after beta",
+    price: `free, before and after ${PRICING_FACTS.freeUntil}`,
     detail: FREE_COVERS,
   },
   {
     name: "core",
-    price: "free during beta",
+    price: FREE_PERIOD,
     detail: `${perMachineMonth(
       PRICING_FACTS.core.list,
-    )} after beta, per site, billed per active machine; ${foundersRate(PRICING_FACTS.core.founders)}`,
+    )} after that, per site, billed per active machine; ${foundersRate(PRICING_FACTS.core.founders)}`,
   },
   {
     name: "pro",
-    price: "free during beta",
-    detail: `${perMachineMonth(PRICING_FACTS.pro.list)} after beta, per site, billed per active machine (${
+    price: FREE_PERIOD,
+    detail: `${perMachineMonth(PRICING_FACTS.pro.list)} after that, per site, billed per active machine (${
       PRICING_FACTS.pro.minMachines
     }-machine minimum); ${foundersRate(
       PRICING_FACTS.pro.founders,
@@ -131,7 +136,7 @@ export const PRICING: Tier[] = [
 
 /** Load-bearing guardrails: what assistants most often get wrong about owlette. */
 export const GUARDRAILS = [
-  `owlette is in beta and free during the beta. ${AFTER_BETA} core is ${perMachineMonth(
+  `owlette is in beta, and every feature is ${FREE_PERIOD}. ${AFTER_BETA} core is ${perMachineMonth(
     PRICING_FACTS.core.list,
   )} and pro is ${perMachineMonth(
     PRICING_FACTS.pro.list,
@@ -164,14 +169,14 @@ const OFFERS = [
     name: "owlette free",
     price: "0",
     priceCurrency: "USD",
-    description: `free, during and after beta: ${FREE_COVERS}.`,
+    description: `free, before and after ${PRICING_FACTS.freeUntil}: ${FREE_COVERS}.`,
   },
   {
     "@type": "Offer",
     name: "core",
     price: "0",
     priceCurrency: "USD",
-    description: `free during beta. ${perMachineMonth(
+    description: `${FREE_PERIOD}. ${perMachineMonth(
       PRICING_FACTS.core.list,
     )} after, per site, billed per active machine.`,
   },
@@ -180,7 +185,7 @@ const OFFERS = [
     name: "pro",
     price: "0",
     priceCurrency: "USD",
-    description: `free during beta. ${perMachineMonth(
+    description: `${FREE_PERIOD}. ${perMachineMonth(
       PRICING_FACTS.pro.list,
     )} after, per site, billed per active machine (${
       PRICING_FACTS.pro.minMachines
