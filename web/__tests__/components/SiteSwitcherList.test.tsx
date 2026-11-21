@@ -17,6 +17,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SITE_FILTER_THRESHOLD, SiteSwitcherList, filterClaimsEscape } from '@/components/SiteSwitcherList';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { CHECKBOX_ROW } from '@/components/ui/multi-select';
 
 const NAMED = [
   { id: 'elm-gate', name: 'LIVE NATION' },
@@ -224,5 +225,76 @@ describe('SiteSwitcherList', () => {
 
     await user.keyboard('{Tab}');
     expect(reached).toEqual(['Tab']);
+  });
+});
+
+// the activity page's pickers take several: given checkedIds, every row is the multi-select's
+// checkbox row, and the square takes the focus, the arrow keys and enter's click
+describe('SiteSwitcherList with checkedIds', () => {
+  const LEADING = { id: '', name: 'every site' };
+
+  function renderChecked(props: Partial<React.ComponentProps<typeof SiteSwitcherList>> = {}) {
+    const onPick = jest.fn();
+    const user = userEvent.setup();
+    render(
+      <SiteSwitcherList surface="popover" sites={ELEVEN} leading={LEADING} checkedIds={['lobby', 'gallery-s']} onPick={onPick} {...props} />,
+    );
+    return { user, onPick };
+  }
+
+  it('checks each of those ids in a checkbox square, with no trailing check', () => {
+    renderChecked();
+
+    expect(screen.queryAllByRole('button', { name: (name) => name !== 'clear filter' })).toHaveLength(0);
+    const boxes = screen.getAllByRole('checkbox');
+    expect(boxes).toHaveLength(ELEVEN.length + 1);
+    expect(boxes.filter((box) => box.getAttribute('aria-checked') === 'true').map((box) => box.closest('label')?.textContent)).toEqual([
+      'Gallery South',
+      'Lobby Wall',
+    ]);
+    for (const box of boxes) {
+      // and by night a match over its hover fill takes the tone composited-contrast holds to aa
+      expect(box.closest('label')).toHaveClass(CHECKBOX_ROW, 'dark:hover:[&_mark]:text-accent-foreground');
+      expect(box).not.toHaveAttribute('aria-current');
+    }
+  });
+
+  it('a click toggles a row, either way', async () => {
+    const { user, onPick } = renderChecked();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Kiosk 2' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Lobby Wall' }));
+
+    expect(onPick.mock.calls).toEqual([['site-2'], ['lobby']]);
+  });
+
+  it('arrow keys move between the squares, enter from the filter toggles the first match', async () => {
+    const { user, onPick } = renderChecked();
+
+    await user.type(filterBox(), 'gallery');
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('checkbox', { name: 'Gallery North' })).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('checkbox', { name: 'Gallery South' })).toHaveFocus();
+    await user.keyboard('{ArrowUp}{ArrowUp}');
+    expect(filterBox()).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    expect(onPick).toHaveBeenCalledWith('gallery-n');
+  });
+
+  it('full blocks an unchecked row, but a checked one still unchecks and the leading row still clears', async () => {
+    const { user, onPick } = renderChecked({ full: true });
+
+    const kiosk = screen.getByRole('checkbox', { name: 'Kiosk 2' });
+    expect(kiosk).toHaveAttribute('aria-disabled', 'true');
+    // no hover fill on a blocked row, so its marks keep their resting tone
+    expect(kiosk.closest('label')).toHaveClass('opacity-50', 'hover:bg-transparent', 'dark:hover:[&_mark]:text-accent-cyan');
+    await user.click(kiosk);
+    expect(onPick).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Lobby Wall' }));
+    await user.click(screen.getByRole('checkbox', { name: 'every site' }));
+    expect(onPick.mock.calls).toEqual([['lobby'], ['']]);
   });
 });

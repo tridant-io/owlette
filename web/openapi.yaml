@@ -452,13 +452,27 @@ paths:
         - name: user
           in: query
           required: false
-          description: Only this user's activity, including what their api keys did.
-          schema: { type: string }
+          description: Only these users' activity, including what their api keys did. One user id per parameter; repeat it for each user (`?user=…&user=…`).
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 10
+            items:
+              type: string
+              pattern: '^[A-Za-z0-9_-]{1,128}$'
         - name: site
           in: query
           required: false
-          description: Only activity in this site.
-          schema: { type: string }
+          description: Only activity in these sites. One site id per parameter; repeat it for each site (`?site=…&site=…`).
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 10
+            items:
+              type: string
+              pattern: '^[A-Za-z0-9_-]{1,128}$'
         - name: since
           in: query
           required: false
