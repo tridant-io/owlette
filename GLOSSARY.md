@@ -292,7 +292,7 @@ The first site an account owns on owlette free, neither billed nor in a trial. W
 _Avoid_: second free site, free slot
 
 **Trial**:
-14 days of pro with no card, once per tridant organization, started when an account with a verified email first opens owlette. It covers every site the owner has registered with tridant id, and those sites become free when it ends unless they are billed.
+14 days of pro with no card, once per owlette account and once per tridant organization, started when an account with a verified email first opens owlette. An account whose trial ran on a tridant organization since closed gets no second one (`trial_already_used`). It covers every site the owner has registered with tridant id, and those sites become free when it ends unless they are billed.
 _Avoid_: beta, demo
 
 **Billed site**:

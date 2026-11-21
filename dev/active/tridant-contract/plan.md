@@ -27,7 +27,7 @@ morning-after settle retry, and the A7 cleanup (no PATCH after an add). Web only
 
 ## Waves
 
-See `tasks.md`: 13 tasks across 6 waves; tasks in one wave never share a file, test files
+See `tasks.md`: 12 tasks across 6 waves; tasks in one wave never share a file, test files
 included.
 
 ## Risks

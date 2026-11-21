@@ -156,7 +156,7 @@ add the Vercel domain, and any custom domain, to Firebase **Authentication** →
 
 ### step 5: scheduled endpoints
 
-Vercel Cron sends no custom headers, and ten of the eleven scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
+Vercel Cron sends no custom headers, and eleven of the twelve scheduled routes check `X-Cron-Secret`. register them on an external scheduler instead; see [scheduled endpoints](#scheduled-endpoints). on a standby origin, register nothing: the jobs belong to the public hostname, which the load balancer routes.
 
 ---
 
@@ -275,14 +275,15 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into digest email |
 | `/api/cron/status-ping` | `* * * * *` | `X-Cron-Secret` | writes status pings and publishes them to Instatus |
 | `/api/cron/talons` | `* * * * *` | `X-Cron-Secret` | fires schedule-triggered and delayed talons, recovers stale runs, and fires due hoot follow-ups |
-| `/api/cron/plan-daily` | `30 23 * * *` (UTC) | `X-Cron-Secret` | records each site's active machines for the day and the plan snapshot that scheduled rollouts check, reports the billed sites' usage, and deletes usage older than 100 days. the last run of a month is the one that month is billed on. plans are not enforced during the beta, and nothing is reported until they are; see [plans](/docs/plans) |
+| `/api/cron/plan-daily` | `30 23 * * *` (UTC) | `X-Cron-Secret` | records each site's active machines for the day and the plan snapshot that scheduled rollouts check, reports the billed sites' usage and saves each report, retries removing deleted sites from tridant id, checks what tridant id lets each key do, and deletes usage older than 100 days. it is the last run inside a month, and `/api/cron/plan-settle` sends that month's report again the morning after. plans are not enforced during the beta, and nothing is reported until they are; with tridant id configured, the removal retry and the key check run anyway. see [plans](/docs/plans) |
+| `/api/cron/plan-settle` | `0 6 * * *` (UTC) | `X-Cron-Secret` | the morning after a billing period ends, recounts each billed site's period to its last moment and reports it again, while tridant id still holds that period's invoice open (24 hours). on other days it finds nothing to do, and it does nothing while plans are not enforced |
 | `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
 | `/api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret` | flags risky activity (a new superadmin, removed 2fa, a deleted site, bursts of failures), emails each high finding, and sends a daily digest |
 | `/api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer` | the autonomous hoot escalation backstop |
 
-`/api/cron/plan-trials` takes `X-Cron-Secret` too but is never scheduled: it starts the trial for existing accounts, run by hand once per environment before plans are switched on. it is a dry run unless called with `?apply=1`, and each call covers 100 accounts; repeat it with the `nextPageToken` it returns, as `?pageToken=`, until that is null.
+`/api/cron/plan-trials` takes `X-Cron-Secret` too but is never scheduled: it starts the trial for existing accounts, run by hand once per environment before plans are switched on. it is a dry run unless called with `?apply=1`: tridant id previews each account's trial and nothing is written. each call covers 100 accounts; repeat it with the `nextPageToken` it returns, as `?pageToken=`, until that is null. both modes first check what tridant id lets each key do and answer it as `keys`, and `?apply=1` answers `503` while `TRIDANT_LICENSE_KEY` fails that check.
 
 <Callout type="warning" title={"almost every failure here is silent"}>
 

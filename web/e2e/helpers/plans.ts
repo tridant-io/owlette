@@ -43,7 +43,25 @@ export const CORE = {
 
 export const siteEntitlements = (siteId: string) => getAdminDb().collection('e2e_entitlements').doc(`site:${siteId}`);
 
-const DAY_MS = 86_400_000;
+/** the organization the fake bills and starts trials under for an account. */
+export const orgFor = (uid: string) => `org_e2e_${uid}`;
+
+export const DAY_MS = 86_400_000;
+
+/**
+ * a site under its owner's pro trial: pro's values under the owner's
+ * organization, and no billing. `trialEndsAt` (epoch ms) is the end tridant id
+ * answers for the trial, as after it extends one.
+ */
+export function trialing(uid: string, trialEndsAt?: number) {
+  return {
+    resolved: true,
+    standing: 'trialing',
+    ent: { ...flags(true, true), 'owlette.machines': 'unlimited', 'owlette.sites': 'unlimited' },
+    orgId: orgFor(uid),
+    ...(trialEndsAt === undefined ? {} : { trialEndsAt }),
+  };
+}
 
 /**
  * an account whose 14-day trial ended a week ago, as `recordTrial` leaves one:
@@ -55,7 +73,7 @@ export async function endTrial(uid: string): Promise<void> {
   await getAdminDb()
     .collection('plan_accounts')
     .doc(uid)
-    .set({ trialStartedAt: now - 21 * DAY_MS, trialEndsAt: now - 7 * DAY_MS, orgId: `org_e2e_${uid}` });
+    .set({ trialStartedAt: now - 21 * DAY_MS, trialEndsAt: now - 7 * DAY_MS, orgId: orgFor(uid) });
 }
 
 export async function signIn(page: Page, user: TestUser): Promise<void> {
@@ -68,18 +86,22 @@ export async function signIn(page: Page, user: TestUser): Promise<void> {
 
 /**
  * removes what reading and changing plans leaves behind for these accounts and
- * sites: the seam docs, the trial record, checkouts, and the fake's records.
+ * sites: the seam docs, the trial record, checkouts, the fake's records, and the
+ * removal record a deleted site's tridant removal leaves.
  */
 export async function clearPlanState(uids: string[], siteIds: string[]): Promise<void> {
   const db = getAdminDb();
-  const byUid = await Promise.all(
-    ['billing_checkouts', 'e2e_billing', 'e2e_billing_calls'].map((name) =>
+  const records = await Promise.all([
+    ...['billing_checkouts', 'e2e_billing', 'e2e_billing_calls'].map((name) =>
       db.collection(name).where('uid', 'in', uids).get(),
     ),
-  );
+    // a site's removal is logged with no uid.
+    db.collection('e2e_billing_calls').where('siteId', 'in', siteIds).get(),
+  ]);
   await Promise.all([
     ...siteIds.map((siteId) => siteEntitlements(siteId).delete()),
+    ...siteIds.map((siteId) => db.collection('tridant_site_removals').doc(siteId).delete()),
     ...uids.map((uid) => db.collection('plan_accounts').doc(uid).delete()),
-    ...byUid.flatMap((snap) => snap.docs.map((doc) => doc.ref.delete())),
+    ...records.flatMap((snap) => snap.docs.map((doc) => doc.ref.delete())),
   ]);
 }

@@ -274,7 +274,8 @@ customer doc does not. Update all three in the same commit.
 | `GET /api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 | `GET /api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer <CRON_SECRET>` | default |
-| `GET /api/cron/plan-daily` | `30 23 * * *` (keep 23:30 UTC: the last run of a month is the one that bills) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** |
+| `GET /api/cron/plan-daily` | `30 23 * * *` (keep 23:30 UTC: the last run inside a month, whose report plan-settle resends) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** |
+| `GET /api/cron/plan-settle` | `0 6 * * *` (06:00 UTC: inside the 24 hours tridant id holds a closed month's invoice open, with time left to retry by hand) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** |
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/swoop-retention` | `30 4 * * *` (or any quiet time apart from retention) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
@@ -282,6 +283,8 @@ customer doc does not. Update all three in the same commit.
 
 `/api/cron/plan-trials` is in the registry too, but is never scheduled: it is run by hand once per
 environment just before plans are switched on ([plans-and-billing.md](plans-and-billing.md)).
+`/api/cron/plan-settle` does nothing until plans are enforced: register it on dev once dev serves
+the route, and on prod with plan-daily when plans go on there.
 
 Four things to get right:
 

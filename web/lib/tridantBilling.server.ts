@@ -300,7 +300,10 @@ function trialBody(input: TrialInput) {
   };
 }
 
-/** one trial per organization, ever: a repeat answers the first one with `already: true`. */
+/**
+ * one trial per organization, ever: a repeat answers the first one with `already: true`. one per
+ * payer too: a payer whose organization with a trial was closed gets 409 `trial_already_used`.
+ */
 export function startTrial(input: TrialInput): Promise<BillingResult<Trial>> {
   if (e2e()) return fake.startTrial(input);
   return request('/v1/billing/trial', 'POST', trialBody(input), (json) => {

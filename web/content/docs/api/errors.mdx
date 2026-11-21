@@ -375,6 +375,7 @@ a site's billing is changed from the dashboard, in site settings → billing, by
 | <span id="billed_by_previous_owner" />`billed_by_previous_owner` | 409 | upgrading a transferred site, or switching its plan, while it is still billed to its previous owner. it can be changed once that billing period has ended |
 | <span id="link_required" />`link_required` | 409 | the owner's email already has a tridant account, which has to be [linked](/docs/plans#if-your-email-already-has-a-tridant-account) first |
 | <span id="site_billed_elsewhere" />`site_billed_elsewhere` | 409 | the site is already billed under another tridant account |
+| <span id="payer_mismatch" />`payer_mismatch` | 409 | switching the plan of a site, or stopping your own billing of it, while tridant bills it under another tridant account. its plan can change once that billing ends |
 | <span id="site_is_default" />`site_is_default` | 409 | the site belongs to another tridant account and cannot move to the owner's |
 | <span id="founders_sold_out" />`founders_sold_out` | 409 | the founders places for the plan are taken; the request can be sent again at the list price |
 | <span id="subscription_paused" />`subscription_paused` | 409 | the owner's subscription is paused; resume it before adding a site |

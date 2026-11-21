@@ -1,5 +1,5 @@
 # tridant contract adoption — Tasks
-**Progress**: 9/13 complete
+**Progress**: 11/12 complete
 
 Every task: work in `C:\Users\admin\Documents\Git-restored\Owlette-tridant-contract-wt` and assert
 `git branch --show-current` is `feat/tridant-contract` before editing (`|| exit 1` on every `cd`).
@@ -297,7 +297,7 @@ commits each wave. Do not touch files outside your task's list.
 
 ## Wave 5: docs and e2e
 
-- [ ] **Task 5.1: docs, ADR 0018, glossary**
+- [x] **Task 5.1: docs, ADR 0018, glossary**
   - Files: `docs/runbooks/plans-and-billing.md`, `docs/runbooks/manual-infrastructure.md`,
     `docs/adr/0018-a-site-has-a-plan-and-its-owner-pays.md`, `GLOSSARY.md`,
     `web/content/docs/plans.mdx`, `web/content/docs/reference/firestore-data-model.mdx`,
@@ -336,7 +336,7 @@ commits each wave. Do not touch files outside your task's list.
     - Copy is lowercase where the surrounding docs are; use GLOSSARY terms.
   - Done when: every file reads true against the code; no new docs file created.
 
-- [ ] **Task 5.2: e2e**
+- [x] **Task 5.2: e2e** (24/24 before the route fix; the rerun is owed by 6.1)
   - Files: `web/e2e/specs/plans/billing.spec.ts`, `web/e2e/specs/plans/free.spec.ts` (only if its
     seeds use the old `founders` field), `web/e2e/COVERAGE.md`, plus any other spec under
     `web/e2e/specs/` whose seed writes top-level `founders` (grep first)
@@ -414,3 +414,19 @@ commits each wave. Do not touch files outside your task's list.
   at least periodEnd + 24 h, so `(now - 24h, now]` is inside it. For the test-clock run with
   Davor: a stopped site's final month cannot take a late report (its item closes when the invoice
   opens), so the settle window does not cover it. Full jest 595/595.
+- Wave 5: 5.2 e2e plans specs 24/24 on shifted ports (18080/19099/19199, app :3110). It caught a
+  wave 3 regression: the account plan's `sites[].billing` went null for a site tridant no longer
+  bills, which took away the upgrade dialog's "has paid before" signal (`UpgradeSiteDialog`
+  picks "either may follow" from any record). Fixed in the route: tridant's answer while tridant
+  bills the site, else Owlette's record of any kind, as before the branch (the daily job closes a
+  stale running record); `foundersHeld` reads the entries again. The e2e workaround was reverted;
+  the plans specs must rerun in 6.1 (route changed after the 24/24 run). `.next-e2e` was built
+  with the shifted emulator hosts: 6.1's run rebuilds it. This undoes wave 3's note that the
+  plan page leaves out "billed as" on a site tridant no longer bills: it shows the record again,
+  as before the branch; the site's billing section shows none.
+- Wave 5 orchestrator additions: `errors.mdx` gains `payer_mismatch`; the `startTrial` comment
+  names the per-payer rule; decision: a blank key (`not_configured`) is reported in the daily
+  summary but not logged at error (a blank `TRIDANT_RELEASE_KEY` is a choice, and an error log
+  every night would be noise). /verify for wave 5: standards and spec, all low, fixed (docs and
+  registry on the blank key and on `site_not_billed`, the record shown only on the account plan,
+  wording). Full jest 595/595.

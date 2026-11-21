@@ -501,7 +501,14 @@ describe('GET /api/account/plan', () => {
       billing: { tier: 'core', founders: true, payerUid: 'u1', endsAt: Date.UTC(2026, 9, 1) },
     };
 
-    expect((await getPlan()).body.foundersHeld).toEqual({ core: true, pro: false });
+    const { body } = await getPlan();
+    expect(body.foundersHeld).toEqual({ core: true, pro: false });
+    // tridant id bills it no longer, so the ended record is what the page shows: it has paid before.
+    expect(body.sites.find((s: { siteId: string }) => s.siteId === 'site-a').billing).toEqual({
+      tier: 'core',
+      founders: true,
+      endsAt: Date.UTC(2026, 9, 1),
+    });
   });
 
   it("shows tridant's tier, rate and end for a billed site over the pointer's", async () => {
@@ -783,8 +790,8 @@ describe('GET /api/account/plan', () => {
     const res = await getPlan();
     expect(res.body.free).toMatchObject({ sitesUsed: 1 });
     expect(res.body.siteCreation).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'site-d', name: 'due' } });
-    // nor is the record shown as its billing, as on the site's own plan answer.
-    expect(res.body.sites[0].billing).toBeNull();
+    // the record still shows, so the upgrade dialog knows the owner has paid before.
+    expect(res.body.sites[0].billing).toEqual({ tier: 'pro', founders: false, endsAt: null });
   });
 
   it('answers unverified from the trial start when the auth read fails', async () => {

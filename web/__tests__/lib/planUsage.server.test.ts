@@ -971,6 +971,19 @@ describe('runPlanDaily: site removals and keys', () => {
     expect(summary.errors).toBe(0);
   });
 
+  it('reports a release key left blank in the summary only', async () => {
+    mockTridantConfigured = true;
+    mockCheckKeys.mockResolvedValue([
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'not_configured', missing: [], expiresAt: null, expiresInDays: null },
+    ]);
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(summary.keys[1]).toEqual({ keyName: 'TRIDANT_RELEASE_KEY', ok: false, missing: [], expiresInDays: null });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it('asks for no key check while tridant id is not configured', async () => {
     const summary = await runPlanDaily(NOW);
 

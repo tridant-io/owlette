@@ -45,7 +45,7 @@ import type {
 } from '@/lib/planResponse';
 import { ensureTrial, type TrialStatus } from '@/lib/planTrial.server';
 import { activeMachinesBetween } from '@/lib/planUsage.server';
-import { readBillingPointer, siteBillingView, type BillingPointer } from '@/lib/siteBilling.server';
+import { billingSummary, readBillingPointer, siteBillingView } from '@/lib/siteBilling.server';
 import { foundersRemaining } from '@/lib/tridantBilling.server';
 import { oidcConfigured } from '@/lib/tridantOidc.server';
 import { withRateLimit } from '@/lib/withRateLimit';
@@ -53,8 +53,6 @@ import { withRateLimit } from '@/lib/withRateLimit';
 interface OwnedSite {
   entry: AccountPlanSite;
   plan: Plan;
-  /** owlette's record of the site's billing, which can name one tridant id no longer answers. */
-  pointer: BillingPointer | null;
   /** read only for a free site. */
   machines: PairedMachine[];
   /** epoch ms; 0 when the site has none. */
@@ -87,15 +85,10 @@ function trialOf(start: TrialStatus, account: PlanAccount | null, now: number): 
 /**
  * the plans an owned site is billed at the founders rate on, or was: tridant id
  * keeps the rate for an organization that has a founders site of that plan, past
- * the cap. owlette knows it only from the sites the account still owns: the billing
- * shown, else its record of a billing tridant id no longer answers.
+ * the cap. owlette knows it only from the billing of the sites the account still owns.
  */
-function foundersHeld(sites: OwnedSite[]): AccountPlanFoundersHeld {
-  const held = (tier: 'core' | 'pro') =>
-    sites.some(({ entry, pointer }) => {
-      const billing = entry.billing ?? pointer;
-      return billing?.founders === true && billing.tier === tier;
-    });
+function foundersHeld(sites: AccountPlanSite[]): AccountPlanFoundersHeld {
+  const held = (tier: 'core' | 'pro') => sites.some(({ billing }) => billing?.founders === true && billing.tier === tier);
   return { core: held('core'), pro: held('pro') };
 }
 
@@ -123,13 +116,15 @@ async function readOwnedSite(
   const base = {
     siteId: site.id,
     name: typeof data.name === 'string' && data.name ? data.name : site.id,
-    // as the site plan answer shows it, so both pages agree.
-    billing: siteBillingView(data, plan).billing,
+    // tridant id's answer while it bills the site, as the site's billing section shows it. a site
+    // it no longer bills keeps its record here, where the billing section shows none: the account
+    // has paid before, at that rate, and the upgrade dialog can't tell whether the subscription
+    // still runs. the daily job closes a record left running.
+    billing: siteBillingView(data, plan).billing ?? (pointer ? billingSummary(pointer) : null),
   };
   if (!plan.enforced) {
     return {
       plan,
-      pointer,
       machines: [],
       createdAt,
       entry: {
@@ -155,7 +150,6 @@ async function readOwnedSite(
   ]);
   return {
     plan,
-    pointer,
     machines,
     createdAt,
     entry: {
@@ -229,7 +223,7 @@ export const GET = withRateLimit(
           trialActive(account, now),
         ),
         foundersRemaining: founders.ok ? { core: founders.core, pro: founders.pro } : null,
-        foundersHeld: foundersHeld(owned),
+        foundersHeld: foundersHeld(entries),
         linkAvailable: oidcConfigured(),
         portalUrl: portalUrl(),
         ...(missingKeys.length > 0 && { missingKeys }),

@@ -303,11 +303,14 @@ async function reportBilledSites(run: Run, billed: BilledSite[]): Promise<void> 
   );
 }
 
-/** what tridant id says each key can do, in the summary; a key that cannot do its job logs at error. */
+/**
+ * what tridant id says each key can do, in the summary; a key that cannot do its job logs at error.
+ * a key left blank is a choice (no releases registered from here), so it is in the summary only.
+ */
 async function checkKeys(run: Run): Promise<void> {
   for (const { keyName, ok, reason, missing, expiresInDays } of await checkTridantKeys()) {
     run.summary.keys.push({ keyName, ok, missing, expiresInDays });
-    if (!ok) {
+    if (!ok && reason !== 'not_configured') {
       logger.error('[plan-daily] tridant key not usable', { context: 'planUsage', data: { keyName, reason, missing } });
     }
   }
