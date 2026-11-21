@@ -485,7 +485,7 @@ function PlanSettings() {
               </p>
             ) : (
               <p data-testid="plans-not-active" className="mt-1 text-sm text-muted-foreground">
-                plans aren&apos;t active during beta, so every feature is included.
+                plans aren&apos;t active before {PRICING_FACTS.freeUntil}, so every feature is included.
               </p>
             ))}
         </div>

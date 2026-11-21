@@ -59,7 +59,7 @@ these can come from almost any route.
 |---|---:|---|---|
 | `unauthorized` | 401 | missing, malformed, unknown, or revoked credential | send a valid credential |
 | `token_expired` | 401 | the API key is past its `expiresAt` | rotate or create a key |
-| `plan_required` | 402 | the site's plan does not include the feature. not enforced during the beta | have the site's owner upgrade it; `entitlement` names what is missing |
+| `plan_required` | 402 | the site's plan does not include the feature. not enforced before 1 April 2027 | have the site's owner upgrade it; `entitlement` names what is missing |
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
@@ -91,7 +91,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 
 ### plan_required
 
-`402`: the plan of the site the request acts on does not include what the request needs. plans apply after the beta and are not enforced yet, so no route returns this today. `entitlement` names the missing feature, and `upgradeUrl` is the caller's plan page, relative to the dashboard, which lists the sites they own with a link to each one's billing:
+`402`: the plan of the site the request acts on does not include what the request needs. plans apply after 1 April 2027 and are not enforced before then, so no route returns this today. `entitlement` names the missing feature, and `upgradeUrl` is the caller's plan page, relative to the dashboard, which lists the sites they own with a link to each one's billing:
 
 ```json
 {
@@ -365,7 +365,7 @@ see [swoop](/docs/dashboard/swoop).
 
 ## billing codes
 
-a site's billing is changed from the dashboard, in site settings → billing, by the site's owner. the requests behind it need a signed-in session: an API key gets `api_key_not_permitted`, and anyone but the owner `forbidden` or `not_owner`. [plans](/docs/plans#upgrading-a-site) apply after the beta; until then nothing is billed, an upgrade or a switch answers `billing_unavailable`, and only stopping a site that is still billed goes through.
+a site's billing is changed from the dashboard, in site settings → billing, by the site's owner. the requests behind it need a signed-in session: an API key gets `api_key_not_permitted`, and anyone but the owner `forbidden` or `not_owner`. [plans](/docs/plans#upgrading-a-site) apply after 1 April 2027; until then nothing is billed, an upgrade or a switch answers `billing_unavailable`, and only stopping a site that is still billed goes through.
 
 | code | status | meaning |
 |---|---:|---|

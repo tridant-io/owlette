@@ -103,7 +103,7 @@ bulk file bytes do **not** go through Firestore. roost chunks and version bodies
 5. a **3-word pairing phrase** appears in the owlette window; authorize it from the dashboard or your phone
 6. your machine appears in the dashboard within 30 seconds
 
-owlette is in beta and every feature is free while it lasts; [plans](https://owlette.app/docs/plans) describes owlette free, core and pro for after it.
+owlette is in beta, and every feature is free until 1 April 2027; [plans](https://owlette.app/docs/plans) describes owlette free, core and pro for after that.
 
 > **[full setup guide →](https://owlette.app/docs/getting-started)**
 
@@ -191,7 +191,7 @@ full documentation is available at **[owlette.app/docs](https://owlette.app/docs
 - [architecture](https://owlette.app/docs/architecture): system design and data flow
 - [authentication](https://owlette.app/docs/reference/authentication): auth methods, device-code pairing, tokens
 - [self-hosting](https://owlette.app/docs/setup): Firebase, R2, the web app, and scheduled jobs
-- [plans](https://owlette.app/docs/plans): owlette free, core and pro, after the beta
+- [plans](https://owlette.app/docs/plans): owlette free, core and pro, after 1 April 2027
 
 ## contributing
 

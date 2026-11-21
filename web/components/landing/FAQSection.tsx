@@ -6,6 +6,7 @@ import { Plus, Minus } from 'lucide-react';
 import {
   AFTER_BETA,
   FREE_COVERS,
+  FREE_PERIOD,
   INCLUDED_STORAGE,
   PRICING_FACTS,
   STORAGE_OVERAGE,
@@ -16,7 +17,7 @@ import {
 const faqs: { q: string; a: React.ReactNode }[] = [
   {
     q: "is it actually free?",
-    a: `during beta, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
+    a: `${FREE_PERIOD}, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
       PRICING_FACTS.core.list,
     )} for monitoring, process control, displays, and alerts. pro is ${perMachineMonth(
       PRICING_FACTS.pro.list,

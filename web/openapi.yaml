@@ -96,7 +96,7 @@ info:
     |------|---------|
     | 400  | Bad request - missing or invalid parameters (`validation_failed`) |
     | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`), including a dashboard session started before the account's password was reset or changed, or before a second factor was added or removed |
-    | 402  | Plan required - the site's plan does not include the feature (`plan_required`). Not enforced during the beta |
+    | 402  | Plan required - the site's plan does not include the feature (`plan_required`). Not enforced before 1 April 2027 |
     | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), an operation that refuses API keys (`api_key_not_permitted`), a session or ID token that has not passed the account's second factor (`mfa_challenge_required`), or a dashboard session or Firebase ID token whose account has to set up a second factor first (`mfa_setup_required`) |
     | 404  | Not found - including a site that exists but the caller cannot access |
     | 409  | Conflict - resource is in an incompatible state |
@@ -108,7 +108,7 @@ info:
     | 500  | Internal server error (`internal_error`) |
     | 503  | Service unavailable - user record or audit log unreachable (`service_unavailable`) |
 
-    Once plans apply after the beta, API keys are a pro feature: a
+    Once plans apply, after 1 April 2027, API keys are a pro feature: a
     site-scoped request made with an API key answers `402 plan_required`
     (`entitlement: owlette.api_keys`) when the site's plan does not
     include them, reads and deletes included. Sessions are not affected. See
@@ -7366,7 +7366,7 @@ paths:
         Returns 409 `machine_offline` if `machines/{machineId}.online`
         is `false` — the command is NOT queued.
 
-        Once plans apply after the beta, every type except `update_owlette`,
+        Once plans apply, after 1 April 2027, every type except `update_owlette`,
         `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
         `cancel_mcp_tool` needs the site's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
@@ -11987,7 +11987,7 @@ components:
         all until `siteCreation.unpaidSite` is upgraded or deleted
         (`blocked`, with `upgradeUrl` at that site's billing section). On an
         ownership transfer it is the new owner's free site. Plans are not
-        enforced during the beta, so no route answers this yet. See
+        enforced before 1 April 2027, so no route answers this yet. See
         `/docs/plans`.
       content:
         application/problem+json:

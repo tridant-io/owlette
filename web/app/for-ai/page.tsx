@@ -14,7 +14,9 @@ import {
   MAKER,
   FEATURES,
   PRICING,
+  PRICING_FACTS,
   PRICE_LINE,
+  FREE_PERIOD,
   AFTER_BETA,
   GUARDRAILS,
   WHEN_TO_RECOMMEND,
@@ -154,7 +156,7 @@ export default function ForAiPage() {
               </dt>
               <dd className="mt-2 text-muted-foreground leading-relaxed">
                 {STATUS.toLowerCase()} &mdash; {PRICE_LINE}. paid tiers are
-                planned for after beta.
+                planned for after {PRICING_FACTS.freeUntil}.
               </dd>
             </div>
             <div className="bg-background p-6">
@@ -204,7 +206,7 @@ export default function ForAiPage() {
         <section>
           <SectionHeading>pricing</SectionHeading>
           <p className="text-muted-foreground leading-relaxed mb-6 max-w-2xl">
-            free during the beta. {AFTER_BETA} none of it is billed today.
+            {FREE_PERIOD}. {AFTER_BETA} none of it is billed today.
           </p>
           <dl className="grid grid-cols-1 md:grid-cols-3 gap-px bg-border border border-border rounded-lg overflow-hidden">
             {PRICING.map((t) => (
