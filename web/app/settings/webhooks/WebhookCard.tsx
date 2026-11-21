@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { IconButton } from '@/components/ui/icon-button';
 import {
   AlertTriangle,
@@ -112,8 +113,7 @@ export function WebhookCard({
     setDeliveriesLoading(false);
   }, [webhook.id, siteId]);
 
-  async function handleToggleExpand() {
-    const next = !expanded;
+  async function handleOpenChange(next: boolean) {
     setExpanded(next);
     if (next && deliveries.length === 0) await loadDeliveries();
   }
@@ -209,177 +209,181 @@ export function WebhookCard({
 
   return (
     <Card className="border-border bg-card p-4">
-      <div className="flex items-start gap-3">
-        <button
-          type="button"
-          onClick={handleToggleExpand}
-          className="mt-1 text-muted-foreground hover:text-foreground cursor-pointer"
-          aria-label={expanded ? 'collapse' : 'expand'}
-          aria-expanded={expanded}
-        >
-          {expanded ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
-        </button>
+      {/* one child of the card: the card's gap-6 moves into the deliveries' mt-10, so it slides in with them */}
+      <Collapsible open={expanded} onOpenChange={handleOpenChange}>
+        <div className="flex items-start gap-3">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="mt-1 text-muted-foreground hover:text-foreground cursor-pointer"
+              aria-label={expanded ? 'collapse' : 'expand'}
+            >
+              {expanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )}
+            </button>
+          </CollapsibleTrigger>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1 flex-wrap">
-            {webhook.paused ? (
-              <Badge variant="outline" className="border-warning-border text-warning dark:border-warning-solid">
-                paused
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="border-success-border text-success dark:border-success-solid">
-                active
-              </Badge>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+              {webhook.paused ? (
+                <Badge variant="outline" className="border-warning-border text-warning dark:border-warning-solid">
+                  paused
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="border-success-border text-success dark:border-success-solid">
+                  active
+                </Badge>
+              )}
+              {webhook.failureCount > 0 && (
+                <Badge variant="outline" className="border-danger-border text-danger">
+                  <AlertTriangle className="h-3 w-3 mr-1" />
+                  {webhook.failureCount} failure{webhook.failureCount === 1 ? '' : 's'}
+                </Badge>
+              )}
+            </div>
+            <code className="block text-sm text-foreground font-mono truncate">{webhook.url}</code>
+            {webhook.description && (
+              <p className="text-xs text-muted-foreground mt-1">{webhook.description}</p>
             )}
-            {webhook.failureCount > 0 && (
-              <Badge variant="outline" className="border-danger-border text-danger">
-                <AlertTriangle className="h-3 w-3 mr-1" />
-                {webhook.failureCount} failure{webhook.failureCount === 1 ? '' : 's'}
-              </Badge>
-            )}
+            <div className="flex flex-wrap gap-1 mt-2">
+              {webhook.events.map((evt) => (
+                <Badge key={evt} variant="secondary" className="font-mono text-[10px]">
+                  {evt}
+                </Badge>
+              ))}
+            </div>
+            <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
+              <span>created {formatRelative(webhook.createdAt)}</span>
+              <span>last delivery {formatRelative(webhook.lastDeliveryAt)}</span>
+            </div>
           </div>
-          <code className="block text-sm text-foreground font-mono truncate">{webhook.url}</code>
-          {webhook.description && (
-            <p className="text-xs text-muted-foreground mt-1">{webhook.description}</p>
-          )}
-          <div className="flex flex-wrap gap-1 mt-2">
-            {webhook.events.map((evt) => (
-              <Badge key={evt} variant="secondary" className="font-mono text-[10px]">
-                {evt}
-              </Badge>
-            ))}
-          </div>
-          <div className="flex gap-4 mt-2 text-xs text-muted-foreground">
-            <span>created {formatRelative(webhook.createdAt)}</span>
-            <span>last delivery {formatRelative(webhook.lastDeliveryAt)}</span>
-          </div>
-        </div>
 
-        <div className="flex items-center gap-1">
-          <IconButton
-            label={webhook.paused ? 'resume webhook' : 'pause webhook'}
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={handleTogglePaused}
-            disabled={busyAction !== null}
-            className="h-8 w-8 p-0 border-border cursor-pointer"
-          >
-            {busyAction === 'paused' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : webhook.paused ? (
-              <Play className="h-3.5 w-3.5" />
-            ) : (
-              <Pause className="h-3.5 w-3.5" />
-            )}
-          </IconButton>
-
-          <IconButton
-            label="rotate signing secret"
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={handleRotateSecret}
-            disabled={busyAction !== null}
-            className="h-8 w-8 p-0 border-border cursor-pointer"
-          >
-            {busyAction === 'rotate' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-          </IconButton>
-
-          <IconButton
-            label="delete webhook"
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={handleDelete}
-            disabled={busyAction !== null}
-            className="h-8 w-8 p-0 border-border text-danger hover:bg-danger-surface hover:text-danger cursor-pointer"
-          >
-            {busyAction === 'delete' ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="h-3.5 w-3.5" />
-            )}
-          </IconButton>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="mt-4 pt-4 border-t border-border">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xs font-semibold text-foreground uppercase tracking-wide">
-              recent deliveries
-            </h2>
-            <Button
+          <div className="flex items-center gap-1">
+            <IconButton
+              label={webhook.paused ? 'resume webhook' : 'pause webhook'}
               type="button"
               size="sm"
               variant="outline"
-              onClick={loadDeliveries}
-              disabled={deliveriesLoading}
-              className="h-7 text-xs border-border cursor-pointer"
+              onClick={handleTogglePaused}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
             >
-              {deliveriesLoading ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+              {busyAction === 'paused' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : webhook.paused ? (
+                <Play className="h-3.5 w-3.5" />
               ) : (
-                'refresh'
+                <Pause className="h-3.5 w-3.5" />
               )}
-            </Button>
+            </IconButton>
+
+            <IconButton
+              label="rotate signing secret"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleRotateSecret}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
+            >
+              {busyAction === 'rotate' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
+
+            <IconButton
+              label="delete webhook"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleDelete}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border text-danger hover:bg-danger-surface hover:text-danger cursor-pointer"
+            >
+              {busyAction === 'delete' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
           </div>
-          {deliveriesLoading && deliveries.length === 0 ? (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : deliveries.length === 0 ? (
-            <p className="text-xs text-muted-foreground text-center py-6">
-              no deliveries yet. webhook deliveries are retained for 30 days.
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {deliveries.map((d) => (
-                <div
-                  key={d.id}
-                  className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-muted/30"
-                >
-                  {stateIcon(d.state)}
-                  <span className="font-mono text-foreground flex-1 truncate">{d.event ?? '—'}</span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {d.lastStatus ?? (d.state === 'pending' ? 'pending' : '—')}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums w-16 text-right">
-                    att {d.attempt}
-                  </span>
-                  <span className="text-muted-foreground w-24 text-right">
-                    {formatRelative(d.createdAt)}
-                  </span>
-                  <IconButton
-                    label="retry this delivery"
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleRetryDelivery(d.id)}
-                    disabled={retryingId !== null}
-                    className="h-6 w-6 p-0 cursor-pointer"
-                  >
-                    {retryingId === d.id ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <RotateCcw className="h-3 w-3" />
-                    )}
-                  </IconButton>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-      )}
+
+        {/* -mx-1 px-1: room past the refresh button, flush right, for the focus ring the slide's clip would cut */}
+        <CollapsibleContent className="-mx-1 overflow-hidden px-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+          <div className="mt-10 pt-4 border-t border-border">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                recent deliveries
+              </h2>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={loadDeliveries}
+                disabled={deliveriesLoading}
+                className="h-7 text-xs border-border cursor-pointer"
+              >
+                {deliveriesLoading ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  'refresh'
+                )}
+              </Button>
+            </div>
+            {deliveriesLoading && deliveries.length === 0 ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : deliveries.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">
+                no deliveries yet. webhook deliveries are retained for 30 days.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {deliveries.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-muted/30"
+                  >
+                    {stateIcon(d.state)}
+                    <span className="font-mono text-foreground flex-1 truncate">{d.event ?? '—'}</span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {d.lastStatus ?? (d.state === 'pending' ? 'pending' : '—')}
+                    </span>
+                    <span className="text-muted-foreground tabular-nums w-16 text-right">
+                      att {d.attempt}
+                    </span>
+                    <span className="text-muted-foreground w-24 text-right">
+                      {formatRelative(d.createdAt)}
+                    </span>
+                    <IconButton
+                      label="retry this delivery"
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleRetryDelivery(d.id)}
+                      disabled={retryingId !== null}
+                      className="h-6 w-6 p-0 cursor-pointer"
+                    >
+                      {retryingId === d.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RotateCcw className="h-3 w-3" />
+                      )}
+                    </IconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     </Card>
   );
 }

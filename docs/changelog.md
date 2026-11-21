@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — panels slide open and closed
+
+the **log tail** on an issue, a key's details under **api keys**, a webhook's **recent deliveries**, a talon's **recent runs**, and a roost's **contents**, **targets** and **version history** opened and closed in one jump, and now slide, as the rows on the activity, logs and deployments pages do.
+
 ### changed — activity rows start with an arrow
 
 each row on **admin** → **activity** now starts with a small arrow, as the machine rows on the dashboard do, so you can see it opens. the arrow turns while the row is open.

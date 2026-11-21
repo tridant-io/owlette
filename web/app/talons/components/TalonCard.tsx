@@ -31,6 +31,7 @@ import {
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -386,333 +387,335 @@ export function TalonCard({
   }
 
   return (
-    <div data-testid="talon-row">
-      <div
-        className={`relative flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
-      >
-        {/* (a) chevron + enabled state */}
-        <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5 md:pt-0">
-          <button
-            type="button"
-            onClick={() => setExpanded((open) => !open)}
-            className="cursor-pointer text-muted-foreground hover:text-foreground"
-            aria-label={expanded ? 'collapse run history' : 'expand run history'}
-            aria-expanded={expanded}
-          >
-            {expanded ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
-          </button>
-          {/* Filled vs hollow, not just green vs grey — must read without colour. */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                role="img"
-                aria-label={talon.enabled ? 'enabled' : 'disabled'}
-                className={`h-2 w-2 flex-shrink-0 rounded-full border ${
-                  talon.enabled
-                    ? 'border-success bg-success'
-                    : 'border-muted-foreground bg-transparent'
-                }`}
-              />
-            </TooltipTrigger>
-            <TooltipContent className="max-w-xs">
-              {disabledReason ? `disabled — ${disabledReason}` : talon.enabled ? 'enabled' : 'disabled'}
-            </TooltipContent>
-          </Tooltip>
-        </div>
+    <Collapsible asChild open={expanded} onOpenChange={setExpanded}>
+      <div data-testid="talon-row">
+        <div
+          className={`relative flex items-start gap-3 px-3 py-2.5 transition-colors hover:bg-muted/50 dark:hover:bg-muted/30 ${TALON_ROW_GRID}`}
+        >
+          {/* (a) chevron + enabled state */}
+          <div className="flex flex-shrink-0 items-center gap-1.5 pt-0.5 md:pt-0">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="cursor-pointer text-muted-foreground hover:text-foreground"
+                aria-label={expanded ? 'collapse run history' : 'expand run history'}
+              >
+                {expanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </button>
+            </CollapsibleTrigger>
+            {/* Filled vs hollow, not just green vs grey — must read without colour. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  role="img"
+                  aria-label={talon.enabled ? 'enabled' : 'disabled'}
+                  className={`h-2 w-2 flex-shrink-0 rounded-full border ${
+                    talon.enabled
+                      ? 'border-success bg-success'
+                      : 'border-muted-foreground bg-transparent'
+                  }`}
+                />
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                {disabledReason ? `disabled — ${disabledReason}` : talon.enabled ? 'enabled' : 'disabled'}
+              </TooltipContent>
+            </Tooltip>
+          </div>
 
-        {/* Below `md` this is the stacked content column; at `md`+ it dissolves
-            so (b)-(f) become grid items of the row itself. */}
-        <div className="min-w-0 flex-1 md:contents">
-          {/* (b) name */}
-          <div className="flex min-w-0 flex-col">
-            <div className="flex min-w-0 items-center gap-2 pr-9 md:pr-0">
-              <span className="truncate text-sm font-medium text-foreground" title={nameTitle}>
-                {talon.name}
-              </span>
-              {failures > 0 && (
-                <Badge
-                  variant="outline"
-                  className="flex-shrink-0 border-danger-border px-1.5 text-[10px] text-danger"
-                  title={`${failures} consecutive failure${failures === 1 ? '' : 's'}`}
+          {/* Below `md` this is the stacked content column; at `md`+ it dissolves
+              so (b)-(f) become grid items of the row itself. */}
+          <div className="min-w-0 flex-1 md:contents">
+            {/* (b) name */}
+            <div className="flex min-w-0 flex-col">
+              <div className="flex min-w-0 items-center gap-2 pr-9 md:pr-0">
+                <span className="truncate text-sm font-medium text-foreground" title={nameTitle}>
+                  {talon.name}
+                </span>
+                {failures > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="flex-shrink-0 border-danger-border px-1.5 text-[10px] text-danger"
+                    title={`${failures} consecutive failure${failures === 1 ? '' : 's'}`}
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    {failures}
+                  </Badge>
+                )}
+              </div>
+              {/* On the row itself — the point is learning it without expanding
+                  the history and reading a run. */}
+              {disabledReason && (
+                <p
+                  data-testid="talon-disabled-reason"
+                  className="mt-1 truncate text-xs text-warning"
+                  title={`switched off automatically — ${disabledReason}`}
                 >
-                  <AlertTriangle className="h-3 w-3" />
-                  {failures}
+                  switched off — {disabledReason}
+                </p>
+              )}
+              {talon.description && (
+                <p className="mt-1 truncate text-xs text-muted-foreground md:hidden">
+                  {talon.description}
+                </p>
+              )}
+              {/* No outputs column below `lg`; the chips live here instead. */}
+              {outputs.length > 0 && (
+                <div className="mt-1.5 flex min-w-0 flex-wrap gap-1 lg:hidden">
+                  <OutputChips outputs={outputs} />
+                </div>
+              )}
+            </div>
+
+            {/* (c) trigger */}
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 md:mt-0">
+              <span
+                className="truncate text-xs text-muted-foreground"
+                title={`${triggerSummary} · ${scopeSummary}`}
+              >
+                {triggerSummary}
+                {/* Scope has no column of its own between `md` and `lg`. */}
+                <span className="hidden md:inline xl:hidden"> · {scopeSummary}</span>
+              </span>
+              {isVisualCheck && (
+                <Badge variant="secondary" className="flex-shrink-0 px-1.5 text-[10px]">
+                  <Eye className="h-3 w-3" />
+                  visual check
                 </Badge>
               )}
             </div>
-            {/* On the row itself — the point is learning it without expanding
-                the history and reading a run. */}
-            {disabledReason && (
-              <p
-                data-testid="talon-disabled-reason"
-                className="mt-1 truncate text-xs text-warning"
-                title={`switched off automatically — ${disabledReason}`}
-              >
-                switched off — {disabledReason}
-              </p>
-            )}
-            {talon.description && (
-              <p className="mt-1 truncate text-xs text-muted-foreground md:hidden">
-                {talon.description}
-              </p>
-            )}
-            {/* No outputs column below `lg`; the chips live here instead. */}
-            {outputs.length > 0 && (
-              <div className="mt-1.5 flex min-w-0 flex-wrap gap-1 lg:hidden">
+
+            {/* (d) outputs */}
+            <div className="hidden min-w-0 flex-wrap items-center gap-1 lg:flex">
+              {outputs.length > 0 ? (
                 <OutputChips outputs={outputs} />
-              </div>
-            )}
-          </div>
-
-          {/* (c) trigger */}
-          <div className="mt-1 flex min-w-0 items-center gap-1.5 md:mt-0">
-            <span
-              className="truncate text-xs text-muted-foreground"
-              title={`${triggerSummary} · ${scopeSummary}`}
-            >
-              {triggerSummary}
-              {/* Scope has no column of its own between `md` and `lg`. */}
-              <span className="hidden md:inline xl:hidden"> · {scopeSummary}</span>
-            </span>
-            {isVisualCheck && (
-              <Badge variant="secondary" className="flex-shrink-0 px-1.5 text-[10px]">
-                <Eye className="h-3 w-3" />
-                visual check
-              </Badge>
-            )}
-          </div>
-
-          {/* (d) outputs */}
-          <div className="hidden min-w-0 flex-wrap items-center gap-1 lg:flex">
-            {outputs.length > 0 ? (
-              <OutputChips outputs={outputs} />
-            ) : (
-              <span className="truncate text-xs text-muted-foreground">no outputs</span>
-            )}
-          </div>
-
-          {/* Below `md` scope and last run share a meta line; at `md`+ this
-              wrapper dissolves into columns (e) and (f). */}
-          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 md:contents">
-            {/* (e) scope */}
-            <span
-              className="block min-w-0 truncate text-xs text-muted-foreground md:hidden xl:block"
-              title={scopeSummary}
-            >
-              {scopeSummary}
-            </span>
-
-            {/* (f) last run */}
-            <span
-              className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-              title={lastRunTitle}
-            >
-              <span
-                role="img"
-                className="flex-shrink-0"
-                aria-label={lastRunStatus ?? 'never run'}
-              >
-                {talonStatusIcon(lastRunStatus)}
-              </span>
-              <span className="truncate">
-                <span className="md:hidden">last run </span>
-                {formatRelative(talon.lastRunAt)}
-              </span>
-            </span>
-          </div>
-        </div>
-
-        {/* (g) actions. below `md` one menu with a label per action, pinned to the
-            corner so the lines under the name keep the full width */}
-        <div className="absolute right-2 top-1.5 md:hidden">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                data-testid="talon-menu"
-                disabled={busyAction !== null}
-                aria-label={`actions for ${talon.name}`}
-                className="text-muted-foreground"
-              >
-                {busyAction !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48 border-border bg-raised">
-              <DropdownMenuItem onSelect={() => void handleRerun()} className="cursor-pointer">
-                <RotateCcw className="h-4 w-4" />
-                run now
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void handleToggleEnabled()} className="cursor-pointer">
-                {talon.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                {talon.enabled ? 'disable' : 'enable'}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={onEdit} className="cursor-pointer">
-                <Pencil className="h-4 w-4" />
-                edit
-              </DropdownMenuItem>
-              {onSaveAsTemplate && (
-                <DropdownMenuItem onSelect={() => void handleSaveAsTemplate()} className="cursor-pointer">
-                  <BookmarkPlus className="h-4 w-4" />
-                  save as template
-                </DropdownMenuItem>
+              ) : (
+                <span className="truncate text-xs text-muted-foreground">no outputs</span>
               )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDeleteOpen(true)} className="cursor-pointer">
-                <Trash2 className="h-4 w-4" />
-                delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+            </div>
 
-        <div className="hidden flex-shrink-0 items-center gap-1 md:flex md:justify-self-end">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                data-testid="talon-rerun"
-                onClick={handleRerun}
-                disabled={busyAction !== null}
-                aria-label={`run ${talon.name} now`}
-                className="h-8 w-8 cursor-pointer border-border p-0"
+            {/* Below `md` scope and last run share a meta line; at `md`+ this
+                wrapper dissolves into columns (e) and (f). */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 md:contents">
+              {/* (e) scope */}
+              <span
+                className="block min-w-0 truncate text-xs text-muted-foreground md:hidden xl:block"
+                title={scopeSummary}
               >
-                {busyAction === 'rerun' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RotateCcw className="h-3.5 w-3.5" />
+                {scopeSummary}
+              </span>
+
+              {/* (f) last run */}
+              <span
+                className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+                title={lastRunTitle}
+              >
+                <span
+                  role="img"
+                  className="flex-shrink-0"
+                  aria-label={lastRunStatus ?? 'never run'}
+                >
+                  {talonStatusIcon(lastRunStatus)}
+                </span>
+                <span className="truncate">
+                  <span className="md:hidden">last run </span>
+                  {formatRelative(talon.lastRunAt)}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {/* (g) actions. below `md` one menu with a label per action, pinned to the
+              corner so the lines under the name keep the full width */}
+          <div className="absolute right-2 top-1.5 md:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  data-testid="talon-menu"
+                  disabled={busyAction !== null}
+                  aria-label={`actions for ${talon.name}`}
+                  className="text-muted-foreground"
+                >
+                  {busyAction !== null ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreVertical className="h-4 w-4" />}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48 border-border bg-raised">
+                <DropdownMenuItem onSelect={() => void handleRerun()} className="cursor-pointer">
+                  <RotateCcw className="h-4 w-4" />
+                  run now
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void handleToggleEnabled()} className="cursor-pointer">
+                  {talon.enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  {talon.enabled ? 'disable' : 'enable'}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={onEdit} className="cursor-pointer">
+                  <Pencil className="h-4 w-4" />
+                  edit
+                </DropdownMenuItem>
+                {onSaveAsTemplate && (
+                  <DropdownMenuItem onSelect={() => void handleSaveAsTemplate()} className="cursor-pointer">
+                    <BookmarkPlus className="h-4 w-4" />
+                    save as template
+                  </DropdownMenuItem>
                 )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>run now</TooltipContent>
-          </Tooltip>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onSelect={() => setConfirmDeleteOpen(true)} className="cursor-pointer">
+                  <Trash2 className="h-4 w-4" />
+                  delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                data-testid="talon-toggle"
-                onClick={handleToggleEnabled}
-                disabled={busyAction !== null}
-                aria-label={talon.enabled ? `disable ${talon.name}` : `enable ${talon.name}`}
-                className="h-8 w-8 cursor-pointer border-border p-0"
-              >
-                {busyAction === 'enabled' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : talon.enabled ? (
-                  <Pause className="h-3.5 w-3.5" />
-                ) : (
-                  <Play className="h-3.5 w-3.5" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{talon.enabled ? 'disable' : 'enable'}</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={onEdit}
-                disabled={busyAction !== null}
-                aria-label={`edit ${talon.name}`}
-                className="h-8 w-8 cursor-pointer border-border p-0"
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>edit</TooltipContent>
-          </Tooltip>
-
-          {onSaveAsTemplate && (
+          <div className="hidden flex-shrink-0 items-center gap-1 md:flex md:justify-self-end">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  data-testid="talon-save-template"
-                  onClick={handleSaveAsTemplate}
+                  data-testid="talon-rerun"
+                  onClick={handleRerun}
                   disabled={busyAction !== null}
-                  aria-label={`save ${talon.name} as a template`}
+                  aria-label={`run ${talon.name} now`}
                   className="h-8 w-8 cursor-pointer border-border p-0"
                 >
-                  {busyAction === 'template' ? (
+                  {busyAction === 'rerun' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <BookmarkPlus className="h-3.5 w-3.5" />
+                    <RotateCcw className="h-3.5 w-3.5" />
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>save as template</TooltipContent>
+              <TooltipContent>run now</TooltipContent>
             </Tooltip>
-          )}
 
-          <Tooltip>
-            <TooltipTrigger asChild>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  data-testid="talon-toggle"
+                  onClick={handleToggleEnabled}
+                  disabled={busyAction !== null}
+                  aria-label={talon.enabled ? `disable ${talon.name}` : `enable ${talon.name}`}
+                  className="h-8 w-8 cursor-pointer border-border p-0"
+                >
+                  {busyAction === 'enabled' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : talon.enabled ? (
+                    <Pause className="h-3.5 w-3.5" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{talon.enabled ? 'disable' : 'enable'}</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={onEdit}
+                  disabled={busyAction !== null}
+                  aria-label={`edit ${talon.name}`}
+                  className="h-8 w-8 cursor-pointer border-border p-0"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>edit</TooltipContent>
+            </Tooltip>
+
+            {onSaveAsTemplate && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    data-testid="talon-save-template"
+                    onClick={handleSaveAsTemplate}
+                    disabled={busyAction !== null}
+                    aria-label={`save ${talon.name} as a template`}
+                    className="h-8 w-8 cursor-pointer border-border p-0"
+                  >
+                    {busyAction === 'template' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <BookmarkPlus className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>save as template</TooltipContent>
+              </Tooltip>
+            )}
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  data-testid="talon-delete"
+                  onClick={() => setConfirmDeleteOpen(true)}
+                  disabled={busyAction !== null}
+                  aria-label={`delete ${talon.name}`}
+                  className="h-8 w-8 cursor-pointer border-border p-0 text-danger hover:bg-danger-surface hover:text-danger"
+                >
+                  {busyAction === 'delete' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>delete</TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+
+        {/* Sibling of the grid row, not a cell: keeping the grid single-row is
+            what guarantees columns resolve identically on every row. */}
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+          <div className="border-t border-border bg-muted/20 px-3 py-3 dark:bg-muted/10">
+            <div className="mb-2 flex items-center justify-between">
+              <h4 className="text-xs font-semibold tracking-wide text-foreground">recent runs</h4>
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                data-testid="talon-delete"
-                onClick={() => setConfirmDeleteOpen(true)}
-                disabled={busyAction !== null}
-                aria-label={`delete ${talon.name}`}
-                className="h-8 w-8 cursor-pointer border-border p-0 text-danger hover:bg-danger-surface hover:text-danger"
+                onClick={() => setRunsKey((key) => key + 1)}
+                className="h-7 cursor-pointer border-border text-xs"
               >
-                {busyAction === 'delete' ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
+                refresh
               </Button>
-            </TooltipTrigger>
-            <TooltipContent>delete</TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-
-      {/* Sibling of the grid row, not a cell: keeping the grid single-row is
-          what guarantees columns resolve identically on every row. */}
-      {expanded && (
-        <div className="border-t border-border bg-muted/20 px-3 py-3 dark:bg-muted/10">
-          <div className="mb-2 flex items-center justify-between">
-            <h4 className="text-xs font-semibold tracking-wide text-foreground">recent runs</h4>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setRunsKey((key) => key + 1)}
-              className="h-7 cursor-pointer border-border text-xs"
-            >
-              refresh
-            </Button>
+            </div>
+            <TalonRunList key={runsKey} siteId={siteId} talonId={talon.id} />
           </div>
-          <TalonRunList key={runsKey} siteId={siteId} talonId={talon.id} />
-        </div>
-      )}
+        </CollapsibleContent>
 
-      <ConfirmDialog
-        open={confirmDeleteOpen}
-        onOpenChange={setConfirmDeleteOpen}
-        title="delete talon?"
-        description={`"${talon.name}" will stop running. its run history is kept for audit.`}
-        confirmText="delete"
-        cancelText="cancel"
-        variant="destructive"
-        onConfirm={handleDelete}
-      />
-    </div>
+        <ConfirmDialog
+          open={confirmDeleteOpen}
+          onOpenChange={setConfirmDeleteOpen}
+          title="delete talon?"
+          description={`"${talon.name}" will stop running. its run history is kept for audit.`}
+          confirmText="delete"
+          cancelText="cancel"
+          variant="destructive"
+          onConfirm={handleDelete}
+        />
+      </div>
+    </Collapsible>
   );
 }
