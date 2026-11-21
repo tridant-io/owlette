@@ -66,6 +66,8 @@ async function degrade<T>(what: string, read: () => Promise<T>): Promise<T | nul
 }
 
 function trialOf(start: TrialStatus, account: PlanAccount | null, now: number): AccountPlanTrial {
+  // before the started branch: a used trial also settles trialStartedAt, with no end.
+  if (account?.trialUsed || start === 'trial_used') return { status: 'used', endsAt: null };
   if (account?.trialStartedAt) {
     return { status: trialActive(account, now) ? 'active' : 'ended', endsAt: account.trialEndsAt };
   }

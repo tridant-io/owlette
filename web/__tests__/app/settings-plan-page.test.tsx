@@ -208,6 +208,15 @@ describe('/settings/plan', () => {
       expect(card).toHaveTextContent('owlette free');
     });
 
+    it('says the trial was used on an earlier tridant account', () => {
+      const card = trialCard({ trial: { status: 'used', endsAt: null } });
+
+      expect(card).toHaveAttribute('data-trial-state', 'used');
+      expect(card).toHaveTextContent('no pro trial');
+      expect(card).toHaveTextContent("this account's pro trial was already used on an earlier tridant account.");
+      expect(card).toHaveTextContent("a site you haven't upgraded is on owlette free.");
+    });
+
     it('says a trial that has not started leaves the account on owlette free', () => {
       const card = trialCard({ trial: { status: 'none', endsAt: null } });
 

@@ -137,7 +137,7 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 
 const mockStopSite = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
-  stopSite: (siteId: string) => mockStopSite(siteId),
+  stopSite: (...args: unknown[]) => mockStopSite(...args),
 }));
 
 const mockRegisterSite = jest.fn();
@@ -421,7 +421,8 @@ describe('transferSiteOwnership — billing follows the transfer', () => {
     const res = await transferToAlice();
 
     expect(res.ok).toBe(true);
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    // the stop names the recorded payer, so it never lands on billing someone else now pays for.
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, OWNER);
     expect(docs.get(`sites/${SITE}`)).toMatchObject({
       owner: ALICE,
       billing: { ...pointer(ENDS_AT), updatedAt: '__SERVER_TS__' },
@@ -454,7 +455,31 @@ describe('transferSiteOwnership — billing follows the transfer', () => {
 
     await transferToAlice({ skipPlanCheck: true });
 
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, OWNER);
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('stops a pointer that names no payer without one', async () => {
+    docs.set(`sites/${SITE}`, { owner: OWNER, name: 'Site A', billing: { tier: 'pro', endsAt: null } });
+
+    await transferToAlice();
+
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, undefined);
+  });
+
+  // the daily job's stranded repair asks tridant who pays and stops or adopts it.
+  it('logs a stop tridant refuses because the recorded payer does not pay, and keeps the transfer', async () => {
+    billed(null);
+    mockStopSite.mockResolvedValue({ ok: false, reason: 'rejected', status: 409, code: 'payer_mismatch' });
+
+    const res = await transferToAlice();
+
+    expect(res).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
+    expect(siteBilling()).toEqual(pointer(null));
+    expect(logger.error).toHaveBeenCalledWith(
+      '[plan] billing not stopped for a transferred site',
+      expect.objectContaining({ data: expect.objectContaining({ siteId: SITE, code: 'payer_mismatch' }) }),
+    );
     expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
   });
 
@@ -510,7 +535,7 @@ describe('transferSiteOwnership — billing follows the transfer', () => {
 
     expect((await transferToAlice()).ok).toBe(true);
     // the old owner is being charged whatever the switch says, and the bulk trial start runs before the switch.
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, OWNER);
     expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
   });
 

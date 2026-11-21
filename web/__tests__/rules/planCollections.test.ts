@@ -1,12 +1,14 @@
 /**
  * @jest-environment node
  *
- * `billing_usage/**`, `plan_snapshot/*`, `plan_accounts/*` and `billing_checkouts/*` are server-only.
+ * `billing_usage/**`, `plan_snapshot/*`, `plan_accounts/*`, `billing_checkouts/*` and
+ * `tridant_site_removals/*` are server-only.
  *
  * there is no rule for either: the catch-all deny at the bottom of
  * `firestore.rules` covers them. this spec stops that changing by accident. a
  * payer able to write their own snapshot could switch scheduled rollouts back
- * on for a lapsed plan, and one able to write usage could shrink their bill.
+ * on for a lapsed plan, one able to write usage could shrink their bill, and one
+ * able to delete a removal record could keep a deleted site's billing running.
  *
  * `firestore.rules` is not modified; this asserts against the file as it ships.
  */
@@ -40,6 +42,7 @@ const paths: Array<[string, (db: Firestore) => DocumentReference]> = [
   ['the plan snapshot', (db) => doc(db, 'plan_snapshot', SITE)],
   ['a plan account', (db) => doc(db, 'plan_accounts', OWNER_UID)],
   ['a billing checkout', (db) => doc(db, 'billing_checkouts', SESSION)],
+  ['a site removal record', (db) => doc(db, 'tridant_site_removals', SITE)],
 ];
 
 const contexts: Array<[string, () => Promise<Firestore> | Firestore]> = [
@@ -81,10 +84,16 @@ beforeEach(async () => {
     });
     await setDoc(doc(db, 'plan_accounts', OWNER_UID), { trialEndsAt: 1, orgId: 'org_1', linkRequired: false });
     await setDoc(doc(db, 'billing_checkouts', SESSION), { uid: OWNER_UID, siteId: SITE, tier: 'pro', founders: false });
+    await setDoc(doc(db, 'tridant_site_removals', SITE), {
+      siteId: SITE,
+      requestedAt: 1,
+      attempts: 0,
+      lastCode: 'site_running',
+    });
   });
 });
 
-describe('billing_usage, plan_snapshot, plan_accounts and billing_checkouts are denied to every client context', () => {
+describe('billing_usage, plan_snapshot, plan_accounts, billing_checkouts and tridant_site_removals are denied to every client context', () => {
   it.each(cases)('denies %s a read of %s', async (_who, _what, context, ref) => {
     const db = await context();
     await assertFails(getDoc(ref(db)));
@@ -100,11 +109,12 @@ describe('billing_usage, plan_snapshot, plan_accounts and billing_checkouts are 
     await assertFails(deleteDoc(ref(db)));
   });
 
-  it.each(contexts)('denies %s listing the usage days, snapshots, accounts or checkouts', async (_who, context) => {
+  it.each(contexts)('denies %s listing the usage days, snapshots, accounts, checkouts or removal records', async (_who, context) => {
     const db = await context();
     await assertFails(getDocs(collection(db, 'billing_usage', SITE, 'days')));
     await assertFails(getDocs(collection(db, 'plan_snapshot')));
     await assertFails(getDocs(collection(db, 'plan_accounts')));
     await assertFails(getDocs(collection(db, 'billing_checkouts')));
+    await assertFails(getDocs(collection(db, 'tridant_site_removals')));
   });
 });

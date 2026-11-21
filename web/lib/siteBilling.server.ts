@@ -32,9 +32,14 @@ import {
   stopSite,
   switchTier,
   type BillingFailure,
+  type BillingResult,
   type BillingTier,
 } from '@/lib/tridantBilling.server';
-import { getSiteEntitlements, invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
+import {
+  getSiteEntitlements,
+  invalidateSiteEntitlements,
+  type SiteBillingPeriod,
+} from '@/lib/tridantEntitlements.server';
 
 export type BillingRefusal = { ok: false; status: 403 | 404 | 409 | 502 | 503; code: string; detail: string };
 
@@ -87,6 +92,7 @@ const CONFLICTS = new Map([
   ['founders_sold_out', 'the founders places for this plan are taken.'],
   ['site_is_default', 'this site belongs to another tridant account and cannot move to yours.'],
   ['subscription_paused', 'your subscription is paused. resume it before adding a site.'],
+  ['payer_mismatch', 'this site is billed under another tridant account. its plan can change once that billing ends.'],
 ]);
 
 const PROBLEMS: Record<BillingRefusal['status'], { type: string; title: string }> = {
@@ -119,6 +125,22 @@ export function billingSummary({ tier, founders, endsAt }: BillingPointer): Site
   return { tier, founders, endsAt };
 }
 
+/**
+ * what tridant id bills for a site, as a pointer naming `payerUid`. an answer
+ * that names no product owlette knows says nothing of the rate either, so
+ * `fallback` stands in for both.
+ */
+function answeredPointer(
+  billing: SiteBillingPeriod,
+  payerUid: string,
+  fallback: Pick<BillingPointer, 'tier' | 'founders'>,
+): BillingPointer {
+  const tier = tierOf(billing.productId);
+  return tier
+    ? { tier, founders: billing.founders, payerUid, endsAt: billing.endsAt }
+    : { tier: fallback.tier, founders: fallback.founders, payerUid, endsAt: billing.endsAt };
+}
+
 /** the cache goes first: if the write fails, the next read still asks tridant what it now bills. */
 async function writePointer(siteId: string, pointer: BillingPointer): Promise<void> {
   invalidateSiteEntitlements(siteId);
@@ -143,10 +165,11 @@ function billedToPreviousOwner(pointer: BillingPointer | null, owner: unknown, r
 
 /**
  * the record as the site plan answer shows it. with plans enforced, tridant id's
- * answer decides whether the site is billed, so once it bills nothing the record
- * is left out and the billing section offers an upgrade, before the daily job
- * has closed a record that still says it runs. with plans off nothing was asked,
- * and the record's own end stands.
+ * answer decides whether the site is billed and at what: its tier, rate and end
+ * are shown, and once it bills nothing the record is left out and the billing
+ * section offers an upgrade, before the daily job has closed a record that still
+ * says it runs. with plans off nothing was asked, and the record stands. who
+ * pays is always the record's: tridant's answer does not say.
  */
 export function siteBillingView(
   siteData: SiteData,
@@ -156,8 +179,9 @@ export function siteBillingView(
   const pointer = readBillingPointer(siteData);
   if (!pointer || (plan.enforced && !plan.billing)) return { billing: null, billedByPreviousOwner: false };
   const runs = plan.enforced || pointer.endsAt === null || pointer.endsAt > now;
+  const shown = plan.enforced && plan.billing ? answeredPointer(plan.billing, pointer.payerUid, pointer) : pointer;
   return {
-    billing: billingSummary(pointer),
+    billing: billingSummary(shown),
     billedByPreviousOwner: billedToPreviousOwner(pointer, siteData.owner, runs),
   };
 }
@@ -168,19 +192,22 @@ async function ownedSite(siteId: string, uid: string): Promise<SiteData | null> 
   return data && data.owner === uid ? data : null;
 }
 
+/** the owner's uid when `orgId`, the organization tridant bills the site under, is the owner's; else empty. */
+async function payingOwner(site: SiteData | null | undefined, orgId: string | null): Promise<string> {
+  const owner = typeof site?.owner === 'string' ? site.owner : '';
+  const account = owner ? await getPlanAccount(owner) : null;
+  return account?.orgId && account.orgId === orgId ? owner : '';
+}
+
 /** what tridant bills for a site, as a pointer. `payerUid` is empty when the organization billed is not the owner's. */
 async function liveBilling(siteId: string, site: SiteData, plan?: Plan): Promise<BillingPointer | null> {
   const resolved = plan ?? (await resolveSitePlan(siteId, site));
   if (!resolved.enforced || !resolved.billing) return null;
-  const owner = typeof site.owner === 'string' ? site.owner : '';
-  const account = owner ? await getPlanAccount(owner) : null;
-  return {
+  return answeredPointer(resolved.billing, await payingOwner(site, resolved.orgId), {
     tier: planTier(resolved) === 'pro' ? 'pro' : 'core',
-    // tridant's answer does not say; the pointer only labels the ui.
+    // the pointer only labels the ui.
     founders: false,
-    payerUid: account?.orgId && account.orgId === resolved.orgId ? owner : '',
-    endsAt: resolved.billing.endsAt,
-  };
+  });
 }
 
 /**
@@ -249,18 +276,15 @@ export async function upgradeSite(input: {
 
   const added = await addSite({ uid, siteId, siteName, tier, founders });
   if (!added.ok) return refusalFor(added, 'add_site', siteId);
-  // a site whose removal was pending resumes at the plan it had, whatever was asked for, so
-  // the plan is switched to match before anything is recorded as billed.
+  // tridant applies the plan asked for, to a stopped site it resumes too; its answer is what is recorded.
   const billed = added.sites.find((entry) => entry.siteId === siteId);
   const billedTier = tierOf(billed?.productId);
-  if (billed && billedTier && (billedTier !== tier || billed.founders !== founders)) {
-    const switched = await switchTier(siteId, tier, founders);
-    if (!switched.ok) {
-      await writePointer(siteId, { tier: billedTier, founders: billed.founders, payerUid: uid, endsAt: null });
-      return refusalFor(switched, 'switch_tier', siteId);
-    }
-  }
-  await writePointer(siteId, { tier, founders, payerUid: uid, endsAt: null });
+  await writePointer(siteId, {
+    tier: billedTier ?? tier,
+    founders: billed && billedTier ? billed.founders : founders,
+    payerUid: uid,
+    endsAt: null,
+  });
   return { ok: true, added: true };
 }
 
@@ -284,7 +308,8 @@ export async function switchSiteTier(input: {
   // switching it would change what the outgoing owner pays.
   if (pointer.payerUid !== uid) return PREVIOUS_OWNER;
 
-  const switched = await switchTier(siteId, tier, founders);
+  // with the owner as payer, tridant refuses a site its record says they pay for and they do not.
+  const switched = await switchTier(siteId, tier, founders, uid);
   if (!switched.ok) {
     return switched.code === 'site_not_billed' ? billingEnded(siteId, site) : refusalFor(switched, 'switch_tier', siteId);
   }
@@ -301,7 +326,8 @@ export async function stopSiteBilling(input: { siteId: string; uid: string }): P
   const pointer = await billedPointer(siteId, site);
   if (!pointer) return NOT_BILLED;
 
-  const stopped = await stopSite(siteId);
+  // a previous owner's billing goes without a payer: the owner is not its payer, and the stop must land.
+  const stopped = await stopSite(siteId, pointer.payerUid === uid ? uid : undefined);
   if (!stopped.ok) {
     return stopped.code === 'site_not_billed' ? billingEnded(siteId, site) : refusalFor(stopped, 'stop_site', siteId);
   }
@@ -343,19 +369,16 @@ export async function closeEndedBilling(siteId: string, siteData: SiteData | nul
  * stops a site's billing before the site is deleted: when owlette has a record of
  * it, or when tridant id says it bills the site, since a checkout whose return
  * never loaded leaves none. whatever the enforcement switch says: someone is
- * being billed. nothing retries once the site is gone, but a stop that did not
- * land costs no more than one that did: with no usage reported for the site,
- * tridant id writes it no line after this period. it is logged at error, so the
- * leftover item can be closed by hand. never throws: neither tridant call does.
+ * being billed. it goes without a payer, so it lands whoever pays. a stop that
+ * did not land is logged at error and not retried here, but the site's removal
+ * from tridant id is retried daily (tridantSiteRemoval.server.ts), and that
+ * retry stops a billing still running with no end. meanwhile it costs no more
+ * than a stop that landed: with no usage reported for the site, tridant id
+ * writes it no line after this period. never throws: neither tridant call does.
  */
 export async function stopBillingBeforeDelete(siteId: string, siteData: SiteData | null | undefined): Promise<void> {
-  if (!readBillingPointer(siteData)) {
-    invalidateSiteEntitlements(siteId);
-    const answer = await getSiteEntitlements(siteId);
-    if (!answer.ok || !answer.billing || answer.billing.endsAt !== null) return;
-  }
-  const stopped = await stopSite(siteId);
-  if (!stopped.ok && stopped.code !== 'site_not_billed') {
+  const stopped = readBillingPointer(siteData) ? await stopSite(siteId) : await stopOpenBilling(siteId);
+  if (stopped && !stopped.ok && stopped.code !== 'site_not_billed') {
     logger.error('[plan] billing not stopped for a deleted site', {
       context: 'plan',
       data: { siteId, reason: stopped.reason, status: stopped.status, code: stopped.code },
@@ -364,15 +387,58 @@ export async function stopBillingBeforeDelete(siteId: string, siteData: SiteData
 }
 
 /**
+ * stops a billing tridant id says still runs with no end, without a payer, so it
+ * lands whoever pays. null when tridant bills nothing open for the site, or
+ * cannot be read.
+ */
+export async function stopOpenBilling(siteId: string): Promise<BillingResult<{ endsAt: number }> | null> {
+  invalidateSiteEntitlements(siteId);
+  const answer = await getSiteEntitlements(siteId);
+  if (!answer.ok || !answer.billing || answer.billing.endsAt !== null) return null;
+  return stopSite(siteId);
+}
+
+/**
  * stops billing for a site whose pointer names a payer who no longer owns it: an
  * ownership transfer whose stop did not land. the daily job calls it for every
- * site, so the outgoing owner is billed no further than the next run. never throws.
+ * site, so the outgoing owner is billed no further than the next run. the stop
+ * names that payer; when tridant id says they do not pay for the site, it is
+ * asked who does. never throws.
  */
 export async function stopStrandedBilling(siteId: string, siteData: SiteData | null | undefined): Promise<void> {
   try {
     const pointer = readBillingPointer(siteData);
     if (!pointer || pointer.endsAt !== null || pointer.payerUid === siteData?.owner) return;
-    const stopped = await stopSite(siteId);
+    let stopped = await stopSite(siteId, pointer.payerUid);
+    if (!stopped.ok && stopped.code === 'payer_mismatch') {
+      invalidateSiteEntitlements(siteId);
+      const answer = await getSiteEntitlements(siteId);
+      if (!answer.ok) {
+        // unread, the owner's own billing cannot be told from another organization's, so the next run asks again.
+        logger.error('[billing] stranded billing not stopped', {
+          context: 'billing',
+          data: { siteId, reason: answer.reason, code: stopped.code },
+        });
+        return;
+      }
+      if (!answer.billing) {
+        // tridant bills nothing here, so the pointer is what is stale.
+        await closeRecord(siteId, pointer);
+        return;
+      }
+      const owner = await payingOwner(siteData, answer.orgId);
+      if (owner) {
+        // the owner pays for it: an upgrade whose checkout return never loaded.
+        await writePointer(siteId, answeredPointer(answer.billing, owner, pointer));
+        return;
+      }
+      // an owner with no organization cannot be the payer either, and a stop can be undone until the period ends.
+      logger.warn('[billing] stranded billing stopped without its payer', {
+        context: 'billing',
+        data: { siteId, code: stopped.code },
+      });
+      stopped = await stopSite(siteId);
+    }
     if (stopped.ok) {
       await writePointer(siteId, { ...pointer, endsAt: stopped.endsAt });
     } else if (stopped.code === 'site_not_billed') {
@@ -410,7 +476,7 @@ export async function adoptBilling(siteId: string, siteData: SiteData | null | u
   }
 }
 
-const tierOf = (productId: string | undefined): BillingTier | undefined =>
+const tierOf = (productId: string | null | undefined): BillingTier | undefined =>
   productId === PRODUCT.core ? 'core' : productId === PRODUCT.pro ? 'pro' : undefined;
 
 /** the return from checkout. only the account that started the checkout may confirm it. */

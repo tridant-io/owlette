@@ -394,6 +394,8 @@ paths:
         unverified account reads `unverified` and stays on owlette free until
         the email is verified. `link_required` means the email already has a
         tridant account, which the caller links before a trial or a purchase.
+        `used` means the account had its trial on an earlier tridant account,
+        since closed, so it gets no second one.
 
         `sites[].activeMachinesThisPeriod` counts distinct machines online on
         any UTC day since the site's billing period started, or since the 1st
@@ -15041,13 +15043,14 @@ components:
           properties:
             status:
               type: string
-              enum: [none, unverified, active, ended, link_required]
+              enum: [none, unverified, active, ended, link_required, used]
               description: |
                 `none`: no trial started yet. `unverified`: verify the email
                 and the next read starts it. `active`: running until `endsAt`.
                 `ended`: over, or the account paid before it ever had one.
                 `link_required`: the email already has a tridant account,
-                which must be linked first.
+                which must be linked first. `used`: the account's trial ran on
+                an earlier tridant account, since closed; there is no second.
             endsAt:
               type: integer
               format: int64

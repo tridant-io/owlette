@@ -1,5 +1,5 @@
 # tridant contract adoption — Tasks
-**Progress**: 2/13 complete
+**Progress**: 6/13 complete
 
 Every task: work in `C:\Users\admin\Documents\Git-restored\Owlette-tridant-contract-wt` and assert
 `git branch --show-current` is `feat/tridant-contract` before editing (`|| exit 1` on every `cd`).
@@ -95,7 +95,7 @@ commits each wave. Do not touch files outside your task's list.
 
 ## Wave 2: callers
 
-- [ ] **Task 2.1: site billing — payer, A7, A8, the stranded fix**
+- [x] **Task 2.1: site billing — payer, A7, A8, the stranded fix**
   - Files: `web/lib/siteBilling.server.ts`, `web/lib/actions/transferSiteOwnership.server.ts`,
     `web/__tests__/lib/siteBilling.stranded.test.ts`, `web/__tests__/api/sites-billing.test.ts`,
     `web/__tests__/lib/actions/transferSiteOwnership.test.ts`,
@@ -132,7 +132,7 @@ commits each wave. Do not touch files outside your task's list.
       PATCH, the view reading tier and founders from the answer.
   - Done when: lint and typecheck clean; the five listed test files green.
 
-- [ ] **Task 2.2: trial — A17 and the bulk dry run (A9, A4)**
+- [x] **Task 2.2: trial — A17 and the bulk dry run (A9, A4)**
   - Files: `web/lib/planTrial.server.ts`, `web/lib/planAccounts.server.ts`, `web/lib/planResponse.ts`,
     `web/app/api/cron/plan-trials/route.ts`, `web/app/api/account/plan/route.ts` (only `trialOf`),
     `web/app/settings/plan/page.tsx`, `web/components/plan/TrialBanner.tsx` (only if it switches on
@@ -163,7 +163,7 @@ commits each wave. Do not touch files outside your task's list.
       refused on a bad license key and allowed with a bad release key; `trialOf` for `used`.
   - Done when: lint and typecheck clean; the three listed test files green.
 
-- [ ] **Task 2.3: remove a deleted site from tridant (A11)**
+- [x] **Task 2.3: remove a deleted site from tridant (A11)**
   - Files: create `web/lib/tridantSiteRemoval.server.ts` and
     `web/__tests__/lib/tridantSiteRemoval.server.test.ts`; modify
     `web/lib/actions/deleteSite.server.ts`, `web/lib/actions/deleteOwnAccount.server.ts`,
@@ -193,7 +193,7 @@ commits each wave. Do not touch files outside your task's list.
   - Done when: lint and typecheck clean; the listed jest files green; `npm run test:rules` green for
     `planCollections` if the emulator is available (say so if it is not).
 
-- [ ] **Task 2.4: batch entitlement read (A14)**
+- [x] **Task 2.4: batch entitlement read (A14)**
   - Files: `web/lib/tridantEntitlements.server.ts`,
     `web/__tests__/lib/tridantEntitlements.server.test.ts`
   - Depends on: 1.2
@@ -277,7 +277,10 @@ commits each wave. Do not touch files outside your task's list.
     - Route `GET /api/cron/plan-settle`: `cronSecretMatches` on `X-Cron-Secret`, like plan-daily;
       doc comment names the schedule `0 6 * * *` UTC on cron-job.org per environment.
     - `infra/cron-jobs.json`: a `cron-plan-settle` entry modelled on `cron-plan-daily` (schedule
-      `0 6 * * *`, purpose, failureMode, environments dev and prod, minTimeoutSeconds 60).
+      `0 6 * * *`, purpose, failureMode, environments dev and prod, minTimeoutSeconds 60). Also
+      bring the `cron-plan-trials` entry's `purpose` up to date: its dry run now previews each
+      account with tridant (`previewTrial`) and reports both keys' checks; `apply` refuses on a bad
+      license key (task 2.2).
     - Tests: window bounds, settled skipped, recount and floor, per-entry `as_of`, outcomes saved,
       `period_closed` logged, auth 401, plans off does nothing; `npx jest cronJobs` green.
   - Done when: lint and typecheck clean; the new tests and `__tests__/infra/cronJobs.test.ts` green.
@@ -299,6 +302,9 @@ commits each wave. Do not touch files outside your task's list.
       the ADR's own format; do not rewrite its decision.
     - Runbooks: the `plan-settle` registration (dev now, prod when plans go on), the dry run's new
       answer and key check, the removal record and its 45-day drop, the payer-mismatch refusal.
+      `plans-and-billing.md` (about :300–330) still shows the old plan-trials example JSON and says
+      "a dry run stops here: every other count is 0": replace with the dry run's and apply's real
+      answers (read `web/app/api/cron/plan-trials/route.ts`).
       `manual-infrastructure.md` :277 and :283 list the cron jobs: add plan-settle.
     - Data model: `billing_usage/{siteId}.report`, `tridant_site_removals/{siteId}`,
       `plan_accounts.trialUsed`. Glossary "Trial": once per account and per organization.
@@ -319,7 +325,10 @@ commits each wave. Do not touch files outside your task's list.
       `e2e/helpers/plans.ts` that writes it on `e2e_entitlements/site:{id}` (with `orgId` matching
       the account's), since `siteSeedToAnswer` maps it to `trial_ends_at`.
     - Switching a site billed under another organization shows the payer-mismatch message.
-    - Deleting a billed site logs `removeSite` in `e2e_billing_calls`, answered `site_running`.
+    - Deleting a billed site logs `removeSite` in `e2e_billing_calls`, answered `site_running`
+      (the fake logs `{ fn: 'removeSite', siteId, answer }`). Under e2e `tridantConfigured()` is
+      true, so that delete also leaves a `tridant_site_removals/{siteId}` record: make
+      `clearPlanState` in `e2e/helpers/plans.ts` clear that collection (and assert the record).
     - The `used` trial line, seeded through `e2e_billing_config/trial.trialUsed`.
     - Update `COVERAGE.md`.
   - Done when: the plans specs pass locally (`npm run e2e -- e2e/specs/plans`); if this box's
@@ -349,3 +358,16 @@ commits each wave. Do not touch files outside your task's list.
   `siteBilling.stranded.test.ts` build `UsageOutcome`/`Plan` literals without the new fields
   (tasks 3.1, 2.1); the `stopSite` mocks in transfer, deleteSite and stranded tests forward only
   `siteId` (2.1, 2.3 widen them); no e2e spec seeds top-level `founders`.
+- Wave 2 done (2.1–2.4). /verify: standards and spec pass, low findings fixed: one
+  `stopOpenBilling` in siteBilling serves the stop before delete and the removal sweep;
+  `payingOwner` serves `liveBilling` and the stranded repair; the stranded repair closes the
+  record, with no second stop, when the re-read shows no billing; the batch prime skips a site
+  invalidated during its call (`invalidatedAt`) and shares `store()` with `cached()`;
+  plan-trials problem titles lowercase. Orchestrator added: `openapi.yaml` `used` status, a
+  `recordTrialUsed` round trip in `planAccounts.server.test.ts`, the `used` card test. Decisions
+  taken by the tasks (accepted): founders follow the product when the answer names none; the
+  stranded repair waits a run when the re-read fails; the `used` card reads "no pro trial";
+  the sweep keeps every record while tridant is not configured. For 3.1: mock factories of
+  `@/lib/tridantEntitlements.server` and `@/lib/tridantSiteRemoval.server` in planUsage tests
+  need `primeSiteEntitlements` / `sweepSiteRemovals`; `planUsage.server.test.ts` builds
+  `Entitlements`/`UsageOutcome` literals without the new fields.

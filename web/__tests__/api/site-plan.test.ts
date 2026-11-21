@@ -155,9 +155,16 @@ describe('who may read a site\'s plan', () => {
   });
 });
 
+/** tridant's answer for a site billed per site, with its billing block changed. */
+const billedAs = (base: typeof PRO_ENTITLEMENTS, billing: Partial<NonNullable<typeof PRO_ENTITLEMENTS.billing>>) => ({
+  ...base,
+  billing: { ...base.billing!, ...billing },
+});
+
 describe('what the plan says', () => {
   it('describes a billed pro site with its billing and its period', async () => {
     stageSite({ billing: { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: null, updatedAt: 'then' } });
+    mockGetSiteEntitlements.mockResolvedValue(billedAs(PRO_ENTITLEMENTS, { founders: true }));
 
     const { body } = await parseResponse(await get());
 
@@ -175,6 +182,25 @@ describe('what the plan says', () => {
     });
     // a billed site locks no machine, so the owner's free sites are not counted.
     expect(mockOwnerFreeMachines).not.toHaveBeenCalled();
+  });
+
+  // tridant bills what it bills; the record only says who pays.
+  it('shows the tier, rate and end tridant bills over a record that says otherwise', async () => {
+    stageSite({ billing: { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null } });
+    mockGetSiteEntitlements.mockResolvedValue(billedAs(PRO_ENTITLEMENTS, { founders: true, endsAt: ENDS_AT }));
+
+    const { body } = await parseResponse(await get());
+
+    expect(body.billing).toEqual({ tier: 'pro', founders: true, endsAt: ENDS_AT });
+  });
+
+  it("keeps the record's tier and rate when tridant's answer names no product", async () => {
+    stageSite({ billing: { tier: 'core', founders: true, payerUid: SITE_OWNER, endsAt: null } });
+    mockGetSiteEntitlements.mockResolvedValue(billedAs(PRO_ENTITLEMENTS, { productId: null, endsAt: ENDS_AT }));
+
+    const { body } = await parseResponse(await get());
+
+    expect(body.billing).toEqual({ tier: 'core', founders: true, endsAt: ENDS_AT });
   });
 
   it('keeps who pays out of the answer', async () => {
@@ -232,7 +258,7 @@ describe('what the plan says', () => {
 
   it('shows when a stopped site\'s billing ends', async () => {
     stageSite({ billing: { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: ENDS_AT } });
-    mockGetSiteEntitlements.mockResolvedValue(CORE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(billedAs(CORE_ENTITLEMENTS, { endsAt: ENDS_AT }));
 
     const { body } = await parseResponse(await get());
 

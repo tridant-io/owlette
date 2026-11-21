@@ -20,6 +20,8 @@ export interface PlanAccount {
   trialEndsAt: number | null;
   orgId: string | null;
   linkRequired: boolean;
+  /** tridant refused the trial: this payer already had one, on an organization since closed. */
+  trialUsed: boolean;
   trialError: string | null;
   claimedAt: number | null;
 }
@@ -42,6 +44,7 @@ function toAccount(data: Record<string, unknown>): PlanAccount {
     trialEndsAt: num(data.trialEndsAt),
     orgId: str(data.orgId),
     linkRequired: data.linkRequired === true,
+    trialUsed: data.trialUsed === true,
     trialError: str(data.trialError),
     claimedAt: num(data.claimedAt),
   };
@@ -106,6 +109,18 @@ export async function recordTrial(uid: string, { orgId, endsAtMs }: { orgId: str
 export async function recordSubscribed(uid: string): Promise<void> {
   await accountRef(uid).set(
     { trialStartedAt: Date.now(), trialError: null, updatedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+}
+
+/**
+ * tridant refused a trial because this payer already had one (`trial_already_used`): no
+ * trial, ever. settles the claim like `recordSubscribed`; with no trial end, no trial runs
+ * and usage counts from the period start.
+ */
+export async function recordTrialUsed(uid: string): Promise<void> {
+  await accountRef(uid).set(
+    { trialStartedAt: Date.now(), trialUsed: true, trialError: null, updatedAt: FieldValue.serverTimestamp() },
     { merge: true },
   );
 }

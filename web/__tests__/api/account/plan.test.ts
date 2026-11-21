@@ -157,6 +157,7 @@ const account = (over: Partial<PlanAccount> = {}): PlanAccount => ({
   trialEndsAt: null,
   orgId: null,
   linkRequired: false,
+  trialUsed: false,
   trialError: null,
   claimedAt: null,
   ...over,
@@ -551,6 +552,23 @@ describe('GET /api/account/plan', () => {
     const res = await getPlan();
 
     expect(res.body.trial).toEqual({ status: 'ended', endsAt: null });
+  });
+
+  it.each([
+    ['the account records it', { status: 'already_started' }, account({ trialStartedAt: MONTH_START, trialUsed: true })],
+    ['tridant just refused the trial and the account read came back empty', { status: 'trial_used' }, null],
+  ])('answers used, not ended, when %s: no trial covers the free site', async (_case, trial, stored) => {
+    mockEnsureTrial.mockResolvedValue(trial);
+    mockGetPlanAccount.mockResolvedValue(stored);
+
+    const res = await getPlan();
+
+    expect(res.body).toMatchObject({
+      trial: { status: 'used', endsAt: null },
+      sites: [FREE_SITE],
+      free: FREE_ONE_OF_ONE,
+      siteCreation: LOBBY_TAKEN,
+    });
   });
 
   it('answers none for a verified account whose trial has not started', async () => {

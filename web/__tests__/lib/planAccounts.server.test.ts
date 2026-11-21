@@ -42,6 +42,7 @@ import {
   recordSubscribed,
   recordTrial,
   recordTrialError,
+  recordTrialUsed,
 } from '@/lib/planAccounts.server';
 
 beforeEach(() => {
@@ -82,6 +83,20 @@ describe('plan_accounts', () => {
     await recordSubscribed('u1');
     expect(await getPlanAccount('u1')).toMatchObject({ orgId: 'org_9', trialEndsAt: null, trialError: null });
     expect(await claimTrialStart('u1', Date.now() + 10 * TRIAL_CLAIM_WINDOW_MS)).toBe(false);
+  });
+
+  it('settles an account whose trial was used on an earlier tridant account, with no end', async () => {
+    await recordTrialError('u1', 'boom');
+    await recordTrialUsed('u1');
+    const account = await getPlanAccount('u1');
+    expect(account).toMatchObject({ trialUsed: true, trialEndsAt: null, trialError: null });
+    expect(account?.trialStartedAt).toEqual(expect.any(Number));
+    expect(await claimTrialStart('u1', Date.now() + 10 * TRIAL_CLAIM_WINDOW_MS)).toBe(false);
+  });
+
+  it('reads trialUsed as false for an account that never hit it', async () => {
+    await recordOrg('u1', 'org_9');
+    expect((await getPlanAccount('u1'))?.trialUsed).toBe(false);
   });
 
   it('records an org without starting a trial', async () => {
