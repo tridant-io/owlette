@@ -14,6 +14,7 @@ import { TextDecoder } from 'node:util';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import PlanSettingsPage from '@/app/settings/plan/page';
 import type { AccountPlanOn, AccountPlanResponse, AccountPlanSite } from '@/lib/planResponse';
+import { PRICING_FACTS } from '@/lib/product-facts';
 import { toast } from '@/lib/toast';
 
 // jsdom has no TextDecoder.
@@ -113,12 +114,12 @@ beforeEach(() => {
 });
 
 describe('/settings/plan', () => {
-  it('says plans are not active during beta when they are off, and nothing else', () => {
+  it('says plans are not active before the free period ends when they are off, and nothing else', () => {
     mockSearch = new URLSearchParams('link=failed&code=state_missing');
     show(OFF);
 
     expect(screen.getByTestId('plans-not-active')).toHaveTextContent(
-      "plans aren't active during beta, so every feature is included.",
+      `plans aren't active before ${PRICING_FACTS.freeUntil}, so every feature is included.`,
     );
     expect(screen.queryByTestId('trial-card')).not.toBeInTheDocument();
     expect(screen.queryByTestId('free-usage')).not.toBeInTheDocument();

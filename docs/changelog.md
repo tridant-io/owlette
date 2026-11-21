@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — owlette is free until 1 April 2027
+
+every feature stays free for everyone, and nobody is billed, until 1 April 2027. the pricing page, the faq, the plans docs and the API reference now give that date where they said "free during the beta". after that date, every account starts with the 14-day pro trial, and owlette free stays free. owlette is still in beta. see [plans](https://owlette.app/docs/plans).
+
 ### fixed — panels slide open and closed
 
 the **log tail** on an issue, a key's details under **api keys**, a webhook's **recent deliveries**, a talon's **recent runs**, and a roost's **contents**, **targets** and **version history** opened and closed in one jump, and now slide, as the rows on the activity, logs and deployments pages do.

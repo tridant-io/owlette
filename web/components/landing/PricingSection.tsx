@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Check } from 'lucide-react';
 import {
   AFTER_BETA,
+  FREE_PERIOD,
   FREE_SCOPE,
   INCLUDED_STORAGE,
   PRICING_FACTS,
@@ -51,7 +52,7 @@ interface TierCardProps {
   name: string;
   price: string;
   unit?: string;
-  /** a list price is struck while beta makes it free; owlette free has none to strike. */
+  /** a list price is struck while the free period makes it free; owlette free has none to strike. */
   struck?: boolean;
   note?: string;
   features: TierFeature[];
@@ -65,7 +66,7 @@ function TierCard({
   price,
   unit,
   struck = true,
-  note = 'free during beta',
+  note = FREE_PERIOD,
   features,
   highlighted = false,
   preludeNote,
@@ -181,7 +182,7 @@ export function PricingSection() {
             name="owlette free"
             price="free"
             struck={false}
-            note="after beta, too"
+            note={`after ${PRICING_FACTS.freeUntil}, too`}
             features={freeFeatures}
           />
           <TierCard

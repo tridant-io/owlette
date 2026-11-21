@@ -10,6 +10,7 @@ import {
   FEATURES,
   PRICING,
   PRICE_LINE,
+  FREE_PERIOD,
   AFTER_BETA,
   MAKER,
   GUARDRAILS,
@@ -44,7 +45,7 @@ ${featureLines}
 
 ## Pricing
 
-- Free during the beta.
+- ${FREE_PERIOD}.
 - ${AFTER_BETA}
 ${pricingLines}
 
