@@ -3,10 +3,11 @@
 /**
  * GET /api/account/plan — the signed-in user's account as an owner who pays for
  * sites. pins the session-only auth (agents refused), the off answer that reads
- * nothing, the lazy trial start and the trial states, each owned site's plan,
- * billing pointer, period and usage window, the free counts and live machines,
- * and that a failed trial start, founders read or usage count only costs its
- * own field.
+ * nothing, the lazy trial start and the trial states, a trial end tridant id
+ * moved, each owned site's plan, billing (tridant's answer, the pointer as
+ * fallback), period and usage window, the free counts and live machines, and
+ * that a failed trial start, founders read or usage count only costs its own
+ * field.
  */
 
 import {
@@ -53,14 +54,18 @@ jest.mock('@/lib/planTrial.server', () => ({
 }));
 
 const mockGetPlanAccount = jest.fn();
+const mockRecordTrialEnd = jest.fn();
 jest.mock('@/lib/planAccounts.server', () => ({
   getPlanAccount: (uid: string) => mockGetPlanAccount(uid),
+  recordTrialEnd: (...a: unknown[]) => mockRecordTrialEnd(...a),
   trialActive: jest.requireActual('@/lib/planAccounts.server').trialActive,
   billedFrom: jest.requireActual('@/lib/planAccounts.server').billedFrom,
+  movedTrialEnd: jest.requireActual('@/lib/planAccounts.server').movedTrialEnd,
 }));
 
 const mockFoundersRemaining = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
+  PRODUCT: jest.requireActual('@/lib/tridantBilling.server').PRODUCT,
   foundersRemaining: () => mockFoundersRemaining(),
 }));
 
@@ -148,6 +153,7 @@ import { GET } from '@/app/api/account/plan/route';
 const NOW = Date.UTC(2026, 10, 11, 12);
 const MONTH_START = Date.UTC(2026, 10, 1);
 const TRIAL_END = Date.UTC(2026, 10, 15);
+const EXTENDED_TRIAL_END = Date.UTC(2026, 10, 25);
 
 /** tridant's answer per site; a site not named here is one tridant does not know, so owlette free. */
 let mockEntitlements: Record<string, EntitlementsResult> = {};
@@ -157,6 +163,7 @@ const account = (over: Partial<PlanAccount> = {}): PlanAccount => ({
   trialEndsAt: null,
   orgId: null,
   linkRequired: false,
+  trialUsed: false,
   trialError: null,
   claimedAt: null,
   ...over,
@@ -207,6 +214,7 @@ beforeEach(() => {
   mockGetPlanAccount.mockResolvedValue(
     account({ trialStartedAt: MONTH_START, trialEndsAt: TRIAL_END, orgId: 'org_1' }),
   );
+  mockRecordTrialEnd.mockResolvedValue(undefined);
   mockFoundersRemaining.mockResolvedValue({ ok: true, core: 40, pro: null });
   mockActiveMachinesBetween.mockResolvedValue(1);
   delete process.env.TRIDANT_OIDC_ISSUER;
@@ -399,7 +407,7 @@ describe('GET /api/account/plan', () => {
     ]);
   });
 
-  it('answers billed sites with their pointer, period and usage since the period started', async () => {
+  it("answers billed sites with tridant's billing, period and usage since the period started", async () => {
     const firstPeriod = Date.UTC(2026, 10, 5);
     const periodEnd = Date.UTC(2026, 11, 1);
     mockGetPlanAccount.mockResolvedValue(
@@ -421,7 +429,10 @@ describe('GET /api/account/plan', () => {
       'site-c': { owner: 'u1', name: 'shed', machines: { 'kiosk-3': Date.UTC(2026, 8, 3) } },
     };
     mockEntitlements = {
-      'site-a': { ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, periodStart: firstPeriod } },
+      'site-a': {
+        ...PRO_ENTITLEMENTS,
+        billing: { ...PRO_ENTITLEMENTS.billing!, periodStart: firstPeriod, founders: true },
+      },
       'site-b': { ...CORE_ENTITLEMENTS, billing: { ...CORE_ENTITLEMENTS.billing!, endsAt: periodEnd } },
     };
     mockActiveMachinesBetween.mockImplementation(
@@ -490,7 +501,61 @@ describe('GET /api/account/plan', () => {
       billing: { tier: 'core', founders: true, payerUid: 'u1', endsAt: Date.UTC(2026, 9, 1) },
     };
 
-    expect((await getPlan()).body.foundersHeld).toEqual({ core: true, pro: false });
+    const { body } = await getPlan();
+    expect(body.foundersHeld).toEqual({ core: true, pro: false });
+    // tridant id bills it no longer, so the ended record is what the page shows: it has paid before.
+    expect(body.sites.find((s: { siteId: string }) => s.siteId === 'site-a').billing).toEqual({
+      tier: 'core',
+      founders: true,
+      endsAt: Date.UTC(2026, 9, 1),
+    });
+  });
+
+  it("shows tridant's tier, rate and end for a billed site over the pointer's", async () => {
+    const endsAt = Date.UTC(2026, 11, 1);
+    mockSites = {
+      'site-a': { owner: 'u1', name: 'lobby', billing: { tier: 'core', founders: false, payerUid: 'u1', endsAt: null } },
+    };
+    mockEntitlements = {
+      'site-a': { ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, founders: true, endsAt } },
+    };
+
+    const res = await getPlan();
+
+    expect(res.body.sites[0].billing).toEqual({ tier: 'pro', founders: true, endsAt });
+    expect(res.body.foundersHeld).toEqual({ core: false, pro: true });
+  });
+
+  it("keeps the pointer's tier and rate, with tridant's end, when the answer names no product owlette knows", async () => {
+    const endsAt = Date.UTC(2026, 11, 1);
+    mockSites = {
+      'site-a': { owner: 'u1', name: 'lobby', billing: { tier: 'core', founders: true, payerUid: 'u1', endsAt: null } },
+    };
+    mockEntitlements = {
+      'site-a': { ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, productId: null, endsAt } },
+    };
+
+    const res = await getPlan();
+
+    expect(res.body.sites[0].billing).toEqual({ tier: 'core', founders: true, endsAt });
+    expect(res.body.foundersHeld).toEqual({ core: true, pro: false });
+  });
+
+  it('shows the pointer for a site whose plan could not be read', async () => {
+    mockSites = {
+      'site-a': { owner: 'u1', name: 'lobby', machines: { 'kiosk-1': Date.UTC(2026, 8, 1) } },
+      'site-b': { owner: 'u1', name: 'annex', billing: { tier: 'pro', founders: true, payerUid: 'u1', endsAt: null } },
+    };
+    mockEntitlements = { 'site-b': { ok: false, reason: 'unreachable' } };
+
+    const res = await getPlan();
+
+    expect(res.body.sites[1]).toMatchObject({
+      tier: null,
+      reason: 'unreachable',
+      billing: { tier: 'pro', founders: true, endsAt: null },
+    });
+    expect(res.body.foundersHeld).toEqual({ core: false, pro: true });
   });
 
   it.each([
@@ -553,6 +618,23 @@ describe('GET /api/account/plan', () => {
     expect(res.body.trial).toEqual({ status: 'ended', endsAt: null });
   });
 
+  it.each([
+    ['the account records it', { status: 'already_started' }, account({ trialStartedAt: MONTH_START, trialUsed: true })],
+    ['tridant just refused the trial and the account read came back empty', { status: 'trial_used' }, null],
+  ])('answers used, not ended, when %s: no trial covers the free site', async (_case, trial, stored) => {
+    mockEnsureTrial.mockResolvedValue(trial);
+    mockGetPlanAccount.mockResolvedValue(stored);
+
+    const res = await getPlan();
+
+    expect(res.body).toMatchObject({
+      trial: { status: 'used', endsAt: null },
+      sites: [FREE_SITE],
+      free: FREE_ONE_OF_ONE,
+      siteCreation: LOBBY_TAKEN,
+    });
+  });
+
   it('answers none for a verified account whose trial has not started', async () => {
     mockEnsureTrial.mockResolvedValue({ status: 'busy' });
     mockGetPlanAccount.mockResolvedValue(account({ claimedAt: NOW }));
@@ -560,6 +642,66 @@ describe('GET /api/account/plan', () => {
     const res = await getPlan();
 
     expect(res.body).toMatchObject({ emailVerified: true, trial: { status: 'none', endsAt: null } });
+  });
+
+  it('records a trial tridant id extended and answers with it: the trial runs, and a bought site counts from the new end', async () => {
+    const bought = Date.UTC(2026, 10, 5);
+    // the recorded trial ended on the 3rd.
+    mockGetPlanAccount.mockResolvedValue(
+      account({ trialStartedAt: Date.UTC(2026, 9, 20), trialEndsAt: Date.UTC(2026, 10, 3), orgId: 'org_1' }),
+    );
+    mockSites = {
+      'site-a': { owner: 'u1', name: 'lobby' },
+      'site-b': { owner: 'u1', name: 'annex' },
+      'site-c': { owner: 'u1', name: 'yard' },
+      'site-d': { owner: 'u1', name: 'shed', billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null } },
+      'site-e': { owner: 'u1', name: 'barn' },
+    };
+    // the latest end among the trialing sites is the account's.
+    mockEntitlements = {
+      'site-a': { ...TRIAL_ENTITLEMENTS, trialEndsAt: Date.UTC(2026, 10, 20) },
+      'site-b': { ...TRIAL_ENTITLEMENTS, trialEndsAt: EXTENDED_TRIAL_END },
+      'site-c': { ...TRIAL_ENTITLEMENTS, trialEndsAt: Date.UTC(2026, 10, 18) },
+      'site-d': { ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, periodStart: bought } },
+    };
+
+    const res = await getPlan();
+
+    expect(mockRecordTrialEnd).toHaveBeenCalledTimes(1);
+    expect(mockRecordTrialEnd).toHaveBeenCalledWith('u1', EXTENDED_TRIAL_END);
+    expect(res.body.trial).toEqual({ status: 'active', endsAt: EXTENDED_TRIAL_END });
+    // with the trial over, the free site would be the one taken.
+    expect(res.body.siteCreation).toEqual(OPEN);
+    expect(mockActiveMachinesBetween).toHaveBeenCalledWith('site-d', EXTENDED_TRIAL_END, NOW);
+  });
+
+  it("answers with tridant's trial end when it cannot be recorded", async () => {
+    mockGetPlanAccount.mockResolvedValue(
+      account({ trialStartedAt: Date.UTC(2026, 9, 20), trialEndsAt: Date.UTC(2026, 10, 3), orgId: 'org_1' }),
+    );
+    mockEntitlements = { 'site-a': { ...TRIAL_ENTITLEMENTS, trialEndsAt: EXTENDED_TRIAL_END } };
+    mockRecordTrialEnd.mockRejectedValue(new Error('firestore down'));
+
+    const res = await getPlan();
+
+    expect(res.status).toBe(200);
+    expect(res.body.trial).toEqual({ status: 'active', endsAt: EXTENDED_TRIAL_END });
+  });
+
+  const onTrial = account({ trialStartedAt: MONTH_START, trialEndsAt: TRIAL_END, orgId: 'org_1' });
+  it.each([
+    ['its site sits under another organization', onTrial, 'org_2', EXTENDED_TRIAL_END],
+    ['it is the one recorded', onTrial, 'org_1', TRIAL_END],
+    ['the account has no organization recorded', { ...onTrial, orgId: null }, 'org_1', EXTENDED_TRIAL_END],
+    ['there is no plan account', null, 'org_1', EXTENDED_TRIAL_END],
+  ])('records no trial end, and answers the stored one, when %s', async (_case, stored, orgId, trialEndsAt) => {
+    mockGetPlanAccount.mockResolvedValue(stored);
+    mockEntitlements = { 'site-a': { ...TRIAL_ENTITLEMENTS, orgId, trialEndsAt } };
+
+    const res = await getPlan();
+
+    expect(mockRecordTrialEnd).not.toHaveBeenCalled();
+    expect(res.body.trial.endsAt).toBe(stored?.trialEndsAt ?? null);
   });
 
   it('still answers when the trial start, the auth and account reads, founders and a usage count all fail', async () => {
@@ -648,6 +790,8 @@ describe('GET /api/account/plan', () => {
     const res = await getPlan();
     expect(res.body.free).toMatchObject({ sitesUsed: 1 });
     expect(res.body.siteCreation).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'site-d', name: 'due' } });
+    // the record still shows, so the upgrade dialog knows the owner has paid before.
+    expect(res.body.sites[0].billing).toEqual({ tier: 'pro', founders: false, endsAt: null });
   });
 
   it('answers unverified from the trial start when the auth read fails', async () => {

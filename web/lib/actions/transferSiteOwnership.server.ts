@@ -192,7 +192,9 @@ async function handOverBilling(
     const running =
       typeof billing === 'object' && billing !== null && typeof (billing as { endsAt?: unknown }).endsAt !== 'number';
     if (running) {
-      const stopped = await stopSite(siteId);
+      // with the recorded payer: tridant refuses it (`payer_mismatch`) when they do not pay for the site.
+      const { payerUid } = billing as { payerUid?: unknown };
+      const stopped = await stopSite(siteId, typeof payerUid === 'string' ? payerUid : undefined);
       if (stopped.ok) {
         await siteRef.update({ 'billing.endsAt': stopped.endsAt, 'billing.updatedAt': FieldValue.serverTimestamp() });
         invalidateSiteEntitlements(siteId);

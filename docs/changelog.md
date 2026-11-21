@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — a site's billing reads what tridant bills
+
+where plans are on, a billed site's section in **site settings** → **billing** and its row on **settings** → **plan** show the plan, founders rate and end date tridant bills it at, not owlette's own copy. a trial that tridant extends shows its new end. an account whose trial already ran on an earlier tridant account, since closed, reads **no pro trial** and gets no second one. switching the plan of a site that tridant bills under another tridant account now says so and changes nothing. deleting a site also removes it from your tridant account once its last billing period is invoiced. a month's machine count is sent once more at 06:00 UTC the next morning, so a report missed on the last evening, or a machine online only in its last half hour, still reaches that month's bill. see [plans](https://owlette.app/docs/plans).
+
+if you self-host with plans on, register `GET /api/cron/plan-settle` on cron-job.org at `0 6 * * *` UTC with your `X-Cron-Secret`, beside `plan-daily`. the bulk trial start's dry run (`GET /api/cron/plan-trials`) now asks tridant what each account's trial would do and answers those counts, with a check of both tridant keys, and `?apply=1` answers 503 while the license key fails that check. see [web deployment](https://owlette.app/docs/setup/web-deployment).
+
 ### changed — owlette is free until 1 April 2027
 
 every feature stays free for everyone, and nobody is billed, until 1 April 2027. the pricing page, the faq, the plans docs and the API reference now give that date where they said "free during the beta". after that date, every account starts with the 14-day pro trial, and owlette free stays free. owlette is still in beta. see [plans](https://owlette.app/docs/plans).

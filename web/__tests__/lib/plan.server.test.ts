@@ -128,6 +128,7 @@ const enforced = (ent: Record<string, string>, standing = 'active', inGoodStandi
   ent,
   billing: null,
   orgId: null,
+  trialEndsAt: null,
 });
 
 const site = (owner: string, machines: string[] = []): FakeSite => ({ data: { owner }, machines });
@@ -270,6 +271,7 @@ describe('resolveSitePlan', () => {
       ent: FREE.ent,
       billing: null,
       orgId: null,
+      trialEndsAt: null,
     });
     expect(planTier(plan)).toBe('free');
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(false);
@@ -288,7 +290,13 @@ describe('resolveSitePlan', () => {
     mockAnswers.s1 = TRIAL;
     const plan = await resolveSitePlan('s1');
 
-    expect(plan).toMatchObject({ enforced: true, standing: 'trialing', inGoodStanding: true, billing: null });
+    expect(plan).toMatchObject({
+      enforced: true,
+      standing: 'trialing',
+      inGoodStanding: true,
+      billing: null,
+      trialEndsAt: TRIAL.trialEndsAt,
+    });
     expect(planTier(plan)).toBe('trial');
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(true);
   });
@@ -306,7 +314,14 @@ describe('resolveSitePlan', () => {
     mockAnswers.s1 = PRO;
     const plan = await resolveSitePlan('s1');
 
-    expect(plan).toMatchObject({ enforced: true, standing: 'active', inGoodStanding: true, billing: PRO.billing, orgId: 'org_1' });
+    expect(plan).toMatchObject({
+      enforced: true,
+      standing: 'active',
+      inGoodStanding: true,
+      billing: PRO.billing,
+      orgId: 'org_1',
+      trialEndsAt: null,
+    });
     expect(planTier(plan)).toBe('pro');
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(true);
   });

@@ -1,7 +1,7 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "plan_accounts", "billing_checkouts", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride", "machineIds", "machine scope", "machine_moves", "siteMove"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "plan_accounts", "billing_checkouts", "tridant_site_removals", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride", "machineIds", "machine scope", "machine_moves", "siteMove"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
@@ -86,10 +86,12 @@ firestore/
 |-- fleet_sessions/{tokenHash}
 |-- fleet_calls/{callId}
 |-- machine_moves/{sourceSiteId}:{machineId}
-|-- billing_usage/{siteId}/days/{YYYY-MM-DD}
+|-- billing_usage/{siteId}
+|   `-- days/{YYYY-MM-DD}
 |-- plan_snapshot/{siteId}
 |-- plan_accounts/{uid}
 |-- billing_checkouts/{sessionId}
+|-- tridant_site_removals/{siteId}
 `-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
 ```
 
@@ -105,7 +107,7 @@ the site. **access**: site members read; writes are server only.
 | --- | --- | --- |
 | `name` | string | site display name. |
 | `owner` | string | uid of the site's owner: the creator, moved by an ownership transfer. no rule consults it — access comes from `members` — but once [plans](/docs/plans) are enforced it names who pays for the site, and the only person who can change its billing. |
-| `billing` | map | present once the site has been billed: `{ tier, founders, payerUid, endsAt, updatedAt }`. `tier` is `core` or `pro`, `founders` whether it is billed at the founders rate, `payerUid` the owner who is billed, and `endsAt` the Unix ms the billing stops at, `null` while it runs. written by the server when the owner upgrades the site, switches its plan or stops its billing, and when ownership is transferred, and repaired by the daily job when it has fallen out of step with what is billed: written for a billed site that has none, and closed (`endsAt` set) once the plan service bills nothing for a site it says is billed. it records what is billed for the dashboard to show; the site's plan, and whether it is billed, come from the plan service, not from this field. |
+| `billing` | map | present once the site has been billed: `{ tier, founders, payerUid, endsAt, updatedAt }`. `tier` is `core` or `pro`, `founders` whether it is billed at the founders rate, `payerUid` the owner who is billed, and `endsAt` the Unix ms the billing stops at, `null` while it runs. written by the server when the owner upgrades the site, switches its plan or stops its billing, and when ownership is transferred, and repaired by the daily job when it has fallen out of step with what is billed: written for a billed site that has none, and closed (`endsAt` set) once the plan service bills nothing for a site it says is billed. the site's plan, and whether it is billed, come from the plan service, not from this field. while the plan service bills the site, the dashboard shows the plan, founders rate and end it answers. once it bills nothing, the site's billing section shows none, and the account's plan page shows this field. `payerUid` is kept only here. |
 | `createdAt` | timestamp | creation time. |
 | `timezone` | string | IANA timezone for site-scoped scheduling. |
 | `timeFormat` | string | `12h` or `24h`, the site's clock format. |
@@ -739,14 +741,16 @@ these are server only unless noted.
 
 ### plans
 
-four server-only collections, all of which fall through to the deny-all rule. a plan belongs to a site, so the first two are keyed by site and written by the daily `/api/cron/plan-daily` job at 23:30 UTC; the other two are keyed by account and by checkout. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
+five server-only collections, all of which fall through to the deny-all rule. a plan belongs to a site, so the first two are keyed by site and written by the daily `/api/cron/plan-daily` job at 23:30 UTC; the next two are keyed by account and by checkout, and the last by a deleted site. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
 
 | path | holds |
 | --- | --- |
 | `billing_usage/{siteId}/days/{YYYY-MM-DD}` | `{ machineIds, updatedAt }`: the site's machines whose `lastHeartbeat` fell in the 26 hours before the run, each recorded on the UTC day of its heartbeat as an array union, so a rerun adds nothing. a billing period's active machines are the distinct IDs across its days. documents older than 100 days are deleted. |
+| `billing_usage/{siteId}` | `report`, a billed site's last usage report: `{ periodStart, periodEnd, countedFrom, floor, machines, asOf, status, recorded, settled, at }`. `periodStart` and `periodEnd` are the billing period (Unix ms; `periodEnd` `null` when the plan service named none), `countedFrom` where the count starts (the period start, or the trial's end when that is later), `floor` the plan's minimum (3 on pro, else 0), `machines` the count sent with the floor applied, `asOf` the moment it was counted as of, `status` and `recorded` the plan service's answer, or why none came, `settled` whether the morning-after resend has landed, and `at` when the daily job wrote it. the daily job replaces it whole on each run; `/api/cron/plan-settle`, at 06:00 UTC the morning after the period ends, recounts the period to its last millisecond, sends it again and writes `settled`, `status`, `recorded`, `machines`, `asOf` and `settlesAt` (Unix ms, when the plan service closes the period's invoice) onto it. |
 | `plan_snapshot/{siteId}` | `{ enforced, control, roost, resolvedAt }`: the site's plan as last resolved, overwritten each run. Cloud Functions cannot ask the plan service, so the scheduled-rollout function reads this instead: a due rollout scheduled before `resolvedAt` is aborted, with the reason, when `enforced` is `true` and `control` or `roost` is `false`. no snapshot means allow. |
-| `plan_accounts/{uid}` | an account's trial and its link to a tridant account: `trialStartedAt` and `trialEndsAt` (Unix ms), `orgId` (the tridant account it is linked to), `linkRequired` (the email already has a tridant account, which has to be linked before a trial or an upgrade), `trialError` (why the last trial start failed), `claimedAt` (Unix ms, which keeps two requests from starting one trial twice) and `updatedAt`. written when the account first reads its plan, when it links a tridant account and when a checkout is confirmed. |
+| `plan_accounts/{uid}` | an account's trial and its link to a tridant account: `trialStartedAt` and `trialEndsAt` (Unix ms), `orgId` (the tridant account it is linked to), `linkRequired` (the email already has a tridant account, which has to be linked before a trial or an upgrade), `trialUsed` (the plan service refused the trial because this account had one on an earlier tridant account; no trial, ever), `trialError` (why the last trial start failed), `claimedAt` (Unix ms, which keeps two requests from starting one trial twice) and `updatedAt`. written when the account first reads its plan, when it links a tridant account and when a checkout is confirmed, and `trialEndsAt` again when the plan service moves the trial's end, as an extension does. |
 | `billing_checkouts/{sessionId}` | what a checkout was started for, so the return from it is matched to the right site and only the account that started it can confirm it: `uid`, `siteId`, `tier`, `founders`, `createdAt`. |
+| `tridant_site_removals/{siteId}` | a deleted site the plan service still holds: `{ siteId, requestedAt, attempts, lastCode }`. `requestedAt` is the Unix ms of the delete, `attempts` how often the daily job has retried the removal, and `lastCode` why the last try did not land (`site_running` while billing still runs on the site). written only when the plan service is configured and refuses the removal while something runs on the site, or does not answer. the daily job retries it, deletes it once the site is removed, and drops it with an error log after 45 days. |
 
 ---
 

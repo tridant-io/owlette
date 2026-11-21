@@ -19,6 +19,7 @@ import {
   __resetForTests,
   getSiteEntitlements,
   invalidateSiteEntitlements,
+  primeSiteEntitlements,
 } from '@/lib/tridantEntitlements.server';
 
 const LICENSE_KEY = 'tid_license_read_key';
@@ -63,6 +64,17 @@ const FREE_ENT_READ = {
 
 const PERIOD_START = Date.UTC(2026, 10, 1);
 const PERIOD_END = Date.UTC(2026, 11, 1);
+const TRIAL_END = Date.UTC(2026, 10, 25);
+
+// as plan.server.ts reads PRO_SITE's billing.
+const PRO_BILLING_READ = {
+  periodStart: PERIOD_START,
+  periodEnd: PERIOD_END,
+  endsAt: null,
+  cancelAtPeriodEnd: false,
+  productId: 'prd_owlette_pro',
+  founders: false,
+};
 
 const PRO_SITE = {
   subject: 'owlette:site-1',
@@ -74,6 +86,8 @@ const PRO_SITE = {
     current_period_end: PERIOD_END,
     cancel_at_period_end: false,
     ends_at: null,
+    product_id: 'prd_owlette_pro',
+    founders: false,
   },
   license_keys: ['OWLT-AAAAA'],
   standing: 'active',
@@ -84,7 +98,7 @@ const PRO_SITE = {
   resolved_at: '2026-11-11T00:00:00Z',
 };
 
-const TRIAL_SITE = { ...PRO_SITE, billing: undefined, standing: 'trialing' };
+const TRIAL_SITE = { ...PRO_SITE, billing: undefined, standing: 'trialing', trial_ends_at: TRIAL_END };
 
 const UNKNOWN_SITE = {
   subject: 'owlette:site-2',
@@ -163,7 +177,8 @@ describe('getSiteEntitlements', () => {
       ent: PRO_ENT_READ,
       epoch: 47,
       orgId: 'org_1',
-      billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+      billing: PRO_BILLING_READ,
+      trialEndsAt: null,
     });
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe('https://api-staging.tridant.io/v1/sites/owlette:site-1/entitlements?app=owlette');
@@ -192,6 +207,7 @@ describe('getSiteEntitlements', () => {
       epoch: 47,
       orgId: null,
       billing: null,
+      trialEndsAt: null,
     });
   });
 
@@ -208,10 +224,11 @@ describe('getSiteEntitlements', () => {
       epoch: 47,
       orgId: 'org_1',
       billing: null,
+      trialEndsAt: null,
     });
   });
 
-  it('reads a site under a trial as trialing with no billing period', async () => {
+  it('reads a site under a trial as trialing with no billing period, and the end of its trial', async () => {
     mockFetch.mockResolvedValue(reply(200, TRIAL_SITE));
 
     expect(await getSiteEntitlements('site-1')).toMatchObject({
@@ -221,6 +238,43 @@ describe('getSiteEntitlements', () => {
       ent: PRO_ENT_READ,
       orgId: 'org_1',
       billing: null,
+      trialEndsAt: TRIAL_END,
+    });
+  });
+
+  it('reads a trial end tridant sends as null, or not as a number, as null', async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, { ...TRIAL_SITE, trial_ends_at: null }));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({ standing: 'trialing', trialEndsAt: null });
+
+    mockFetch.mockResolvedValueOnce(reply(200, { ...TRIAL_SITE, trial_ends_at: '2026-11-25T00:00:00Z' }));
+    expect(await getSiteEntitlements('site-2')).toMatchObject({ standing: 'trialing', trialEndsAt: null });
+  });
+
+  it("carries a billed site's product and its founders rate", async () => {
+    mockFetch.mockResolvedValue(
+      reply(200, { ...PRO_SITE, billing: { ...PRO_SITE.billing, product_id: 'prd_owlette_core', founders: true } }),
+    );
+
+    expect(await getSiteEntitlements('site-1')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: 'prd_owlette_core', founders: true },
+    });
+  });
+
+  it('reads a billing block without a product or founders flag as null and false', async () => {
+    const billing = {
+      current_period_start: PERIOD_START,
+      current_period_end: PERIOD_END,
+      cancel_at_period_end: false,
+      ends_at: null,
+    };
+    mockFetch.mockResolvedValueOnce(reply(200, { ...PRO_SITE, billing }));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: null, founders: false },
+    });
+
+    mockFetch.mockResolvedValueOnce(reply(200, { ...PRO_SITE, billing: { ...billing, product_id: 7, founders: 'yes' } }));
+    expect(await getSiteEntitlements('site-2')).toMatchObject({
+      billing: { ...PRO_BILLING_READ, productId: null, founders: false },
     });
   });
 
@@ -396,14 +450,9 @@ describe('getSiteEntitlements', () => {
     });
 
     it('reads e2e_entitlements/site:{siteId} instead of calling tridant', async () => {
+      const billing = { ...PRO_BILLING_READ, productId: 'prd_owlette_core', founders: true };
       mockSeedGet.mockResolvedValue(
-        seed({
-          resolved: true,
-          standing: 'active',
-          ent: PRO_ENT,
-          orgId: 'org_e2e_u1',
-          billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
-        }),
+        seed({ resolved: true, standing: 'active', ent: PRO_ENT, orgId: 'org_e2e_u1', billing }),
       );
 
       expect(await getSiteEntitlements('site-1')).toEqual({
@@ -415,11 +464,39 @@ describe('getSiteEntitlements', () => {
         ent: PRO_ENT_READ,
         epoch: null,
         orgId: 'org_e2e_u1',
-        billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+        billing,
+        trialEndsAt: null,
       });
       expect(mockCollection).toHaveBeenCalledWith('e2e_entitlements');
       expect(mockDoc).toHaveBeenCalledWith('site:site-1');
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("maps a trialing seed's trialEndsAt", async () => {
+      mockSeedGet.mockResolvedValue(
+        seed({ resolved: true, standing: 'trialing', ent: PRO_ENT, orgId: 'org_e2e_u1', trialEndsAt: TRIAL_END }),
+      );
+
+      expect(await getSiteEntitlements('site-1')).toMatchObject({
+        standing: 'trialing',
+        billing: null,
+        trialEndsAt: TRIAL_END,
+      });
+    });
+
+    it('reads a billed seed without productId or founders as null and false', async () => {
+      mockSeedGet.mockResolvedValue(
+        seed({
+          resolved: true,
+          standing: 'active',
+          ent: PRO_ENT,
+          billing: { periodStart: PERIOD_START, periodEnd: PERIOD_END, endsAt: null, cancelAtPeriodEnd: false },
+        }),
+      );
+
+      expect(await getSiteEntitlements('site-1')).toMatchObject({
+        billing: { ...PRO_BILLING_READ, productId: null, founders: false },
+      });
     });
 
     it('works without tridant configured, and reads a seed with no billing or organization', async () => {
@@ -437,6 +514,7 @@ describe('getSiteEntitlements', () => {
         epoch: null,
         orgId: null,
         billing: null,
+        trialEndsAt: null,
       });
     });
 
@@ -484,5 +562,190 @@ describe('getSiteEntitlements', () => {
       mockSeedGet.mockRejectedValueOnce(new Error('emulator down'));
       expect(await getSiteEntitlements('site-1')).toEqual({ ok: false, reason: 'unreachable' });
     });
+  });
+});
+
+describe('primeSiteEntitlements', () => {
+  const BATCH_FAILED = '[tridant] batch entitlement read failed';
+
+  function batchReply(results: unknown[]) {
+    return reply(200, { results, max: 100 });
+  }
+
+  function sentSites(call: number): string[] {
+    return JSON.parse(mockFetch.mock.calls[call][1].body).sites;
+  }
+
+  function batchWarnings() {
+    return (logger.warn as jest.Mock).mock.calls.filter(([message]) => message === BATCH_FAILED);
+  }
+
+  it('posts the refs to /v1/sites/entitlements?app=owlette with the license key and a 15 s timeout', async () => {
+    const timeout = jest.spyOn(AbortSignal, 'timeout');
+    mockFetch.mockResolvedValue(batchReply([PRO_SITE, UNKNOWN_SITE]));
+
+    try {
+      await primeSiteEntitlements(['site-1', 'site-2']);
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    } finally {
+      timeout.mockRestore();
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('https://api-staging.tridant.io/v1/sites/entitlements?app=owlette');
+    expect(init.method).toBe('POST');
+    expect(init.headers.Authorization).toBe(`Bearer ${LICENSE_KEY}`);
+    expect(JSON.parse(init.body)).toEqual({ sites: ['owlette:site-1', 'owlette:site-2'] });
+  });
+
+  it('serves each primed site from the cache, as its own read would answer, with no second call', async () => {
+    mockFetch.mockResolvedValue(batchReply([PRO_SITE, UNKNOWN_SITE]));
+
+    expect(await primeSiteEntitlements(['site-1', 'site-2'])).toEqual({ primed: 2, failed: false });
+    expect(await getSiteEntitlements('site-1')).toEqual({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      graceUntil: null,
+      ent: PRO_ENT_READ,
+      epoch: 47,
+      orgId: 'org_1',
+      billing: PRO_BILLING_READ,
+      trialEndsAt: null,
+    });
+    expect(await getSiteEntitlements('site-2')).toMatchObject({ ok: true, resolved: false, ent: FREE_ENT_READ });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves out a site invalidated while the call was out, as its answer may predate the change', async () => {
+    mockFetch.mockImplementationOnce(async () => {
+      invalidateSiteEntitlements('site-1');
+      return batchReply([PRO_SITE, UNKNOWN_SITE]);
+    });
+
+    expect(await primeSiteEntitlements(['site-1', 'site-2'])).toEqual({ primed: 1, failed: false });
+    mockFetch.mockResolvedValue(reply(200, PRO_SITE));
+    await getSiteEntitlements('site-1');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a primed site for the same 60 s as a single read', async () => {
+    mockFetch.mockResolvedValue(batchReply([PRO_SITE]));
+    await primeSiteEntitlements(['site-1']);
+
+    now += 59_999;
+    await getSiteEntitlements('site-1');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    now += 1;
+    mockFetch.mockResolvedValue(reply(200, LAPSED_SITE));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({ standing: 'expired' });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('replaces a site already cached with the batch answer', async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, LAPSED_SITE));
+    await getSiteEntitlements('site-1');
+
+    mockFetch.mockResolvedValueOnce(batchReply([PRO_SITE]));
+    await primeSiteEntitlements(['site-1']);
+    expect(await getSiteEntitlements('site-1')).toMatchObject({ standing: 'active' });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends the ref unencoded and matches it against the subject tridant echoes', async () => {
+    mockFetch.mockResolvedValue(batchReply([{ ...PRO_SITE, subject: 'owlette:a/b?c' }]));
+
+    expect(await primeSiteEntitlements(['a/b?c'])).toEqual({ primed: 1, failed: false });
+    expect(sentSites(0)).toEqual(['owlette:a/b?c']);
+    await getSiteEntitlements('a/b?c');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips results whose subject does not match their position, and those sites read on their own', async () => {
+    mockFetch.mockResolvedValueOnce(batchReply([UNKNOWN_SITE, PRO_SITE]));
+    expect(await primeSiteEntitlements(['site-1', 'site-2'])).toEqual({ primed: 0, failed: false });
+
+    mockFetch.mockResolvedValueOnce(reply(200, PRO_SITE));
+    expect(await getSiteEntitlements('site-1')).toMatchObject({ resolved: true, standing: 'active' });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls[1][0]).toBe(
+      'https://api-staging.tridant.io/v1/sites/owlette:site-1/entitlements?app=owlette',
+    );
+  });
+
+  it('skips a malformed or missing result and primes the rest', async () => {
+    mockFetch.mockResolvedValueOnce(batchReply([{ ...PRO_SITE, ent: undefined }, UNKNOWN_SITE]));
+    expect(await primeSiteEntitlements(['site-1', 'site-2', 'site-3'])).toEqual({ primed: 1, failed: false });
+    expect(batchWarnings()).toHaveLength(0);
+
+    await getSiteEntitlements('site-2');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    mockFetch.mockResolvedValue(reply(200, LAPSED_SITE));
+    await getSiteEntitlements('site-1');
+    await getSiteEntitlements('site-3');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('primes nothing from a failed call and warns once with the chunk size', async () => {
+    mockFetch.mockResolvedValueOnce(reply(503, { error: 'unavailable' }));
+    expect(await primeSiteEntitlements(['site-1', 'site-2'])).toEqual({ primed: 0, failed: true });
+    expect(batchWarnings()).toEqual([
+      [BATCH_FAILED, { context: 'tridant', data: { size: 2, reason: 'unreachable' } }],
+    ]);
+
+    mockFetch.mockResolvedValueOnce(reply(200, PRO_SITE));
+    await getSiteEntitlements('site-1');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads an answer without a results list as a failed call', async () => {
+    mockFetch.mockResolvedValueOnce(reply(200, { max: 100 }));
+    expect(await primeSiteEntitlements(['site-1'])).toEqual({ primed: 0, failed: true });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(BATCH_FAILED, {
+      context: 'tridant',
+      data: { size: 1, reason: 'malformed_response' },
+    });
+  });
+
+  it('sends 100 sites per call, and a failed chunk leaves the others primed', async () => {
+    const siteIds = Array.from({ length: 250 }, (_, i) => `site-${i}`);
+    mockFetch.mockImplementation(async (_url: string, init: { body: string }) => {
+      const { sites } = JSON.parse(init.body) as { sites: string[] };
+      if (sites[0] === 'owlette:site-100') return reply(503, { error: 'unavailable' });
+      return batchReply(sites.map((subject) => ({ ...UNKNOWN_SITE, subject })));
+    });
+
+    expect(await primeSiteEntitlements(siteIds)).toEqual({ primed: 150, failed: true });
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(sentSites(0)).toEqual(siteIds.slice(0, 100).map((id) => `owlette:${id}`));
+    expect(sentSites(1)).toEqual(siteIds.slice(100, 200).map((id) => `owlette:${id}`));
+    expect(sentSites(2)).toEqual(siteIds.slice(200).map((id) => `owlette:${id}`));
+    expect(batchWarnings()).toEqual([
+      [BATCH_FAILED, { context: 'tridant', data: { size: 100, reason: 'unreachable' } }],
+    ]);
+
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue(reply(200, PRO_SITE));
+    await getSiteEntitlements('site-0');
+    await getSiteEntitlements('site-249');
+    expect(mockFetch).not.toHaveBeenCalled();
+    await getSiteEntitlements('site-150');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes no call for no sites', async () => {
+    expect(await primeSiteEntitlements([])).toEqual({ primed: 0, failed: false });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('does nothing under the e2e seam', async () => {
+    process.env.OWLETTE_E2E = '1';
+    expect(await primeSiteEntitlements(['site-1'])).toEqual({ primed: 0, failed: false });
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockSeedGet).not.toHaveBeenCalled();
   });
 });

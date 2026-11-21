@@ -37,12 +37,17 @@ import {
   getCheckout,
   getPlanAccount,
   markLinkRequired,
+  movedTrialEnd,
   recordCheckout,
   recordOrg,
   recordSubscribed,
   recordTrial,
+  recordTrialEnd,
   recordTrialError,
+  recordTrialUsed,
+  type PlanAccount,
 } from '@/lib/planAccounts.server';
+import type { Plan } from '@/lib/plan.server';
 
 beforeEach(() => {
   mockStore = new Map();
@@ -84,6 +89,20 @@ describe('plan_accounts', () => {
     expect(await claimTrialStart('u1', Date.now() + 10 * TRIAL_CLAIM_WINDOW_MS)).toBe(false);
   });
 
+  it('settles an account whose trial was used on an earlier tridant account, with no end', async () => {
+    await recordTrialError('u1', 'boom');
+    await recordTrialUsed('u1');
+    const account = await getPlanAccount('u1');
+    expect(account).toMatchObject({ trialUsed: true, trialEndsAt: null, trialError: null });
+    expect(account?.trialStartedAt).toEqual(expect.any(Number));
+    expect(await claimTrialStart('u1', Date.now() + 10 * TRIAL_CLAIM_WINDOW_MS)).toBe(false);
+  });
+
+  it('reads trialUsed as false for an account that never hit it', async () => {
+    await recordOrg('u1', 'org_9');
+    expect((await getPlanAccount('u1'))?.trialUsed).toBe(false);
+  });
+
   it('records an org without starting a trial', async () => {
     await recordOrg('u1', 'org_9');
     expect(await getPlanAccount('u1')).toMatchObject({ orgId: 'org_9', trialStartedAt: null, linkRequired: false });
@@ -94,6 +113,62 @@ describe('plan_accounts', () => {
     await recordOrg('u1', 'org_9');
     await recordTrialError('u1', 'boom');
     expect(await getPlanAccount('u1')).toMatchObject({ orgId: 'org_9', trialError: 'boom' });
+  });
+
+  it('records a moved trial end without disturbing the rest', async () => {
+    await recordTrial('u1', { orgId: 'org_1', endsAtMs: 5000 });
+    const started = (await getPlanAccount('u1'))?.trialStartedAt;
+    await recordTrialEnd('u1', 9000);
+    expect(await getPlanAccount('u1')).toMatchObject({ orgId: 'org_1', trialEndsAt: 9000, trialStartedAt: started });
+    expect(mockStore.get('plan_accounts/u1')?.updatedAt).toBe('__SERVER_TS__');
+  });
+});
+
+describe('movedTrialEnd', () => {
+  const ACCOUNT: PlanAccount = {
+    trialStartedAt: 1000,
+    trialEndsAt: 5000,
+    orgId: 'org_1',
+    linkRequired: false,
+    trialUsed: false,
+    trialError: null,
+    claimedAt: null,
+  };
+  const planOf = (orgId: string | null, trialEndsAt: number | null, standing = 'trialing'): Plan => ({
+    enforced: true,
+    resolved: true,
+    standing,
+    inGoodStanding: true,
+    ent: {},
+    billing: null,
+    orgId,
+    trialEndsAt,
+  });
+
+  it('answers the end tridant id moved the trial to', () => {
+    expect(movedTrialEnd([planOf('org_1', 9000)], ACCOUNT)).toBe(9000);
+  });
+
+  it('answers null when the end is the recorded one', () => {
+    expect(movedTrialEnd([planOf('org_1', 5000)], ACCOUNT)).toBeNull();
+  });
+
+  it('ignores a site trialing under another organization', () => {
+    expect(movedTrialEnd([planOf('org_2', 9000)], ACCOUNT)).toBeNull();
+  });
+
+  it('answers null for an account with no organization, or none at all', () => {
+    expect(movedTrialEnd([planOf('org_1', 9000)], { ...ACCOUNT, orgId: null })).toBeNull();
+    expect(movedTrialEnd([planOf('org_1', 9000)], null)).toBeNull();
+  });
+
+  it('ignores a site that is not trialing, and plans that are off', () => {
+    expect(movedTrialEnd([planOf('org_1', 9000, 'active'), { enforced: false, reason: 'unreachable' }], ACCOUNT)).toBeNull();
+  });
+
+  it('answers the latest end among the account’s own trialing sites', () => {
+    const plans = [planOf('org_1', 7000), planOf('org_1', 9000), planOf('org_2', 12000), planOf('org_1', null)];
+    expect(movedTrialEnd(plans, ACCOUNT)).toBe(9000);
   });
 });
 

@@ -31,6 +31,7 @@ const mockRecordTrial = jest.fn();
 const mockRecordSubscribed = jest.fn();
 const mockMarkLink = jest.fn();
 const mockRecordError = jest.fn();
+const mockRecordTrialUsed = jest.fn();
 jest.mock('@/lib/planAccounts.server', () => ({
   getPlanAccount: (...a: unknown[]) => mockGetAccount(...a),
   claimTrialStart: (...a: unknown[]) => mockClaim(...a),
@@ -38,6 +39,7 @@ jest.mock('@/lib/planAccounts.server', () => ({
   recordSubscribed: (...a: unknown[]) => mockRecordSubscribed(...a),
   markLinkRequired: (...a: unknown[]) => mockMarkLink(...a),
   recordTrialError: (...a: unknown[]) => mockRecordError(...a),
+  recordTrialUsed: (...a: unknown[]) => mockRecordTrialUsed(...a),
 }));
 
 const mockStartTrial = jest.fn();
@@ -60,6 +62,7 @@ const account = (over: Record<string, unknown> = {}) => ({
   trialEndsAt: null,
   orgId: null,
   linkRequired: false,
+  trialUsed: false,
   trialError: null,
   claimedAt: null,
   ...over,
@@ -172,6 +175,21 @@ describe('ensureTrial', () => {
     expect(mockRecordSubscribed).toHaveBeenCalledWith('u1');
     expect(mockRecordTrial).not.toHaveBeenCalled();
     expect(mockRecordError).not.toHaveBeenCalled();
+  });
+
+  it('settles trial_already_used as a used trial, which the next read does not retry', async () => {
+    mockStartTrial.mockResolvedValue({ ok: false, reason: 'rejected', status: 409, code: 'trial_already_used' });
+    expect(await ensureTrial('u1')).toEqual({ status: 'trial_used' });
+    expect(mockRecordTrialUsed).toHaveBeenCalledWith('u1');
+    expect(mockRecordTrial).not.toHaveBeenCalled();
+    expect(mockRecordSubscribed).not.toHaveBeenCalled();
+    expect(mockRecordError).not.toHaveBeenCalled();
+    expect(mockPushSite).not.toHaveBeenCalled();
+
+    // what recordTrialUsed leaves on the account.
+    mockGetAccount.mockResolvedValue(account({ trialStartedAt: 1, trialUsed: true }));
+    expect(await ensureTrial('u1')).toEqual({ status: 'already_started' });
+    expect(mockStartTrial).toHaveBeenCalledTimes(1);
   });
 
   it('records an upstream failure and does not throw', async () => {

@@ -11,6 +11,7 @@
 import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import type { Plan } from '@/lib/plan.server';
 
 /** a claim younger than this blocks another trial start, so concurrent reads start one. */
 export const TRIAL_CLAIM_WINDOW_MS = 60 * 1000;
@@ -20,6 +21,8 @@ export interface PlanAccount {
   trialEndsAt: number | null;
   orgId: string | null;
   linkRequired: boolean;
+  /** tridant refused the trial: this payer already had one, on an organization since closed. */
+  trialUsed: boolean;
   trialError: string | null;
   claimedAt: number | null;
 }
@@ -42,6 +45,7 @@ function toAccount(data: Record<string, unknown>): PlanAccount {
     trialEndsAt: num(data.trialEndsAt),
     orgId: str(data.orgId),
     linkRequired: data.linkRequired === true,
+    trialUsed: data.trialUsed === true,
     trialError: str(data.trialError),
     claimedAt: num(data.claimedAt),
   };
@@ -65,6 +69,22 @@ export function trialActive(account: PlanAccount | null, now: number = Date.now(
 export function billedFrom(periodStart: number, account: PlanAccount | null): number {
   const trialEndsAt = account?.trialEndsAt ?? null;
   return trialEndsAt === null ? periodStart : Math.max(periodStart, trialEndsAt);
+}
+
+/**
+ * tridant id's trial end for the account when it is not the recorded one, as after
+ * an extension: the latest among the sites trialing under the account's own
+ * organization, since a transferred site can still sit under its previous owner's.
+ */
+export function movedTrialEnd(plans: Plan[], account: PlanAccount | null): number | null {
+  if (!account?.orgId) return null;
+  let latest: number | null = null;
+  for (const plan of plans) {
+    if (plan.enforced && plan.standing === 'trialing' && plan.orgId === account.orgId && plan.trialEndsAt !== null) {
+      latest = Math.max(latest ?? plan.trialEndsAt, plan.trialEndsAt);
+    }
+  }
+  return latest === account.trialEndsAt ? null : latest;
 }
 
 /** true when this caller may start the trial: none recorded, no link needed, no fresh claim. */
@@ -98,6 +118,11 @@ export async function recordTrial(uid: string, { orgId, endsAtMs }: { orgId: str
   );
 }
 
+/** tridant id moved the trial's end, as when it extends a trial. `endsAtMs` is epoch ms. */
+export async function recordTrialEnd(uid: string, endsAtMs: number): Promise<void> {
+  await accountRef(uid).set({ trialEndsAt: endsAtMs, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+}
+
 /**
  * tridant refused a trial because the account already pays (`already_subscribed`): there is
  * no trial to start, ever. settles the claim so nothing retries, and leaves the org id a
@@ -106,6 +131,18 @@ export async function recordTrial(uid: string, { orgId, endsAtMs }: { orgId: str
 export async function recordSubscribed(uid: string): Promise<void> {
   await accountRef(uid).set(
     { trialStartedAt: Date.now(), trialError: null, updatedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+}
+
+/**
+ * tridant refused a trial because this payer already had one (`trial_already_used`): no
+ * trial, ever. settles the claim like `recordSubscribed`; with no trial end, no trial runs
+ * and usage counts from the period start.
+ */
+export async function recordTrialUsed(uid: string): Promise<void> {
+  await accountRef(uid).set(
+    { trialStartedAt: Date.now(), trialUsed: true, trialError: null, updatedAt: FieldValue.serverTimestamp() },
     { merge: true },
   );
 }

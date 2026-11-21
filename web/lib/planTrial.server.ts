@@ -17,6 +17,7 @@ import {
   recordSubscribed,
   recordTrial,
   recordTrialError,
+  recordTrialUsed,
 } from '@/lib/planAccounts.server';
 import { invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
 import { pushSite, startTrial, type BillingResult } from '@/lib/tridantBilling.server';
@@ -31,13 +32,15 @@ export type TrialStatus =
   | 'started'
   | 'link_required'
   | 'subscribed'
+  | 'trial_used'
   | 'error';
 
 export type SiteRegistration = BillingResult<{ created: boolean; moved: boolean }>;
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-function nameFor(displayName: string | undefined, email: string): string {
+/** the payer name tridant gets with a trial, so the bulk dry run asks with the same one. */
+export function nameFor(displayName: string | undefined, email: string): string {
   return displayName || email.split('@')[0] || email;
 }
 
@@ -161,6 +164,10 @@ export async function ensureTrial(
     if (result.code === 'already_subscribed') {
       await recordSubscribed(uid);
       return { status: 'subscribed' };
+    }
+    if (result.code === 'trial_already_used') {
+      await recordTrialUsed(uid);
+      return { status: 'trial_used' };
     }
     const code = result.code ?? result.reason;
     await recordTrialError(uid, code);
