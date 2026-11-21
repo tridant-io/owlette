@@ -373,7 +373,7 @@ switch, and `trial.status: "active"` after it.
 
   Until then railway-prod and vercel-prod hold no `TRIDANT_LICENSE_KEY` and no `TRIDANT_OIDC_*`,
   and `node scripts/sync-env.mjs check` listing them as missing there is expected.
-- [ ] It is 2027-04-01 00:00 UTC or later: the public copy promises owlette free until then
+- [ ] It is 2027-04-01 00:00 UTC or later: the public copy promises every feature free until then
   (`PRICING_FACTS.freeUntil`).
 - [ ] The pricing copy no longer presents the free period as current. That covers `STATUS`,
   `PRICE_LINE`, `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "not enforced
