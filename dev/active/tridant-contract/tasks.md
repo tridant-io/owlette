@@ -1,5 +1,5 @@
 # tridant contract adoption — Tasks
-**Progress**: 8/13 complete
+**Progress**: 9/13 complete
 
 Every task: work in `C:\Users\admin\Documents\Git-restored\Owlette-tridant-contract-wt` and assert
 `git branch --show-current` is `feat/tridant-contract` before editing (`|| exit 1` on every `cd`).
@@ -260,7 +260,7 @@ commits each wave. Do not touch files outside your task's list.
 
 ## Wave 4: month-end retry
 
-- [ ] **Task 4.1: settle pass and its cron route (A2)**
+- [x] **Task 4.1: settle pass and its cron route (A2)**
   - Files: create `web/lib/planSettle.server.ts`, `web/app/api/cron/plan-settle/route.ts`,
     `web/__tests__/lib/planSettle.server.test.ts`, `web/__tests__/api/cron/plan-settle.test.ts`;
     modify `infra/cron-jobs.json`
@@ -310,6 +310,10 @@ commits each wave. Do not touch files outside your task's list.
       per account as well as once per organization (`trial_already_used`), (c) the site record is a
       fallback, no longer the only copy of tier and founders. Amend in place, dated 2026-11-20, in
       the ADR's own format; do not rewrite its decision.
+    - `web/content/docs/setup/web-deployment.mdx` (add to this task's files): its table of every
+      scheduled route (about :269–285, the one the registry's `$schema-note` points to) needs a
+      `plan-settle` row. The ADR 0018 bullet you amend also says "usage is reported once a day,
+      late in the UTC day": rewrite the whole bullet, not just the "after the 1st" clause.
     - Also stale since wave 3: `web/content/docs/setup/web-deployment.mdx:278`,
       `docs/runbooks/plans-and-billing.md` about :496 ("the last run of a month bills"); with plans
       off, tridant is still called by the removal sweep and the key check when configured. Document
@@ -400,3 +404,13 @@ commits each wave. Do not touch files outside your task's list.
   every site answers the same `trial_ends_at`. The saved report is written with
   `mergeFields: ['report']`. Full jest 593/593 (useSwoopSession's load flake passed alone, 87/87).
   The plan page now leaves out "billed as" on a site tridant no longer bills, as the site page does.
+- Wave 4 done (4.1). /verify: standards one low (registry said `recorded` stays the daily run's;
+  the pass now writes `report.recorded` too, registry and header fixed); spec two lows, both
+  fixed: `site_not_billed` on a resend settles (tridant closes a stopped site's billing item when
+  the invoice opens, so the month bills on the daily run's report), and a report counted from its
+  period end or later (the trial covered the period) is not a candidate. `inBatches` is shared
+  from planUsage. Verified against tridant source: `as_of = periodEnd - 1` lands as `recorded`,
+  `settling: true` whether or not tridant has rolled the subscription; tridant holds the invoice to
+  at least periodEnd + 24 h, so `(now - 24h, now]` is inside it. For the test-clock run with
+  Davor: a stopped site's final month cannot take a late report (its item closes when the invoice
+  opens), so the settle window does not cover it. Full jest 595/595.

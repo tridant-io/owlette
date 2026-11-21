@@ -10,7 +10,8 @@
  *   period's active machines are the union of its days.
  * - `billing_usage/{siteId}.report` = `{ periodStart, periodEnd, countedFrom,
  *   floor, machines, asOf, status, recorded, settled, at }`: a billed site's
- *   last report, what the settle pass resends.
+ *   last report, what the settle pass resends. the settle pass updates its
+ *   send fields in place and adds `settlesAt`.
  * - `plan_snapshot/{siteId}` = `{ enforced, control, roost, resolvedAt }`:
  *   functions can't call tridant id, so they gate on this instead.
  *
@@ -94,7 +95,8 @@ function fail(summary: PlanDailySummary, what: string, error: unknown): void {
   });
 }
 
-async function inBatches<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
+/** runs `run` over `items` ten at a time, answering in order. the settle pass shares it. */
+export async function inBatches<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = [];
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     results.push(...(await Promise.all(items.slice(i, i + BATCH_SIZE).map(run))));
