@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'October 20, 2026';
+  const lastUpdated = 'November 21, 2026';
   const router = useRouter();
 
   return (
@@ -127,6 +127,7 @@ export default function PrivacyPage() {
                 <li>detect, investigate, and prevent abuse, fraud, and security incidents</li>
                 <li>maintain audit records of privileged actions</li>
                 <li>improve and optimize our service</li>
+                <li>count visits to the website and see how its pages perform</li>
                 <li>respond to support requests</li>
                 <li>comply with legal obligations</li>
               </ul>
@@ -149,8 +150,9 @@ export default function PrivacyPage() {
                 </li>
                 <li>
                   <strong>legitimate interests</strong> (Art. 6(1)(f)) &mdash; to keep the service secure and
-                  reliable: abuse prevention, rate limiting, audit logging, and error diagnostics. we
-                  balance these interests against your rights and limit the data used accordingly.
+                  reliable: abuse prevention, rate limiting, audit logging, and error diagnostics; and
+                  to count visits to the website. we balance these interests against your rights and
+                  limit the data used accordingly.
                 </li>
                 <li>
                   <strong>consent</strong> (Art. 6(1)(a)) &mdash; for optional features you switch on, such as
@@ -214,6 +216,7 @@ export default function PrivacyPage() {
                 <li><strong>process and configuration data:</strong> until the machine is removed from your account.</li>
                 <li><strong>hoot conversations:</strong> until you delete them. deleting a conversation removes it from every listing and hides it from the interface; the underlying record is retained in a deleted state. ask us if you need it erased.</li>
                 <li><strong>deployment content:</strong> until you delete the associated release or roost.</li>
+                <li><strong>visit counts:</strong> as Cloudflare&apos;s policies set.</li>
                 <li><strong>audit and security logs:</strong> retained for as long as needed to investigate incidents and meet legal obligations.</li>
               </ul>
               <p className="mt-4">
@@ -254,7 +257,7 @@ export default function PrivacyPage() {
                     </tr>
                     <tr className="border-b border-border/50">
                       <td className="py-2 pr-4">Cloudflare</td>
-                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content and for the logs, screenshots and videos you attach to an issue</td>
+                      <td className="py-2 pr-4">DNS, load balancing, CDN, visit counting (Web Analytics), and object storage for deployment content and for the logs, screenshots and videos you attach to an issue</td>
                       <td className="py-2">global / USA</td>
                     </tr>
                     <tr className="border-b border-border/50">
@@ -400,7 +403,13 @@ export default function PrivacyPage() {
                 we use Firebase Authentication together with an encrypted session cookie to maintain
                 your login. if you choose to remember a device for two-factor authentication, we set an
                 additional cookie for that purpose. we do not use tracking cookies for advertising and
-                we do not run third-party advertising or analytics trackers.
+                we do not run third-party advertising trackers.
+              </p>
+              <p className="mt-4">
+                we count visits with Cloudflare Web Analytics. it sets no cookies, stores nothing in
+                your browser and does not identify or fingerprint you. it records the pages viewed, the
+                referring website, your country, your browser, operating system and type of device, and
+                how quickly pages load, and shows them to us only as totals.
               </p>
             </section>
 
