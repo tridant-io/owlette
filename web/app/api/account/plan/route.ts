@@ -29,7 +29,14 @@ import {
   type PairedMachine,
   type Plan,
 } from '@/lib/plan.server';
-import { billedFrom, getPlanAccount, trialActive, type PlanAccount } from '@/lib/planAccounts.server';
+import {
+  billedFrom,
+  getPlanAccount,
+  movedTrialEnd,
+  recordTrialEnd,
+  trialActive,
+  type PlanAccount,
+} from '@/lib/planAccounts.server';
 import type {
   AccountPlanFoundersHeld,
   AccountPlanResponse,
@@ -38,7 +45,7 @@ import type {
 } from '@/lib/planResponse';
 import { ensureTrial, type TrialStatus } from '@/lib/planTrial.server';
 import { activeMachinesBetween } from '@/lib/planUsage.server';
-import { billingSummary, readBillingPointer } from '@/lib/siteBilling.server';
+import { readBillingPointer, siteBillingView, type BillingPointer } from '@/lib/siteBilling.server';
 import { foundersRemaining } from '@/lib/tridantBilling.server';
 import { oidcConfigured } from '@/lib/tridantOidc.server';
 import { withRateLimit } from '@/lib/withRateLimit';
@@ -46,6 +53,8 @@ import { withRateLimit } from '@/lib/withRateLimit';
 interface OwnedSite {
   entry: AccountPlanSite;
   plan: Plan;
+  /** owlette's record of the site's billing, which can name one tridant id no longer answers. */
+  pointer: BillingPointer | null;
   /** read only for a free site. */
   machines: PairedMachine[];
   /** epoch ms; 0 when the site has none. */
@@ -78,10 +87,15 @@ function trialOf(start: TrialStatus, account: PlanAccount | null, now: number): 
 /**
  * the plans an owned site is billed at the founders rate on, or was: tridant id
  * keeps the rate for an organization that has a founders site of that plan, past
- * the cap. owlette knows it only from its records on the sites the account still owns.
+ * the cap. owlette knows it only from the sites the account still owns: the billing
+ * shown, else its record of a billing tridant id no longer answers.
  */
-function foundersHeld(sites: AccountPlanSite[]): AccountPlanFoundersHeld {
-  const held = (tier: 'core' | 'pro') => sites.some(({ billing }) => billing?.founders === true && billing.tier === tier);
+function foundersHeld(sites: OwnedSite[]): AccountPlanFoundersHeld {
+  const held = (tier: 'core' | 'pro') =>
+    sites.some(({ entry, pointer }) => {
+      const billing = entry.billing ?? pointer;
+      return billing?.founders === true && billing.tier === tier;
+    });
   return { core: held('core'), pro: held('pro') };
 }
 
@@ -98,22 +112,24 @@ function portalUrl(): string | null {
 
 async function readOwnedSite(
   site: FirebaseFirestore.QueryDocumentSnapshot,
+  plan: Plan,
   monthStart: number,
   account: PlanAccount | null,
   now: number,
 ): Promise<OwnedSite> {
   const data = site.data();
-  const plan = await resolveSitePlan(site.id, data);
   const pointer = readBillingPointer(data);
   const createdAt = timestampToMs(data.createdAt) ?? 0;
   const base = {
     siteId: site.id,
     name: typeof data.name === 'string' && data.name ? data.name : site.id,
-    billing: pointer ? billingSummary(pointer) : null,
+    // as the site plan answer shows it, so both pages agree.
+    billing: siteBillingView(data, plan).billing,
   };
   if (!plan.enforced) {
     return {
       plan,
+      pointer,
       machines: [],
       createdAt,
       entry: {
@@ -139,6 +155,7 @@ async function readOwnedSite(
   ]);
   return {
     plan,
+    pointer,
     machines,
     createdAt,
     entry: {
@@ -167,16 +184,21 @@ export const GET = withRateLimit(
         foundersRemaining(),
       ]);
       // after the trial start: it registers the caller's sites, which then read as trialing.
-      const [account, sites] = await Promise.all([
+      const [stored, sites] = await Promise.all([
         degrade('the plan account read', () => getPlanAccount(uid)),
         getAdminDb().collection('sites').where('owner', '==', uid).select('name', 'owner', 'billing', 'createdAt').get(),
       ]);
+      const plans = await Promise.all(sites.docs.map((site) => resolveSitePlan(site.id, site.data())));
+      // before the usage counts, which start at the trial's end.
+      const trialEnd = movedTrialEnd(plans, stored);
+      const account = stored && trialEnd !== null ? { ...stored, trialEndsAt: trialEnd } : stored;
+      if (trialEnd !== null) await degrade('the trial end record', () => recordTrialEnd(uid, trialEnd));
 
       const now = Date.now();
       const today = new Date(now);
       const monthStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
       const owned = await Promise.all(
-        sites.docs.map((site) => readOwnedSite(site, monthStart, account, now)),
+        sites.docs.map((site, index) => readOwnedSite(site, plans[index], monthStart, account, now)),
       );
 
       // every owned site unrestricted (tridant id failing, or a superadmin's sites) is plans off for this account.
@@ -207,7 +229,7 @@ export const GET = withRateLimit(
           trialActive(account, now),
         ),
         foundersRemaining: founders.ok ? { core: founders.core, pro: founders.pro } : null,
-        foundersHeld: foundersHeld(entries),
+        foundersHeld: foundersHeld(owned),
         linkAvailable: oidcConfigured(),
         portalUrl: portalUrl(),
         ...(missingKeys.length > 0 && { missingKeys }),

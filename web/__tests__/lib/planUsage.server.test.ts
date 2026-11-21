@@ -17,10 +17,12 @@ jest.mock('firebase-admin/firestore', () => ({
 }));
 
 let mockEnforced = false;
+let mockTridantConfigured = false;
 // tridant's answer per site, as the resolver turns it into a plan: a failed read is not enforced.
 const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/plan.server', () => ({
   plansEnforced: () => mockEnforced,
+  tridantConfigured: () => mockTridantConfigured,
   resolveSitePlan: async (siteId: string) => {
     const answer = await mockGetSiteEntitlements(siteId);
     return answer?.ok ? { enforced: true, ...answer } : { enforced: false, reason: answer?.reason ?? 'unreachable' };
@@ -29,7 +31,24 @@ jest.mock('@/lib/plan.server', () => ({
 
 const mockReportUsage = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
+  PRODUCT: { core: 'prd_owlette_core', pro: 'prd_owlette_pro' },
   reportUsage: (...args: unknown[]) => mockReportUsage(...args),
+}));
+
+// the batch read fills a cache the resolver mock never reads; here it only matters when it is called.
+const mockPrime = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  primeSiteEntitlements: (...args: unknown[]) => mockPrime(...args),
+}));
+
+const mockSweepRemovals = jest.fn();
+jest.mock('@/lib/tridantSiteRemoval.server', () => ({
+  sweepSiteRemovals: (...args: unknown[]) => mockSweepRemovals(...args),
+}));
+
+const mockCheckKeys = jest.fn();
+jest.mock('@/lib/tridant.server', () => ({
+  checkTridantKeys: () => mockCheckKeys(),
 }));
 
 const mockStopStranded = jest.fn();
@@ -42,10 +61,13 @@ jest.mock('@/lib/siteBilling.server', () => ({
 }));
 
 /** `plan_accounts/{uid}`, for the owner's trial end. */
-let mockAccounts: Record<string, { trialEndsAt: number | null }> = {};
+let mockAccounts: Record<string, { trialEndsAt: number | null; orgId?: string | null }> = {};
+const mockRecordTrialEnd = jest.fn();
 jest.mock('@/lib/planAccounts.server', () => ({
   getPlanAccount: async (uid: string) => mockAccounts[uid] ?? null,
+  recordTrialEnd: (...args: unknown[]) => mockRecordTrialEnd(...args),
   billedFrom: jest.requireActual('@/lib/planAccounts.server').billedFrom,
+  movedTrialEnd: jest.requireActual('@/lib/planAccounts.server').movedTrialEnd,
 }));
 
 // the reconcile has its own suite; here it only matters which sites reach it, and with what.
@@ -60,30 +82,50 @@ type FakeSite = { id: string; machines: Record<string, Doc> | 'fail'; data?: Doc
 let mockSites: FakeSite[] = [];
 /** billing_usage and plan_snapshot, by document path. */
 let mockStore = new Map<string, Doc>();
+/** document paths whose writes fail. */
+let mockFailWrites = new Set<string>();
 let mockSitePages = 0;
 /** the fields the sites query projects. */
 let mockSiteFields: string[] = [];
 
-function mockApplySet(path: string, data: Doc, options?: { merge?: boolean }) {
-  const prev = options?.merge ? mockStore.get(path) ?? {} : {};
+const mockIsMap = (value: unknown): value is Doc =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// as firestore merges: maps field by field, all the way down.
+function mockMerge(prev: Doc, data: Doc): Doc {
   const next: Doc = { ...prev };
   for (const [key, value] of Object.entries(data)) {
     const union = (value as { __arrayUnion?: unknown[] } | null)?.__arrayUnion;
     if (union) {
       const existing = Array.isArray(prev[key]) ? (prev[key] as unknown[]) : [];
       next[key] = [...existing, ...union.filter((e) => !existing.includes(e))];
+    } else if (mockIsMap(value) && mockIsMap(prev[key])) {
+      next[key] = mockMerge(prev[key], value);
     } else {
       next[key] = value;
     }
   }
-  mockStore.set(path, next);
+  return next;
+}
+
+type SetOptions = { merge?: boolean; mergeFields?: string[] };
+
+function mockApplySet(path: string, data: Doc, options?: SetOptions) {
+  if (mockFailWrites.has(path)) throw new Error('write refused');
+  const prev = mockStore.get(path) ?? {};
+  if (options?.mergeFields) {
+    // each named field is replaced whole; the rest of the doc stays.
+    mockStore.set(path, { ...prev, ...Object.fromEntries(options.mergeFields.map((field) => [field, data[field]])) });
+    return;
+  }
+  mockStore.set(path, mockMerge(options?.merge ? prev : {}, data));
 }
 
 function mockDocRef(path: string): Record<string, unknown> {
   return {
     id: path.split('/').pop(),
     path,
-    set: async (data: Doc, options?: { merge?: boolean }) => mockApplySet(path, data, options),
+    set: async (data: Doc, options?: SetOptions) => mockApplySet(path, data, options),
     delete: async () => {
       mockStore.delete(path);
     },
@@ -127,30 +169,31 @@ function mockCollectionRef(path: string): Record<string, unknown> {
 }
 
 function mockSiteSnap(site: FakeSite) {
+  return { id: site.id, data: () => site.data ?? {} };
+}
+
+/** `sites/{siteId}/machines`; a site not in `mockSites` has none. */
+function mockMachines(siteId: string) {
   return {
-    id: site.id,
-    data: () => site.data ?? {},
-    ref: {
-      collection: (name: string) => {
-        if (name !== 'machines') throw new Error(`unexpected subcollection ${name}`);
-        return {
-          select: () => ({
-            get: async () => {
-              if (site.machines === 'fail') throw new Error('machines read failed');
-              return {
-                docs: Object.entries(site.machines).map(([id, data]) => ({ id, data: () => data })),
-              };
-            },
-          }),
-        };
+    select: () => ({
+      get: async () => {
+        const machines = mockSites.find((site) => site.id === siteId)?.machines ?? {};
+        if (machines === 'fail') throw new Error('machines read failed');
+        return { docs: Object.entries(machines).map(([id, data]) => ({ id, data: () => data })) };
       },
-    },
+    }),
   };
 }
 
 function mockSitesQuery() {
   const state = { limit: Infinity, after: null as string | null };
   const query = {
+    doc: (siteId: string) => ({
+      collection: (name: string) => {
+        if (name !== 'machines') throw new Error(`unexpected subcollection ${name}`);
+        return mockMachines(siteId);
+      },
+    }),
     orderBy: (field: unknown) => {
       if (field !== '__name__') throw new Error('sites must page by document id');
       return query;
@@ -186,9 +229,11 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import logger from '@/lib/logger';
-import { activeMachinesBetween, ACTIVE_WINDOW_MS, runPlanDaily } from '@/lib/planUsage.server';
+import { activeMachinesBetween, ACTIVE_WINDOW_MS, runPlanDaily, stampSiteMachines } from '@/lib/planUsage.server';
+import type { TridantKeyCheck } from '@/lib/tridant.server';
 import type { UsageEntry, UsageOutcome } from '@/lib/tridantBilling.server';
-import type { Entitlements, EntitlementsResult } from '@/lib/tridantEntitlements.server';
+import type { Entitlements, EntitlementsResult, SiteBillingPeriod } from '@/lib/tridantEntitlements.server';
+import type { SiteRemovalSweep } from '@/lib/tridantSiteRemoval.server';
 
 // the scheduled slot: late in the UTC day.
 const NOW = new Date('2026-10-08T23:30:00.000Z');
@@ -196,6 +241,7 @@ const TODAY = '2026-10-08';
 const YESTERDAY = '2026-10-07';
 const HOUR_MS = 60 * 60 * 1000;
 const PERIOD_START = Date.UTC(2026, 9, 1);
+const PERIOD_END = Date.UTC(2026, 10, 1);
 
 const FREE: Entitlements = {
   ok: true,
@@ -207,8 +253,17 @@ const FREE: Entitlements = {
   epoch: null,
   orgId: null,
   billing: null,
+  trialEndsAt: null,
 };
-const BILLING = { periodStart: PERIOD_START, periodEnd: Date.UTC(2026, 10, 1), endsAt: null, cancelAtPeriodEnd: false };
+const BILLING: SiteBillingPeriod = {
+  periodStart: PERIOD_START,
+  periodEnd: PERIOD_END,
+  endsAt: null,
+  cancelAtPeriodEnd: false,
+  productId: 'prd_owlette_core',
+  founders: false,
+};
+const PRO_BILLING: SiteBillingPeriod = { ...BILLING, productId: 'prd_owlette_pro' };
 const CORE: Entitlements = {
   ...FREE,
   resolved: true,
@@ -221,10 +276,16 @@ const CORE: Entitlements = {
 const PRO: Entitlements = {
   ...CORE,
   ent: { 'owlette.control': '1', 'owlette.deployments': '1', 'owlette.roost': '1' },
+  billing: PRO_BILLING,
 };
 // a running trial reads pro, and is not billed.
-const TRIAL: Entitlements = { ...PRO, standing: 'trialing', billing: null };
+const TRIAL: Entitlements = { ...PRO, standing: 'trialing', billing: null, trialEndsAt: Date.UTC(2026, 9, 15) };
 const UNREACHABLE: EntitlementsResult = { ok: false, reason: 'unreachable' };
+const NO_REMOVALS: SiteRemovalSweep = { removed: 0, pending: 0, dropped: 0, errors: 0 };
+const GOOD_KEYS: TridantKeyCheck[] = [
+  { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+  { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+];
 
 function seenAgo(ms: number) {
   return { lastHeartbeat: { toMillis: () => NOW.getTime() - ms } };
@@ -243,17 +304,38 @@ beforeEach(() => {
   mockSites = [];
   mockAccounts = {};
   mockStore = new Map();
+  mockFailWrites = new Set();
   mockSitePages = 0;
   mockSiteFields = [];
   mockReconcile.mockReset();
+  mockRecordTrialEnd.mockReset();
+  mockRecordTrialEnd.mockResolvedValue(undefined);
   mockEnforced = false;
+  mockTridantConfigured = false;
   mockGetSiteEntitlements.mockReset();
   mockReportUsage.mockReset();
   mockReportUsage.mockImplementation(async (entries: UsageEntry[]) => ({
     ok: true,
-    results: entries.map(({ siteId }): UsageOutcome => ({ siteId, status: 'recorded', recorded: true })),
+    results: entries.map(
+      ({ siteId }): UsageOutcome => ({
+        siteId,
+        status: 'recorded',
+        recorded: true,
+        settling: false,
+        settlesAt: null,
+        periodStart: PERIOD_START,
+        periodEnd: PERIOD_END,
+      }),
+    ),
   }));
+  mockPrime.mockReset();
+  mockPrime.mockResolvedValue({ primed: 0, failed: false });
+  mockSweepRemovals.mockReset();
+  mockSweepRemovals.mockResolvedValue(NO_REMOVALS);
+  mockCheckKeys.mockReset();
+  mockCheckKeys.mockResolvedValue(GOOD_KEYS);
   jest.mocked(logger.warn).mockClear();
+  jest.mocked(logger.error).mockClear();
 });
 
 describe('runPlanDaily: active machines', () => {
@@ -469,9 +551,34 @@ describe('runPlanDaily: enforcement off', () => {
       });
     }
     expect(machineIds('s1')).toEqual(['m1']);
+    expect(mockPrime).not.toHaveBeenCalled();
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockReportUsage).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ machines: 1, snapshots: 2, reported: 0, recorded: 0, errors: 0 });
+  });
+});
+
+describe('runPlanDaily: batch entitlement read', () => {
+  it('reads each page of sites in one call before reading any site of it', async () => {
+    mockSites = Array.from({ length: 205 }, (_, i) => ({ id: `site-${String(i).padStart(3, '0')}`, machines: {} }));
+    plans({});
+
+    await runPlanDaily(NOW);
+
+    expect(mockPrime.mock.calls.map(([ids]) => [ids.length, ids[0], ids[ids.length - 1]])).toEqual([
+      [100, 'site-000', 'site-099'],
+      [100, 'site-100', 'site-199'],
+      [5, 'site-200', 'site-204'],
+    ]);
+    // every site of a page is read after its page's prime, and before the next page's.
+    const readOrder = (siteId: string) =>
+      mockGetSiteEntitlements.mock.invocationCallOrder[mockGetSiteEntitlements.mock.calls.findIndex(([id]) => id === siteId)];
+    const [first, second, third] = mockPrime.mock.invocationCallOrder;
+    expect(readOrder('site-000')).toBeGreaterThan(first);
+    expect(readOrder('site-099')).toBeLessThan(second);
+    expect(readOrder('site-100')).toBeGreaterThan(second);
+    expect(readOrder('site-199')).toBeLessThan(third);
+    expect(readOrder('site-200')).toBeGreaterThan(third);
   });
 });
 
@@ -570,6 +677,95 @@ describe('runPlanDaily: usage report', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  // the flags read pro on a site bought at core while its owner's trial runs.
+  it('floors by the billed product, not the flags', async () => {
+    plans({ core: { ...PRO, billing: BILLING }, 'pro-small': { ...CORE, billing: PRO_BILLING } });
+
+    await runPlanDaily(NOW);
+
+    expect(mockReportUsage).toHaveBeenCalledWith(
+      [
+        { siteId: 'core', machines: 1 },
+        { siteId: 'pro-small', machines: 3 },
+      ],
+      NOW.getTime(),
+    );
+  });
+
+  it('saves each billed site’s report with its outcome, for the settle pass', async () => {
+    mockReportUsage.mockResolvedValue({
+      ok: true,
+      results: [
+        { siteId: 'core', status: 'recorded', recorded: true },
+        { siteId: 'core-idle', status: 'site_not_billed', recorded: false },
+        { siteId: 'pro-big', status: 'recorded', recorded: true },
+        { siteId: 'pro-small', status: 'recorded', recorded: true },
+      ],
+    });
+
+    await runPlanDaily(NOW);
+
+    const period = { periodStart: PERIOD_START, periodEnd: PERIOD_END, countedFrom: PERIOD_START };
+    const run = { asOf: NOW.getTime(), settled: false, at: '__SERVER_TS__' };
+    expect(mockStore.get('billing_usage/pro-small')).toEqual({
+      report: { ...period, floor: 3, machines: 3, status: 'recorded', recorded: true, ...run },
+    });
+    expect(mockStore.get('billing_usage/core-idle')).toEqual({
+      report: { ...period, floor: 0, machines: 0, status: 'site_not_billed', recorded: false, ...run },
+    });
+    expect(mockStore.get('billing_usage/pro-big')?.report).toMatchObject({ floor: 3, machines: 4 });
+    // no billing period, nothing to resend.
+    for (const site of ['free', 'trial', 'unread']) expect(mockStore.has(`billing_usage/${site}`)).toBe(false);
+  });
+
+  it('saves every report with the reason, unrecorded, when the call failed outright', async () => {
+    mockReportUsage.mockResolvedValue({ ok: false, reason: 'not_configured' });
+
+    await runPlanDaily(NOW);
+
+    expect(mockStore.get('billing_usage/pro-small')).toEqual({
+      report: {
+        periodStart: PERIOD_START,
+        periodEnd: PERIOD_END,
+        countedFrom: PERIOD_START,
+        floor: 3,
+        machines: 3,
+        asOf: NOW.getTime(),
+        status: 'not_configured',
+        recorded: false,
+        settled: false,
+        at: '__SERVER_TS__',
+      },
+    });
+    for (const site of ['core', 'core-idle', 'pro-big']) {
+      expect(mockStore.get(`billing_usage/${site}`)?.report).toMatchObject({ status: 'not_configured', recorded: false });
+    }
+  });
+
+  it('replaces an earlier report whole and leaves the rest of the doc', async () => {
+    mockStore.set('billing_usage/core', {
+      report: { periodEnd: PERIOD_START, settled: true, settlesAt: PERIOD_START + 24 * HOUR_MS },
+      kept: true,
+    });
+
+    await runPlanDaily(NOW);
+
+    const doc = mockStore.get('billing_usage/core');
+    expect(doc?.kept).toBe(true);
+    expect(doc?.report).toMatchObject({ periodEnd: PERIOD_END, settled: false });
+    expect(doc?.report).not.toHaveProperty('settlesAt');
+  });
+
+  it('counts a report it could not save as one error and saves the others', async () => {
+    mockFailWrites.add('billing_usage/core');
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(summary).toMatchObject({ reported: 4, recorded: 4, errors: 1 });
+    expect(mockStore.has('billing_usage/core')).toBe(false);
+    expect(mockStore.get('billing_usage/core-idle')?.report).toMatchObject({ status: 'recorded' });
+  });
+
   // nothing in the trial is billed: a site bought during it is in a period that started at the purchase.
   it("counts a site bought during its owner's trial only from the trial's end", async () => {
     mockSites = [{ id: 'core', machines: { c1: seenAgo(HOUR_MS) }, data: { owner: 'u1' } }];
@@ -581,6 +777,10 @@ describe('runPlanDaily: usage report', () => {
     await runPlanDaily(NOW);
 
     expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
+    expect(mockStore.get('billing_usage/core')?.report).toMatchObject({
+      periodStart: PERIOD_START,
+      countedFrom: Date.UTC(2026, 9, 4, 12),
+    });
   });
 
   it("counts from the period start once the owner's trial ended before it", async () => {
@@ -592,6 +792,53 @@ describe('runPlanDaily: usage report', () => {
     await runPlanDaily(NOW);
 
     expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
+  });
+
+  describe('a trial tridant id extended', () => {
+    const STORED_END = Date.UTC(2026, 9, 4, 12);
+    const EXTENDED_END = Date.UTC(2026, 9, 6, 12);
+    // billed, and still under its owner's trial, which tridant id moved past the recorded end.
+    const EXTENDED: Entitlements = { ...CORE, standing: 'trialing', trialEndsAt: EXTENDED_END };
+
+    beforeEach(() => {
+      mockSites = [{ id: 'core', machines: { c1: seenAgo(HOUR_MS) }, data: { owner: 'u1' } }];
+      mockStore.set('billing_usage/core/days/2026-10-05', { machineIds: ['in-extension'] });
+      mockStore.set('billing_usage/core/days/2026-10-07', { machineIds: ['after-trial'] });
+      plans({ core: EXTENDED });
+    });
+
+    it('records the new end and counts from it', async () => {
+      mockAccounts = { u1: { trialEndsAt: STORED_END, orgId: 'org_1' } };
+
+      const summary = await runPlanDaily(NOW);
+
+      expect(mockRecordTrialEnd).toHaveBeenCalledTimes(1);
+      expect(mockRecordTrialEnd).toHaveBeenCalledWith('u1', EXTENDED_END);
+      expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
+      expect(mockStore.get('billing_usage/core')?.report).toMatchObject({ countedFrom: EXTENDED_END, machines: 2 });
+      expect(summary.errors).toBe(0);
+    });
+
+    it('still counts from the new end when it cannot record it, and counts the error', async () => {
+      mockAccounts = { u1: { trialEndsAt: STORED_END, orgId: 'org_1' } };
+      mockRecordTrialEnd.mockRejectedValue(new Error('write refused'));
+
+      const summary = await runPlanDaily(NOW);
+
+      expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
+      expect(summary).toMatchObject({ reported: 1, errors: 1 });
+    });
+
+    // a transferred site can still sit under its previous owner's organization, and that trial is not this owner's.
+    it('ignores the end of a trial under another organization', async () => {
+      mockAccounts = { u1: { trialEndsAt: STORED_END, orgId: 'org_2' } };
+
+      await runPlanDaily(NOW);
+
+      expect(mockRecordTrialEnd).not.toHaveBeenCalled();
+      expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 3 }], NOW.getTime());
+      expect(mockStore.get('billing_usage/core')?.report).toMatchObject({ countedFrom: STORED_END });
+    });
   });
 
   it('skips a billed site whose answer carries no period start', async () => {
@@ -651,6 +898,111 @@ describe('runPlanDaily: pruning', () => {
       'billing_usage/s1/days/2026-09-01',
       `billing_usage/s1/days/${TODAY}`,
     ]);
+  });
+
+  it('leaves a saved report alone', async () => {
+    const report = { periodEnd: PERIOD_END, settled: false };
+    mockStore.set('billing_usage/s1', { report });
+    mockStore.set('billing_usage/s1/days/2026-01-01', { machineIds: ['m1'] });
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(summary.pruned).toBe(1);
+    expect(mockStore.get('billing_usage/s1')).toEqual({ report });
+  });
+});
+
+describe('runPlanDaily: site removals and keys', () => {
+  it.each([false, true])('sweeps the recorded removals once a run and answers the counts (plans enforced: %s)', async (enforced) => {
+    mockSites = Array.from({ length: 150 }, (_, i) => ({ id: `site-${String(i).padStart(3, '0')}`, machines: {} }));
+    mockEnforced = enforced;
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
+    mockSweepRemovals.mockResolvedValue({ removed: 1, pending: 2, dropped: 1, errors: 1 });
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(mockSweepRemovals).toHaveBeenCalledTimes(1);
+    expect(mockSweepRemovals).toHaveBeenCalledWith(NOW.getTime());
+    expect(summary.removals).toEqual({ removed: 1, pending: 2, dropped: 1, errors: 1 });
+  });
+
+  it('checks the keys once a run when tridant id is configured, and answers each one', async () => {
+    mockSites = Array.from({ length: 150 }, (_, i) => ({ id: `site-${String(i).padStart(3, '0')}`, machines: {} }));
+    mockTridantConfigured = true;
+    mockCheckKeys.mockResolvedValue([
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: Date.UTC(2027, 0, 1), expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+    ]);
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(mockCheckKeys).toHaveBeenCalledTimes(1);
+    expect(summary.keys).toEqual([
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: null },
+    ]);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('logs a key that cannot do its job at error, with its name, reason and missing scopes only', async () => {
+    mockTridantConfigured = true;
+    mockCheckKeys.mockResolvedValue([
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresAt: null, expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'rejected', missing: [], expiresAt: null, expiresInDays: null },
+    ]);
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(summary.keys).toEqual([
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, missing: [], expiresInDays: null },
+    ]);
+    expect(jest.mocked(logger.error).mock.calls).toEqual([
+      [
+        '[plan-daily] tridant key not usable',
+        { context: 'planUsage', data: { keyName: 'TRIDANT_LICENSE_KEY', reason: undefined, missing: ['site.write'] } },
+      ],
+      [
+        '[plan-daily] tridant key not usable',
+        { context: 'planUsage', data: { keyName: 'TRIDANT_RELEASE_KEY', reason: 'rejected', missing: [] } },
+      ],
+    ]);
+    // a key is a setup problem, not a failed step of the run.
+    expect(summary.errors).toBe(0);
+  });
+
+  it('asks for no key check while tridant id is not configured', async () => {
+    const summary = await runPlanDaily(NOW);
+
+    expect(mockCheckKeys).not.toHaveBeenCalled();
+    expect(summary.keys).toEqual([]);
+  });
+
+  it('counts a key check that throws as one error and still prunes', async () => {
+    mockTridantConfigured = true;
+    mockCheckKeys.mockRejectedValue(new Error('boom'));
+    mockStore.set('billing_usage/s1/days/2026-01-01', { machineIds: ['m1'] });
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(summary).toMatchObject({ errors: 1, pruned: 1, keys: [] });
+  });
+});
+
+describe('stampSiteMachines', () => {
+  it('stamps a site from its id alone and answers how many machines it stamped', async () => {
+    mockSites = [
+      { id: 's1', machines: { late: seenAgo(HOUR_MS), lastNight: seenAgo(25 * HOUR_MS), gone: seenAgo(30 * HOUR_MS) } },
+    ];
+
+    expect(await stampSiteMachines('s1', NOW.getTime())).toBe(2);
+    expect(machineIds('s1')).toEqual(['late']);
+    expect(machineIds('s1', YESTERDAY)).toEqual(['lastNight']);
+  });
+
+  it('answers 0 and writes nothing for a site with no machines', async () => {
+    expect(await stampSiteMachines('gone', NOW.getTime())).toBe(0);
+    expect(mockStore.size).toBe(0);
   });
 });
 

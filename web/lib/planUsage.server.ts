@@ -1,12 +1,16 @@
 /**
  * active machines per site, the usage report to tridant id, and the plan
  * snapshot cloud functions read (adr 0018). `/api/cron/plan-daily` runs it at
- * 23:30 UTC: tridant id bills what it holds when the month ends, so the last
- * run of a month is the one that bills.
+ * 23:30 UTC. tridant id bills a period's newest report and holds the closed
+ * period's invoice open for a day, so the settle pass (`/api/cron/plan-settle`)
+ * resends each billed site's month from the report saved here the morning after.
  *
  * - `billing_usage/{siteId}/days/{YYYY-MM-DD}` = `{ machineIds, updatedAt }`:
  *   the machines whose `lastHeartbeat` fell on that UTC day. a billing
  *   period's active machines are the union of its days.
+ * - `billing_usage/{siteId}.report` = `{ periodStart, periodEnd, countedFrom,
+ *   floor, machines, asOf, status, recorded, settled, at }`: a billed site's
+ *   last report, what the settle pass resends.
  * - `plan_snapshot/{siteId}` = `{ enforced, control, roost, resolvedAt }`:
  *   functions can't call tridant id, so they gate on this instead.
  *
@@ -18,12 +22,15 @@ import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
-import { plansEnforced, resolveSitePlan, type Plan } from '@/lib/plan.server';
-import { billedFrom, getPlanAccount } from '@/lib/planAccounts.server';
+import { plansEnforced, resolveSitePlan, tridantConfigured, type Plan } from '@/lib/plan.server';
+import { billedFrom, getPlanAccount, movedTrialEnd, recordTrialEnd, type PlanAccount } from '@/lib/planAccounts.server';
 import { reconcileSiteRegistration } from '@/lib/planTrial.server';
 import { PRICING_FACTS } from '@/lib/product-facts';
 import { adoptBilling, closeEndedBilling, stopStrandedBilling } from '@/lib/siteBilling.server';
-import { reportUsage, type UsageEntry } from '@/lib/tridantBilling.server';
+import { checkTridantKeys, type TridantKeyCheck } from '@/lib/tridant.server';
+import { PRODUCT, reportUsage } from '@/lib/tridantBilling.server';
+import { primeSiteEntitlements } from '@/lib/tridantEntitlements.server';
+import { sweepSiteRemovals, type SiteRemovalSweep } from '@/lib/tridantSiteRemoval.server';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -32,7 +39,7 @@ export const ACTIVE_WINDOW_MS = 26 * 60 * 60 * 1000;
 export const USAGE_RETENTION_DAYS = 100;
 
 const SITE_PAGE_SIZE = 100;
-// sites handled at once: with plans enforced each is a tridant call with a 5 s timeout.
+// sites handled at once: with plans enforced, a site the page's batch read missed is a tridant call with a 5 s timeout.
 const BATCH_SIZE = 10;
 
 export interface PlanDailySummary {
@@ -49,6 +56,22 @@ export interface PlanDailySummary {
   recorded: number;
   pruned: number;
   errors: number;
+  /** the retry of deleted sites tridant id still held. */
+  removals: SiteRemovalSweep;
+  /** each tridant key's scopes and expiry; empty while tridant id is not configured. */
+  keys: Pick<TridantKeyCheck, 'keyName' | 'ok' | 'missing' | 'expiresInDays'>[];
+}
+
+/** a billed site's count and the period it counts in. */
+interface BilledSite {
+  siteId: string;
+  /** with the floor applied: what is sent. */
+  machines: number;
+  periodStart: number;
+  periodEnd: number | null;
+  countedFrom: number;
+  /** the plan's minimum (pro's three machines), 0 when it has none. */
+  floor: number;
 }
 
 interface Run {
@@ -83,11 +106,15 @@ function usageDays(db: FirebaseFirestore.Firestore, siteId: string): FirebaseFir
   return db.collection('billing_usage').doc(siteId).collection('days');
 }
 
-/** unions the site's machines seen in the active window into the day doc of each one's heartbeat. */
-async function stampSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot): Promise<void> {
-  const cutoffMs = run.nowMs - ACTIVE_WINDOW_MS;
+/**
+ * unions the site's machines seen in the active window into the day doc of each
+ * one's heartbeat; answers how many it stamped.
+ */
+export async function stampSiteMachines(siteId: string, nowMs: number): Promise<number> {
+  const db = getAdminDb();
+  const cutoffMs = nowMs - ACTIVE_WINDOW_MS;
   const byDay = new Map<string, string[]>();
-  const machines = await site.ref.collection('machines').select('lastHeartbeat').get();
+  const machines = await db.collection('sites').doc(siteId).collection('machines').select('lastHeartbeat').get();
   for (const machine of machines.docs) {
     const heartbeatMs = timestampToMs(machine.data().lastHeartbeat);
     if (heartbeatMs === null || heartbeatMs < cutoffMs) continue;
@@ -97,8 +124,8 @@ async function stampSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot
     byDay.set(day, [...(byDay.get(day) ?? []), machine.id]);
   }
 
-  const days = usageDays(run.db, site.id);
-  await Promise.all(
+  const days = usageDays(db, siteId);
+  const stamped = await Promise.all(
     Array.from(byDay, async ([day, machineIds]) => {
       // a union, so a rerun or a second registration of the job adds nothing.
       await days
@@ -107,16 +134,43 @@ async function stampSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot
           { machineIds: FieldValue.arrayUnion(...machineIds), updatedAt: FieldValue.serverTimestamp() },
           { merge: true },
         );
-      run.summary.machines += machineIds.length;
+      return machineIds.length;
     }),
   );
+  return stamped.reduce((sum, count) => sum + count, 0);
 }
 
-/** stamps, snapshots and re-registers one site; answers its usage entry when tridant id bills it. */
-async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot): Promise<UsageEntry | null> {
+/**
+ * the site owner's plan account, with a trial end tridant id moved (an extension)
+ * recorded and applied: without it the added days would count as billed until the
+ * owner next opens the plan page.
+ */
+async function ownerAccount(
+  run: Run,
+  site: FirebaseFirestore.QueryDocumentSnapshot,
+  plan: Plan,
+): Promise<PlanAccount | null> {
+  const owner = site.data().owner;
+  if (typeof owner !== 'string') return null;
+  const stored = await getPlanAccount(owner);
+  const trialEnd = movedTrialEnd([plan], stored);
+  if (stored === null || trialEnd === null) return stored;
+  try {
+    await recordTrialEnd(owner, trialEnd);
+  } catch (error) {
+    // this count still starts at the new end, and the next run records it again.
+    fail(run.summary, `recording the trial end for site ${site.id}`, error);
+  }
+  return { ...stored, trialEndsAt: trialEnd };
+}
+
+/** stamps, snapshots and re-registers one site; answers its count when tridant id bills it. */
+async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot): Promise<BilledSite | null> {
   const { db, summary } = run;
   try {
-    await stampSite(run, site);
+    // awaited before the sum: `+= await` reads the total first, and sites run ten at a time.
+    const stamped = await stampSiteMachines(site.id, run.nowMs);
+    summary.machines += stamped;
   } catch (error) {
     fail(summary, `usage of site ${site.id}`, error);
   }
@@ -132,8 +186,8 @@ async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot):
       const resolved = await resolveSitePlan(site.id, site.data());
       if (resolved.enforced) plan = resolved;
     } catch (error) {
-      // the resolver reads the owner's user doc. one site's read must not end the run: the last
-      // run of a month is the one that bills every other site.
+      // the resolver reads the owner's user doc. one site's read must not end the run, or no other
+      // site is snapshotted or reported.
       fail(summary, `plan of site ${site.id}`, error);
     }
   }
@@ -161,34 +215,75 @@ async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot):
   if (plan) await closeEndedBilling(site.id, site.data(), plan);
 
   // a site under a trial, or on free, has no billing period and nothing to report.
-  const periodStart = plan?.billing?.periodStart ?? null;
-  if (plan === null || periodStart === null) return null;
+  const billing = plan?.billing ?? null;
+  if (plan === null || billing === null || billing.periodStart === null) return null;
   try {
-    const owner = site.data().owner;
-    const account = typeof owner === 'string' ? await getPlanAccount(owner) : null;
-    const machines = await activeMachinesBetween(site.id, billedFrom(periodStart, account), run.nowMs);
-    // an explicit '1' only: the floor adds to a bill, so a key tridant left out never raises it.
-    const pro = plan.ent['owlette.deployments'] === '1';
-    return { siteId: site.id, machines: pro ? Math.max(machines, PRICING_FACTS.pro.minMachines) : machines };
+    const countedFrom = billedFrom(billing.periodStart, await ownerAccount(run, site, plan));
+    const machines = await activeMachinesBetween(site.id, countedFrom, run.nowMs);
+    // the billed product, not the flags: a site bought at core during its owner's trial reads pro until the trial ends.
+    const floor = billing.productId === PRODUCT.pro ? PRICING_FACTS.pro.minMachines : 0;
+    return {
+      siteId: site.id,
+      machines: Math.max(machines, floor),
+      periodStart: billing.periodStart,
+      periodEnd: billing.periodEnd,
+      countedFrom,
+      floor,
+    };
   } catch (error) {
     fail(summary, `counting site ${site.id}`, error);
     return null;
   }
 }
 
-/** one call for every billed site. an entry tridant id does not file is logged, and the next run sends it again. */
-async function reportBilledSites(run: Run, entries: UsageEntry[]): Promise<void> {
-  const { summary } = run;
-  if (entries.length === 0) return;
-  summary.reported = entries.length;
+/**
+ * `billing_usage/{siteId}.report`. replaced whole, so a field the settle pass
+ * adds for one period never lingers into the next.
+ */
+async function saveReport(run: Run, site: BilledSite, status: string, recorded: boolean): Promise<void> {
+  try {
+    await run.db
+      .collection('billing_usage')
+      .doc(site.siteId)
+      .set(
+        {
+          report: {
+            periodStart: site.periodStart,
+            periodEnd: site.periodEnd,
+            countedFrom: site.countedFrom,
+            floor: site.floor,
+            machines: site.machines,
+            asOf: run.nowMs,
+            status,
+            recorded,
+            settled: false,
+            at: FieldValue.serverTimestamp(),
+          },
+        },
+        { mergeFields: ['report'] },
+      );
+  } catch (error) {
+    fail(run.summary, `saving the report of site ${site.siteId}`, error);
+  }
+}
 
-  const answer = await reportUsage(entries, run.nowMs);
+/**
+ * one call for every billed site, then each site's report saved with its outcome.
+ * an entry tridant id does not file is logged, and the next run sends it again.
+ */
+async function reportBilledSites(run: Run, billed: BilledSite[]): Promise<void> {
+  const { summary } = run;
+  if (billed.length === 0) return;
+  summary.reported = billed.length;
+
+  const answer = await reportUsage(billed.map(({ siteId, machines }) => ({ siteId, machines })), run.nowMs);
   if (!answer.ok) {
     summary.errors += 1;
     logger.error('[plan-daily] usage report failed', {
       context: 'planUsage',
-      data: { reason: answer.reason, sites: entries.length },
+      data: { reason: answer.reason, sites: billed.length },
     });
+    await inBatches(billed, (site) => saveReport(run, site, answer.reason, false));
     return;
   }
   for (const { siteId, status, recorded } of answer.results) {
@@ -199,12 +294,27 @@ async function reportBilledSites(run: Run, entries: UsageEntry[]): Promise<void>
     // expected for `site_not_billed` during a stripe trial and for `period_rolled_over`.
     logger.warn('[plan-daily] usage not recorded', { context: 'planUsage', data: { siteId, status } });
   }
+  // one outcome per entry, in the order sent.
+  await inBatches(
+    billed.map((site, index) => ({ site, outcome: answer.results[index] })),
+    ({ site, outcome }) => saveReport(run, site, outcome.status, outcome.recorded),
+  );
+}
+
+/** what tridant id says each key can do, in the summary; a key that cannot do its job logs at error. */
+async function checkKeys(run: Run): Promise<void> {
+  for (const { keyName, ok, reason, missing, expiresInDays } of await checkTridantKeys()) {
+    run.summary.keys.push({ keyName, ok, missing, expiresInDays });
+    if (!ok) {
+      logger.error('[plan-daily] tridant key not usable', { context: 'planUsage', data: { keyName, reason, missing } });
+    }
+  }
 }
 
 /** drops day docs older than the retention window, under every parent ever stamped. */
 async function pruneUsage(run: Run, cutoffDay: string): Promise<void> {
   const { db, summary } = run;
-  // listDocuments includes the parent paths that hold only subcollections, which is all of these.
+  // listDocuments includes the parent paths that hold only subcollections, as most of these do.
   const parents = await db.collection('billing_usage').listDocuments();
   await inBatches(parents, async (parent) => {
     try {
@@ -232,11 +342,13 @@ export async function runPlanDaily(now: Date = new Date()): Promise<PlanDailySum
       recorded: 0,
       pruned: 0,
       errors: 0,
+      removals: { removed: 0, pending: 0, dropped: 0, errors: 0 },
+      keys: [],
     },
   };
   const { db, summary } = run;
 
-  const entries: UsageEntry[] = [];
+  const billed: BilledSite[] = [];
   let last: FirebaseFirestore.QueryDocumentSnapshot | undefined;
   for (;;) {
     // owner for the plan, name for the registration.
@@ -245,16 +357,28 @@ export async function runPlanDaily(now: Date = new Date()): Promise<PlanDailySum
     const page = await query.get();
     summary.sites += page.size;
 
-    for (const entry of await inBatches(page.docs, (site) => runSite(run, site))) {
-      if (entry) entries.push(entry);
+    // one call fills the entitlement cache for the page; a site it missed is read on its own.
+    if (run.enforced) await primeSiteEntitlements(page.docs.map((site) => site.id));
+    for (const counted of await inBatches(page.docs, (site) => runSite(run, site))) {
+      if (counted) billed.push(counted);
     }
 
     if (page.size < SITE_PAGE_SIZE) break;
     last = page.docs[page.docs.length - 1];
   }
 
-  // before the prune: a report that reaches tridant id after the 1st counts for nothing.
-  await reportBilledSites(run, entries);
+  // a report that does not land is sent again by the next run, and a month's last one by the settle
+  // pass the morning after.
+  await reportBilledSites(run, billed);
+
+  summary.removals = await sweepSiteRemovals(run.nowMs);
+  if (tridantConfigured()) {
+    try {
+      await checkKeys(run);
+    } catch (error) {
+      fail(summary, 'tridant key check', error);
+    }
+  }
 
   try {
     await pruneUsage(run, usageDay(new Date(run.nowMs - USAGE_RETENTION_DAYS * DAY_MS)));

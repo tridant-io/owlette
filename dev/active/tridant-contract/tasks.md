@@ -1,5 +1,5 @@
 # tridant contract adoption — Tasks
-**Progress**: 6/13 complete
+**Progress**: 8/13 complete
 
 Every task: work in `C:\Users\admin\Documents\Git-restored\Owlette-tridant-contract-wt` and assert
 `git branch --show-current` is `feat/tridant-contract` before editing (`|| exit 1` on every `cd`).
@@ -213,7 +213,7 @@ commits each wave. Do not touch files outside your task's list.
 
 ## Wave 3: the daily job and the plan page
 
-- [ ] **Task 3.1: daily job — batch, saved reports, removals, keys, Pro floor**
+- [x] **Task 3.1: daily job — batch, saved reports, removals, keys, Pro floor**
   - Files: `web/lib/planUsage.server.ts`, `web/__tests__/lib/planUsage.server.test.ts`,
     `web/__tests__/api/cron/plan-daily.test.ts`
   - Depends on: 2.1, 2.3, 2.4
@@ -240,7 +240,7 @@ commits each wave. Do not touch files outside your task's list.
       summary.
   - Done when: lint and typecheck clean; both test files green.
 
-- [ ] **Task 3.2: account plan route — billing from tridant, trial-end refresh**
+- [x] **Task 3.2: account plan route — billing from tridant, trial-end refresh**
   - Files: `web/app/api/account/plan/route.ts`, `web/lib/planAccounts.server.ts`,
     `web/__tests__/api/account/plan.test.ts`
   - Depends on: 2.1, 2.2
@@ -280,7 +280,17 @@ commits each wave. Do not touch files outside your task's list.
       `0 6 * * *`, purpose, failureMode, environments dev and prod, minTimeoutSeconds 60). Also
       bring the `cron-plan-trials` entry's `purpose` up to date: its dry run now previews each
       account with tridant (`previewTrial`) and reports both keys' checks; `apply` refuses on a bad
-      license key (task 2.2).
+      license key (task 2.2). The `cron-plan-daily` entry's purpose, failureMode, note and
+      detectedBy still say the last run of a month bills / a report after the 1st counts for
+      nothing: correct them (the settle pass resends the morning after), and mention the removal
+      sweep and the key check. Same for the doc comment in `web/app/api/cron/plan-daily/route.ts`
+      (add it to this task's files).
+    - Writing onto the saved report: task 3.1 writes `report` with `{ mergeFields: ['report'] }`
+      (each daily run replaces the whole map). The settle pass must update it with dotted paths
+      (`report.settled`, `report.status`, …) or a merge, never replace it.
+    - Known, accepted: a daily run that lands after midnight UTC already reads the new period and
+      replaces the closed period's report before 06:00; a billed answer with a null `periodEnd`
+      never settles. Do not engineer around them; 5.1 documents them.
     - Tests: window bounds, settled skipped, recount and floor, per-entry `as_of`, outcomes saved,
       `period_closed` logged, auth 401, plans off does nothing; `npx jest cronJobs` green.
   - Done when: lint and typecheck clean; the new tests and `__tests__/infra/cronJobs.test.ts` green.
@@ -300,6 +310,11 @@ commits each wave. Do not touch files outside your task's list.
       per account as well as once per organization (`trial_already_used`), (c) the site record is a
       fallback, no longer the only copy of tier and founders. Amend in place, dated 2026-11-20, in
       the ADR's own format; do not rewrite its decision.
+    - Also stale since wave 3: `web/content/docs/setup/web-deployment.mdx:278`,
+      `docs/runbooks/plans-and-billing.md` about :496 ("the last run of a month bills"); with plans
+      off, tridant is still called by the removal sweep and the key check when configured. Document
+      the two accepted edges: a daily run after midnight UTC replaces the closed period's report
+      before the settle pass reads it; a billed answer with no period end never settles.
     - Runbooks: the `plan-settle` registration (dev now, prod when plans go on), the dry run's new
       answer and key check, the removal record and its 45-day drop, the payer-mismatch refusal.
       `plans-and-billing.md` (about :300–330) still shows the old plan-trials example JSON and says
@@ -308,6 +323,12 @@ commits each wave. Do not touch files outside your task's list.
       `manual-infrastructure.md` :277 and :283 list the cron jobs: add plan-settle.
     - Data model: `billing_usage/{siteId}.report`, `tridant_site_removals/{siteId}`,
       `plan_accounts.trialUsed`. Glossary "Trial": once per account and per organization.
+    - `web/openapi.yaml` (add to this task's files): the `/api/account/plan` site `billing`
+      description (about :15090) says "`null` for a site that was never billed"; it is now also
+      null when plans are enforced and tridant bills nothing, and its tier, founders and end come
+      from tridant's answer. The `foundersHeld` description (about :15178) says it is read from
+      the billing records: now tridant's answer, else the record. `plans-and-billing.md` :582 says
+      founders held is "read from the pointers": same fix.
     - Copy is lowercase where the surrounding docs are; use GLOSSARY terms.
   - Done when: every file reads true against the code; no new docs file created.
 
@@ -371,3 +392,11 @@ commits each wave. Do not touch files outside your task's list.
   `@/lib/tridantEntitlements.server` and `@/lib/tridantSiteRemoval.server` in planUsage tests
   need `primeSiteEntitlements` / `sweepSiteRemovals`; `planUsage.server.test.ts` builds
   `Entitlements`/`UsageOutcome` literals without the new fields.
+- Wave 3 done (3.1, 3.2). /verify: spec clean; standards one low (a "tier" comment, fixed).
+  Follow-up beyond 3.1's text: `movedTrialEnd` lives in `planAccounts.server.ts`, shared by the
+  route and the daily job, which records and uses a trial end tridant moved (billed sites whose
+  answer reads `trialing`; one reading `active` mid-trial does not refresh it, accepted until the
+  test-clock run shows which it reads). tridant's trial licence covers the whole organization, so
+  every site answers the same `trial_ends_at`. The saved report is written with
+  `mergeFields: ['report']`. Full jest 593/593 (useSwoopSession's load flake passed alone, 87/87).
+  The plan page now leaves out "billed as" on a site tridant no longer bills, as the site page does.
