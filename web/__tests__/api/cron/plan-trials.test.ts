@@ -52,20 +52,15 @@ const check = (keyName: string, over: Record<string, unknown> = {}) => ({
   keyName,
   ok: true,
   missing: [],
-  expiresAt: 1_800_000_000_000,
   expiresInDays: 40,
   ...over,
 });
 
 const LICENSE_OK = check('TRIDANT_LICENSE_KEY');
 const RELEASE_OK = check('TRIDANT_RELEASE_KEY');
-// what the answer exposes per key: no expiresAt.
-const KEYS_OK = [
-  { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: 40 },
-  { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: 40 },
-];
+const KEYS_OK = [LICENSE_OK, RELEASE_OK];
 
-const preview = (payer: string, trial: string | null) => ({ ok: true, payer, trial, orgId: null });
+const preview = (payer: string, trial: string | null) => ({ ok: true, payer, trial });
 
 const ENV_KEYS = ['CRON_SECRET', 'PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY', 'OWLETTE_E2E'] as const;
 

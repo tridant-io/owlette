@@ -257,42 +257,22 @@ export function startTrial(input: TrialInput): Promise<BillingResult<Trial>> {
   });
 }
 
-// the fake links no account, so no preview names an organization.
 export function previewTrial(input: TrialInput): Promise<BillingResult<TrialPreview>> {
   return guarded<TrialPreview>(async () => {
     const { linkRequired, trialUsed } = await trialListsFor(input.uid);
-    if (linkRequired) return { ok: true, payer: 'link_required', trial: null, orgId: null };
-    return { ok: true, payer: 'would_create', trial: trialUsed ? 'used' : 'would_start', orgId: null };
+    if (linkRequired) return { ok: true, payer: 'link_required', trial: null };
+    return { ok: true, payer: 'would_create', trial: trialUsed ? 'used' : 'would_start' };
   });
 }
 
 /** recorded into the month of each entry's moment; a closed month settles for a day, then refuses. */
 function usageOutcome(siteId: string, asOfMs: number): UsageOutcome {
-  const asOf = new Date(asOfMs);
-  const periodEnd = monthEnd(asOf);
+  const periodEnd = monthEnd(new Date(asOfMs));
   const settlesAt = periodEnd + SETTLE_MS;
   const now = Date.now();
-  if (settlesAt <= now) {
-    return {
-      siteId,
-      status: 'period_closed',
-      recorded: false,
-      settling: false,
-      settlesAt: null,
-      periodStart: null,
-      periodEnd: null,
-    };
-  }
+  if (settlesAt <= now) return { siteId, status: 'period_closed', recorded: false, settlesAt: null };
   const settling = periodEnd <= now;
-  return {
-    siteId,
-    status: 'recorded',
-    recorded: true,
-    settling,
-    settlesAt: settling ? settlesAt : null,
-    periodStart: monthStart(asOf),
-    periodEnd,
-  };
+  return { siteId, status: 'recorded', recorded: true, settlesAt: settling ? settlesAt : null };
 }
 
 export function reportUsage(

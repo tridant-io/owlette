@@ -134,7 +134,6 @@ export interface TridantKeyCheck {
   reason?: TridantFailureReason;
   /** the required scopes the key lacks; empty when its scopes could not be read. */
   missing: string[];
-  expiresAt: number | null;
   expiresInDays: number | null;
 }
 
@@ -154,13 +153,13 @@ function holds(scopes: string[], required: string): boolean {
 }
 
 async function checkKey(keyName: TridantKeyName): Promise<TridantKeyCheck> {
-  const answer = { keyName, missing: [], expiresAt: null, expiresInDays: null };
+  const answer = { keyName, missing: [], expiresInDays: null };
   if (process.env.OWLETTE_E2E === '1') return { ...answer, ok: true };
 
   const response = await tridantFetch('/v1/key', { key: process.env[keyName], keyName });
   if (!response.ok) return { ...answer, ok: false, reason: response.reason };
   const body = typeof response.json === 'object' && response.json !== null ? (response.json as Record<string, unknown>) : {};
-  const { scopes, expires_at, expires_in_days } = body;
+  const { scopes, expires_in_days } = body;
   if (!Array.isArray(scopes) || !scopes.every((scope): scope is string => typeof scope === 'string')) {
     return { ...answer, ok: false, reason: 'malformed_response' };
   }
@@ -170,7 +169,6 @@ async function checkKey(keyName: TridantKeyName): Promise<TridantKeyCheck> {
     keyName,
     ok: missing.length === 0,
     missing,
-    expiresAt: typeof expires_at === 'number' ? expires_at : null,
     expiresInDays: typeof expires_in_days === 'number' ? expires_in_days : null,
   };
 }

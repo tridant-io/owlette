@@ -86,7 +86,6 @@ const PREVIEW_TRIALS = ['would_start', 'already', 'already_subscribed', 'used'] 
 export type TrialPreview = {
   payer: (typeof PREVIEW_PAYERS)[number];
   trial: (typeof PREVIEW_TRIALS)[number] | null;
-  orgId: string | null;
 };
 export type PushSiteInput = { uid: string; siteId: string; name: string };
 export type LinkInput = { uid: string; orgId: string; idToken: string };
@@ -110,19 +109,12 @@ const USAGE_STATUSES = [
 export type UsageStatus = (typeof USAGE_STATUSES)[number] | 'unreachable' | 'rejected' | 'malformed_response';
 /** `asOfMs` overrides the call's moment for this entry. */
 export type UsageEntry = { siteId: string; machines: number; asOfMs?: number };
-/**
- * `settling`: recorded into a period that has closed, whose invoice tridant
- * holds open until `settlesAt`. the period, set on a recorded entry only, is
- * the one it landed in.
- */
+/** `settlesAt` is set on an entry recorded into a period that has closed: tridant holds its invoice open until then. */
 export type UsageOutcome = {
   siteId: string;
   status: UsageStatus;
   recorded: boolean;
-  settling: boolean;
   settlesAt: number | null;
-  periodStart: number | null;
-  periodEnd: number | null;
 };
 
 const e2e = () => process.env.OWLETTE_E2E === '1';
@@ -320,18 +312,14 @@ export function previewTrial(input: TrialInput): Promise<BillingResult<TrialPrev
   return request('/v1/billing/trial/preview', 'POST', trialBody(input), (json) => {
     const payer = PREVIEW_PAYERS.find((known) => known === json.payer);
     if (!payer) return null;
-    return {
-      payer,
-      trial: PREVIEW_TRIALS.find((known) => known === json.trial) ?? null,
-      orgId: typeof json.org_id === 'string' ? json.org_id : null,
-    };
+    return { payer, trial: PREVIEW_TRIALS.find((known) => known === json.trial) ?? null };
   });
 }
 
 const numberOrNull = (value: unknown) => (typeof value === 'number' ? value : null);
 
 function unanswered(siteId: string, status: UsageStatus): UsageOutcome {
-  return { siteId, status, recorded: false, settling: false, settlesAt: null, periodStart: null, periodEnd: null };
+  return { siteId, status, recorded: false, settlesAt: null };
 }
 
 /**
@@ -373,16 +361,11 @@ export async function reportUsage(
         results.push(unanswered(siteId, 'malformed_response'));
         return;
       }
-      // on period_closed and period_rolled_over, tridant's period is the subscription's current one, not the entry's.
-      const recorded = status === 'recorded';
       results.push({
         siteId,
         status,
         recorded: answer.recorded === true,
-        settling: answer.settling === true,
         settlesAt: numberOrNull(answer.settles_at),
-        periodStart: recorded ? numberOrNull(answer.period_start) : null,
-        periodEnd: recorded ? numberOrNull(answer.period_end) : null,
       });
     });
   }

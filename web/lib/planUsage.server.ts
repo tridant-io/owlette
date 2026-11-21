@@ -22,6 +22,7 @@
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
+import { inBatches } from '@/lib/inBatches';
 import logger from '@/lib/logger';
 import { plansEnforced, resolveSitePlan, tridantConfigured, type Plan } from '@/lib/plan.server';
 import { billedFrom, getPlanAccount, movedTrialEnd, recordTrialEnd, type PlanAccount } from '@/lib/planAccounts.server';
@@ -40,8 +41,6 @@ export const ACTIVE_WINDOW_MS = 26 * 60 * 60 * 1000;
 export const USAGE_RETENTION_DAYS = 100;
 
 const SITE_PAGE_SIZE = 100;
-// sites handled at once: with plans enforced, a site the page's batch read missed is a tridant call with a 5 s timeout.
-const BATCH_SIZE = 10;
 
 export interface PlanDailySummary {
   ok: true;
@@ -59,8 +58,8 @@ export interface PlanDailySummary {
   errors: number;
   /** the retry of deleted sites tridant id still held. */
   removals: SiteRemovalSweep;
-  /** each tridant key's scopes and expiry; empty while tridant id is not configured. */
-  keys: Pick<TridantKeyCheck, 'keyName' | 'ok' | 'missing' | 'expiresInDays'>[];
+  /** each tridant key's scopes and expiry, or why its scopes could not be read; empty while tridant id is not configured. */
+  keys: TridantKeyCheck[];
 }
 
 /** a billed site's count and the period it counts in. */
@@ -93,15 +92,6 @@ function fail(summary: PlanDailySummary, what: string, error: unknown): void {
     context: 'planUsage',
     data: { error: error instanceof Error ? error.message : String(error) },
   });
-}
-
-/** runs `run` over `items` ten at a time, answering in order. the settle pass shares it. */
-export async function inBatches<T, R>(items: T[], run: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = [];
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    results.push(...(await Promise.all(items.slice(i, i + BATCH_SIZE).map(run))));
-  }
-  return results;
 }
 
 function usageDays(db: FirebaseFirestore.Firestore, siteId: string): FirebaseFirestore.CollectionReference {
@@ -308,8 +298,9 @@ async function reportBilledSites(run: Run, billed: BilledSite[]): Promise<void> 
  * a key left blank is a choice (no releases registered from here), so it is in the summary only.
  */
 async function checkKeys(run: Run): Promise<void> {
-  for (const { keyName, ok, reason, missing, expiresInDays } of await checkTridantKeys()) {
-    run.summary.keys.push({ keyName, ok, missing, expiresInDays });
+  for (const check of await checkTridantKeys()) {
+    run.summary.keys.push(check);
+    const { keyName, ok, reason, missing } = check;
     if (!ok && reason !== 'not_configured') {
       logger.error('[plan-daily] tridant key not usable', { context: 'planUsage', data: { keyName, reason, missing } });
     }

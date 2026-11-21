@@ -271,7 +271,7 @@ describe('checkTridantKeys', () => {
     });
   }
 
-  const unanswered = { missing: [], expiresAt: null, expiresInDays: null };
+  const unanswered = { missing: [], expiresInDays: null };
 
   beforeEach(() => {
     process.env.TRIDANT_LICENSE_KEY = LICENSE_KEY;
@@ -286,15 +286,14 @@ describe('checkTridantKeys', () => {
   });
 
   it('asks GET /v1/key with each key, and passes keys holding every scope they need', async () => {
-    const expiresAt = Date.UTC(2027, 0, 1);
     answerByKey({
-      [LICENSE_KEY]: keyAnswer(LICENSE_SCOPES, { expires_at: expiresAt, expires_in_days: 42 }),
+      [LICENSE_KEY]: keyAnswer(LICENSE_SCOPES, { expires_at: Date.UTC(2027, 0, 1), expires_in_days: 42 }),
       [RELEASE_KEY]: keyAnswer(RELEASE_SCOPES),
     });
 
     expect(await checkTridantKeys()).toEqual([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt, expiresInDays: 42 },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: 42 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: null },
     ]);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     for (const [url, init] of mockFetch.mock.calls) {
@@ -315,14 +314,8 @@ describe('checkTridantKeys', () => {
     });
 
     expect(await checkTridantKeys()).toEqual([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresAt: null, expiresInDays: null },
-      {
-        keyName: 'TRIDANT_RELEASE_KEY',
-        ok: false,
-        missing: ['release.write:prd_owlette_*'],
-        expiresAt: null,
-        expiresInDays: null,
-      },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresInDays: null },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, missing: ['release.write:prd_owlette_*'], expiresInDays: null },
     ]);
   });
 
@@ -371,7 +364,7 @@ describe('checkTridantKeys', () => {
     answerByKey({ [LICENSE_KEY]: keyAnswer(LICENSE_SCOPES) });
 
     expect(await checkTridantKeys()).toEqual([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: null },
       { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'not_configured', ...unanswered },
     ]);
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -392,8 +385,8 @@ describe('checkTridantKeys', () => {
     delete process.env.TRIDANT_RELEASE_KEY;
 
     expect(await checkTridantKeys()).toEqual([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: null },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: null },
     ]);
     expect(mockFetch).not.toHaveBeenCalled();
   });

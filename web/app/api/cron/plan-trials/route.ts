@@ -101,15 +101,8 @@ export async function GET(request: NextRequest) {
     const { searchParams } = request.nextUrl;
     const apply = searchParams.get('apply') === '1';
 
-    const checks = await checkTridantKeys();
-    const keys = checks.map(({ keyName, ok, reason, missing, expiresInDays }) => ({
-      keyName,
-      ok,
-      reason,
-      missing,
-      expiresInDays,
-    }));
-    const license = checks.find(({ keyName }) => keyName === 'TRIDANT_LICENSE_KEY');
+    const keys = await checkTridantKeys();
+    const license = keys.find(({ keyName }) => keyName === 'TRIDANT_LICENSE_KEY');
     if (apply && license?.ok !== true) {
       const why = !license
         ? 'it was not checked'

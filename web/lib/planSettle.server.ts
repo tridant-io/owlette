@@ -10,9 +10,10 @@
  */
 
 import { getAdminDb } from '@/lib/firebase-admin';
+import { inBatches } from '@/lib/inBatches';
 import logger from '@/lib/logger';
 import { plansEnforced } from '@/lib/plan.server';
-import { activeMachinesBetween, inBatches, stampSiteMachines } from '@/lib/planUsage.server';
+import { activeMachinesBetween, stampSiteMachines } from '@/lib/planUsage.server';
 import { reportUsage, type UsageOutcome } from '@/lib/tridantBilling.server';
 
 // tridant's site_settle_hours: past it, a report into the closed period answers period_closed.

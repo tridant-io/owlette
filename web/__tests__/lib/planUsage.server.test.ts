@@ -283,8 +283,8 @@ const TRIAL: Entitlements = { ...PRO, standing: 'trialing', billing: null, trial
 const UNREACHABLE: EntitlementsResult = { ok: false, reason: 'unreachable' };
 const NO_REMOVALS: SiteRemovalSweep = { removed: 0, pending: 0, dropped: 0, errors: 0 };
 const GOOD_KEYS: TridantKeyCheck[] = [
-  { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
-  { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+  { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: null },
+  { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: null },
 ];
 
 function seenAgo(ms: number) {
@@ -321,10 +321,7 @@ beforeEach(() => {
         siteId,
         status: 'recorded',
         recorded: true,
-        settling: false,
         settlesAt: null,
-        periodStart: PERIOD_START,
-        periodEnd: PERIOD_END,
       }),
     ),
   }));
@@ -930,8 +927,8 @@ describe('runPlanDaily: site removals and keys', () => {
     mockSites = Array.from({ length: 150 }, (_, i) => ({ id: `site-${String(i).padStart(3, '0')}`, machines: {} }));
     mockTridantConfigured = true;
     mockCheckKeys.mockResolvedValue([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: Date.UTC(2027, 0, 1), expiresInDays: 84 },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: true, missing: [], expiresInDays: null },
     ]);
 
     const summary = await runPlanDaily(NOW);
@@ -947,15 +944,15 @@ describe('runPlanDaily: site removals and keys', () => {
   it('logs a key that cannot do its job at error, with its name, reason and missing scopes only', async () => {
     mockTridantConfigured = true;
     mockCheckKeys.mockResolvedValue([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresAt: null, expiresInDays: 84 },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'rejected', missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresInDays: 84 },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'rejected', missing: [], expiresInDays: null },
     ]);
 
     const summary = await runPlanDaily(NOW);
 
     expect(summary.keys).toEqual([
       { keyName: 'TRIDANT_LICENSE_KEY', ok: false, missing: ['site.write'], expiresInDays: 84 },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, missing: [], expiresInDays: null },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'rejected', missing: [], expiresInDays: null },
     ]);
     expect(jest.mocked(logger.error).mock.calls).toEqual([
       [
@@ -974,13 +971,19 @@ describe('runPlanDaily: site removals and keys', () => {
   it('reports a release key left blank in the summary only', async () => {
     mockTridantConfigured = true;
     mockCheckKeys.mockResolvedValue([
-      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresAt: null, expiresInDays: null },
-      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'not_configured', missing: [], expiresAt: null, expiresInDays: null },
+      { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: null },
+      { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'not_configured', missing: [], expiresInDays: null },
     ]);
 
     const summary = await runPlanDaily(NOW);
 
-    expect(summary.keys[1]).toEqual({ keyName: 'TRIDANT_RELEASE_KEY', ok: false, missing: [], expiresInDays: null });
+    expect(summary.keys[1]).toEqual({
+      keyName: 'TRIDANT_RELEASE_KEY',
+      ok: false,
+      reason: 'not_configured',
+      missing: [],
+      expiresInDays: null,
+    });
     expect(logger.error).not.toHaveBeenCalled();
   });
 

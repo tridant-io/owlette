@@ -107,7 +107,8 @@ call owlette makes, so it needs all of this:
   asks it of this key and of `TRIDANT_RELEASE_KEY` on every run once tridant id is configured
   (`keys` in [its summary](#reading-the-daily-summary)), and logs a key that lacks a scope or could
   not be read as `[plan-daily] tridant key not usable` at error. A blank `TRIDANT_RELEASE_KEY`
-  reads `ok: false` in the summary but is not logged: no releases are registered from there.
+  reads `ok: false` with `reason: "not_configured"` in the summary but is not logged: no releases
+  are registered from there.
   [The bulk trial start](#the-bulk-trial-start) answers the same check,
   and refuses `?apply=1` while this key fails it.
 - **It expires.** tridant id mints keys with a 400-day life by default. In a key's last 30 days
@@ -651,7 +652,7 @@ Two cases are never settled, both accepted:
 | `machines` | non-zero on any fleet with a machine online in the last day |
 | `pruned` | 0 for the first 100 days, then roughly one per stamped site per day |
 | `removals` | the retry of deleted sites tridant id still holds: `removed` now, still `pending`, `dropped` after 45 days, and `errors`. `dropped` and `errors` are 0; each is logged at error. Neither counts in the top-level `errors` |
-| `keys` | per key, `ok: true` with `missing` empty. A key that is not ok is logged `[plan-daily] tridant key not usable` at error, unless it is blank; it does not count in `errors`. Empty while tridant id is not configured |
+| `keys` | per key, `ok: true` with `missing` empty, and `expiresInDays`. A key whose scopes could not be read carries a `reason`: `not_configured` for a blank key, otherwise `unreachable`, `rejected` or `malformed_response`. A key that is not ok is logged `[plan-daily] tridant key not usable` at error, unless it is blank; it does not count in `errors`. Empty while tridant id is not configured |
 
 A `401` means the header or secret is wrong for that environment. A `500` means the handler threw;
 check the host logs for `cron/plan-daily`.

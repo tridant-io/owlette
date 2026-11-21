@@ -97,19 +97,16 @@ const mockFetch = jest.fn();
 const answer = (json: unknown, status = 200): TridantResult => ({ ok: true, status, json });
 const refusal = (status: number, json: unknown): TridantResult => ({ ok: false, reason: 'rejected', status, json });
 
-/** a usage outcome, not recorded and with no period unless `more` says. */
+/** a usage outcome, not recorded and not settling unless `more` says. */
 const outcome = (siteId: string, status: string, more: Record<string, unknown> = {}) => ({
   siteId,
   status,
   recorded: false,
-  settling: false,
   settlesAt: null,
-  periodStart: null,
-  periodEnd: null,
   ...more,
 });
 /** recorded into this month, which has not closed. */
-const RECORDED = { recorded: true, periodStart: MONTH_START, periodEnd: MONTH_END };
+const RECORDED = { recorded: true };
 
 function expectCall(method: string, path: string, body?: unknown) {
   expect(mockTridantFetch).toHaveBeenCalledTimes(1);
@@ -483,7 +480,7 @@ describe('previewTrial', () => {
       answer({ subject: 'owlette:u1', payer: 'linked', trial: 'already', org_id: 'org_1' }),
     );
 
-    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: 'already', orgId: 'org_1' });
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: 'already' });
     expectCall('POST', '/v1/billing/trial/preview', {
       payer: { subject: 'owlette:u1', email: EMAIL, name: 'Acme' },
       product: 'prd_owlette_pro',
@@ -497,17 +494,17 @@ describe('previewTrial', () => {
     ['linked', 'already_subscribed'],
   ])('reads payer %s with trial %s', async (payer, trial) => {
     mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer, trial, org_id: null }));
-    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer, trial, orgId: null });
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer, trial });
   });
 
   it('reads a payer that must link first, with no trial', async () => {
     mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer: 'link_required', trial: null, org_id: null }));
-    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'link_required', trial: null, orgId: null });
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'link_required', trial: null });
   });
 
   it('reads a trial outcome it does not know as none', async () => {
     mockTridantFetch.mockResolvedValue(answer({ subject: 'owlette:u1', payer: 'linked', trial: 'paused', org_id: 'org_1' }));
-    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: null, orgId: 'org_1' });
+    expect(await previewTrial(INPUT)).toEqual({ ok: true, payer: 'linked', trial: null });
   });
 
   it.each([
@@ -601,24 +598,14 @@ describe('reportUsage', () => {
 
     expect(await reportUsage([{ siteId: 'site-7', machines: 4, asOfMs: MONTH_START - 1 }], NOW)).toEqual({
       ok: true,
-      results: [
-        outcome('site-7', 'recorded', {
-          recorded: true,
-          settling: true,
-          settlesAt: MONTH_START + 86_400_000,
-          periodStart: LAST_MONTH,
-          periodEnd: MONTH_START,
-        }),
-      ],
+      results: [outcome('site-7', 'recorded', { recorded: true, settlesAt: MONTH_START + 86_400_000 })],
     });
   });
 
-  it('reads the period fields as null when absent or not numbers', async () => {
+  it('reads settles_at as null when it is not a number', async () => {
     mockTridantFetch.mockResolvedValue(
       answer({
-        results: [
-          { site: 'owlette:site-7', status: 'recorded', recorded: true, settles_at: '2026-12-02T00:00:00Z', period_start: null },
-        ],
+        results: [{ site: 'owlette:site-7', status: 'recorded', recorded: true, settles_at: '2026-12-02T00:00:00Z' }],
       }),
     );
     expect(await reportUsage([{ siteId: 'site-7', machines: 1 }], NOW)).toEqual({
@@ -637,8 +624,7 @@ describe('reportUsage', () => {
     'invalid_site_ref',
     'invalid_machines',
     'invalid_as_of',
-  ])('passes the status %s through as not recorded, with no period', async (status) => {
-    // tridant sends the subscription's current period on the period_* statuses; it is not the entry's.
+  ])('passes the status %s through as not recorded', async (status) => {
     mockTridantFetch.mockResolvedValue(
       answer({
         recorded: 0,
@@ -1183,9 +1169,9 @@ describe('the e2e fake', () => {
     mockStore.set('e2e_billing_config/trial', { linkRequired: ['u2'], trialUsed: ['u3'] });
     const preview = (uid: string) => previewTrial({ uid, email: EMAIL, name: 'Acme' });
 
-    expect(await preview('u1')).toEqual({ ok: true, payer: 'would_create', trial: 'would_start', orgId: null });
-    expect(await preview('u2')).toEqual({ ok: true, payer: 'link_required', trial: null, orgId: null });
-    expect(await preview('u3')).toEqual({ ok: true, payer: 'would_create', trial: 'used', orgId: null });
+    expect(await preview('u1')).toEqual({ ok: true, payer: 'would_create', trial: 'would_start' });
+    expect(await preview('u2')).toEqual({ ok: true, payer: 'link_required', trial: null });
+    expect(await preview('u3')).toEqual({ ok: true, payer: 'would_create', trial: 'used' });
     expect([...mockStore.keys()]).toEqual(['e2e_billing_config/trial']);
   });
 
@@ -1208,7 +1194,6 @@ describe('the e2e fake', () => {
   });
 
   it("logs each entry's own moment, and records into its month as tridant does", async () => {
-    const LAST_MONTH = Date.UTC(2026, 9, 1);
     const SETTLES_AT = MONTH_START + 86_400_000;
     const EARLY = MONTH_START + 3 * 3_600_000;
     const entries = [
@@ -1221,13 +1206,7 @@ describe('the e2e fake', () => {
     expect(await reportUsage(entries, EARLY)).toEqual({
       ok: true,
       results: [
-        outcome('site-7', 'recorded', {
-          recorded: true,
-          settling: true,
-          settlesAt: SETTLES_AT,
-          periodStart: LAST_MONTH,
-          periodEnd: MONTH_START,
-        }),
+        outcome('site-7', 'recorded', { recorded: true, settlesAt: SETTLES_AT }),
         outcome('site-8', 'recorded', RECORDED),
       ],
     });

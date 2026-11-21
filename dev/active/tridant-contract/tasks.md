@@ -430,3 +430,13 @@ commits each wave. Do not touch files outside your task's list.
   every night would be noise). /verify for wave 5: standards and spec, all low, fixed (docs and
   registry on the blank key and on `site_not_billed`, the record shown only on the account plan,
   wording). Full jest 595/595.
+- Wave 6: dev merged at 15f03ed3 (4.2.4, no conflicts), changelog entry in both files, security
+  gate CLEAR (GATE_REF=refs/heads/dev, 5 acks already on dev), full jest 595/595, rules 720/720
+  on shifted ports. Final /verify of the whole branch: spec passes all nine items; standards four
+  lows, fixed: `inBatches` in its own `web/lib/inBatches.ts` (daily job, settle pass, removal
+  sweep); daily `keys` carry `reason` and both routes pass `TridantKeyCheck` as is; dead parsed
+  fields removed (`UsageOutcome.settling/periodStart/periodEnd`, `TrialPreview.orgId`,
+  `TridantKeyCheck.expiresAt`; the task texts above still name them); a "tier" comment; the
+  changelog no longer overclaims the 23:30 gap and notes the plan-trials changes. For Davor:
+  tridant's `site-billing.md` says owlette always sends the payer; by design it sends it only
+  where it knows who pays (decision 1).

@@ -17,7 +17,6 @@ const mockCount = jest.fn();
 jest.mock('@/lib/planUsage.server', () => ({
   stampSiteMachines: (...args: unknown[]) => mockStamp(...args),
   activeMachinesBetween: (...args: unknown[]) => mockCount(...args),
-  inBatches: <T, R>(items: T[], run: (item: T) => Promise<R>) => Promise.all(items.map(run)),
 }));
 
 const mockReportUsage = jest.fn();
@@ -116,10 +115,7 @@ function outcome(siteId: string, overrides: Partial<UsageOutcome> = {}): UsageOu
     siteId,
     status: 'recorded',
     recorded: true,
-    settling: true,
     settlesAt: SETTLES_AT,
-    periodStart: PERIOD_START,
-    periodEnd: PERIOD_END,
     ...overrides,
   };
 }
@@ -264,8 +260,8 @@ describe('runPlanSettle', () => {
     mockDocs.set('unanswered', { report: report() });
     mockCount.mockResolvedValue(4);
     answers({
-      stale: { status: 'stale', recorded: false, settling: false, settlesAt: null, periodStart: null, periodEnd: null },
-      unanswered: { status: 'unreachable', recorded: false, settling: false, settlesAt: null, periodStart: null, periodEnd: null },
+      stale: { status: 'stale', recorded: false, settlesAt: null },
+      unanswered: { status: 'unreachable', recorded: false, settlesAt: null },
     });
 
     const summary = await runPlanSettle(NOW);
@@ -290,7 +286,7 @@ describe('runPlanSettle', () => {
 
   it('settles a site whose billing ended with the period: the daily run already billed it', async () => {
     mockDocs.set('stopped', { report: report() });
-    answers({ stopped: { status: 'site_not_billed', recorded: false, settling: false, settlesAt: null, periodStart: null, periodEnd: null } });
+    answers({ stopped: { status: 'site_not_billed', recorded: false, settlesAt: null } });
 
     const summary = await runPlanSettle(NOW);
 
@@ -302,7 +298,7 @@ describe('runPlanSettle', () => {
 
   it('logs a period tridant id already closed at error and leaves it unsettled', async () => {
     mockDocs.set('late', { report: report() });
-    answers({ late: { status: 'period_closed', recorded: false, settling: false, settlesAt: null, periodStart: null, periodEnd: null } });
+    answers({ late: { status: 'period_closed', recorded: false, settlesAt: null } });
 
     const summary = await runPlanSettle(NOW);
 

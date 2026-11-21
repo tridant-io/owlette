@@ -165,11 +165,11 @@ function billedToPreviousOwner(pointer: BillingPointer | null, owner: unknown, r
 
 /**
  * the record as the site plan answer shows it. with plans enforced, tridant id's
- * answer decides whether the site is billed and at what: its tier, rate and end
- * are shown, and once it bills nothing the record is left out and the billing
- * section offers an upgrade, before the daily job has closed a record that still
- * says it runs. with plans off nothing was asked, and the record stands. who
- * pays is always the record's: tridant's answer does not say.
+ * answer decides whether the site is billed and at what: its plan, founders rate
+ * and end are shown, and once it bills nothing the record is left out and the
+ * billing section offers an upgrade, before the daily job has closed a record
+ * that still says it runs. with plans off nothing was asked, and the record
+ * stands. who pays is always the record's: tridant's answer does not say.
  */
 export function siteBillingView(
   siteData: SiteData,
