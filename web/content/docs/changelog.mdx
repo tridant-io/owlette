@@ -8,6 +8,12 @@ tocDepth: 2
 
 ## [Unreleased]
 
+### changed — a site's billing reads what tridant bills
+
+where plans are on, a billed site's section in **site settings** → **billing** and its row on **settings** → **plan** show the plan, founders rate and end date tridant bills it at, not owlette's own copy. a trial that tridant extends shows its new end. an account whose trial already ran on an earlier tridant account, since closed, reads **no pro trial** and gets no second one. switching the plan of a site that tridant bills under another tridant account now says so and changes nothing. deleting a site also removes it from your tridant account once its last billing period is invoiced. a month's machine count is sent once more at 06:00 UTC the next morning, so a report missed on the last evening, or a machine seen only after it, still reaches that month's bill. see [plans](/docs/plans).
+
+if you self-host with plans on, register `GET /api/cron/plan-settle` on cron-job.org at `0 6 * * *` UTC with your `X-Cron-Secret`, beside `plan-daily`. see [web deployment](/docs/setup/web-deployment).
+
 ### changed — pick several users or sites on the activity page, and an x clears them
 
 the user and site filters on **admin** → **activity** take several at once, up to 10 of each: a row checks or unchecks a person or a site, the list stays open, and the filter reads **2 users** or **2 sites**. an x on a filter clears it, as **anyone** and **every site** still do. the address repeats each one, `user=…&user=…`, and so does `GET /api/admin/activity`, which refuses more than 10 of either.
