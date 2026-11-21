@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — activity rows start with an arrow
+
+each row on **admin** → **activity** now starts with a small arrow, as the machine rows on the dashboard do, so you can see it opens. the arrow turns while the row is open.
+
 ### changed — pick several users or sites on the activity page, and an x clears them
 
 the user and site filters on **admin** → **activity** take several at once, up to 10 of each: a row checks or unchecks a person or a site, the list stays open, and the filter reads **2 users** or **2 sites**. an x on a filter clears it, as **anyone** and **every site** still do. the address repeats each one, `user=…&user=…`, and so does `GET /api/admin/activity`, which refuses more than 10 of either.

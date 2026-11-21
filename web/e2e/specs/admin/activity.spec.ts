@@ -472,6 +472,21 @@ test.describe('the page, as a superadmin', () => {
     expect(await clippedFocusRings(page, row)).toEqual([]);
   });
 
+  test('a row leads with a chevron that always shows and turns while open', async ({ page }) => {
+    await page.goto('/admin/activity');
+    const row = item(page, CHANGE);
+    const chevron = row.locator('svg.lucide-chevron-down');
+    await expect(chevron).toHaveCount(1);
+    await expect(chevron).toHaveCSS('opacity', '1');
+    await expect(chevron).toHaveCSS('rotate', 'none');
+
+    await openRow(row);
+    await expect(chevron).toHaveCSS('rotate', '180deg');
+
+    await row.getByRole('button').first().click();
+    await expect(chevron).toHaveCSS('rotate', 'none');
+  });
+
   test('the date range narrows the list and stays in the url', async ({ page }) => {
     await page.goto('/admin/activity');
     await expect(item(page, CHANGE)).toBeVisible();
@@ -590,6 +605,7 @@ test.describe('the page at a phone width', () => {
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
     const row = item(page, CHANGE);
+    await expect(row.locator('svg.lucide-chevron-down')).toBeVisible();
     await openRow(row);
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything from this actor' }), 'the actor shortcut');
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything on this site' }), 'the site shortcut');
