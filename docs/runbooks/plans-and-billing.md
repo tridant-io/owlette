@@ -19,7 +19,7 @@ and the four server-only collections described under [what owlette stores](#what
 Every gate is shipped. As of 2026-11-12, plans are enforced on dev (since 19:13 UTC that day) and
 ship off on prod, where every gate is dormant.
 
-Prod's `PLAN_ENFORCEMENT` stays off until 2027-04-01 00:00 UTC (Rosco, 2026-11-20), so nobody is
+Prod's `PLAN_ENFORCEMENT` stays off until 2027-04-01 00:00 UTC (owner, 2026-11-20), so nobody is
 billed before then: the public copy says owlette is free until 1 April 2027
 (`PRICING_FACTS.freeUntil`). [The bulk trial start](#the-bulk-trial-start) and [the flip](#the-flip)
 happen on or after that date, in that order, so the first possible charge comes after the 14-day
