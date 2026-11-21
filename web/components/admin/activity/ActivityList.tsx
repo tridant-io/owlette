@@ -66,9 +66,11 @@ function KindBadge({ row }: { row: ActivityRow }) {
 
 const EMPTY_COPY = { title: 'nothing here', detail: 'no activity matches this view and these filters' };
 
-// one grid, two shapes. a phone: badge and age on the first line, who and what
-// under them, the muted line last. md up: one row, age and badge in their own columns.
-// cells are placed by line: a col-span utility would reset the col-start beside it
+// one grid, two shapes, both led by a chevron that always shows, as on the dashboard's
+// machine rows. a phone: badge and age on the first line, who and what under them, the
+// muted line last. md up: one row, age and badge in their own columns. cells are placed
+// by line: a col-span utility would reset the col-start beside it. the opened panel's
+// left pad lines it up with the badge column
 function ActivityItem({
   row,
   open,
@@ -89,27 +91,30 @@ function ActivityItem({
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            className="grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
+            className="grid w-full cursor-pointer grid-cols-[0.875rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-3 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 sm:px-4 md:grid-cols-[0.875rem_4.5rem_9rem_minmax(0,1fr)] md:gap-x-4"
           >
-            <span className="col-[2] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[1] md:row-[1/3] md:text-left">
+            <ChevronDown
+              className={`col-[1] row-[1] h-3.5 w-3.5 text-muted-foreground transition-transform md:row-[1/3] ${open ? 'rotate-180' : ''}`}
+            />
+            <span className="col-[3] row-[1] text-right font-mono text-xs tabular-nums text-muted-foreground md:col-[2] md:row-[1/3] md:text-left">
               <time dateTime={new Date(row.at).toISOString()} title={rowFullTime(row)}>
                 {rowTime(row)}
               </time>
             </span>
-            <span className="col-[1] row-[1] flex md:col-[2] md:row-[1/3]">
+            <span className="col-[2] row-[1] flex md:col-[3] md:row-[1/3]">
               <KindBadge row={row} />
             </span>
-            <span className="col-[1/3] row-[2] break-words text-sm md:col-[3] md:row-[1] md:truncate">
+            <span className="col-[2/4] row-[2] break-words text-sm md:col-[4] md:row-[1] md:truncate">
               <span className="font-semibold text-foreground">{rowWho(row)}</span>
               <span className="text-foreground"> {rowWhat(row)}</span>
             </span>
-            <span className="col-[1/3] row-[3] break-words text-xs text-muted-foreground md:col-[3] md:row-[2] md:truncate">
+            <span className="col-[2/4] row-[3] break-words text-xs text-muted-foreground md:col-[4] md:row-[2] md:truncate">
               {rowMeta(row, siteNames)}
             </span>
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-          <div className="flex flex-col gap-3 px-3 pb-4 pt-1 sm:px-4 md:pl-[6.5rem]">
+          <div className="flex flex-col gap-3 pb-4 pl-[2.375rem] pr-3 pt-1 sm:pl-[2.625rem] sm:pr-4 md:pl-[8.375rem]">
             <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
               {rowFacts(row, siteNames).map(([key, value], i) => (
                 <div key={`${key}:${i}`} className="contents">
