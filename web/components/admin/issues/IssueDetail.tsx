@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Download, Film, ImageIcon, SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIssue, type Issue } from '@/hooks/useIssues';
@@ -208,6 +208,12 @@ function SystemInfo({ systemInfo }: { systemInfo: string }) {
 function LogTail({ logTail }: { logTail: string }) {
   const [open, setOpen] = useState(false);
   const lines = logTail.replace(/\n+$/, '').split('\n').length;
+  // opens at the end: the newest lines are where the trouble is. a stable ref runs once per
+  // mount and the panel mounts its log on each open, so a re-render (the close slide
+  // included) never yanks the scroll back down
+  const toNewest = useCallback((el: HTMLPreElement | null) => {
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <section aria-labelledby="issue-log-heading" className="overflow-hidden rounded-xl border border-border bg-card">
@@ -222,12 +228,9 @@ function LogTail({ logTail }: { logTail: string }) {
             </Button>
           </CollapsibleTrigger>
         </h2>
-        <CollapsibleContent>
-          {/* opens at the end: the newest lines are where the trouble is */}
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
           <pre
-            ref={(el) => {
-              if (el) el.scrollTop = el.scrollHeight;
-            }}
+            ref={toNewest}
             className="max-h-[32rem] overflow-auto border-t border-border bg-card-sunken px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground wrap-anywhere sm:px-5"
           >
             {logTail}
