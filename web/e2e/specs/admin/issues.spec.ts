@@ -18,6 +18,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mintApiKey, revokeApiKey, authHeaders, type MintedApiKey } from '../../helpers/apiKey';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const DAY = 24 * 60 * 60 * 1000;
@@ -31,6 +32,11 @@ const USER_TEXT = 'it goes black every few minutes and comes back on its own.';
 
 const SYSTEM_INFO = ['  hostname: LOBBY-WALL-03', '  cpu percent: 38.4', '  agent version: 4.1.17'].join('\n');
 const LOG_LINE = '2026-10-15 09:58:00 ERROR process_monitor: TouchDesigner.exe exited with code 3221225477';
+// an agent sends about its last 100 lines, so the tail scrolls; the error is the newest
+const LOG_TAIL = [
+  ...Array.from({ length: 99 }, (_, i) => `2026-10-15 09:57:${String(i % 60).padStart(2, '0')} INFO process_monitor: heartbeat ${i}`),
+  LOG_LINE,
+].join('\n');
 
 // submitted through the bug-report route; cleaned up with the seeded ones
 const submittedIds: string[] = [];
@@ -43,7 +49,7 @@ test.beforeAll(async () => {
       source: 'agent',
       category: 'bug',
       title: NEW_TITLE,
-      description: `${USER_TEXT}\n\nscreenshots attached: 1\n\n--- system info ---\n${SYSTEM_INFO}\n\n--- recent logs (last ~100 lines) ---\n${LOG_LINE}`,
+      description: `${USER_TEXT}\n\nscreenshots attached: 1\n\n--- system info ---\n${SYSTEM_INFO}\n\n--- recent logs (last ~100 lines) ---\n${LOG_TAIL}`,
       status: 'new',
       createdAt: Timestamp.now(),
       userEmail: '',
@@ -140,6 +146,45 @@ test.describe('the pages, as a superadmin', () => {
 
     const stored = (await getAdminDb().doc(`bug_reports/${NEW_ID}`).get()).data();
     expect(stored).toMatchObject({ status: 'fixed', triageNote: note, statusUpdatedBy: 'super-uid' });
+  });
+
+  test('the log tail slides open and closed, as the other expandable panels do', async ({ page }) => {
+    await page.goto(`/admin/issues/${NEW_NUMBER}`);
+    const log = page.getByRole('region', { name: /log tail/ });
+    await expect(log).toBeVisible();
+    const slides = await recordSlides(log);
+    const toggle = log.getByRole('button', { name: /log tail/ });
+
+    await toggle.click();
+    await expect.poll(slides).toBe('collapsible-down');
+    await expect(page.getByText(LOG_LINE)).toBeVisible();
+
+    await toggle.click();
+    await expect.poll(slides).toBe('collapsible-down collapsible-up');
+    await expect(page.getByText(LOG_LINE)).toBeHidden();
+  });
+
+  test('the log tail opens at its newest line and holds its scroll while it slides shut', async ({ page }) => {
+    await page.goto(`/admin/issues/${NEW_NUMBER}`);
+    const log = page.getByRole('region', { name: /log tail/ });
+    const toggle = log.getByRole('button', { name: /log tail/ });
+    await toggle.click();
+    await slideSettled(log);
+    const tail = log.locator('pre');
+    await expect.poll(() => tail.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop)).toBeLessThan(2);
+
+    // read back to the top, let that scroll's own event pass, then note any scroll from here on.
+    // scroll events don't bubble, so the section listens in the capture phase
+    await tail.evaluate(async (el) => {
+      el.scrollTop = 0;
+      await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+      const section = el.closest('section')!;
+      section.dataset.scrolled = 'no';
+      section.addEventListener('scroll', () => (section.dataset.scrolled = 'yes'), true);
+    });
+    await toggle.click();
+    await expect(page.getByText(LOG_LINE)).toBeHidden();
+    await expect(log).toHaveAttribute('data-scrolled', 'no');
   });
 });
 

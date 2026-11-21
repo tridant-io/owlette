@@ -36,6 +36,7 @@ import { clippedFocusRings } from '../../helpers/focusRing';
 import { E2E_CRON_SECRET } from '../../helpers/cron';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 import { releaseFixtureSite, seedSite } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
@@ -289,7 +290,7 @@ async function openRow(row: Locator): Promise<void> {
   const trigger = row.getByRole('button').first();
   await trigger.click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'true');
-  await row.evaluate((li) => Promise.allSettled(li.getAnimations({ subtree: true }).map((a) => a.finished)));
+  await slideSettled(row);
 }
 
 /** the seeded rows on screen, in the order they appear */
@@ -449,14 +450,7 @@ test.describe('the page, as a superadmin', () => {
     const row = item(page, CHANGE);
     await expect(row).toBeVisible();
 
-    // read the animations off their start events, so the test never races a 200ms slide
-    await row.evaluate((li: HTMLElement) => {
-      li.dataset.slides = '';
-      li.addEventListener('animationstart', (e) => {
-        if (e.animationName.startsWith('collapsible-')) li.dataset.slides += `${e.animationName} `;
-      });
-    });
-    const slides = () => row.evaluate((li: HTMLElement) => (li.dataset.slides ?? '').trim());
+    const slides = await recordSlides(row);
 
     await row.getByRole('button').first().click();
     await expect.poll(slides).toBe('collapsible-down');
@@ -470,6 +464,21 @@ test.describe('the page, as a superadmin', () => {
     // last, because the check turns animation off for the rest of the page
     await openRow(row);
     expect(await clippedFocusRings(page, row)).toEqual([]);
+  });
+
+  test('a row leads with a chevron that always shows and turns while open', async ({ page }) => {
+    await page.goto('/admin/activity');
+    const row = item(page, CHANGE);
+    const chevron = row.locator('svg.lucide-chevron-down');
+    await expect(chevron).toHaveCount(1);
+    await expect(chevron).toHaveCSS('opacity', '1');
+    await expect(chevron).toHaveCSS('rotate', 'none');
+
+    await openRow(row);
+    await expect(chevron).toHaveCSS('rotate', '180deg');
+
+    await row.getByRole('button').first().click();
+    await expect(chevron).toHaveCSS('rotate', 'none');
   });
 
   test('the date range narrows the list and stays in the url', async ({ page }) => {
@@ -590,6 +599,7 @@ test.describe('the page at a phone width', () => {
     await expectFullyWithinViewport(page, page.getByRole('button', { name: 'refresh activity' }), 'refresh');
 
     const row = item(page, CHANGE);
+    await expect(row.locator('svg.lucide-chevron-down')).toBeVisible();
     await openRow(row);
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything from this actor' }), 'the actor shortcut');
     await expectFullyWithinViewport(page, row.getByRole('button', { name: 'everything on this site' }), 'the site shortcut');

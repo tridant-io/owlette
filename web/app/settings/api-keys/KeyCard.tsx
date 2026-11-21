@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -171,192 +172,196 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
           : 'rounded-md border border-border bg-card/50 px-3 py-2 space-y-2'
       }
     >
-      {/* Fixed tracks for the date columns so they land at the same x on every
-          row; the name is the only flexible one. Stacking each label over its
-          value is what stops the dates truncating. */}
-      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[auto_minmax(6rem,1fr)_5.25rem_5.25rem_5.25rem_auto]">
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? 'hide' : 'show'} details for ${apiKey.name}`}
-          className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground cursor-pointer"
-        >
-          <ChevronRight
-            className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`}
-          />
-        </button>
+      {/* the row and its details are one child of the card's space-y, so the gap
+          above the details is in them and slides in with them */}
+      <Collapsible open={expanded} onOpenChange={setExpanded}>
+        {/* Fixed tracks for the date columns so they land at the same x on every
+            row; the name is the only flexible one. Stacking each label over its
+            value is what stops the dates truncating. */}
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[auto_minmax(6rem,1fr)_5.25rem_5.25rem_5.25rem_auto]">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              aria-label={`${expanded ? 'hide' : 'show'} details for ${apiKey.name}`}
+              className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <ChevronRight
+                className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`}
+              />
+            </button>
+          </CollapsibleTrigger>
 
-        <div className="flex min-w-0 items-center gap-2">
-          {/* p.font-medium is load-bearing: rowFor() in api-keys-states.spec.ts
-              locates the row by it. */}
-          <p className="min-w-0 truncate text-sm text-foreground font-medium">
-            {apiKey.name || '(unnamed key)'}
-          </p>
-          {/* Only legacy `test` keys get a badge — live is the only environment
-              minted now, so a "live" badge everywhere is noise. A lingering test
-              key authenticates identically, so it stays called out. */}
-          {apiKey.environment === 'test' && (
+          <div className="flex min-w-0 items-center gap-2">
+            {/* p.font-medium is load-bearing: rowFor() in api-keys-states.spec.ts
+                locates the row by it. */}
+            <p className="min-w-0 truncate text-sm text-foreground font-medium">
+              {apiKey.name || '(unnamed key)'}
+            </p>
+            {/* Only legacy `test` keys get a badge — live is the only environment
+                minted now, so a "live" badge everywhere is noise. A lingering test
+                key authenticates identically, so it stays called out. */}
+            {apiKey.environment === 'test' && (
+              <Badge
+                variant="outline"
+                className="border-warning/50 text-warning text-xs flex-shrink-0"
+              >
+                legacy test
+              </Badge>
+            )}
             <Badge
               variant="outline"
-              className="border-warning/50 text-warning text-xs flex-shrink-0"
+              className={
+                status.tone === 'ok'
+                  ? 'border-success/50 text-success text-xs flex-shrink-0'
+                  : status.tone === 'warn'
+                    ? 'border-warning/50 text-warning text-xs flex-shrink-0'
+                    : status.tone === 'error'
+                      ? 'border-danger/50 text-danger text-xs flex-shrink-0'
+                      : 'border-border text-muted-foreground text-xs flex-shrink-0'
+              }
             >
-              legacy test
+              {status.label}
             </Badge>
-          )}
-          <Badge
-            variant="outline"
-            className={
-              status.tone === 'ok'
-                ? 'border-success/50 text-success text-xs flex-shrink-0'
-                : status.tone === 'warn'
-                  ? 'border-warning/50 text-warning text-xs flex-shrink-0'
-                  : status.tone === 'error'
-                    ? 'border-danger/50 text-danger text-xs flex-shrink-0'
-                    : 'border-border text-muted-foreground text-xs flex-shrink-0'
-            }
-          >
-            {status.label}
-          </Badge>
-        </div>
-
-        <div className="hidden min-w-0 sm:block">
-          <div className="text-[11px] leading-tight text-muted-foreground/80">created</div>
-          <div className="text-xs leading-tight text-muted-foreground tabular-nums">
-            {formatDate(apiKey.createdAt)}
           </div>
-        </div>
 
-        <div className="hidden min-w-0 sm:block">
-          <div className="text-[11px] leading-tight text-muted-foreground/80">last used</div>
-          <div className="text-xs leading-tight text-muted-foreground tabular-nums">
-            {formatRelativeAt(apiKey.lastUsedAt, now)}
+          <div className="hidden min-w-0 sm:block">
+            <div className="text-[11px] leading-tight text-muted-foreground/80">created</div>
+            <div className="text-xs leading-tight text-muted-foreground tabular-nums">
+              {formatDate(apiKey.createdAt)}
+            </div>
           </div>
-        </div>
 
-        <div className="hidden min-w-0 sm:block">
-          <div
-            className={`text-[11px] leading-tight ${
-              apiKey.expired ? 'text-danger' : 'text-muted-foreground/80'
-            }`}
-          >
-            {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}
+          <div className="hidden min-w-0 sm:block">
+            <div className="text-[11px] leading-tight text-muted-foreground/80">last used</div>
+            <div className="text-xs leading-tight text-muted-foreground tabular-nums">
+              {formatRelativeAt(apiKey.lastUsedAt, now)}
+            </div>
           </div>
-          <div
-            className={`text-xs leading-tight tabular-nums ${
-              apiKey.expired ? 'text-danger' : 'text-muted-foreground'
-            }`}
-          >
-            {formatDate(apiKey.retired ? apiKey.retiresAt : apiKey.expiresAt)}
-          </div>
-        </div>
 
-        {/* A revoked key is terminal in every direction — rotate and edit 409,
-            and revoking it again is a no-op — so the whole action cell goes
-            away rather than offering a button that cannot change anything. */}
-        {apiKey.revoked ? null : confirmRevoke ? (
-          <div className="flex items-center justify-end gap-1.5">
-            <span className="text-xs text-danger">revoke?</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost-destructive"
-              onClick={handleRevoke}
-              disabled={revoking}
-              className="h-7 px-2 text-xs cursor-pointer"
+          <div className="hidden min-w-0 sm:block">
+            <div
+              className={`text-[11px] leading-tight ${
+                apiKey.expired ? 'text-danger' : 'text-muted-foreground/80'
+              }`}
             >
-              {revoking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'yes'}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setConfirmRevoke(false)}
-              disabled={revoking}
-              className="h-7 px-2 text-xs text-muted-foreground cursor-pointer"
+              {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}
+            </div>
+            <div
+              className={`text-xs leading-tight tabular-nums ${
+                apiKey.expired ? 'text-danger' : 'text-muted-foreground'
+              }`}
             >
-              no
-            </Button>
+              {formatDate(apiKey.retired ? apiKey.retiresAt : apiKey.expiresAt)}
+            </div>
           </div>
-        ) : !actionable ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost-destructive"
-            onClick={() => setConfirmRevoke(true)}
-            aria-label={`revoke ${apiKey.name}`}
-            className="h-7 w-7 justify-self-end p-0 cursor-pointer"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
-        ) : (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+
+          {/* A revoked key is terminal in every direction — rotate and edit 409,
+              and revoking it again is a no-op — so the whole action cell goes
+              away rather than offering a button that cannot change anything. */}
+          {apiKey.revoked ? null : confirmRevoke ? (
+            <div className="flex items-center justify-end gap-1.5">
+              <span className="text-xs text-danger">revoke?</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost-destructive"
+                onClick={handleRevoke}
+                disabled={revoking}
+                className="h-7 px-2 text-xs cursor-pointer"
+              >
+                {revoking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'yes'}
+              </Button>
               <Button
                 type="button"
                 size="sm"
                 variant="ghost"
-                aria-label={`actions for ${apiKey.name}`}
-                className="h-7 w-7 justify-self-end p-0 text-muted-foreground hover:text-foreground cursor-pointer"
+                onClick={() => setConfirmRevoke(false)}
+                disabled={revoking}
+                className="h-7 px-2 text-xs text-muted-foreground cursor-pointer"
               >
-                {rotating ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <MoreHorizontal className="h-3.5 w-3.5" />
-                )}
+                no
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={() => onEditScopes(apiKey)} className="cursor-pointer">
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-                {editing ? 'close editor' : 'edit scopes'}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={handleRotate}
-                disabled={rotating}
-                className="cursor-pointer"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                rotate
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={() => setConfirmRevoke(true)}
-                variant="destructive"
-                className="cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                revoke
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-
-      {expanded && (
-        <div className="space-y-1 pl-8 pt-1">
-          <code className="block truncate font-mono text-xs text-muted-foreground">
-            {apiKey.keyPrefix || 'owk_'}•••
-          </code>
-          <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <KeyRound className="mt-0.5 h-3 w-3 flex-shrink-0" />
-            <span className="min-w-0 break-words">{summarizeScopes(apiKey.scopes)}</span>
-          </div>
-          <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-            <Wrench className="mt-0.5 h-3 w-3 flex-shrink-0" />
-            <span className="min-w-0 break-words">{TOOL_TIER_LABELS[apiKey.maxToolTier]}</span>
-          </div>
-          {/* Where the sm:-hidden date columns surface on a phone. */}
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground sm:hidden">
-            <span>created {formatDate(apiKey.createdAt)}</span>
-            <span>last used {formatRelativeAt(apiKey.lastUsedAt, now)}</span>
-            <span>
-              {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}{' '}
-              {formatDate(apiKey.retired ? apiKey.retiresAt : apiKey.expiresAt)}
-            </span>
-          </div>
+            </div>
+          ) : !actionable ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost-destructive"
+              onClick={() => setConfirmRevoke(true)}
+              aria-label={`revoke ${apiKey.name}`}
+              className="h-7 w-7 justify-self-end p-0 cursor-pointer"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`actions for ${apiKey.name}`}
+                  className="h-7 w-7 justify-self-end p-0 text-muted-foreground hover:text-foreground cursor-pointer"
+                >
+                  {rotating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onSelect={() => onEditScopes(apiKey)} className="cursor-pointer">
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  {editing ? 'close editor' : 'edit scopes'}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={handleRotate}
+                  disabled={rotating}
+                  className="cursor-pointer"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  rotate
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => setConfirmRevoke(true)}
+                  variant="destructive"
+                  className="cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  revoke
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-      )}
+
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+          <div className="flex flex-col gap-1 pl-8 pt-3">
+            <code className="block truncate font-mono text-xs text-muted-foreground">
+              {apiKey.keyPrefix || 'owk_'}•••
+            </code>
+            <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <KeyRound className="mt-0.5 h-3 w-3 flex-shrink-0" />
+              <span className="min-w-0 break-words">{summarizeScopes(apiKey.scopes)}</span>
+            </div>
+            <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <Wrench className="mt-0.5 h-3 w-3 flex-shrink-0" />
+              <span className="min-w-0 break-words">{TOOL_TIER_LABELS[apiKey.maxToolTier]}</span>
+            </div>
+            {/* Where the sm:-hidden date columns surface on a phone. */}
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground sm:hidden">
+              <span>created {formatDate(apiKey.createdAt)}</span>
+              <span>last used {formatRelativeAt(apiKey.lastUsedAt, now)}</span>
+              <span>
+                {apiKey.expired ? 'expired' : apiKey.retired ? 'retired' : 'expires'}{' '}
+                {formatDate(apiKey.retired ? apiKey.retiresAt : apiKey.expiresAt)}
+              </span>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
 
       {status.tone === 'warn' && status.label === 'expiring soon' && daysUntilExpiry !== null && (
         <div className="flex items-center gap-2 pl-8 text-xs text-warning">
