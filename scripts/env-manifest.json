@@ -46,7 +46,7 @@
       "ENABLE_RATE_LIMIT_ENFORCEMENT": "Same Firestore-outage fallback as ENABLE_CAPABILITY_ENFORCEMENT, governing rate-limit enforcement (web/lib/securityConfig.server.ts:112). Unset means enabled.",
       "FIREBASE_AUTH_EMULATOR_HOST": "Presence alone — any value — flips the Admin SDK into emulator mode, initializing without a service-account credential (web/lib/firebase-admin.ts:37-41). On a deploy target every server-side read and write would silently leave production Firestore. Set only by the Playwright emulator runner.",
       "FIRESTORE_EMULATOR_HOST": "Second trigger for the same Admin SDK emulator branch (web/lib/firebase-admin.ts:39) — either variable alone is sufficient, so both must stay absent.",
-      "GCLOUD_PROJECT": "Runtime-injected inside GCP, never on Railway or Vercel. Read only as a fallback for the audit-log project id (web/lib/auditLogClient.ts:34), which FIREBASE_PROJECT_ID already satisfies on all three targets. Same do-not-sync rule as RAILWAY_*.",
+      "GCLOUD_PROJECT": "Runtime-injected inside GCP, never on Railway or Vercel. Not read by the web code. Same do-not-sync rule as RAILWAY_*.",
       "LEGACY_API_KEY_ALLOW_HASH_LIST": "Companion allowlist of SHA-256 key hashes for LEGACY_API_KEY_BYPASS_ENABLED (web/lib/apiAuth.server.ts:66) — inert alone, dangerous paired.",
       "LEGACY_API_KEY_BYPASS_ENABLED": "'true' re-admits pre-scope-system API keys with empty or missing scopes (web/lib/apiAuth.server.ts:65). Shipped as an emergency-only migration hatch (docs/runbooks/upgrade-2.12.0.md).",
       "NEXT_PUBLIC_FIREBASE_AUTH_EMULATOR_HOST": "Browser-side auth emulator host, applied only when NEXT_PUBLIC_USE_FIREBASE_EMULATOR is 'true' (web/lib/firebase.ts:79). NEXT_PUBLIC_ vars are inlined at build time, so it must be absent from the build environment, not just the runtime one.",
@@ -74,8 +74,6 @@
   "vars": {
     "ADMIN_EMAIL_DEV": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "ADMIN_EMAIL_PROD": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
-    "AUDIT_LOG_REGION": { "class": "config", "targets": [], "note": "optional override — defaults to us-central1, which is where recordAuditEvent deploys (functions/src/auditLog.ts:193 declares no region). Set only if the function moves region" },
-    "AUDIT_LOG_URL": { "class": "config", "targets": [], "note": "optional override — the recordAuditEvent url is otherwise composed from FIREBASE_PROJECT_ID + AUDIT_LOG_REGION (web/lib/auditLogClient.ts:29-38), which already resolves on all three targets" },
     "CLOUDFLARE_TURN_KEY_API_TOKEN": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"], "note": "bearer that mints swoop ICE credentials at rtc.live.cloudflare.com. It cannot query the GraphQL analytics API — TURN usage metering needs its own token" },
     "CLOUDFLARE_TURN_KEY_ID": { "class": "config", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },
     "CORTEX_INTERNAL_SECRET": { "class": "secret", "targets": ["railway-dev", "railway-prod", "vercel-prod"] },

@@ -21,6 +21,32 @@ let email: { enabled: boolean; recipients: string[] };
 const loadActivitySince = jest.fn();
 const getAll = jest.fn();
 const historyWheres: unknown[][] = [];
+// each site's queued audit events, as the collection-group scan meets them; `drained` empties
+// the queue between the scan and the read of its oldest event
+let auditQueued: Array<{ siteId: string; enqueuedAt: number; drained?: boolean }>;
+
+const queueScan = () => {
+  let after = '';
+  const q = {
+    orderBy: () => q,
+    limit: () => q,
+    startAfter: (cursor: string) => ((after = cursor), q),
+    get: async () => {
+      const next = [...auditQueued]
+        .sort((a, b) => a.siteId.localeCompare(b.siteId))
+        .find((queued) => `sites/${queued.siteId}/audit_queue/x` > after);
+      if (!next) return { docs: [] };
+      const doc = { get: () => next.enqueuedAt };
+      const queue = {
+        path: `sites/${next.siteId}/audit_queue`,
+        parent: { id: next.siteId },
+        orderBy: () => ({ limit: () => ({ get: async () => ({ docs: next.drained ? [] : [doc] }) }) }),
+      };
+      return { docs: [{ ...doc, ref: { parent: queue } }] };
+    },
+  };
+  return q;
+};
 
 const chain = (get: () => Promise<unknown>) => {
   const q: Record<string, unknown> = {};
@@ -47,7 +73,8 @@ const mockDb = {
     }
     return chain(async () => ({ docs: [...store.values()].map((f) => ({ id: f.id, data: () => f })) }));
   },
-  collectionGroup: () => chain(async () => ({ docs: [] })),
+  collectionGroup: (name: string) =>
+    name === 'audit_queue' ? queueScan() : chain(async () => ({ docs: [] })),
   doc: (path: string) => ({ path }),
   getAll: (...args: unknown[]) => getAll(...args),
 };
@@ -150,6 +177,7 @@ describe('GET /api/cron/activity-watch', () => {
     loadActivitySince.mockImplementation(async () => feedRows);
     getAll.mockResolvedValue([]);
     historyWheres.length = 0;
+    auditQueued = [];
     emailSend.mockImplementation(async () => {
       callOrder.push('send');
       return { error: null };
@@ -391,6 +419,44 @@ describe('GET /api/cron/activity-watch', () => {
       expect(first.emailsSent).toBe(1);
       expect(second.emailsSent).toBe(0);
       expect(emailSend.mock.calls.filter((c) => c[0].subject.includes('2fa removed'))).toHaveLength(1);
+    });
+  });
+
+  describe('audit queues that stop draining', () => {
+    it('mails every queue stuck past 5 minutes in one email an hour, and leaves a fresh one alone', async () => {
+      auditQueued = [
+        { siteId: 'site-b', enqueuedAt: NOW - 6 * MIN },
+        { siteId: 'site-c', enqueuedAt: NOW - MIN },
+        { siteId: 'site-e', enqueuedAt: NOW - 30 * MIN },
+      ];
+      const hour = Math.floor(NOW / (60 * MIN));
+
+      const first = await (await GET(request('cron-secret'))).json();
+      const again = await (await GET(request('cron-secret'))).json();
+      dateNow.mockReturnValue(NOW + 60 * MIN);
+      const nextHour = await (await GET(request('cron-secret'))).json();
+
+      expect(first).toMatchObject({ findingsCreated: 1, emailsSent: 1 });
+      expect(again).toMatchObject({ findingsCreated: 0, emailsSent: 0 });
+      expect(nextHour).toMatchObject({ findingsCreated: 1, emailsSent: 1 });
+      expect([...store.keys()]).toEqual([`audit_queue_stuck:${hour}`, `audit_queue_stuck:${hour + 1}`]);
+      expect(store.get(`audit_queue_stuck:${hour}`)?.facts).toEqual([
+        { label: 'sites', value: 'site-b, site-e' },
+        { label: 'stuck sites', value: '2' },
+        { label: 'oldest queued', value: new Date(NOW - 30 * MIN).toISOString() },
+      ]);
+      const mail = emailSend.mock.calls[0][0];
+      expect(mail.subject).toContain('audit queue stuck — platform');
+      expect(mail.html).toContain('2 sites have audit events that have waited more than 5 minutes to join an audit log.');
+      expect(mail.html).toContain('site-b, site-e');
+    });
+
+    it('does not flag a queue the drainer emptied between the scan and the read of its oldest event', async () => {
+      auditQueued = [{ siteId: 'site-d', enqueuedAt: NOW - MIN, drained: true }];
+
+      const res = await (await GET(request('cron-secret'))).json();
+
+      expect(res).toMatchObject({ findingsCreated: 0, emailsSent: 0 });
     });
   });
 

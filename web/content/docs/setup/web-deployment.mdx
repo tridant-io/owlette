@@ -80,7 +80,7 @@ in Railway → the service → **variables**, add the values from [environment v
 - **R2** for roost: `R2_S3_ENDPOINT`, `R2_S3_ACCESS_KEY_ID`, `R2_S3_SECRET_ACCESS_KEY`, and `ROOST_ENV` (`prod` or `dev`)
 - **rate limiting**: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`. without them every endpoint falls back to a loose per-process limiter, and the server logs a warning at boot
 - **cron**: `CRON_SECRET`
-- **internal calls**: `CORTEX_INTERNAL_SECRET`, the same value as in `functions/.env.<project-id>`. Cloud Functions present it to fire talons, threshold alerts and audit entries, and autonomous hoot uses it too
+- **internal calls**: `CORTEX_INTERNAL_SECRET`, the same value as in `functions/.env.<project-id>`. Cloud Functions present it to fire talons and threshold alerts, and autonomous hoot uses it too
 - **email**: `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `ADMIN_EMAIL_PROD`, `ADMIN_EMAIL_DEV`
 - **swoop**, when you run it: `SWOOP_SIGNAL_URL`, `SWOOP_SIGNAL_RING_SECRET`, `SWOOP_JWT_KID`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_JWT_PUBLIC_KEY`, `SWOOP_SESSION_MASTER_KEY`, and `CLOUDFLARE_TURN_KEY_ID` with `CLOUDFLARE_TURN_KEY_API_TOKEN` for the relay
 - **error reporting**, optional: `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_SENTRY_ENVIRONMENT`, and `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` for source maps at build time
@@ -280,7 +280,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |
-| `/api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret` | flags risky activity (a new superadmin, removed 2fa, a deleted site, bursts of failures), emails each high finding, and sends a daily digest |
+| `/api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret` | flags risky activity (a new superadmin, removed 2fa, a deleted site, bursts of failures) and any audit queue that has stopped draining, emails each high finding, and sends a daily digest |
 | `/api/hoot/escalation` | `*/5 * * * *` | `Authorization: Bearer` | the autonomous hoot escalation backstop |
 
 `/api/cron/plan-trials` takes `X-Cron-Secret` too but is never scheduled: it starts the trial for existing accounts, run by hand once per environment before plans are switched on. it is a dry run unless called with `?apply=1`: tridant id previews each account's trial and nothing is written. each call covers 100 accounts; repeat it with the `nextPageToken` it returns, as `?pageToken=`, until that is null. both modes first check what tridant id lets each key do and answer it as `keys`, and `?apply=1` answers `503` while `TRIDANT_LICENSE_KEY` fails that check.
@@ -401,7 +401,7 @@ X-Cron-Secret: <CRON_SECRET value>
 
 ### activity watch
 
-scans platform activity every five minutes, stores what the detection rules flag, and emails each high finding. from 16:00 utc it also sends one daily digest of the findings nobody has been mailed about. mail goes to `ACTIVITY_EMAIL`, or to `ADMIN_EMAIL_PROD` / `ADMIN_EMAIL_DEV` when that is unset. without the job nothing is flagged and nobody is mailed:
+scans platform activity every five minutes, stores what the detection rules flag, raises one finding an hour, when an audit queue first goes 5 minutes without draining, listing the sites stuck then, and emails each high finding, including the hourly one the audit drainer keeps per site for the events it sets aside. from 16:00 utc it also sends one daily digest of the findings nobody has been mailed about. mail goes to `ACTIVITY_EMAIL`, or to `ADMIN_EMAIL_PROD` / `ADMIN_EMAIL_DEV` when that is unset. without the job nothing is flagged and nobody is mailed:
 
 ```text
 GET https://<your-app>/api/cron/activity-watch

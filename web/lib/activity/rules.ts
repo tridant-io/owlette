@@ -1,4 +1,4 @@
-import type { ActivityActor, ActivityRow, Finding } from './types';
+import { PLATFORM_AUDIT_SITE_ID, type ActivityActor, type ActivityRow, type Finding } from './types';
 
 type Fact = Finding['facts'][number];
 
@@ -6,6 +6,9 @@ export const WINDOW_MS = 15 * 60 * 1000;
 export const SECOND_FACTOR_BURST = 5;
 export const DESTRUCTIVE_BURST = 5;
 export const REFUSAL_BURST = 20;
+export const AUDIT_QUEUE_STUCK_MS = 5 * 60 * 1000;
+const STUCK_SITES_LISTED = 10;
+const HOUR_MS = 60 * 60 * 1000;
 
 export interface RuleInput {
   rows: ActivityRow[];
@@ -212,4 +215,43 @@ export function evaluateRules({ rows, knownNetworks, hasHistory, siteRoles, labe
   }
 
   return findings;
+}
+
+/** a site with queued audit events, and when its oldest was queued (null when it has no time) */
+export interface QueuedAudit {
+  siteId: string;
+  at: number | null;
+}
+
+// a queue nothing drains holds back audit events that no other rule can see. one finding per hour
+// for the whole platform, so an outage that stalls every queue mails once an hour, not once a site.
+// it lists the sites stuck when it is first raised; one that stalls later in the hour is named by
+// the next hour's. the drainer raises its own finding for events it sets aside (functions/src/auditLog.ts)
+export function evaluateAuditQueues(queues: QueuedAudit[], now: number): Finding[] {
+  const stuck = queues.filter((q) => q.at === null || now - q.at > AUDIT_QUEUE_STUCK_MS);
+  if (stuck.length === 0) return [];
+  const names = stuck.map((q) => (q.siteId === PLATFORM_AUDIT_SITE_ID ? 'the platform' : q.siteId));
+  const listed = names.slice(0, STUCK_SITES_LISTED).join(', ');
+  const more = names.length - STUCK_SITES_LISTED;
+  const times = stuck.flatMap((q) => (q.at === null ? [] : [q.at]));
+  const oldest = times.length > 0 ? Math.min(...times) : null;
+  return [
+    {
+      id: safe(`audit_queue_stuck:${Math.floor(now / HOUR_MS)}`),
+      rule: 'audit_queue_stuck',
+      severity: 'high',
+      title: 'audit queue stuck',
+      summary:
+        `${stuck.length === 1 ? '1 site has' : `${stuck.length} sites have`} audit events ` +
+        'that have waited more than 5 minutes to join an audit log.',
+      subject: { siteId: null },
+      at: oldest ?? now,
+      facts: [
+        fact('sites', more > 0 ? `${listed} and ${more} more` : listed),
+        fact('stuck sites', String(stuck.length)),
+        fact('oldest queued', oldest === null ? 'unknown' : new Date(oldest).toISOString()),
+      ],
+      rowIds: [],
+    },
+  ];
 }

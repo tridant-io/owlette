@@ -35,7 +35,9 @@ firestore/
 |   |-- settings/{settingId}                       rules
 |   |-- logs/{logId}                               rules
 |   |-- audit_log/{entryId}                        rules
-|   |-- audit_log_meta/head
+|   |-- audit_log_meta/head (+ drain_lock)
+|   |-- audit_queue/{eventId}
+|   |-- audit_queue_rejected/{eventId}
 |   |-- deployments/{deploymentId}                 rules
 |   |-- installer_templates/{templateId}           rules
 |   |-- roosts/{roostId}                           rules
@@ -180,7 +182,7 @@ security-boundary audit records. **access**: site admins read; client writes are
 | `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started` (`metadata.joined: true` for a viewer who joined a session already running), `session_ended` (`metadata.left: true` for a viewer who left one that goes on), `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), `step_up_network_check` (the network a control request came from: `mode`, `key`, `prefix`, `viaEdge`, `match`, `windowNetwork`; always outcome `allow`, the decision's own row says what happened), and host events. |
 | `denyReason`, `errorCode`, `enforcementBypassed` | string, string, boolean | optional. |
 
-hash-chained records from the `recordAuditEvent` function land in the same collection under their hash, with `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`, server only) as the chain head.
+hash-chained change records land in the same collection under their hash. writers only queue them: the web app adds `{ event, enqueuedAt }` to `sites/{siteId}/audit_queue/{eventId}`, and the `onAuditQueued` trigger and the every-minute `sweepAuditQueue` chain each site's queue in batches. `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`) is the chain head, and `audit_log_meta/drain_lock` (`{ expiresAt }`) keeps one drainer per site busy while the other triggers return. an event that fails validation, or that firestore will not store, moves to `sites/{siteId}/audit_queue_rejected/{eventId}` with its `reason`, and the drainer counts it, in the same commit, into one high activity finding per site per hour (`audit_rejected:{siteId}:{hour}`). set-aside events stay there until someone removes them. all of these are server only.
 
 ### `sites/{siteId}/webhooks/{webhookId}`
 
@@ -735,7 +737,7 @@ these are server only unless noted.
 | `global/security_config` | platform security kill switches. |
 | `global/audit_log/entries/{entryId}` | platform audit records for actions outside any site, and the sign-in records the [activity page](/docs/dashboard/admin) reads. a sign-in record has `capability` `AUTH_SIGN_IN` (outcome `allow`, one per sign-in, keyed `signin_{uid}_{authTime}`) or `AUTH_SECOND_FACTOR` (a second factor, outcome `allow` when passed and `deny` when failed), plus `metadata.event` (`sign_in`, `sign_in_failed`, `second_factor_passed` or `second_factor_failed`), `metadata.method` and `metadata.network` `{ key, prefix, viaEdge }`: `key` is the internet provider as `asn:<number>`, or `unknown` when the edge did not vouch for it, and `prefix` is the address's /24 (IPv4) or /64 (IPv6), kept for the log only. a failed password is never recorded, because Firebase handles it. |
 | `global/activity_watch` | the state of the activity check, server only: `scannedThrough` (the time up to which activity was scanned, in ms) and `lastDigestDay` (`YYYY-MM-DD`, the last day a digest was sent), plus the superadmin's email setting: `emailEnabled` (boolean; absent means on) and `emailRecipients` (up to 10 lowercase addresses; absent means the list starts as `ACTIVITY_EMAIL` or the admin address, empty means nobody is mailed). |
-| `global/activity_watch/findings/{findingId}` | what a detection rule raised, server only. a finding's `id` is fixed by its rule and subject, so the same one is never stored twice: `rule`, `severity` (`high` or `digest`), `title`, `summary`, `subject`, `at`, `facts`, `rowIds`, then `detectedAt`, `emailedAt` and `digestedAt` (ms, or `null` until it is mailed or put in a digest). |
+| `global/activity_watch/findings/{findingId}` | what a detection rule raised, server only. a finding's `id` is fixed by its rule and subject, so the same one is never stored twice: `rule`, `severity` (`high` or `digest`), `title`, `summary`, `subject`, `at`, `facts`, `rowIds`, then `detectedAt`, `emailedAt` and `digestedAt` (ms, or `null` until it is mailed or put in a digest). the audit drainer keeps one `audit_rejected` finding per site per hour and updates it as it sets events aside, adding `count` and `reasons` (the newest three distinct). |
 | `status_pings/{ms}` | status-page probe results. |
 | `dmca_notices/{id}` | notices from `POST /api/legal/dmca`. |
 

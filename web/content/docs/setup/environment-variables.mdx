@@ -313,17 +313,6 @@ needed only for autonomous hoot, which investigates process crashes on its own. 
 
 ---
 
-## audit log (optional)
-
-the web app sends audit records to the `recordAuditEvent` Cloud Function. its URL is composed from `FIREBASE_PROJECT_ID`, so neither override is normally set.
-
-| variable | what it does |
-|----------|-------------|
-| `AUDIT_LOG_REGION` | the function's region; defaults to `us-central1` |
-| `AUDIT_LOG_URL` | the full function URL, overriding the composed one |
-
----
-
 ## observability (optional)
 
 | variable | what it does |

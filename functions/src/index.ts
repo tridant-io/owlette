@@ -19,7 +19,9 @@ export {
 } from './telemetry';
 export {
   exportAuditDaily,
+  onAuditQueued,
   recordAuditEvent,
+  sweepAuditQueue,
   verifyAuditChain,
 } from './auditLog';
 export { exportSecurityBoundaryAuditDevDaily } from './securityBoundaryAuditExport';
