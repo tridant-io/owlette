@@ -10,7 +10,8 @@ import {
 import { apiError } from '@/lib/apiErrorResponse';
 import logger from '@/lib/logger';
 import { loadActivitySince } from '@/lib/activity/feed.server';
-import { evaluateRules, type RuleInput } from '@/lib/activity/rules';
+import { loadOldestQueued } from '@/lib/activity/auditQueues.server';
+import { evaluateAuditQueues, evaluateRules, type RuleInput } from '@/lib/activity/rules';
 import { fromDecisionDoc } from '@/lib/activity/rows';
 import { loadUserLabels } from '@/lib/activity/labels.server';
 import {
@@ -25,7 +26,8 @@ import { ACTIVITY_FINDINGS_COLLECTION, type ActivityRow, type Finding } from '@/
 
 /**
  * GET /api/cron/activity-watch — one pass over the platform's activity since the last
- * scan: runs the detection rules, stores the new findings, emails each new high one
+ * scan: runs the detection rules, flags any site whose audit queue has waited past 5 minutes,
+ * stores the new findings, emails each new high one (the audit drainer adds its own),
  * and, once a day from 16:00 utc, a digest of the findings nobody has been mailed about.
  * Auth: X-Cron-Secret must equal CRON_SECRET. Dedupe: findings have deterministic ids,
  * and `emailedAt` and the digest day are claimed BEFORE the send, so a retry cannot mail
@@ -149,9 +151,14 @@ export async function GET(request: NextRequest) {
     to = email.recipients;
     const start = Math.max(Math.min(scannedThrough ?? Infinity, now - OVERLAP_MS), now - MAX_LOOKBACK_MS);
 
-    const rows = (await loadActivitySince(db, start)).filter((r) => r.at <= end);
+    const [all, queues] = await Promise.all([loadActivitySince(db, start), loadOldestQueued(db)]);
+    const rows = all.filter((r) => r.at <= end);
     const [labels, signInContext] = await Promise.all([loadUserLabels(db, rowUids(rows)), loadSignInContext(db, rows, now)]);
-    const created = await saveNewFindings(db, evaluateRules({ rows, labels, ...signInContext }), now);
+    const created = await saveNewFindings(
+      db,
+      [...evaluateRules({ rows, labels, ...signInContext }), ...evaluateAuditQueues(queues, now)],
+      now,
+    );
 
     const canMail = email.enabled && !!resend && to.length > 0;
     if (!email.enabled) logger.info('activity-watch: activity emails are switched off, skipping email', { context: 'cron/activity-watch' });

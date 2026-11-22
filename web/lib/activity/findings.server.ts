@@ -18,7 +18,8 @@ export async function saveNewFindings(db: Db, found: Finding[], now: number): Pr
   const created: Finding[] = [];
   for (const finding of found) {
     try {
-      // firestore rejects undefined fields
+      // firestore rejects undefined fields. the audit drainer writes this same shape for the events it sets
+      // aside, one per site per hour (setAsideIn in functions/src/auditLog.ts)
       const subject = Object.fromEntries(Object.entries(finding.subject).filter(([, v]) => v !== undefined));
       await findings(db).doc(finding.id).create({ ...finding, subject, detectedAt: now, emailedAt: null, digestedAt: null });
       created.push(finding);

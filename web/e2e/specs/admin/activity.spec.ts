@@ -15,8 +15,10 @@
  * afterwards.
  *
  * The last describe runs the real detection path: five failed second factors for
- * one user, then `GET /api/cron/activity-watch` twice. No mail goes out (resend is
- * not configured in e2e).
+ * one user, then `GET /api/cron/activity-watch` twice, and an audit queue left
+ * undrained past 5 minutes. e2e runs no audit drainer, so the suite's own queued
+ * events can raise stuck-queue findings too. No mail goes out (resend is not
+ * configured in e2e).
  *
  * The emulator does not enforce indexes. A green run here proves the feed's
  * logic, not that `firestore.indexes.json` holds every composite the production
@@ -712,9 +714,14 @@ test.describe('the detection path, through the cron route', () => {
       emailedAt: null,
     });
 
+    const afterFirst = new Set((await findings.get()).docs.map((d) => d.id));
     const second = await call();
     expect(second.status(), await second.text()).toBe(200);
-    expect((await second.json()).findingsCreated).toBe(0);
+    // e2e runs no audit drainer, so the suite's own queued events can trip the stuck-queue rule on
+    // either call; nothing else may be found twice
+    const foundAgain = (await findings.get()).docs.filter((d) => !afterFirst.has(d.id));
+    foundAgain.forEach((d) => seeded.push(d.ref));
+    expect(foundAgain.filter((d) => d.get('rule') !== 'audit_queue_stuck').map((d) => d.id)).toEqual([]);
     const burstDocs = (await findings.where('rule', '==', 'second_factor_burst').get()).docs.filter(
       (d) => d.get('subject.userId') === BURST_USER,
     );
@@ -726,6 +733,40 @@ test.describe('the detection path, through the cron route', () => {
     await openRow(row);
     await expect(row.getByText('failures', { exact: true })).toBeVisible();
     await expect(row.locator('dt:has-text("failures") + dd')).toHaveText('5');
+  });
+
+  test('a queue nothing has drained for 5 minutes is listed in the hour\'s stuck-queue finding', async ({ request }) => {
+    const db = getAdminDb();
+    const findings = db.collection('global').doc('activity_watch').collection('findings');
+    // a site id that sorts first, so the finding's capped site list names it
+    const site = `0-act-stuck-${SUFFIX}`;
+    const queued = db.collection('sites').doc(site).collection('audit_queue').doc('q');
+    seeded.push(queued);
+    await queued.set({
+      event: { kind: 'process_mutated', siteId: site, target: `p-${SUFFIX}` },
+      enqueuedAt: Timestamp.fromMillis(Date.now() - 10 * 60 * 1000),
+    });
+
+    // the finding is keyed by the hour the route ran in, which a call can straddle. the call
+    // above may already have raised this hour's, before this queue was stuck
+    const hour = () => Math.floor(Date.now() / (60 * 60 * 1000));
+    const hours = [hour()];
+    await findings.doc(`audit_queue_stuck:${hours[0]}`).delete();
+    const res = await request.get('/api/cron/activity-watch', { headers: { 'x-cron-secret': E2E_CRON_SECRET } });
+    expect(res.status(), await res.text()).toBe(200);
+    hours.push(hour());
+
+    const stuck = (await Promise.all([...new Set(hours)].map((h) => findings.doc(`audit_queue_stuck:${h}`).get())))
+      .filter((snap) => snap.exists);
+    stuck.filter((snap) => !seeded.some((ref) => ref.path === snap.ref.path)).forEach((snap) => seeded.push(snap.ref));
+    expect(stuck.length).toBeGreaterThanOrEqual(1);
+    expect(stuck[0].data()).toMatchObject({
+      rule: 'audit_queue_stuck',
+      severity: 'high',
+      title: 'audit queue stuck',
+      subject: { siteId: null },
+    });
+    expect(stuck[0].get('facts')[0]).toMatchObject({ label: 'sites', value: expect.stringMatching(new RegExp(`^${site}`)) });
   });
 });
 

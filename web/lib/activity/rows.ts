@@ -1,10 +1,8 @@
 import { timestampToMs } from '@/lib/firestoreTime.server';
-import { AUTH_CAPABILITIES, type ActivityActor, type ActivityRow } from './types';
+import { AUTH_CAPABILITIES, PLATFORM_AUDIT_SITE_ID, type ActivityActor, type ActivityRow } from './types';
 
 type Doc = { id: string; data(): FirebaseFirestore.DocumentData | undefined };
 type Data = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-
-const PLATFORM_SITE = '_platform';
 
 export function parseChangeActor(actor: unknown): ActivityActor {
   const s = typeof actor === 'string' ? actor : '';
@@ -33,7 +31,7 @@ export function fromChangeDoc(doc: Doc): ActivityRow {
     kind: 'change',
     at: timestampToMs(data.recordedAt) ?? 0,
     actor: parseChangeActor(event.actor),
-    siteId: !event.siteId || event.siteId === PLATFORM_SITE ? null : String(event.siteId),
+    siteId: !event.siteId || event.siteId === PLATFORM_AUDIT_SITE_ID ? null : String(event.siteId),
     action: verb ? `${kind}:${verb}` : kind,
     outcome: null,
     ...(typeof event.target === 'string' ? { target: { id: event.target } } : {}),

@@ -5,7 +5,7 @@
  * `hash(previousHash || canonicalPayload)` so a verifier can walk a site's chain
  * and prove nothing was modified or deleted. The first record uses GENESIS_HASH.
  *
- * No firestore here — this builds records the handler persists, and keeps the
+ * No firestore here — this builds records the drainer persists, and keeps the
  * verifier importable by any consumer with no firebase deps.
  */
 
@@ -182,6 +182,62 @@ export function buildAuditRecord(
   const payload = canonicalJson(event);
   const hash = computeChainHash(previousHash, recordedAt, payload);
   return { event, recordedAt, previousHash, hash };
+}
+
+export interface AuditHead {
+  /** the next record's `previousHash`: the latest record hash, or GENESIS_HASH. */
+  hash: string;
+  /** the latest record's recordedAt, or 0 at genesis. */
+  recordedAt: number;
+}
+
+export interface QueuedEvent {
+  id: string;
+  event: unknown;
+}
+
+export interface ChainedBatch {
+  /** how many queued events, from the front, became a record or a rejection. */
+  taken: number;
+  records: AuditRecord[];
+  rejected: { id: string; reason: string }[];
+  head: AuditHead;
+}
+
+/** keeps a batch's writes well under firestore's 10 MiB transaction limit. */
+export const BATCH_EVENT_BYTES = 4 * 1024 * 1024;
+
+/**
+ * chain queued events onto `head` in queue order. recordedAt is the drain time,
+ * kept strictly after the record it links to: readChain orders by it, and the
+ * activity scan reads change rows forward from a cursor on it.
+ */
+export function chainQueued(
+  siteId: string,
+  head: AuditHead,
+  queued: readonly QueuedEvent[],
+  nowMs: number,
+): ChainedBatch {
+  const batch: ChainedBatch = { taken: 0, records: [], rejected: [], head };
+  let bytes = 0;
+  for (const q of queued) {
+    bytes += Buffer.byteLength(JSON.stringify(q.event) ?? '');
+    if (batch.taken > 0 && bytes > BATCH_EVENT_BYTES) break;
+    batch.taken++;
+    const validated = canonicaliseEvent(q.event as Partial<AuditEvent>);
+    if (!validated.ok || validated.event.siteId !== siteId) {
+      batch.rejected.push({ id: q.id, reason: validated.ok ? 'siteId_mismatch' : validated.reason });
+      continue;
+    }
+    const record = buildAuditRecord(
+      validated.event,
+      batch.head.hash,
+      Math.max(nowMs, batch.head.recordedAt + 1),
+    );
+    batch.records.push(record);
+    batch.head = { hash: record.hash, recordedAt: record.recordedAt };
+  }
+  return batch;
 }
 
 /**
