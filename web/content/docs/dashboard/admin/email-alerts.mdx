@@ -1,7 +1,7 @@
 ---
 title: "email alerts"
 description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. site owners and admins write threshold rules on admin → alerts; each person picks which emails they get in account settings."
-keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "built-in alerts", "custom rules", "sleep", "asleep", "laptop", "lid closed", "battery"]
+keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "low disk", "default alert", "resend", "cooldown", "digest", "built-in alerts", "custom rules", "sleep", "asleep", "laptop", "lid closed", "battery"]
 ---
 
 alert email goes to the people on a site, not to a fixed address. each person decides which categories they get; site owners and admins decide what counts as a threshold breach.
@@ -110,15 +110,19 @@ a rule on a metric a machine does not report never fires for that machine; [plat
 | preset | rule | severity | cooldown |
 |---|---|---|---|
 | GPU Overheating | `gpu_temp > 85` | warning | 30 min |
-| Low Disk | `disk_percent < 10` | warning | 60 min |
+| Low Disk | `disk_percent > 90` | warning | 1440 min |
 | High Memory | `memory_percent > 90` | warning | 30 min |
 | High CPU | `cpu_percent > 95` | critical | 30 min |
-
-the Low Disk preset fires when a disk is less than 10% **used**, so it alerts on an almost empty disk, not a full one. for a disk filling up, create a rule on **disk usage (%)** `>` 90 instead.
 
 the **webhook** channel sends `threshold.breached`, an event new subscriptions cannot select, so it reaches only older subscriptions that already list it; see [what fires today](/docs/dashboard/admin/webhooks#what-fires-today).
 
 ![email alert rule configuration](/docs-screens/email-alerts.png)
+
+### the default low disk rule
+
+a site has one rule before anyone saves its rule list: **Low Disk**, `disk_percent > 90`, warning, both channels, cooldown 1440 minutes. a machine whose fullest disk is more than 90% used, under 10% free, sends one alert a day until it has room again, to everyone in [who gets them](#who-gets-them) whose **threshold alerts** switch is on. **custom rules** lists it like any other rule, and hoot mcp's `list_alert_rules` returns it.
+
+it lasts until the site's rule list is first saved, from this page or through `PUT /api/sites/{siteId}/alerts`. from then on the saved list is all the site has: the default turned off, edited or deleted stays that way, and a list saved empty stays empty. the **Low Disk** preset adds the rule back. a site that saved its rule list before the default existed had the rule added to that list once, when the default shipped, unless the list already held a rule for a full disk.
 
 ---
 

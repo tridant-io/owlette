@@ -15,7 +15,7 @@ you can build a talon in the visual editor, **start from a template**, or simply
 | trigger | fires when | notes |
 |---|---|---|
 | schedule | fixed times on chosen weekdays (up to 50), or every n minutes | evaluated in the site timezone. an interval is 5 to 1440 minutes, and at least 15 with a visual check |
-| threshold | a metric alert rule fires and its breach matches the talon's own predicate | rides the existing alert pipeline — a threshold talon does nothing until a matching alert rule exists |
+| threshold | a metric alert rule fires and its breach matches the talon's own predicate | rides the existing alert pipeline — a threshold talon does nothing until a matching alert rule exists. every site has the [default low disk rule](/docs/dashboard/admin/email-alerts#the-default-low-disk-rule) until it saves its own list |
 | event | one of the subscribed machine events lands | process crash, start failure or restart, exe missing, machine offline, and the display events. an optional delay of up to 1440 minutes lets a slow-starting app settle before the talon looks; a delayed event writes a `pending` run that later becomes `fired` or `missed` |
 
 ## the condition

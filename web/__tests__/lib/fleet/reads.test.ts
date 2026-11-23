@@ -13,6 +13,7 @@ import {
   readInstalledSoftware,
   readMetricsHistory,
 } from '@/lib/fleet/reads.server';
+import { DEFAULT_LOW_DISK_RULE } from '@/lib/defaultAlertRules';
 
 type Data = Record<string, unknown>;
 type Where = [unknown, string, unknown];
@@ -206,8 +207,14 @@ describe('readAlertRules', () => {
     expect(await readAlertRules(makeDb(store), SITE)).toEqual([{ ...rule, channels: ['email'] }]);
   });
 
-  it('is empty when the site has no rules', async () => {
-    expect(await readAlertRules(makeDb({}), SITE)).toEqual([]);
+  it('reads the default rule on a site that never saved its rules', async () => {
+    expect(await readAlertRules(makeDb({}), SITE)).toEqual([DEFAULT_LOW_DISK_RULE]);
+  });
+
+  it('is empty when the site saved an empty list', async () => {
+    const store = { [`sites/${SITE}/settings/alerts`]: { rules: [] } };
+
+    expect(await readAlertRules(makeDb(store), SITE)).toEqual([]);
   });
 });
 

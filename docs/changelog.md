@@ -11,6 +11,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — every site alerts on a nearly full disk
+
+a site that has never saved its alert rules now has one: **Low Disk**, `disk_percent > 90`, warning, by email and webhook, at most once a day per machine. it shows under **custom rules** on **admin** → **alerts**, and turning it off, editing it or deleting it there sticks. a site that saved its rules before this release has the rule added to its list once, unless the list already holds a rule for a full disk; the **Low Disk** preset adds the same rule. see [the default low disk rule](https://owlette.app/docs/dashboard/admin/email-alerts#the-default-low-disk-rule).
+
+if you self-host: before you deploy, run `node scripts/migrations/seed-default-low-disk-rule.mjs --env=prod --dry-run`, then once without `--dry-run`. it adds the rule to rule lists saved earlier and repairs rules added from the old **Low Disk** preset; run after the deploy, it would put the rule back for a site that had deleted it. the functions evaluate the rule as soon as they are deployed, and **admin** → **alerts** lists it once the web app is.
+
+### fixed — the low disk preset fires on a full disk
+
+the **Low Disk** preset on **admin** → **alerts** added `disk_percent < 10`, but **disk usage (%)** is the share of the disk that is used, so the rule fired on an almost empty disk and never on a full one. it now adds `disk_percent > 90`. a rule added from the old preset is repaired to `> 90`, once a day per machine, when the default low disk rule ships; until then, edit it to `>` 90. see [email alerts](https://owlette.app/docs/dashboard/admin/email-alerts#threshold-alert-rules).
+
 ### changed — audit events are queued and drained in order
 
 each change the web app records joins its site's audit queue, and the functions drain every queue in order into the site's hash-chained audit log, so no audit event waits on a single request. an event that cannot be added is set aside. **admin** → **activity** raises one high finding a site per hour for the events set aside, with their count, and one an hour, raised when a queue first goes 5 minutes without draining, listing the sites whose queues were stuck then.
