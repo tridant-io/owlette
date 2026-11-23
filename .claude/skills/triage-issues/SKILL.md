@@ -79,7 +79,7 @@ A **403 `scope_insufficient`** means the owner has not ticked issue read/write o
    git diff "v$APPVERSION" origin/dev -- agent/src/<file>.py   # already fixed since?
    ```
 
-5. **Find the cause.** Reproduce it with a failing test where possible, following the debug skill. If dev already fixes it, say which commit and release.
+5. **Find the cause.** Reproduce it with a failing test where possible, following `tridant:debug`. If dev already fixes it, say which commit and release.
 
 6. **Produce one of these.**
    - **A fix branch** from origin/dev, in its own worktree (other sessions share the main checkout; a web change needs its own `npm ci` there). `--no-track` stops a bare push landing on dev:

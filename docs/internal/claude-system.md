@@ -21,7 +21,9 @@ Skills are folders, never flat files: Claude Code silently skips `.claude/skills
 
 ## the workflow
 
-`/plan` (codebase-researcher agents) → `/execute` (one task-executor per task in a wave) or `/next` → `/verify` (checks, then code-architecture-reviewer for standards and work-verifier for spec, in parallel, plus evidence from where the owner looks). `/debug` for bugs, `/preflight` before pushing web changes, `/save` and `/resume` across sessions. Plans live in `dev/` (see `dev/README.md`).
+`/plan` (codebase-researcher agents) → `/execute` (one task-executor per task in a wave) or `/next` → `tridant:verify` (the checks for the areas the diff touches, then a standards reviewer and a spec reviewer in parallel, plus evidence from where the owner looks). `tridant:debug` for bugs, `/preflight` before pushing web changes, `/save` and `/resume` across sessions. Plans live in `dev/` (see `dev/README.md`).
+
+`tridant:verify`, `tridant:debug` and the two reviewers come from the tridant plugin (`tridant-io/skills`, private to the team), one copy for every tridant repo; this repo keeps only what is its own. The checks `tridant:verify` runs are the table in the testing-guidelines skill, and the standards reviewer reads the dev-guidelines skill for the area because `.claude/CLAUDE.md` points it there.
 
 ## hooks
 

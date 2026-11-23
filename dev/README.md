@@ -29,13 +29,14 @@ dev/
 2. **`/execute`** — run the next wave of tasks in parallel (fresh agent context
    per task), or **`/next`** — execute the next single task in the current
    context.
-3. **`/verify`** — run the checks, then a standards reviewer and a spec reviewer
-   in parallel on the diff, plus evidence from where the owner looks.
+3. **`tridant:verify`** (the tridant plugin) — run the checks, then a standards
+   reviewer and a spec reviewer in parallel on the diff, plus evidence from where
+   the owner looks.
 4. **`/save`** — persist progress to the dev docs before context compaction;
    **`/resume`** — restore context in a new session.
 5. When an initiative is fully shipped, move its folder to `dev/completed/`.
 
-Use `/debug` for non-obvious bugs and `/build-and-fix` to build web + agent and
+Use `tridant:debug` for non-obvious bugs and `/build-and-fix` to build web + agent and
 fix all errors. Skip `/plan` for single-file tweaks or small fixes.
 
 ## Conventions

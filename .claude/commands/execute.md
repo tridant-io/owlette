@@ -1,5 +1,5 @@
 ---
-description: Run next wave of planned tasks in parallel with fresh context per task
+description: "Run the next wave of the active plan in dev/active/ in parallel, one fresh task-executor agent per task, then check the build and tick the tasks off. Use when a plan exists and the owner says execute, run the plan or run the next wave."
 ---
 
 Execute the next wave of tasks from the active plan. Each task runs in a **fresh agent context** to prevent context rot.
@@ -18,7 +18,7 @@ If multiple tasks exist, ask the user which one. Read `dev/active/[task-name]/ta
 
 Parse tasks.md and identify the next wave where ALL tasks are still unchecked (`- [ ]`). Skip waves that are fully complete (`- [x]`). If a wave is partially complete, execute only the remaining unchecked tasks in that wave.
 
-If all waves are complete, report "All tasks complete. Run /verify to check the work." and stop.
+If all waves are complete, report "All tasks complete. Next: tridant:verify to check the work." and stop.
 
 ### Step 3: Execute Wave
 
@@ -62,7 +62,7 @@ Mark completed tasks in `dev/active/[task-name]/tasks.md`:
 **Build status**: [pass/fail]
 **Progress**: [completed]/[total] tasks ([%])
 
-Next: [description of next wave, or "All waves complete — run /verify"]
+Next: [description of next wave, or "All waves complete — next: tridant:verify"]
 ```
 
 If there are more waves and no blockers, ask: **"Continue with Wave [N+1]?"**

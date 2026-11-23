@@ -1,5 +1,5 @@
 ---
-description: Pick up and execute the next single task from the active plan
+description: "Do the next unchecked task of the active plan in dev/active/ in this context, one task at a time, and tick it off. Use when the owner asks for the next task, wants to step through a plan and look at each result, or the plan is too small for parallel agents."
 ---
 
 Execute the next uncompleted task from the active plan. Unlike /execute (which runs full waves in parallel), this runs one task at a time in the current context.
@@ -29,7 +29,7 @@ Wave [N] | Task [M] of [total in wave]
 Proceeding...
 ```
 
-If all tasks are complete, report "All tasks done. Run /verify to check the work." and stop.
+If all tasks are complete, report "All tasks done. Next: tridant:verify to check the work." and stop.
 
 ### Step 3: Execute
 
