@@ -8,10 +8,15 @@
  *
  * all writers are fire-and-forget and never throw: a failed audit write must not fail
  * a login.
+ *
+ * each row carries `expiresAt`, and a firestore ttl policy on `entries.expiresAt`
+ * (firestore.indexes.json) deletes it then. the policy covers every collection named
+ * `entries` (the platform sink's other rows, roost's chunk referrers), and none of
+ * those carry `expiresAt`: adding it to one would get that row deleted too.
  */
 
 import type { NextRequest } from 'next/server';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { generateCorrelationId, type Role } from '@/lib/auditLog.server';
 import { requestNetwork } from '@/lib/network.server';
@@ -21,6 +26,10 @@ type AuthCapability = 'AUTH_SIGN_IN' | 'AUTH_SECOND_FACTOR';
 
 /** `/api/auth/session` runs on every page load and `auth_time` survives token refresh. */
 const SIGN_IN_WINDOW_SECONDS = 10 * 60;
+
+/** a public commitment in privacy policy §6: the constant and the policy text move together. */
+const RETENTION_DAYS = 400;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const ALREADY_EXISTS = 6;
 
@@ -72,6 +81,8 @@ function entry(
       network: { key, prefix, viaEdge },
     },
     timestamp: FieldValue.serverTimestamp(),
+    // the server clock, not `timestamp`: a sentinel has no value until the write lands
+    expiresAt: Timestamp.fromMillis(Date.now() + RETENTION_DAYS * DAY_MS),
   };
 }
 
