@@ -16,7 +16,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { TEST_USERS } from '../../helpers/seed';
-import { recordSlides } from '../../helpers/slide';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 import type {
   ApiKeyEnvironment,
   ApiKeyLookup,
@@ -251,3 +252,56 @@ test(
     await expect(row.getByRole('button', { name: /^revoke / })).toHaveCount(0);
   },
 );
+
+test('the revoked keys slide open and shut, and keep their whole focus rings', async ({ page }) => {
+  await page.goto('/settings/api-keys');
+  await expect(
+    page.getByRole('heading', { name: 'api keys', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  const toggle = page.getByRole('button', { name: /^(show|hide) revoked \(\d+\)$/ });
+  const group = page.locator('[data-slot="collapsible"]').filter({ has: toggle });
+  const row = rowFor(page, 'e2e state revoked');
+  const slides = await recordSlides(group);
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(row).toBeVisible();
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(row).toHaveCount(0);
+
+  await toggle.click();
+  await slideSettled(group);
+  expect(await clippedFocusRings(page, group)).toEqual([]);
+});
+
+test('a key\'s scope editor slides open and shut, and keeps its whole focus rings', async ({ page }) => {
+  await page.goto('/settings/api-keys');
+  await expect(
+    page.getByRole('heading', { name: 'api keys', exact: true }),
+  ).toBeVisible({ timeout: 10_000 });
+
+  const row = rowFor(page, 'e2e state active');
+  await expect(row).toBeVisible();
+  // the card and its editor are one collapsible; the card's menu opens the editor
+  const key = page.locator('[data-slot="collapsible"]').filter({ has: row });
+  const slides = await recordSlides(key);
+
+  await page.getByRole('button', { name: 'actions for e2e state active' }).click();
+  await page.getByRole('menuitem', { name: 'edit scopes' }).click();
+  await expect.poll(slides).toBe('collapsible-down');
+  const cancel = key.getByRole('button', { name: 'cancel', exact: true });
+  await expect(cancel).toBeVisible();
+
+  await cancel.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(cancel).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'actions for e2e state active' }).click();
+  await page.getByRole('menuitem', { name: 'edit scopes' }).click();
+  await expect(cancel).toBeVisible();
+  await slideSettled(key);
+  expect(await clippedFocusRings(page, key)).toEqual([]);
+});

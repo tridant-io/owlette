@@ -15,6 +15,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
 import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
+import { recordSlides, slideSettled, twoFrames } from '../../helpers/slide';
 import { TEST_SITES } from '../../helpers/seed';
 
 test.use(roleState('admin'));
@@ -31,6 +32,19 @@ async function tabUntilFocused(page: Page, target: Locator, max: number) {
     if (await target.evaluate((el) => el === document.activeElement)) return;
   }
   throw new Error(`not reached within ${max} tab presses`);
+}
+
+const newDeployment = (page: Page) => page.getByRole('button', { name: 'new deployment' }).first();
+
+async function openDeployDialog(page: Page) {
+  await page.goto('/deployments');
+  await expect(page.getByRole('heading', { level: 1, name: 'deployments', exact: true })).toBeVisible({
+    timeout: 10_000,
+  });
+  await newDeployment(page).click();
+  const dialog = page.getByRole('dialog', { name: 'deploy software' });
+  await expect(dialog).toBeVisible();
+  return dialog;
 }
 
 test.beforeAll(async () => {
@@ -94,16 +108,47 @@ test('a failed deployment expands, shows its reason and reaches retry by keyboar
 // its edge; the shared DialogContent keeps room there for the focus ring.
 test('the deploy dialog keeps every focus ring whole on a short screen', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 520 });
-  await page.goto('/deployments');
-  await expect(page.getByRole('heading', { level: 1, name: 'deployments', exact: true })).toBeVisible({
-    timeout: 10_000,
-  });
-
-  await page.getByRole('button', { name: 'new deployment' }).first().click();
-  const dialog = page.getByRole('dialog', { name: 'deploy software' });
-  await expect(dialog).toBeVisible();
+  const dialog = await openDeployDialog(page);
   // the case needs a dialog taller than the screen
   expect(await dialog.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
 
   expect(await clippedFocusRings(page, dialog)).toEqual([]);
+});
+
+test('close running processes slides open and shut, and keeps its whole focus rings', async ({ page }) => {
+  const dialog = await openDeployDialog(page);
+  const toggle = dialog.getByRole('button', { name: /^close running processes before install/ });
+  const field = dialog.getByLabel('additional process names');
+  const slides = await recordSlides(dialog);
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(field).toBeVisible();
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(field).toHaveCount(0);
+
+  await toggle.click();
+  await slideSettled(dialog);
+  expect(await clippedFocusRings(page, dialog)).toEqual([]);
+});
+
+// the dialog resets the panel as it opens; that must not play as a slide shut
+test('a reopened deploy dialog starts with close running processes shut, without sliding it', async ({ page }) => {
+  const dialog = await openDeployDialog(page);
+  const toggle = dialog.getByRole('button', { name: /^close running processes before install/ });
+  await toggle.click();
+  await expect(dialog.getByLabel('additional process names')).toBeVisible();
+  await slideSettled(dialog);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  const slides = await recordSlides(page.locator('body'));
+  await newDeployment(page).click();
+  await expect(dialog).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(dialog.getByLabel('additional process names')).toHaveCount(0);
+  await twoFrames(page);
+  expect(await slides()).toBe('');
 });

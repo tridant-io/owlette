@@ -13,6 +13,8 @@
 
 import { test, expect } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled, twoFrames } from '../../helpers/slide';
 import { TEST_USERS } from '../../helpers/seed';
 import { seedHootFixture } from '../../helpers/coverageSeed';
 
@@ -58,6 +60,41 @@ test.describe('app nav drawer', () => {
     await page.keyboard.press('Escape');
     await trigger.click();
     await expect(sites).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  // the drawer clears the list as it opens; that must not play as a slide shut
+  test('the site list slides open and shut, and a reopened drawer starts it shut without a slide', async ({ page }) => {
+    await page.goto('/dashboard');
+    const trigger = page.getByRole('button', { name: 'menu', exact: true });
+    await trigger.click();
+    const drawer = page.getByRole('navigation', { name: /site and page navigation/i });
+    const sites = drawer.getByTestId('drawer-site-toggle');
+    const slides = await recordSlides(drawer);
+
+    await sites.click();
+    await expect.poll(slides).toBe('collapsible-down');
+    await sites.click();
+    await expect.poll(slides).toBe('collapsible-down collapsible-up');
+
+    await sites.click();
+    await slideSettled(drawer);
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+
+    const reopened = await recordSlides(page.locator('body'));
+    await trigger.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
+    await twoFrames(page);
+    expect(await reopened()).toBe('');
+
+    // last, as the check turns animations off. the list keeps room above and below its
+    // rows' outlines; their sides were already cut by the drawer's scroll box before it slid
+    await sites.click();
+    const list = drawer.locator('[data-slot="collapsible-content"]');
+    await expect(list).toBeVisible();
+    await slideSettled(drawer);
+    const cut = await clippedFocusRings(page, list);
+    expect(cut.filter((ring) => ring.edge === 'top' || ring.edge === 'bottom')).toEqual([]);
   });
 
   test('focus moves in, tab stays in, and escape hands it back', async ({ page }) => {

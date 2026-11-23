@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useMachines, Process } from '@/hooks/useFirestore';
@@ -625,22 +626,24 @@ export default function DeploymentDialog({
           </div>
 
           {/* Close Running Processes (collapsible) */}
-          <div className="space-y-2">
-            <button
-              type="button"
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              aria-expanded={showCloseProcesses}
-              onClick={() => setShowCloseProcesses(!showCloseProcesses)}
-            >
-              {showCloseProcesses ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              close running processes before install
-              {(selectedProjectIds.size > 0 || additionalProcesses.trim()) && (
-                <Badge className="bg-warning-solid text-warning-solid-foreground text-xs ml-1">active</Badge>
-              )}
-            </button>
+          <Collapsible open={showCloseProcesses} onOpenChange={setShowCloseProcesses}>
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {showCloseProcesses ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                close running processes before install
+                {(selectedProjectIds.size > 0 || additionalProcesses.trim()) && (
+                  <Badge className="bg-warning-solid text-warning-solid-foreground text-xs ml-1">active</Badge>
+                )}
+              </button>
+            </CollapsibleTrigger>
 
-            {showCloseProcesses && (
-              <div className="space-y-3 pl-5">
+            {/* room past the field's sides for its focus ring, without moving it */}
+            <CollapsibleContent className="-mx-1 overflow-hidden px-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+              {/* the gap under the toggle is in here, so it slides in with the panel */}
+              <div className="space-y-3 pl-5 pt-2">
                 {/* Managed projects from selected machines */}
                 {(() => {
                   // Collect unique processes across selected machines
@@ -750,8 +753,8 @@ export default function DeploymentDialog({
                   );
                 })()}
               </div>
-            )}
-          </div>
+            </CollapsibleContent>
+          </Collapsible>
 
           {/* Target Machines */}
           <div className="space-y-2">

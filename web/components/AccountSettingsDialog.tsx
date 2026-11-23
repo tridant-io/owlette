@@ -5,6 +5,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { UserAvatar } from '@/components/UserAvatar';
 import { cropAndResizeSquare } from '@/lib/imageUtils';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -1034,31 +1035,36 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     />
                   )}
 
-                  <div className="space-y-3">
+                  <Collapsible
+                    open={showPasswordSection}
+                    onOpenChange={(open) => {
+                      setShowPasswordSection(open);
+                      clearPassword();
+                      if (!open) {
+                        setCurrentPassword('');
+                        setNewPassword('');
+                        setConfirmPassword('');
+                      }
+                    }}
+                  >
                     <div className="flex items-center justify-between">
                       <p className="text-sm leading-none font-medium text-foreground">change password</p>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setShowPasswordSection(!showPasswordSection);
-                          clearPassword();
-                          if (showPasswordSection) {
-                            setCurrentPassword('');
-                            setNewPassword('');
-                            setConfirmPassword('');
-                          }
-                        }}
-                        className="h-8 cursor-pointer border-border text-accent-cyan hover:text-accent-cyan hover:bg-muted"
-                        disabled={loading}
-                      >
-                        {showPasswordSection ? 'cancel' : 'update password'}
-                      </Button>
+                      <CollapsibleTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 cursor-pointer border-border text-accent-cyan hover:text-accent-cyan hover:bg-muted"
+                          disabled={loading}
+                        >
+                          {showPasswordSection ? 'cancel' : 'update password'}
+                        </Button>
+                      </CollapsibleTrigger>
                     </div>
 
-                    {showPasswordSection && (
-                      <div className="space-y-3 rounded-md border border-border bg-card/50 p-4">
+                    <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                      {/* the gap under the row is the fields' margin, so it slides in with them */}
+                      <div className="mt-3 space-y-3 rounded-md border border-border bg-card/50 p-4">
                         <div className="space-y-2">
                           <Label htmlFor="currentPassword" className="text-foreground">current password</Label>
                           <div className="relative">
@@ -1158,8 +1164,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                         <FormError message={passwordError?.message} id="settings-password-error" />
                       </div>
-                    )}
-                  </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               )}
 

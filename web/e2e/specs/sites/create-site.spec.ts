@@ -16,6 +16,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { releaseFixtureSite, seedSite } from '../../helpers/seed';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled, twoFrames } from '../../helpers/slide';
 
 test.use(roleState('superadmin'));
 
@@ -104,4 +106,52 @@ test('create site stays disabled when the site ID is already taken', async ({ pa
 
   await expect(createDialog.getByText(/already taken/i)).toBeVisible({ timeout: 5_000 });
   await expect(createDialog.getByRole('button', { name: /^create site$/i })).toBeDisabled();
+});
+
+test('customize site ID and change timezone slide open and shut, and keep their whole focus rings', async ({ page }) => {
+  const createDialog = await openCreateDialog(page);
+  const customize = createDialog.getByRole('button', { name: /customize site id/i });
+  const timezone = createDialog.getByRole('button', { name: /change timezone/i });
+  const slides = await recordSlides(createDialog);
+
+  await customize.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(createDialog.locator('#site-id')).toBeVisible();
+  await timezone.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-down');
+  await expect(createDialog.locator('#site-timezone')).toBeVisible();
+
+  await customize.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-down collapsible-up');
+  await expect(createDialog.locator('#site-id')).toHaveCount(0);
+  await timezone.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-down collapsible-up collapsible-up');
+  await expect(createDialog.locator('#site-timezone')).toHaveCount(0);
+
+  await customize.click();
+  await timezone.click();
+  await slideSettled(createDialog);
+  expect(await clippedFocusRings(page, createDialog)).toEqual([]);
+});
+
+// the dialog resets both panels as it opens; that must not play as a slide shut
+test('a reopened create dialog starts with both panels shut, without sliding them', async ({ page }) => {
+  const createDialog = await openCreateDialog(page);
+  const customize = createDialog.getByRole('button', { name: /customize site id/i });
+  const timezone = createDialog.getByRole('button', { name: /change timezone/i });
+  await customize.click();
+  await timezone.click();
+  await expect(createDialog.locator('#site-timezone')).toBeVisible();
+  await slideSettled(createDialog);
+  await page.keyboard.press('Escape');
+  await expect(createDialog).toBeHidden();
+
+  const slides = await recordSlides(page.locator('body'));
+  await page.getByRole('button', { name: 'new site', exact: true }).click();
+  await expect(createDialog).toBeVisible();
+  await expect(customize).toHaveAttribute('aria-expanded', 'false');
+  await expect(timezone).toHaveAttribute('aria-expanded', 'false');
+  await expect(createDialog.locator('#site-id')).toHaveCount(0);
+  await twoFrames(page);
+  expect(await slides()).toBe('');
 });

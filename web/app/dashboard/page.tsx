@@ -15,6 +15,7 @@ import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { useAgentAlertToasts, type ExeMissingToastAlert } from '@/hooks/useAgentAlertToasts';
 import { PageCascade } from '@/components/PageCascade';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { IconButton } from '@/components/ui/icon-button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -1632,38 +1633,43 @@ export default function DashboardPage() {
 
             {/* Schedule Configuration — auto-shown in `scheduled` mode, disclosed
                 by the gear in `off` / `always on`. Edits here are saved with the
-                rest of the form and never move the launch mode. */}
-            {scheduleSectionVisible && (
-              <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3" data-testid="process-dialog-schedule-section">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-3.5 w-3.5 text-info" />
-                    <span className="text-xs font-medium text-info">schedule configuration</span>
+                rest of the form and never move the launch mode. -mt-4 takes back
+                the gap space-y-4 puts above it; the pt-4 inside slides it in. */}
+            <Collapsible open={scheduleSectionVisible} className="-mt-4">
+              <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                <div className="pt-4">
+                  <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3" data-testid="process-dialog-schedule-section">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-3.5 w-3.5 text-info" />
+                        <span className="text-xs font-medium text-info">schedule configuration</span>
+                      </div>
+                      {/* `scheduleClockLabel` is the single source for this string — the
+                          clock only belongs to the site once it has opted in. (This used
+                          to say "kept in sync with ProcessDialog.tsx by convention";
+                          that component was unused and was deleted 2026-09-08.) */}
+                      <span className="text-[10px] text-muted-foreground">
+                        {scheduleClockLabel(currentSite?.timezone, currentSite?.schedulesFollowSiteTime)}
+                      </span>
+                    </div>
+                    {editProcessForm.launch_mode !== 'scheduled' && (
+                      <p className="text-[11px] text-muted-foreground">
+                        saved with the process — switch to scheduled whenever you want these windows to run it
+                      </p>
+                    )}
+                    <div className="flex justify-center mb-2">
+                      <WeekSummaryBar schedules={scheduleBlocks} tall />
+                    </div>
+                    <ScheduleBlocksEditor
+                      blocks={scheduleBlocks}
+                      onChange={(blocks) => setEditProcessForm({ ...editProcessForm, schedules: blocks })}
+                      compact
+                      maxHeight="200px"
+                    />
                   </div>
-                  {/* `scheduleClockLabel` is the single source for this string — the
-                      clock only belongs to the site once it has opted in. (This used
-                      to say "kept in sync with ProcessDialog.tsx by convention";
-                      that component was unused and was deleted 2026-09-08.) */}
-                  <span className="text-[10px] text-muted-foreground">
-                    {scheduleClockLabel(currentSite?.timezone, currentSite?.schedulesFollowSiteTime)}
-                  </span>
                 </div>
-                {editProcessForm.launch_mode !== 'scheduled' && (
-                  <p className="text-[11px] text-muted-foreground">
-                    saved with the process — switch to scheduled whenever you want these windows to run it
-                  </p>
-                )}
-                <div className="flex justify-center mb-2">
-                  <WeekSummaryBar schedules={scheduleBlocks} tall />
-                </div>
-                <ScheduleBlocksEditor
-                  blocks={scheduleBlocks}
-                  onChange={(blocks) => setEditProcessForm({ ...editProcessForm, schedules: blocks })}
-                  compact
-                  maxHeight="200px"
-                />
-              </div>
-            )}
+              </CollapsibleContent>
+            </Collapsible>
           </div>
           <DialogFooter className="flex items-center">
             {processDialogMode === 'edit' && (

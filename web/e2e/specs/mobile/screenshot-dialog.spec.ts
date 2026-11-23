@@ -8,51 +8,24 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { Timestamp } from 'firebase-admin/firestore';
-import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
-import { TEST_SITES, seedMachine } from '../../helpers/seed';
-import { stubScreenshotCapture } from '../../helpers/stubAgent';
+import { TEST_SITES } from '../../helpers/seed';
+import { openScreenshotDialog, removeScreenshotMachine, seedScreenshotMachine } from '../../helpers/screenshotDialog';
+import { recordSlides } from '../../helpers/slide';
 
 const SITE_ID = TEST_SITES[0].id;
 const MACHINE_ID = 'e2e-mobile-screenshot-machine';
-const PNG_1X1 =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+const SHOT_ID = 'e2e-mobile-shot-1';
 const MIN_IMAGE_WIDTH_PX = 300;
-
-function machineRef() {
-  return getAdminDb().collection('sites').doc(SITE_ID).collection('machines').doc(MACHINE_ID);
-}
 
 test.describe('mobile screenshot dialog — admin on site-A', () => {
   test.use(roleState('admin'));
 
-  test.beforeAll(async () => {
-    await seedMachine(SITE_ID, MACHINE_ID);
-    // a stored capture, so opening the dialog shows it instead of sending a new capture
-    await stubScreenshotCapture(SITE_ID, MACHINE_ID, PNG_1X1);
-    await machineRef().collection('screenshots').doc('e2e-mobile-shot-1').set({
-      url: PNG_1X1,
-      timestamp: Timestamp.now(),
-      sizeKB: 128,
-    });
-  });
-
-  test.afterAll(async () => {
-    await machineRef().collection('screenshots').doc('e2e-mobile-shot-1').delete();
-    await machineRef().delete();
-  });
+  test.beforeAll(() => seedScreenshotMachine(SITE_ID, MACHINE_ID, SHOT_ID));
+  test.afterAll(() => removeScreenshotMachine(SITE_ID, MACHINE_ID, SHOT_ID));
 
   test('the screenshot fills the dialog width and fullscreen closes on its own', async ({ page }) => {
-    await page.goto('/dashboard');
-    const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
-    await expect(card).toBeVisible();
-
-    await card.getByTestId('machine-context-menu-trigger').click();
-    await page.getByRole('menuitem', { name: 'screenshot' }).click();
-
-    const dialog = page.getByRole('dialog', { name: new RegExp(`screenshot — ${MACHINE_ID}`) });
-    await expect(dialog).toBeVisible();
+    const dialog = await openScreenshotDialog(page, MACHINE_ID);
 
     const image = dialog.getByRole('img', { name: `screenshot of ${MACHINE_ID}` });
     await expect(image).toBeVisible();
@@ -74,5 +47,22 @@ test.describe('mobile screenshot dialog — admin on site-A', () => {
 
     await dialog.getByRole('button', { name: 'close' }).click();
     await expect(dialog).toBeHidden();
+  });
+
+  // stacked under the screenshot, the history slides down, as the other panels do;
+  // from md it slides across (dashboard/screenshot-history.spec.ts)
+  test('the history slides shut and open under the screenshot', async ({ page }) => {
+    const dialog = await openScreenshotDialog(page, MACHINE_ID);
+    const history = dialog.getByText('history', { exact: true });
+    await expect(history).toBeVisible();
+    const slides = await recordSlides(dialog);
+
+    await dialog.getByRole('button', { name: 'hide history' }).click();
+    await expect.poll(slides).toBe('collapsible-up');
+    await expect(history).toHaveCount(0);
+
+    await dialog.getByRole('button', { name: 'show history' }).click();
+    await expect.poll(slides).toBe('collapsible-up collapsible-down');
+    await expect(history).toBeVisible();
   });
 });
