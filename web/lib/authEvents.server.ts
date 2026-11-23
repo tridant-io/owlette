@@ -9,10 +9,10 @@
  * all writers are fire-and-forget and never throw: a failed audit write must not fail
  * a login.
  *
- * each row carries `expiresAt`, and a firestore ttl policy on `entries.expiresAt`
+ * each row carries `deleteAt`, and a firestore ttl policy on `entries.deleteAt`
  * (firestore.indexes.json) deletes it then. the policy covers every collection named
  * `entries` (the platform sink's other rows, roost's chunk referrers), and none of
- * those carry `expiresAt`: adding it to one would get that row deleted too.
+ * those carry `deleteAt`: adding it to one would get that row deleted too.
  */
 
 import type { NextRequest } from 'next/server';
@@ -82,7 +82,7 @@ function entry(
     },
     timestamp: FieldValue.serverTimestamp(),
     // the server clock, not `timestamp`: a sentinel has no value until the write lands
-    expiresAt: Timestamp.fromMillis(Date.now() + RETENTION_DAYS * DAY_MS),
+    deleteAt: Timestamp.fromMillis(Date.now() + RETENTION_DAYS * DAY_MS),
   };
 }
 

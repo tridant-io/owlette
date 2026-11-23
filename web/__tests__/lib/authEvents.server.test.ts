@@ -62,7 +62,7 @@ afterEach(() => {
   dateNow.mockRestore();
 });
 
-describe('expiresAt', () => {
+describe('deleteAt', () => {
   it('stamps every row 400 days after the server clock at write time', async () => {
     recordSignIn(request(), { userId: 'user-1', role: 'member', method: 'password', authTime: nowSeconds() });
     recordSecondFactorPassed(request(), { userId: 'user-1', method: 'totp' });
@@ -74,8 +74,8 @@ describe('expiresAt', () => {
     });
     await flush();
 
-    expect(mockCreate.mock.calls[0][0].expiresAt).toEqual(EXPIRES);
-    expect(mockAdd.mock.calls.map((call) => call[0].expiresAt)).toEqual([EXPIRES, EXPIRES]);
+    expect(mockCreate.mock.calls[0][0].deleteAt).toEqual(EXPIRES);
+    expect(mockAdd.mock.calls.map((call) => call[0].deleteAt)).toEqual([EXPIRES, EXPIRES]);
   });
 
   it('moves with the clock', async () => {
@@ -83,7 +83,7 @@ describe('expiresAt', () => {
     recordSecondFactorPassed(request(), { userId: 'user-1', method: 'passkey' });
     await flush();
 
-    expect(mockAdd.mock.calls[0][0].expiresAt).toEqual({ ms: EXPIRES.ms + 1234 });
+    expect(mockAdd.mock.calls[0][0].deleteAt).toEqual({ ms: EXPIRES.ms + 1234 });
   });
 });
 
@@ -113,7 +113,7 @@ describe('recordSignIn', () => {
         network: { key: 'unknown', prefix: '203.0.113.0/24', viaEdge: false },
       },
       timestamp: 'SERVER_TS',
-      expiresAt: EXPIRES,
+      deleteAt: EXPIRES,
     });
   });
 
@@ -170,7 +170,7 @@ describe('recordSecondFactorPassed', () => {
         network: { key: 'unknown', prefix: null, viaEdge: false },
       },
       timestamp: 'SERVER_TS',
-      expiresAt: EXPIRES,
+      deleteAt: EXPIRES,
     });
   });
 
@@ -209,7 +209,7 @@ describe('recordAuthFailure', () => {
         network: { key: 'unknown', prefix: null, viaEdge: false },
       },
       timestamp: 'SERVER_TS',
-      expiresAt: EXPIRES,
+      deleteAt: EXPIRES,
     });
   });
 

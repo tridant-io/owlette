@@ -377,7 +377,7 @@
     },
     {
       "collectionGroup": "entries",
-      "fieldPath": "expiresAt",
+      "fieldPath": "deleteAt",
       "ttl": true,
       "indexes": []
     }
