@@ -110,11 +110,9 @@ a rule on a metric a machine does not report never fires for that machine; [plat
 | preset | rule | severity | cooldown |
 |---|---|---|---|
 | GPU Overheating | `gpu_temp > 85` | warning | 30 min |
-| Low Disk | `disk_percent < 10` | warning | 60 min |
+| Low Disk | `disk_percent > 90` | warning | 60 min |
 | High Memory | `memory_percent > 90` | warning | 30 min |
 | High CPU | `cpu_percent > 95` | critical | 30 min |
-
-the Low Disk preset fires when a disk is less than 10% **used**, so it alerts on an almost empty disk, not a full one. for a disk filling up, create a rule on **disk usage (%)** `>` 90 instead.
 
 the **webhook** channel sends `threshold.breached`, an event new subscriptions cannot select, so it reaches only older subscriptions that already list it; see [what fires today](/docs/dashboard/admin/webhooks#what-fires-today).
 

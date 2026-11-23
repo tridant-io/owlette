@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the low disk preset fires on a full disk
+
+the **Low Disk** preset on **admin** → **alerts** added `disk_percent < 10`, but **disk usage (%)** is the share of the disk that is used, so the rule fired on an almost empty disk and never on a full one. it now adds `disk_percent > 90`. a rule added from the old preset keeps `< 10`: edit it to `>` 90, or delete it and add the preset again. see [email alerts](https://owlette.app/docs/dashboard/admin/email-alerts#threshold-alert-rules).
+
 ### changed — audit events are queued and drained in order
 
 each change the web app records joins its site's audit queue, and the functions drain every queue in order into the site's hash-chained audit log, so no audit event waits on a single request. an event that cannot be added is set aside. **admin** → **activity** raises one high finding a site per hour for the events set aside, with their count, and one an hour, raised when a queue first goes 5 minutes without draining, listing the sites whose queues were stuck then.

@@ -96,8 +96,8 @@ const PRESET_TEMPLATES: Omit<AlertRule, 'id'>[] = [
   {
     name: 'Low Disk',
     metric: 'disk_percent',
-    operator: '<',
-    value: 10,
+    operator: '>',
+    value: 90,
     severity: 'warning',
     channels: ['email', 'webhook'],
     enabled: true,
