@@ -12,6 +12,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Dialog,
   DialogBody,
@@ -375,35 +376,40 @@ export function CreateSiteDialog({
               <FormError message={validationError} id="site-id-error" />
 
               {/* Expandable custom ID section */}
-              <button
-                type="button"
-                aria-expanded={customIdOpen}
-                onClick={() => setCustomIdOpen(!customIdOpen)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
-              >
-                {customIdOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                customize site ID
-              </button>
-
-              {customIdOpen && (
-                <div className="relative">
-                  <Label htmlFor="site-id" className="sr-only">site ID</Label>
-                  <Input
-                    id="site-id"
-                    placeholder="e.g., nyc-office"
-                    value={newSiteId}
-                    onChange={(e) => handleSiteIdChange(e.target.value)}
-                    aria-invalid={hasIdError || undefined}
-                    aria-describedby={validationError ? 'site-id-error' : undefined}
-                    className={`border-border bg-background text-foreground pr-10 ${
-                      availabilityStatus === 'available' ? 'border-success/50 focus-visible:ring-success' : ''
-                    }`}
-                  />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    {getAvailabilityIcon()}
+              <Collapsible open={customIdOpen} onOpenChange={setCustomIdOpen}>
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
+                  >
+                    {customIdOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    customize site ID
+                  </button>
+                </CollapsibleTrigger>
+                {/* room past the field's sides and foot for its focus ring, without moving it */}
+                <CollapsibleContent className="-mx-1 -mb-1 overflow-hidden px-1 pb-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                  {/* the gap under the toggle is in here, so it slides in with the field */}
+                  <div className="pt-2">
+                    <div className="relative">
+                      <Label htmlFor="site-id" className="sr-only">site ID</Label>
+                      <Input
+                        id="site-id"
+                        placeholder="e.g., nyc-office"
+                        value={newSiteId}
+                        onChange={(e) => handleSiteIdChange(e.target.value)}
+                        aria-invalid={hasIdError || undefined}
+                        aria-describedby={validationError ? 'site-id-error' : undefined}
+                        className={`border-border bg-background text-foreground pr-10 ${
+                          availabilityStatus === 'available' ? 'border-success/50 focus-visible:ring-success' : ''
+                        }`}
+                      />
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                        {getAvailabilityIcon()}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
+                </CollapsibleContent>
+              </Collapsible>
             </div>
 
             {/* Detected timezone, shown read-only behind the same disclosure
@@ -428,29 +434,31 @@ export function CreateSiteDialog({
                   : 'we could not read a timezone from your browser — pick one below to run this site’s schedules on one clock, or leave it and each machine keeps its own.'}
               </p>
 
-              <button
-                type="button"
-                aria-expanded={timezoneOpen}
-                onClick={() => setTimezoneOpen(!timezoneOpen)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
-              >
-                {timezoneOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                change timezone
-              </button>
-
-              {timezoneOpen && (
-                <>
-                  {/* The read-only row above is the visible label; the select
-                      still needs one of its own to have an accessible name. */}
-                  <Label htmlFor="site-timezone" className="sr-only">site timezone</Label>
-                  <TimezoneSelect
-                    id="site-timezone"
-                    value={timezone}
-                    onValueChange={setTimezone}
-                    className="border-border bg-background text-foreground"
-                  />
-                </>
-              )}
+              <Collapsible open={timezoneOpen} onOpenChange={setTimezoneOpen}>
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
+                  >
+                    {timezoneOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    change timezone
+                  </button>
+                </CollapsibleTrigger>
+                {/* room past the select's sides and foot for its focus ring, without moving it */}
+                <CollapsibleContent className="-mx-1 -mb-1 overflow-hidden px-1 pb-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                  <div className="pt-2">
+                    {/* The read-only row above is the visible label; the select
+                        still needs one of its own to have an accessible name. */}
+                    <Label htmlFor="site-timezone" className="sr-only">site timezone</Label>
+                    <TimezoneSelect
+                      id="site-timezone"
+                      value={timezone}
+                      onValueChange={setTimezone}
+                      className="border-border bg-background text-foreground"
+                    />
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
 
             {freeSite && (

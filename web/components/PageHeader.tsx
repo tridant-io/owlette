@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
 import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { getUserShortName } from '@/lib/userUtils';
@@ -517,30 +518,35 @@ export function PageHeader({
           {selectSite && (
             <div className="border-b border-border py-2">
               {/* closed on every open: a long site list pushed the pages out of view */}
-              <button
-                type="button"
-                data-testid="drawer-site-toggle"
-                aria-expanded={drawerSitesOpen}
-                onClick={() => setDrawerSitesOpen((open) => !open)}
-                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
-              >
-                <span className="text-xs text-muted-foreground">site</span>
-                <span className="min-w-0 flex-1 truncate text-foreground">{currentSiteName}</span>
-                <ChevronDown
-                  className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
-                />
-              </button>
-              {drawerSitesOpen && (
-                <SiteSwitcherList
-                  surface="drawer"
-                  sites={sites}
-                  currentSiteId={currentSiteId}
-                  onPick={(siteId) => {
-                    selectSite(siteId);
-                    setNavDrawerOpen(false);
-                  }}
-                />
-              )}
+              <Collapsible open={drawerSitesOpen} onOpenChange={setDrawerSitesOpen}>
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="drawer-site-toggle"
+                    className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
+                  >
+                    <span className="text-xs text-muted-foreground">site</span>
+                    <span className="min-w-0 flex-1 truncate text-foreground">{currentSiteName}</span>
+                    <ChevronDown
+                      className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+                </CollapsibleTrigger>
+                {/* room above and below the list for the first and last rows' outlines, without
+                    moving them. none at the sides: the rows run edge to edge like the rest of the
+                    drawer, whose scroll box clips their sides anyway */}
+                <CollapsibleContent className="-my-1 overflow-hidden py-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                  <SiteSwitcherList
+                    surface="drawer"
+                    sites={sites}
+                    currentSiteId={currentSiteId}
+                    onPick={(siteId) => {
+                      selectSite(siteId);
+                      setNavDrawerOpen(false);
+                    }}
+                  />
+                </CollapsibleContent>
+              </Collapsible>
               {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                 <button
                   key={label}

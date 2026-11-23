@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Camera, Loader2, AlertTriangle, Download, ClipboardCopy, Check, Maximize2, X as XIcon, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { IconButton } from '@/components/ui/icon-button';
 import { ImageLightbox } from '@/components/ImageLightbox';
 import {
@@ -293,7 +294,7 @@ export function ScreenshotDialog({
       >
         {/* below md the history stacks under the screenshot, so the image keeps the
             dialog's full width; from md it is a sidebar on the left */}
-        <div className="flex h-full flex-col overflow-hidden md:flex-row">
+        <Collapsible open={showHistory} className="flex h-full flex-col overflow-hidden md:flex-row">
 
           {/* Main content — screenshot display */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
@@ -425,9 +426,12 @@ export function ScreenshotDialog({
           </div>
 
           {/* Collapsible history — after the screenshot in the DOM, so focus order
-              matches the phone layout; md:order-first puts it on the left from md */}
-          {showHistory && (
-            <div className="max-h-[40%] flex flex-col border-t border-border md:order-first md:max-h-none md:w-52 md:flex-shrink-0 md:border-t-0 md:border-r">
+              matches the phone layout; md:order-first puts it on the left from md.
+              it slides down under the screenshot, and from md across beside it */}
+          <CollapsibleContent className="flex max-h-[40%] flex-col overflow-hidden border-t border-border data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up md:order-first md:max-h-none md:flex-shrink-0 md:border-t-0 md:border-r md:data-[state=open]:animate-collapsible-right md:data-[state=closed]:animate-collapsible-left">
+            {/* a fixed width from md, so the slide uncovers the column rather than rewrapping it;
+                1px short of w-52, as the border-r around it sits outside it */}
+            <div className="flex min-h-0 flex-1 flex-col md:w-[calc(13rem-1px)]">
               <div className="px-3 py-2 border-b border-border flex flex-col gap-1">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">history</span>
@@ -525,9 +529,9 @@ export function ScreenshotDialog({
                 </Button>
               </div>
             </div>
-          )}
+          </CollapsibleContent>
 
-        </div>
+        </Collapsible>
       </DialogContent>
     </Dialog>
 

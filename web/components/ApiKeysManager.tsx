@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Dialog,
   DialogContent,
@@ -77,7 +78,8 @@ export function ApiKeysManager({ compact = false }: Props) {
 
   function renderKeyRow(k: ApiKeyListItem) {
     return (
-      <div key={k.id}>
+      // the card's menu opens the editor, so the panel has no trigger of its own
+      <Collapsible key={k.id} open={editingKeyId === k.id}>
         <KeyCard
           apiKey={k}
           now={now}
@@ -96,14 +98,14 @@ export function ApiKeysManager({ compact = false }: Props) {
             setEditingKeyId((current) => (current === target.id ? null : target.id));
           }}
         />
-        {editingKeyId === k.id && (
+        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
           <ApiKeyScopeEditor
             apiKey={k}
             onSubmit={(input) => handleUpdate(k.id, input)}
             onCancel={() => setEditingKeyId(null)}
           />
-        )}
-      </div>
+        </CollapsibleContent>
+      </Collapsible>
     );
   }
 
@@ -197,28 +199,29 @@ export function ApiKeysManager({ compact = false }: Props) {
             )}
 
             {revokedKeys.length > 0 && (
-              <div className="space-y-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowRevoked((v) => !v)}
-                  aria-expanded={showRevoked}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-                >
-                  <ChevronRight
-                    className={`h-3.5 w-3.5 transition-transform ${showRevoked ? 'rotate-90' : ''}`}
-                  />
-                  {showRevoked ? 'hide' : 'show'} revoked ({revokedKeys.length})
-                </button>
-                {showRevoked && (
-                  <div className="space-y-2">
+              <Collapsible open={showRevoked} onOpenChange={setShowRevoked} className="pt-1">
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <ChevronRight
+                      className={`h-3.5 w-3.5 transition-transform ${showRevoked ? 'rotate-90' : ''}`}
+                    />
+                    {showRevoked ? 'hide' : 'show'} revoked ({revokedKeys.length})
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+                  {/* the gap under the toggle is in here, so it slides in with the list */}
+                  <div className="space-y-2 pt-2">
                     <p className="text-xs text-muted-foreground/70">
                       revoked keys stop working immediately. they stay listed so a request made
                       with one is still traceable to the key it came from.
                     </p>
                     {revokedKeys.map(renderKeyRow)}
                   </div>
-                )}
-              </div>
+                </CollapsibleContent>
+              </Collapsible>
             )}
           </div>
         )}

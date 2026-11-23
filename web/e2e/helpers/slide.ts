@@ -1,12 +1,13 @@
 /**
  * the slide every expandable panel shares: collapsible-down and collapsible-up
- * in globals.css, on a radix CollapsibleContent. a test reads the slides off
+ * in globals.css, or collapsible-right and collapsible-left for a panel that
+ * opens from the side, on a radix CollapsibleContent. a test reads the slides off
  * their animationstart events, which bubble, so it never races a 200ms
- * animation. only these two count: a spinner inside a panel is an animation too,
- * and one that never ends.
+ * animation. only the collapsible-* slides count: a spinner inside a panel is an
+ * animation too, and one that never ends.
  */
 
-import type { Locator } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 /**
  * start recording the slides that play inside `scope`. the returned read gives
@@ -20,6 +21,14 @@ export async function recordSlides(scope: Locator): Promise<() => Promise<string
     });
   });
   return () => scope.evaluate((el: HTMLElement) => (el.dataset.slides ?? '').trim());
+}
+
+/**
+ * wait two frames, so a slide the last render set off has started and been recorded:
+ * how a test shows that something did NOT slide
+ */
+export async function twoFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
 /** wait out a slide in `scope`: a click inside a panel still sliding open can miss its target */

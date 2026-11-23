@@ -24,6 +24,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
+import { recordSlides } from '../../helpers/slide';
 import { TEST_USERS } from '../../helpers/seed';
 import {
   configProcessById,
@@ -288,6 +289,44 @@ test('no tab stop in the add process dialog has its focus ring cut off', async (
   await expect(dialog.getByTestId('process-dialog-schedule-section')).toBeVisible();
 
   expect(await clippedFocusRings(page, dialog)).toEqual([]);
+});
+
+// shut, the section's root stays in the form as its last child, so it takes back the
+// gap the form puts between fields: the form ends where it did before the slide
+test('the schedule section slides open and shut, and leaves no gap while shut', async ({ page }) => {
+  await page.goto('/dashboard');
+  const card = machineCard(page, MACHINE_ID);
+  await expect(card).toBeVisible();
+
+  await card.getByRole('button', { name: /^add process$/i }).click();
+  const dialog = page.getByRole('dialog', { name: /^add process$/i });
+  await expect(dialog).toBeVisible();
+  const gear = dialog.getByTestId('process-dialog-configure-schedule');
+  const section = dialog.getByTestId('process-dialog-schedule-section');
+  // from the bottom of the field above to the top of the root, and of the section
+  const gaps = () =>
+    dialog.evaluate((el) => {
+      const root = el.querySelector('[data-slot="collapsible"]')!;
+      const above = root.previousElementSibling!.getBoundingClientRect().bottom;
+      const box = root.querySelector('[data-testid="process-dialog-schedule-section"]');
+      return {
+        root: root.getBoundingClientRect().top - above,
+        height: root.getBoundingClientRect().height,
+        section: box ? box.getBoundingClientRect().top - above : null,
+      };
+    });
+  expect(await gaps()).toEqual({ root: 0, height: 0, section: null });
+  const slides = await recordSlides(dialog);
+
+  await gear.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(section).toBeVisible();
+  await expect.poll(async () => (await gaps()).section).toBe(16);
+
+  await gear.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(section).toHaveCount(0);
+  expect(await gaps()).toEqual({ root: 0, height: 0, section: null });
 });
 
 // outlines are for form fields (owner, 2026-11-20): a launch mode segment

@@ -23,6 +23,8 @@
 import { test, expect } from '@playwright/test';
 import { getAdminAuth, AUTH_EMULATOR_URL, EMULATOR_PROJECT_ID } from '../../helpers/emulator';
 import { seedUser, type TestUser } from '../../helpers/seed';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 
 // Do NOT use roleState here. See header comment for the fixture-isolation
 // rationale. Each test signs in fresh through the /login form.
@@ -84,13 +86,13 @@ async function openSecuritySection(
   // Sidebar button labelled "security" on the left; mobile has a scrollable
   // tab bar with the same text — first() picks the visible one.
   await page.getByRole('button', { name: /^security$/i }).first().click();
-  await page.getByRole('button', { name: /^update password$/i }).click();
 }
 
 test('user can change password; new password authenticates against the emulator', async ({ page }) => {
   const newPassword = `e2e-new-pw-${Date.now()}`;
 
   await openSecuritySection(page, PW_USER.password);
+  await page.getByRole('button', { name: /^update password$/i }).click();
   await page.locator('#currentPassword').fill(PW_USER.password);
   await page.locator('#newPassword').fill(newPassword);
   await page.locator('#confirmPassword').fill(newPassword);
@@ -112,6 +114,7 @@ test('submitting a wrong current password surfaces "Current password is incorrec
   const newPassword = `e2e-never-applied-pw-${Date.now()}`;
 
   await openSecuritySection(page, PW_USER.password);
+  await page.getByRole('button', { name: /^update password$/i }).click();
   await page.locator('#currentPassword').fill('definitely-the-wrong-password');
   await page.locator('#newPassword').fill(newPassword);
   await page.locator('#confirmPassword').fill(newPassword);
@@ -127,4 +130,27 @@ test('submitting a wrong current password surfaces "Current password is incorrec
   // Seeded password still works — the save never went through.
   const oldStatus = await signInStatus(PW_USER.email, PW_USER.password);
   expect(oldStatus).toBe(200);
+});
+
+test('the password fields slide open and shut, and keep their whole focus rings', async ({ page }) => {
+  await openSecuritySection(page, PW_USER.password);
+
+  const block = page.locator('[data-slot="collapsible"]').filter({ hasText: 'change password' });
+  // the one button reads "update password" while shut and "cancel" while open
+  const toggle = block.getByRole('button', { name: /^(update password|cancel)$/ });
+  const field = page.locator('#currentPassword');
+  const slides = await recordSlides(block);
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(field).toBeVisible();
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(field).toHaveCount(0);
+
+  await toggle.click();
+  await expect(field).toBeVisible();
+  await slideSettled(block);
+  expect(await clippedFocusRings(page, block)).toEqual([]);
 });

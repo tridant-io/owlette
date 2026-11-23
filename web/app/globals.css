@@ -819,6 +819,22 @@ input[type="week"] {
 }
 .animate-collapsible-down { animation: collapsible-down 200ms ease-out; }
 .animate-collapsible-up   { animation: collapsible-up   180ms ease-in; }
+/* the same slide sideways, for a panel that opens from the side. theme tokens, as
+   tw-animate-css gives the two above: a variant such as md: or data-[state] only
+   wraps a token, so a plain class here would never reach the page. 200ms ease-out
+   both ways, as tw-animate-css's tokens play (not the classes above) */
+@theme inline {
+  --animate-collapsible-right: collapsible-right 200ms ease-out;
+  --animate-collapsible-left: collapsible-left 200ms ease-out;
+}
+@keyframes collapsible-right {
+  from { width: 0; }
+  to   { width: var(--radix-collapsible-content-width); }
+}
+@keyframes collapsible-left {
+  from { width: var(--radix-collapsible-content-width); }
+  to   { width: 0; }
+}
 
 /* Falling feather (boot splash — FallingFeather). Four composed transforms
    reproduce the pendulum-glide regime of a real feather, one axis each so
