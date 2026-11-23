@@ -51,8 +51,8 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 
 ## plans
 
-Plans are not enforced during the beta. Once they apply, a command that the
-site's plan does not cover fails with `402 plan_required`, and the
+Plans are not enforced before 1 April 2027. Once they apply, a command that
+the site's plan does not cover fails with `402 plan_required`, and the
 message says what the plan lacks. API keys are part of pro, checked against
 the plan of the site each command acts on: on a site without them every
 command made with a key fails that way. `owlette auth login` and creating a

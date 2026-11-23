@@ -46,7 +46,7 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 const mockStopSite = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
   PRODUCT: { core: 'prd_owlette_core', pro: 'prd_owlette_pro' },
-  stopSite: (siteId: string) => mockStopSite(siteId),
+  stopSite: (...args: unknown[]) => mockStopSite(...args),
 }));
 
 import logger from '@/lib/logger';
@@ -59,6 +59,33 @@ import {
 } from '@/lib/siteBilling.server';
 
 const pointer = (payerUid: string, endsAt: number | null = null) => ({ tier: 'pro', founders: true, payerUid, endsAt });
+
+type Billing = Extract<Plan, { enforced: true }>['billing'];
+
+const BILLED = {
+  periodStart: 1,
+  periodEnd: 2,
+  endsAt: null,
+  cancelAtPeriodEnd: false,
+  productId: 'prd_owlette_pro',
+  founders: false,
+};
+
+const planWith = (billing: Billing, inGoodStanding = false): Plan => ({
+  enforced: true,
+  resolved: true,
+  standing: inGoodStanding ? 'active' : 'expired',
+  inGoodStanding,
+  ent: {},
+  orgId: 'org_1',
+  billing,
+  trialEndsAt: null,
+});
+
+/** tridant's site answer: the site under `orgId`, billed as `billing`. */
+const answer = (billing: Billing, orgId = 'org_1') => ({ ok: true, ...planWith(billing), orgId, graceUntil: null, epoch: 1 });
+
+const MISMATCH = { ok: false, reason: 'rejected', status: 409, code: 'payer_mismatch' };
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -76,15 +103,130 @@ describe('stopStrandedBilling', () => {
     expect(mockStopSite).not.toHaveBeenCalled();
   });
 
-  it('stops a site still billed to an owner it no longer has, and records the end', async () => {
+  it('stops a site still billed to an owner it no longer has, naming that payer, and records the end', async () => {
     mockStopSite.mockResolvedValue({ ok: true, endsAt: 1_800_000_000_000 });
 
     await stopStrandedBilling('site-1', { owner: 'bob', billing: pointer('alice') });
 
-    expect(mockStopSite).toHaveBeenCalledWith('site-1');
+    expect(mockStopSite.mock.calls).toEqual([['site-1', 'alice']]);
     expect(mockInvalidate).toHaveBeenCalledWith('site-1');
     expect(mockUpdate).toHaveBeenCalledWith('site-1', {
       billing: { ...pointer('alice', 1_800_000_000_000), updatedAt: '__SERVER_TS__' },
+    });
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  describe('when tridant id says the recorded payer does not pay for the site', () => {
+    const site = { owner: 'bob', billing: pointer('alice') };
+
+    beforeEach(() => {
+      mockStopSite.mockReset();
+      mockGetSiteEntitlements.mockReset();
+      mockGetPlanAccount.mockReset().mockResolvedValue({ orgId: 'org_bob' });
+    });
+
+    // the new owner upgraded once the old billing had ended, and the checkout return never loaded.
+    it('writes the pointer for the owner when tridant bills the site under their organization', async () => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH);
+      mockGetSiteEntitlements.mockResolvedValue(
+        answer({ ...BILLED, productId: 'prd_owlette_core', founders: true, endsAt: 1_800_000_000_000 }, 'org_bob'),
+      );
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockStopSite.mock.calls).toEqual([['site-1', 'alice']]);
+      expect(mockInvalidate).toHaveBeenCalledWith('site-1');
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
+      expect(mockInvalidate.mock.invocationCallOrder[0]).toBeLessThan(
+        mockGetSiteEntitlements.mock.invocationCallOrder[0],
+      );
+      expect(mockGetPlanAccount).toHaveBeenCalledWith('bob');
+      expect(mockUpdate.mock.calls).toEqual([
+        [
+          'site-1',
+          {
+            billing: {
+              tier: 'core',
+              founders: true,
+              payerUid: 'bob',
+              endsAt: 1_800_000_000_000,
+              updatedAt: '__SERVER_TS__',
+            },
+          },
+        ],
+      ]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("keeps the pointer's tier and rate when the answer names no product", async () => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH);
+      mockGetSiteEntitlements.mockResolvedValue(answer({ ...BILLED, productId: null }, 'org_bob'));
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockUpdate).toHaveBeenCalledWith('site-1', {
+        billing: { tier: 'pro', founders: true, payerUid: 'bob', endsAt: null, updatedAt: '__SERVER_TS__' },
+      });
+    });
+
+    it.each([
+      ['bills it under another organization', answer(BILLED, 'org_other'), { orgId: 'org_bob' }],
+      ['bills it, and the owner has no organization', answer(BILLED, 'org_bob'), { orgId: null }],
+      ['bills it, and the owner has no plan account', answer(BILLED, 'org_bob'), null],
+    ])('stops it without a payer when tridant %s, and warns', async (_case, read, account) => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH).mockResolvedValueOnce({ ok: true, endsAt: 1_800_000_000_000 });
+      mockGetSiteEntitlements.mockResolvedValue(read);
+      mockGetPlanAccount.mockResolvedValue(account);
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockStopSite.mock.calls).toEqual([['site-1', 'alice'], ['site-1']]);
+      expect(mockUpdate).toHaveBeenCalledWith('site-1', {
+        billing: { ...pointer('alice', 1_800_000_000_000), updatedAt: '__SERVER_TS__' },
+      });
+      // the site and tridant's code, nothing of the payer.
+      expect(logger.warn).toHaveBeenCalledWith('[billing] stranded billing stopped without its payer', {
+        context: 'billing',
+        data: { siteId: 'site-1', code: 'payer_mismatch' },
+      });
+    });
+
+    it('closes the record, with no second stop, when tridant bills nothing for the site', async () => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH);
+      mockGetSiteEntitlements.mockResolvedValue(answer(null, 'org_bob'));
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockStopSite.mock.calls).toEqual([['site-1', 'alice']]);
+      expect(mockUpdate).toHaveBeenCalledWith('site-1', {
+        billing: expect.objectContaining({ payerUid: 'alice', endsAt: expect.any(Number) }),
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('logs a stop without a payer that does not land, and leaves the pointer for the next run', async () => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH).mockResolvedValueOnce({ ok: false, reason: 'unreachable' });
+      mockGetSiteEntitlements.mockResolvedValue(answer(BILLED, 'org_other'));
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith('[billing] stranded billing not stopped', expect.anything());
+    });
+
+    // unread, the owner's own billing cannot be told from another organization's.
+    it('stops nothing more when the site answer cannot be read, and leaves it for the next run', async () => {
+      mockStopSite.mockResolvedValueOnce(MISMATCH);
+      mockGetSiteEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+      await stopStrandedBilling('site-1', site);
+
+      expect(mockStopSite).toHaveBeenCalledTimes(1);
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith(
+        '[billing] stranded billing not stopped',
+        expect.objectContaining({ data: { siteId: 'site-1', reason: 'unreachable', code: 'payer_mismatch' } }),
+      );
     });
   });
 
@@ -114,14 +256,15 @@ describe('stopStrandedBilling', () => {
 });
 
 describe('adoptBilling', () => {
-  const billedPlan = (orgId: string, deployments = '1'): Plan => ({
+  const billedPlan = (orgId: string, deployments = '1', billing: Partial<typeof BILLED> = {}): Plan => ({
     enforced: true,
     resolved: true,
     standing: 'active',
     inGoodStanding: true,
     ent: { 'owlette.control': '1', 'owlette.deployments': deployments },
     orgId,
-    billing: { periodStart: 1, periodEnd: 2, endsAt: null, cancelAtPeriodEnd: false },
+    billing: { ...BILLED, ...billing },
+    trialEndsAt: null,
   });
 
   beforeEach(() => {
@@ -136,10 +279,18 @@ describe('adoptBilling', () => {
     });
   });
 
-  it('reads the plan as core without deployments', async () => {
-    await adoptBilling('site-1', { owner: 'alice' }, billedPlan('org_1', '0'));
+  it('takes the tier and the rate from the product tridant bills, whatever the flags say', async () => {
+    await adoptBilling('site-1', { owner: 'alice' }, billedPlan('org_1', '1', { productId: 'prd_owlette_core', founders: true }));
 
-    expect(mockUpdate).toHaveBeenCalledWith('site-1', { billing: expect.objectContaining({ tier: 'core' }) });
+    expect(mockUpdate).toHaveBeenCalledWith('site-1', {
+      billing: { tier: 'core', founders: true, payerUid: 'alice', endsAt: null, updatedAt: '__SERVER_TS__' },
+    });
+  });
+
+  it('reads the plan from its flags, as core without deployments, when the answer names no product', async () => {
+    await adoptBilling('site-1', { owner: 'alice' }, billedPlan('org_1', '0', { productId: null }));
+
+    expect(mockUpdate).toHaveBeenCalledWith('site-1', { billing: expect.objectContaining({ tier: 'core', founders: false }) });
   });
 
   it('leaves a site that has a pointer, is not billed, or is billed under another organization', async () => {
@@ -155,18 +306,6 @@ describe('adoptBilling', () => {
     mockGetPlanAccount.mockRejectedValue(new Error('boom'));
     await expect(adoptBilling('site-1', { owner: 'alice' }, billedPlan('org_1'))).resolves.toBeUndefined();
   });
-});
-
-const BILLED = { periodStart: 1, periodEnd: 2, endsAt: null, cancelAtPeriodEnd: false };
-
-const planWith = (billing: typeof BILLED | null, inGoodStanding = false): Plan => ({
-  enforced: true,
-  resolved: true,
-  standing: inGoodStanding ? 'active' : 'expired',
-  inGoodStanding,
-  ent: {},
-  orgId: 'org_1',
-  billing,
 });
 
 describe('closeEndedBilling', () => {
@@ -214,14 +353,13 @@ describe('closeEndedBilling', () => {
 });
 
 describe('stopBillingBeforeDelete', () => {
-  const answer = (billing: typeof BILLED | null) => ({ ok: true, ...planWith(billing), graceUntil: null, epoch: 1 });
-
+  // without a payer, so it lands whoever pays.
   it('stops a site owlette has a record of, without asking tridant first', async () => {
     mockStopSite.mockResolvedValue({ ok: true, endsAt: 2 });
 
     await stopBillingBeforeDelete('site-1', { billing: pointer('alice') });
 
-    expect(mockStopSite).toHaveBeenCalledWith('site-1');
+    expect(mockStopSite.mock.calls).toEqual([['site-1']]);
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 

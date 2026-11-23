@@ -3,10 +3,12 @@
  */
 
 import {
+  AUDIT_QUEUE_STUCK_MS,
   DESTRUCTIVE_BURST,
   REFUSAL_BURST,
   SECOND_FACTOR_BURST,
   WINDOW_MS,
+  evaluateAuditQueues,
   evaluateRules,
   type RuleInput,
 } from '@/lib/activity/rules';
@@ -281,5 +283,59 @@ describe('labels', () => {
     expect(f.summary).toContain('for ann@example.test within');
     expect(f.facts[0]).toEqual({ label: 'user', value: 'ann@example.test' });
     expect(f.subject).toEqual({ userId: 'u1' });
+  });
+});
+
+describe('evaluateAuditQueues', () => {
+  const HOUR = 60 * 60 * 1000;
+  const NOW = 500 * HOUR + 10 * 60 * 1000;
+
+  it('raises one platform finding an hour for every queue waiting past 5 minutes', () => {
+    const queues = [
+      { siteId: 'site-b', at: NOW - AUDIT_QUEUE_STUCK_MS - 1 },
+      { siteId: 'site-c', at: NOW - AUDIT_QUEUE_STUCK_MS },
+      { siteId: '_platform', at: null },
+      { siteId: 'site-d', at: NOW - 20 * 60 * 1000 },
+    ];
+    const out = evaluateAuditQueues(queues, NOW);
+    expect(out).toEqual([
+      {
+        id: 'audit_queue_stuck:500',
+        rule: 'audit_queue_stuck',
+        severity: 'high',
+        title: 'audit queue stuck',
+        summary: '3 sites have audit events that have waited more than 5 minutes to join an audit log.',
+        subject: { siteId: null },
+        at: NOW - 20 * 60 * 1000,
+        facts: [
+          { label: 'sites', value: 'site-b, the platform, site-d' },
+          { label: 'stuck sites', value: '3' },
+          { label: 'oldest queued', value: new Date(NOW - 20 * 60 * 1000).toISOString() },
+        ],
+        rowIds: [],
+      },
+    ]);
+    expect(evaluateAuditQueues(queues, NOW + 40 * 60 * 1000)[0].id).toBe('audit_queue_stuck:500');
+    expect(evaluateAuditQueues(queues, NOW + 50 * 60 * 1000)[0].id).toBe('audit_queue_stuck:501');
+  });
+
+  it('lists the first ten sites and counts the rest', () => {
+    const queues = Array.from({ length: 12 }, (_, i) => ({ siteId: `s${i}`, at: null }));
+    const [f] = evaluateAuditQueues(queues, NOW);
+    expect(f.summary).toBe('12 sites have audit events that have waited more than 5 minutes to join an audit log.');
+    expect(f.facts).toEqual([
+      { label: 'sites', value: 's0, s1, s2, s3, s4, s5, s6, s7, s8, s9 and 2 more' },
+      { label: 'stuck sites', value: '12' },
+      { label: 'oldest queued', value: 'unknown' },
+    ]);
+  });
+
+  it('reads one site in the singular', () => {
+    const [f] = evaluateAuditQueues([{ siteId: 'site-a', at: NOW - HOUR }], NOW);
+    expect(f.summary).toBe('1 site has audit events that have waited more than 5 minutes to join an audit log.');
+  });
+
+  it('finds nothing while every queue is fresh', () => {
+    expect(evaluateAuditQueues([{ siteId: 'site-a', at: NOW }], NOW)).toEqual([]);
   });
 });

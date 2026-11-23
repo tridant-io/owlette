@@ -20,7 +20,7 @@ test.describe('landing faq + footer', () => {
     await expect(page.getByText(/is mayonnaise an instrument/i)).toHaveCount(0);
   });
 
-  test('pricing answer keeps beta free and states the after-beta model', async ({ page }) => {
+  test('pricing answer dates the free period and states the model after it', async ({ page }) => {
     await page.goto('/');
 
     const question = page.getByRole('button', { name: /is it actually free/i });
@@ -28,7 +28,8 @@ test.describe('landing faq + footer', () => {
     // the answer panel is the button's next sibling.
     const answer = question.locator('xpath=following-sibling::div[1]//p');
 
-    await expect(answer).toContainText('during beta, yes');
+    await expect(answer).toContainText('free until 1 April 2027, yes');
+    await expect(answer).toContainText('after 1 April 2027, every account starts with a 14-day pro trial');
     await expect(answer).toContainText('14-day pro trial, no card, once its email is verified');
     await expect(answer).toContainText('a site falls back to owlette free');
     await expect(answer).toContainText('each site has its own plan and is billed on its own');

@@ -6,8 +6,10 @@ import { runPlanDaily } from '@/lib/planUsage.server';
 /**
  * GET /api/cron/plan-daily — stamps each site's active machines, refreshes its
  * plan snapshot and reports the billed sites to tridant id (adr 0018; the work
- * is in `@/lib/planUsage.server`). answers the run's counts. auth:
- * X-Cron-Secret must equal CRON_SECRET.
+ * is in `@/lib/planUsage.server`), then retries the removal of deleted sites
+ * tridant id still holds and checks what tridant id lets each key do. a month's
+ * last report is sent again the morning after by `/api/cron/plan-settle`.
+ * answers the run's counts. auth: X-Cron-Secret must equal CRON_SECRET.
  *
  * runs on cron-job.org, not railway — register once per environment, in UTC:
  *   30 23 * * *  GET https://<app>/api/cron/plan-daily

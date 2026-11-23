@@ -26,6 +26,11 @@ const SUMMARY = {
   recorded: 1,
   pruned: 0,
   errors: 0,
+  removals: { removed: 1, pending: 0, dropped: 0, errors: 0 },
+  keys: [
+    { keyName: 'TRIDANT_LICENSE_KEY', ok: true, missing: [], expiresInDays: 84 },
+    { keyName: 'TRIDANT_RELEASE_KEY', ok: false, reason: 'not_configured', missing: [], expiresInDays: null },
+  ],
 };
 
 describe('GET /api/cron/plan-daily', () => {

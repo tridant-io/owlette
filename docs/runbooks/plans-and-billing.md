@@ -10,15 +10,22 @@ it is really on, rolling it back, and running it day to day.
 Design source of truth: [ADR 0018](../adr/0018-a-site-has-a-plan-and-its-owner-pays.md) and the
 "Plans and billing" terms in `GLOSSARY.md`. Plans, the trial and billing all live in tridant id.
 Owlette holds no Stripe key and no billing state of its own beyond a pointer on the site document
-and the four server-only collections described under [what owlette stores](#what-owlette-stores).
+and the five server-only collections described under [what owlette stores](#what-owlette-stores).
 
 ---
 
 ## current state
 
 Every gate is shipped. As of 2026-11-12, plans are enforced on dev (since 19:13 UTC that day) and
-ship off on prod, where every gate is dormant. A gate enforces for a site only when **all** of
-these hold on the origin that answers the request:
+ship off on prod, where every gate is dormant.
+
+Prod's `PLAN_ENFORCEMENT` stays off until 2027-04-01 00:00 UTC (owner, 2026-11-20), so nobody is
+billed before then: the public copy says owlette is free until 1 April 2027
+(`PRICING_FACTS.freeUntil`). [The bulk trial start](#the-bulk-trial-start) and [the flip](#the-flip)
+happen on or after that date, in that order, so the first possible charge comes after the 14-day
+trials.
+
+A gate enforces for a site only when **all** of these hold on the origin that answers the request:
 
 1. `PLAN_ENFORCEMENT` is exactly `on`. `On`, `true` and `1` all count as off.
 2. `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY` are both set (non-blank).
@@ -53,17 +60,20 @@ enforcement still off (see [the bulk trial start](#the-bulk-trial-start)).
 
 **A key missing from a site's answer is unrestricted.** It logs `[plan] tridant sent no value for
 <key>; treating it as unrestricted` once per key, and `/api/account/plan` lists the keys in
-`missingKeys`. The pro floor on usage is the exception: it applies only when the answer says
-`owlette.deployments` is on, so a missing key never raises a bill.
+`missingKeys`. A missing key never raises a bill: the pro floor on usage reads none of these keys,
+only the product tridant id bills the site at (`billing.product_id`).
 
 **What already runs while dormant:**
 - the `plan-daily` cron, if registered, stamps active machines and writes every `plan_snapshot` as
-  `enforced: false`. It asks tridant id nothing and reports nothing;
+  `enforced: false`. It reports nothing. Once tridant id is configured it still stops a billing
+  left running for a previous owner, retries the removal of deleted sites and checks both keys;
+- the `plan-settle` cron, if registered, does nothing and answers zeros;
 - pairing stamps `pairedAt` on new machines;
 - password sign-ups get the email-verification link;
 - transferring a site that carries a billing pointer, and deleting one that carries a pointer or
   that tridant id says it bills (an account delete included), still stops its billing with tridant
-  id, whatever the switch says. Someone is being billed for it;
+  id, whatever the switch says. Someone is being billed for it. A deleted site is also removed from
+  tridant id once it is configured;
 - once tridant id is configured, [the bulk trial start](#the-bulk-trial-start) runs, and a new site
   is registered with tridant id when its owner already has a tridant organization, so it is under
   the owner's trial when the switch flips.
@@ -93,11 +103,21 @@ One key per environment, under the env name `TRIDANT_LICENSE_KEY`. It does every
 call owlette makes, so it needs all of this:
 
 - **Bound to the app `owlette`.** tridant id binds every key to one app.
-- **Three scopes:** `license.read` (the per-site entitlement lookup), `site.write` (registering a
-  site under its owner's tridant organization, `POST /v1/sites`) and `billing.write` for owlette
-  Core (`billing.write:prd_owlette_core`: the trial, checkout, linking, adding, switching and
-  stopping a site, and the usage report). The scope is bound to the product's group, so it covers
-  pro as well.
+- **Three scopes:** `license.read` (the per-site entitlement lookup, and the daily job's batch
+  read of 100 sites at a time, `POST /v1/sites/entitlements`), `site.write` (registering a site
+  under its owner's tridant organization, `POST /v1/sites`, and removing a deleted one, `DELETE
+  /v1/sites/owlette:{siteId}`) and `billing.write` for owlette Core
+  (`billing.write:prd_owlette_core`: the trial, checkout, linking, adding,
+  switching and stopping a site, and the usage report). The scope is bound to the product's group,
+  so it covers pro as well.
+- **Owlette checks it.** `GET /v1/key` answers what a key can do, and writes nothing. The daily job
+  asks it of this key and of `TRIDANT_RELEASE_KEY` on every run once tridant id is configured
+  (`keys` in [its summary](#reading-the-daily-summary)), and logs a key that lacks a scope or could
+  not be read as `[plan-daily] tridant key not usable` at error. A blank `TRIDANT_RELEASE_KEY`
+  reads `ok: false` with `reason: "not_configured"` in the summary but is not logged: no releases
+  are registered from there.
+  [The bulk trial start](#the-bulk-trial-start) answers the same check,
+  and refuses `?apply=1` while this key fails it.
 - **It expires.** tridant id mints keys with a 400-day life by default. In a key's last 30 days
   every answer carries a `Sunset` header, and owlette logs it once per process at error:
   `[tridant] tridant id says this api key expires on YYYY-MM-DD; rotate TRIDANT_LICENSE_KEY before
@@ -107,7 +127,7 @@ call owlette makes, so it needs all of this:
 To rotate: rotate the key in the tridant id admin, set the new value on Railway (UI, never a
 command line), mirror it to Vercel on prod (`node scripts/sync-env.mjs sync vercel-prod`, dry run
 then `--apply`, then redeploy Vercel), and confirm `/api/account/plan` still answers `enforced:
-true` with no `reason`.
+true` with no `reason`, and the next `plan-daily` summary shows the key `ok: true` in `keys`.
 
 ### the OIDC client
 
@@ -182,6 +202,19 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
   returns `200` with a summary where `errors` is 0 and `snapshots` equals `sites` (see
   [reading the daily summary](#reading-the-daily-summary)). Register it before the flip so the
   month's day stamps are already accumulating.
+- [ ] **`plan-settle` registered on cron-job.org for dev**, once dev serves the route. The entry is
+  `cron-plan-settle`:
+
+  | setting | value |
+  |---|---|
+  | method | `GET` |
+  | url | `https://dev.owlette.app/api/cron/plan-settle` |
+  | schedule | `0 6 * * *`, timezone UTC (see [the settle pass](#the-settle-pass)) |
+  | header | `X-Cron-Secret: <dev CRON_SECRET>` |
+  | timeout | at least 60 s |
+
+  Verify by hand: `curl -si -H "X-Cron-Secret: $CRON_SECRET" https://dev.owlette.app/api/cron/plan-settle`
+  returns `200` with `errors: 0`. On a day that follows no billing period's end every count is 0.
 - [ ] **Test accounts ready.** A non-superadmin account with a verified email that **owns a site**,
   and a fresh password account left **unverified** that owns a site. A superadmin's sites always
   read `reason: "superadmin"` and prove nothing, and an account that owns no site proves nothing
@@ -197,9 +230,9 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
    `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY` and the three `TRIDANT_OIDC_*` are live on railway-dev,
    and `PLAN_ENFORCEMENT` is still off.
 2. **Start the trials, with enforcement still off.** Run [the bulk trial start](#the-bulk-trial-start)
-   as a dry run, review the counts, then apply it. It needs only tridant id configured, so every
-   existing account is on its trial before any gate goes on and none of its sites reads owlette
-   free at the switch. Each trial's 14 days start counting at this run, so do it close to the
+   as a dry run, review the counts and the key check, then apply it. It needs only tridant id
+   configured, so every existing account is on its trial before any gate goes on and none of its
+   sites reads owlette free at the switch. Each trial's 14 days start counting at this run, so do it close to the
    switch, in the same sitting as step 3. An account created or verified after the run starts its
    own trial on its first plan read once step 3 is live.
 3. Set `PLAN_ENFORCEMENT=on` on railway-dev (UI, or
@@ -233,6 +266,7 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
    | `enforced: true` with `missingKeys` | tridant id sent no readable value for those keys, which stay unrestricted | fix on the tridant id side; not a pass |
    | `trial.status: "none"` | the trial start failed; `plan_accounts/{uid}.trialError` holds the code | usually the key lacks `billing.write`. Fix it; the next read retries after 60 s |
    | `trial.status: "link_required"` | the email already has a tridant organization | expected for such an account: link it from the plan page |
+   | `trial.status: "used"` | the account had its trial on an earlier tridant organization, since closed, and tridant id refused another (`trial_already_used`); `plan_accounts/{uid}.trialUsed` is true | expected: no second trial, ever. The plan page reads "no pro trial" |
    | a site with `tier: null` and a `reason` | that one site's plan could not be read | as the `reason` rows above, for that site |
 
    `GET /api/sites/{siteId}/plan` answers one site's plan to any of its members, with the same
@@ -305,9 +339,16 @@ on cron-job.org.
 - It runs **before** `PLAN_ENFORCEMENT=on`, with enforcement still off: it needs only
   `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY`, and answers `503` while either is blank. Each
   trial's 14 days start counting when this run starts it, so run it close to the switch.
-- **A dry run by default.** It reads one page of 100 Firebase Auth users and counts the eligible
-  ones: enabled, email verified, and not an agent's account (`agent_…`). `?apply=1` starts the
-  trial for each.
+- **The key check first.** Both modes ask tridant id what each key can do (`GET /v1/key`) and
+  answer it as `keys`. `?apply=1` answers `503` with the same `keys`, and starts nothing, while
+  `TRIDANT_LICENSE_KEY` fails it; its `detail` names what the key lacks. `TRIDANT_RELEASE_KEY` is
+  only reported.
+- **A dry run by default.** It reads one page of 100 Firebase Auth users, takes the eligible ones
+  (enabled, email verified, and not an agent's account, `agent_…`), and asks tridant id what a trial
+  start would answer for each (`POST /v1/billing/trial/preview`, which writes nothing). The uids,
+  never the emails, of the accounts that must link first or already used a trial are logged at
+  info as `[plan] trial preview`, one line per page: follow them up before applying. `?apply=1`
+  starts the trial for each.
 - **One page per call.** Pass the answer's `nextPageToken` back as `?pageToken=` until it is
   `null`. Allow 5 minutes per call.
 
@@ -318,19 +359,33 @@ curl -s -H "X-Cron-Secret: $CRON_SECRET" \
   "https://dev.owlette.app/api/cron/plan-trials?apply=1&pageToken=<nextPageToken>"
 ```
 
+A dry run:
+
 ```json
-{"ok":true,"apply":true,"scanned":100,"eligible":72,"started":66,"alreadyStarted":3,"linkRequired":2,"subscribed":0,"busy":0,"failed":1,"nextPageToken":"…"}
+{"ok":true,"apply":false,"scanned":100,"eligible":72,"wouldStart":66,"already":3,"alreadySubscribed":0,"used":1,"linkRequired":2,"failed":0,"keys":[{"keyName":"TRIDANT_LICENSE_KEY","ok":true,"missing":[],"expiresInDays":312},{"keyName":"TRIDANT_RELEASE_KEY","ok":true,"missing":[],"expiresInDays":298}],"nextPageToken":"…"}
+```
+
+With `?apply=1`:
+
+```json
+{"ok":true,"apply":true,"scanned":100,"eligible":72,"started":65,"alreadyStarted":3,"linkRequired":2,"subscribed":0,"trialUsed":1,"busy":0,"failed":1,"keys":[{"keyName":"TRIDANT_LICENSE_KEY","ok":true,"missing":[],"expiresInDays":312},{"keyName":"TRIDANT_RELEASE_KEY","ok":true,"missing":[],"expiresInDays":298}],"nextPageToken":"…"}
 ```
 
 | field | meaning |
 |---|---|
-| `scanned`, `eligible` | users on the page, and how many of them qualify. A dry run stops here: every other count is 0 |
-| `started` | trials started now |
-| `alreadyStarted` | the account had its trial before. A rerun is safe: nothing starts twice |
-| `linkRequired` | the email already has a tridant organization. The owner links it from the plan page, and the trial starts then |
-| `subscribed` | the account already pays in tridant id, so it gets no trial |
-| `busy` | another request was starting the same trial. Run the page again |
-| `failed` | the start failed; `plan_accounts/{uid}.trialError` holds the code and the logs `[plan] trial start failed`. Run the page again; once plans are on, the account also retries on its next plan read |
+| `scanned`, `eligible` | users on the page, and how many of them qualify |
+| `keys` | per key: `ok` when tridant id answered and the key holds every scope owlette needs, `missing` the scopes it lacks, `expiresInDays`, and `reason` when its scopes could not be read (`not_configured` for a blank key) |
+| `wouldStart` | dry run: trials the apply would start |
+| `already` | dry run: the account's tridant organization has its trial already. Applying starts nothing twice: it counts the account as `alreadyStarted`, or as `started` when owlette had no record of the trial yet, and records it |
+| `alreadySubscribed` | dry run: the account already pays in tridant id, so it gets no trial |
+| `used` | dry run: the account had its trial on an earlier tridant organization, since closed, so it gets no other. Its uid is logged |
+| `linkRequired` | both: the email already has a tridant organization. The owner links it from the plan page, and the trial starts then. A dry run logs its uid |
+| `started` | apply: trials started now |
+| `alreadyStarted` | apply: the account had its trial before. A rerun is safe: nothing starts twice |
+| `subscribed` | apply: the account already pays in tridant id, so it gets no trial |
+| `trialUsed` | apply: tridant id refused the trial (`trial_already_used`), as `used` above. It is recorded on `plan_accounts/{uid}.trialUsed`, and never retried |
+| `busy` | apply: another request was starting the same trial. Run the page again |
+| `failed` | dry run: the preview failed, or named no outcome. Apply: the start failed; `plan_accounts/{uid}.trialError` holds the code and the logs `[plan] trial start failed`. Run the page again; once plans are on, the account also retries on its next plan read |
 
 Before applying, decide what happens to existing **unverified** password accounts: the run skips
 them, so their sites are on owlette free from the flip until they verify.
@@ -366,9 +421,12 @@ switch, and `trial.status: "active"` after it.
 
   Until then railway-prod and vercel-prod hold no `TRIDANT_LICENSE_KEY` and no `TRIDANT_OIDC_*`,
   and `node scripts/sync-env.mjs check` listing them as missing there is expected.
-- [ ] The pricing copy no longer says "free during beta". That covers `STATUS`, `PRICE_LINE`,
-  `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "applies after beta" framing in
-  the plans docs. The change is on `main` and deployed.
+- [ ] It is 2027-04-01 00:00 UTC or later: the public copy promises every feature free until then
+  (`PRICING_FACTS.freeUntil`).
+- [ ] The pricing copy no longer presents the free period as current. That covers `STATUS`,
+  `PRICE_LINE`, `AFTER_BETA` and `PRICING` in `web/lib/product-facts.ts`, and the "not enforced
+  before 1 April 2027" framing in the docs, `web/openapi.yaml` and the cli and sdk READMEs. The
+  change is on `main` and deployed.
 - [ ] `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY` and the three `TRIDANT_OIDC_*` are set on
   railway-prod (service `owlette-prod`, environment `dev`: both Railway services live in the one
   `dev` environment). `PLAN_ENFORCEMENT` is still off.
@@ -382,14 +440,17 @@ switch, and `trial.status: "active"` after it.
 - [ ] `plan-daily` is registered for prod at `https://owlette.app/api/cron/plan-daily`, `30 23 * * *`
   UTC, with the prod `CRON_SECRET`, and a manual run returns `200` with `errors: 0`. Register it
   only once prod serves the route: before the web release that carries it, it answers `404`.
+- [ ] `plan-settle` is registered for prod at `https://owlette.app/api/cron/plan-settle`,
+  `0 6 * * *` UTC, with the prod `CRON_SECRET`, and a manual run returns `200` with `errors: 0`.
+  The same rule: only once prod serves the route.
 - [ ] The customer notice (below) has been signed off by the owner.
 
 ### the flip
 
 1. **Bulk trial start on prod, with enforcement still off:** the dry run against
-   `https://owlette.app`, check the counts, then `?apply=1` through every page. This starts every
-   verified account's 14 days, so do it close to the switch and send the customer notice the same
-   day.
+   `https://owlette.app`, check the counts and `keys`, then `?apply=1` through every page. This
+   starts every verified account's 14 days, so do it close to the switch and send the customer
+   notice the same day.
 2. Set `PLAN_ENFORCEMENT=on` on railway-prod and wait for the redeploy.
 3. Mirror it: `node scripts/sync-env.mjs sync vercel-prod` (dry run), then `--apply`, then redeploy
    Vercel. **Don't skip this.** Until it is done, a failover serves owlette.app with plans off.
@@ -455,17 +516,23 @@ impossible, so investigate it as a bug. Also roll back if trialing or billed sit
   switch is off, `plan-daily` reports no usage, so tridant id bills each site on the last report
   it holds. Turn enforcement back on before the month's last 23:30 run. Stopping the affected
   sites in tridant id does not waive the current period: a stop still bills it, on the last
-  report held, and ends the billing only after it.
+  report held, and ends the billing only after it. The settle pass does nothing either while the
+  switch is off.
 - **Nothing can be bought or switched from the dashboard:** an upgrade or a switch answers `503
   billing_unavailable`. The billing section stays only on a billed site, for its owner, and offers
   only **stop billing**, which still reaches tridant id, as the stop on delete and transfer does.
 - **Trials keep counting down** while enforcement is off, so a long rollback means sites come back
   on free when it is turned on again. Extend trials in tridant id before re-enabling if that
-  matters.
+  matters. Once enforcement is on, owlette records the new end from tridant id's answer for a site
+  trialing under the account's own organization (on the owner's next plan read, and at the daily
+  job for a billed site) and counts usage from it.
 - `billing_usage/{siteId}/days/*`: kept. The cron keeps stamping whatever the switch says, and
   prunes past 100 days.
 - `plan_snapshot/{siteId}`: overwritten by the next run (step 3).
-- `plan_accounts`, `billing_checkouts`, `sites/{siteId}.billing` and `pairedAt`: kept, and harmless.
+- `plan_accounts`, `billing_checkouts`, `billing_usage/{siteId}.report`, `sites/{siteId}.billing`
+  and `pairedAt`: kept, and harmless.
+- `tridant_site_removals/{siteId}`: kept, and still retried by the daily job while tridant id is
+  configured.
 - Rollouts already written off as `aborted` stay aborted, because `aborted` is terminal. Deploy the
   version again.
 - Device codes refused at authorize stay refused until they expire (10 minutes). The agent pairs
@@ -482,23 +549,31 @@ tridant id is the source of truth for every plan. Owlette keeps:
 
 | path | holds |
 |---|---|
-| `sites/{siteId}.billing` | the pointer the dashboard shows: `{tier, founders, payerUid, endsAt, updatedAt}`. Written when the owner upgrades, switches or stops, when a checkout is confirmed, and when ownership is transferred. `endsAt` is null while billing runs. It decides nothing: whether a site is billed is tridant id's answer (its `billing` block), and a pointer that still says billed once tridant id bills nothing is closed by a switch, a stop or the daily job |
-| `plan_accounts/{uid}` | an account's trial and link state: `trialStartedAt`, `trialEndsAt`, `orgId`, `linkRequired`, `trialError`, `claimedAt` |
+| `sites/{siteId}.billing` | the pointer: `{tier, founders, payerUid, endsAt, updatedAt}`. Written when the owner upgrades, switches or stops, when a checkout is confirmed, and when ownership is transferred. `endsAt` is null while billing runs. It decides nothing: whether a site is billed is tridant id's answer (its `billing` block), and a pointer that still says billed once tridant id bills nothing is closed by a switch, a stop or the daily job. While tridant id's answer bills the site, the dashboard shows the plan, founders rate and end from that answer. With plans off it shows the pointer. Once tridant id bills nothing, the site's billing section shows none, and the account plan (`/settings/plan`) shows the pointer, which also tells the upgrade dialog the owner has paid before. Who pays (`payerUid`) is only here: tridant id's answer does not say |
+| `plan_accounts/{uid}` | an account's trial and link state: `trialStartedAt`, `trialEndsAt`, `orgId`, `linkRequired`, `trialUsed`, `trialError`, `claimedAt`. `trialEndsAt` follows tridant id when it moves the end (an extension). `trialUsed` is tridant id's `trial_already_used`: no trial, ever |
 | `billing_checkouts/{sessionId}` | what a Stripe Checkout session was started for (`uid`, `siteId`, `tier`, `founders`), so only the account that started it can confirm it |
 | `billing_usage/{siteId}/days/{YYYY-MM-DD}` | the site's active machines per UTC day |
+| `billing_usage/{siteId}.report` | a billed site's last usage report, for [the settle pass](#the-settle-pass): `{periodStart, periodEnd, countedFrom, floor, machines, asOf, status, recorded, settled, at}`, plus `settlesAt` once the settle pass has sent it. Replaced whole by each daily run |
+| `tridant_site_removals/{siteId}` | a deleted site tridant id has not removed yet: `{siteId, requestedAt, attempts, lastCode}`. See [transfers and deletes](#transfers-and-deletes) |
 | `plan_snapshot/{siteId}` | `{enforced, control, roost, resolvedAt}`, for Cloud Functions |
 
-The four collections are server-only: the `firestore.rules` catch-all denies them, and
+The five collections are server-only: the `firestore.rules` catch-all denies them, and
 `web/__tests__/rules/planCollections.test.ts` holds that.
 
 ### the daily job
 
-`GET /api/cron/plan-daily` (`web/lib/planUsage.server.ts`) runs at **23:30 UTC**. For every site
-it:
+`GET /api/cron/plan-daily` (`web/lib/planUsage.server.ts`) runs at **23:30 UTC**. It reads the
+sites 100 at a time. With enforcement on, one tridant id call (`POST /v1/sites/entitlements`) reads
+the whole page's plans first, and a site that call missed is read on its own. For every site it:
 
 1. unions the machines whose `lastHeartbeat` falls in the last 26 h into
    `billing_usage/{siteId}/days/{YYYY-MM-DD}`, each on the UTC day of its own heartbeat;
-2. stops billing that was left running for a previous owner (a transfer whose stop did not land);
+2. stops billing that was left running for a previous owner (a transfer whose stop did not land),
+   naming that owner as the payer. When tridant id answers `payer_mismatch` (they do not pay for
+   it), it reads the site again. Billed under the current owner's own organization, the pointer is
+   rewritten for the owner (their upgrade whose checkout return never loaded). Billed under any
+   other, it is stopped without a payer, logged `[billing] stranded billing stopped without its
+   payer` at warn. Billed nowhere, the pointer is closed;
 3. writes `plan_snapshot/{siteId}`;
 4. re-registers a site that tridant id holds under another organization than its owner's (a
    transferred site moves once nothing is billed on it there), writes the billing pointer for
@@ -508,24 +583,73 @@ it:
 
 Then, with enforcement on, it reports every billed site to tridant id in one `POST /v1/usage`: the
 site's distinct active machines since its billing period started, or since the owner's trial
-ended when that is later (nothing in the trial is billed), a pro site as at least 3, with
-`as_of` set to the run. Last, it prunes day docs older than 100 days. With enforcement off it asks
-tridant id nothing and reports nothing.
+ended when that is later (nothing in the trial is billed; a trial end tridant id has moved is
+recorded first), a site billed at pro as at least 3, with `as_of` set to the run. Each site's count
+and tridant id's answer are saved on `billing_usage/{siteId}.report` for
+[the settle pass](#the-settle-pass). Then, whatever the switch says, once tridant id is configured,
+it retries the removal of deleted sites tridant id still holds (see
+[transfers and deletes](#transfers-and-deletes)) and checks both keys (`GET /v1/key`). Last, it
+prunes day docs older than 100 days. With enforcement off it reports nothing, and asks tridant id
+only to stop a stranded billing, retry the removals and check the keys.
 
-**The last run of a month is the one that bills.** tridant id bills each site on the report it
-holds when the month ends, and a report that arrives after the 1st, 00:00 UTC counts for nothing.
-There is no grace. That is why the job runs at 23:30: late enough to count the day, with half an
-hour for the report to arrive. If the run on the last day of a month fails, trigger it by hand
-before midnight UTC; after that the month is billed on the previous day's count.
+**A month is billed on the newest report tridant id holds for it.** tridant id keeps a closed
+period's invoice open for 24 hours after the period ends (`site_settle_hours`): a report dated
+inside the closed period still lands on it until then, and answers `period_closed` after. The 23:30
+run is the last one inside a month, and [the settle pass](#the-settle-pass) at 06:00 UTC the
+morning after recounts the month and sends it again, so a failed last run is mostly made up (the
+settle pass lists what it misses). If the run on a month's last day fails, trigger it by hand
+before midnight UTC; that is the better fix. After midnight, don't run it again until the settle
+pass has settled the month (`settled` equals `sent` in its answer): a run then reads the new period
+and replaces the closed period's saved report, which the settle pass then never finds.
 
 The 26 h window overlaps the previous run by two hours, so a run up to two hours late misses
-nothing. The job is rerun-safe: the day stamp is an array union, the snapshot an overwrite, and
-tridant id keeps the report with the newest `as_of`.
+nothing. The job is rerun-safe: the day stamp is an array union, the snapshot an overwrite, the
+saved report is replaced whole, and tridant id keeps the report with the newest `as_of`.
+
+### the settle pass
+
+`GET /api/cron/plan-settle` (`web/lib/planSettle.server.ts`) runs at **06:00 UTC**, with the same
+`X-Cron-Secret`. With enforcement on, it takes every `billing_usage/{siteId}.report` whose
+`periodEnd` fell in the last 24 hours and that is not settled, and leaves out one counted from its
+period end or later (a trial that covered the whole period, so nothing in it bills). For each, it
+stamps the site's machines as the daily job does and recounts the period from the report's
+`countedFrom` to `periodEnd - 1`, with the report's floor. It sends them all in one
+`POST /v1/usage`, each with `as_of = periodEnd - 1`, which tridant id files in the closed period,
+and saves each answer onto the report (`settled`, `status`, `recorded`, `machines`, `asOf`,
+`settlesAt`). `recorded` settles it, and so do `stale` (tridant id already holds a newer report
+for the period) and `site_not_billed` (the site's billing ended with the period, and the daily
+run's report already bills it). With enforcement off it does nothing and answers zeros.
+
+That covers a failed or unrecorded 23:30 run, and machines last seen between 23:30 and midnight. A
+machine still online at 06:00 has its heartbeat on the new day, so it is not counted in the closed
+month again; the 23:30 run counted it there. When that 23:30 run failed, the pass misses two
+things: a machine first seen that day and still online at 06:00, and a site with no saved report
+for the month, which has nothing to resend.
+
+```json
+{"ok":true,"candidates":6,"sent":6,"settled":6,"errors":0}
+```
+
+| field | healthy |
+|---|---|
+| `candidates` | 0 on every day that does not follow a billed site's period end, which is most days. The morning after a period ends, the billed sites with a saved report for it |
+| `sent` | equals `candidates`. Less means a recount failed; `errors` counts it, and the report stays unsettled |
+| `settled` | equals `sent`. A site that is not settled is logged `[plan-settle] usage not settled` at warn with its status. `period_closed` is logged `[plan-settle] period closed before the resend` at error: the invoice was written without this report, and tridant id flags the gap on its side too |
+| `errors` | 0. Otherwise search the logs for `[plan-settle] … failed` |
+
+It is rerun-safe: a settled report is skipped, and tridant id keeps the newest `as_of`, so the same
+one twice changes nothing. Trigger it by hand to retry, any time within 24 hours of a period's end.
+
+Two cases are never settled, both accepted:
+- a `plan-daily` run that lands after midnight UTC replaces the closed period's saved report before
+  06:00, so that month bills on the last report tridant id received;
+- a billed site whose tridant id answer had no period end has its report saved with no
+  `periodEnd`, so the pass never finds it.
 
 ### reading the daily summary
 
 ```json
-{"ok":true,"day":"2026-11-30","sites":42,"machines":57,"snapshots":42,"reported":6,"recorded":6,"pruned":0,"errors":0}
+{"ok":true,"day":"2026-11-30","sites":42,"machines":57,"snapshots":42,"reported":6,"recorded":6,"pruned":0,"errors":0,"removals":{"removed":1,"pending":0,"dropped":0,"errors":0},"keys":[{"keyName":"TRIDANT_LICENSE_KEY","ok":true,"missing":[],"expiresInDays":312},{"keyName":"TRIDANT_RELEASE_KEY","ok":true,"missing":[],"expiresInDays":298}]}
 ```
 
 | field | healthy |
@@ -533,10 +657,12 @@ tridant id keeps the report with the newest `as_of`.
 | `day` | the UTC day of the run |
 | `snapshots` | equals `sites`. Less means a snapshot write failed; `errors` counts it |
 | `reported` | the billed sites sent to tridant id. 0 while enforcement is off |
-| `recorded` | equals `reported`. A site that was not recorded is logged `[plan-daily] usage not recorded` with its status. `site_not_billed` during a Stripe trial and `period_rolled_over` are expected, and the next run reports again |
+| `recorded` | equals `reported`. A site that was not recorded is logged `[plan-daily] usage not recorded` with its status. `site_not_billed` during a Stripe trial and `period_rolled_over` are expected, and the next run reports again (for a month's last day, the settle pass) |
 | `errors` | 0. Otherwise search the logs for `[plan-daily] … failed` |
 | `machines` | non-zero on any fleet with a machine online in the last day |
 | `pruned` | 0 for the first 100 days, then roughly one per stamped site per day |
+| `removals` | the retry of deleted sites tridant id still holds: `removed` now, still `pending`, `dropped` after 45 days, and `errors`. `dropped` and `errors` are 0; each is logged at error. Neither counts in the top-level `errors` |
+| `keys` | per key, `ok: true` with `missing` empty, and `expiresInDays`. A key whose scopes could not be read carries a `reason`: `not_configured` for a blank key, otherwise `unreachable`, `rejected` or `malformed_response`. A key that is not ok is logged `[plan-daily] tridant key not usable` at error, unless it is blank; it does not count in `errors`. Empty while tridant id is not configured |
 
 A `401` means the header or secret is wrong for that environment. A `500` means the handler threw;
 check the host logs for `cron/plan-daily`.
@@ -546,14 +672,18 @@ fails open per site, so that site's snapshot is written `enforced: false`, it is
 nothing counts as an error. Check for `[tridant] request failed` around 23:30, and compare
 `reported` with the number of billed sites you expect.
 
-Runtime grows with sites: one machines read per site, and with enforcement on one tridant id
-lookup per site, ten at a time, each up to 5 s. Watch the duration in the cron-job.org history.
+Runtime grows with sites: one machines read per site, and with enforcement on one batch tridant id
+read per page of 100 sites (up to 15 s), plus a lookup of up to 5 s for each site the batch missed,
+ten sites at a time. Watch the duration in the cron-job.org history.
 
 ### manual runs
 
 `curl -si -H "X-Cron-Secret: $CRON_SECRET" https://<host>/api/cron/plan-daily` is safe at any
-time, and is the fix for a missed run. A machine is stamped on the day of its own heartbeat, so a
-run just after midnight does not move the previous evening's machines into the new period.
+time but one, and is the fix for a missed run. A machine is stamped on the day of its own
+heartbeat, so a run just after midnight does not move the previous evening's machines into the new
+period. The exception is after midnight on the 1st, until the settle pass has settled the month:
+a run then replaces the closed month's saved report. Retry the month there with
+`curl -si -H "X-Cron-Secret: $CRON_SECRET" https://<host>/api/cron/plan-settle` instead.
 
 ### billing actions
 
@@ -574,13 +704,18 @@ owner gets `403 not_owner`.
   section polls `GET /api/billing/checkout/{sessionId}` until tridant id says `complete`, and the
   pointer is written then. If the tab is closed first, the site is still billed: the daily job
   writes the pointer, and switch and stop work without it.
-- **Switch** (`PATCH`) is immediate. The whole period is billed at the plan held when it ends.
+- **Switch** (`PATCH`) is immediate. The whole period is billed at the plan held when it ends. It
+  names the owner as the payer, so tridant id refuses it with `payer_mismatch`, and changes
+  nothing, when it bills the site under another organization than the owner's.
 - **Stop** (`DELETE`): the site keeps its plan to the end of the billing period, which is billed,
-  then goes to owlette free. Upgrading it again before then resumes the same billing.
+  then goes to owlette free. Upgrading it again before then resumes the same billing, at the plan
+  chosen. The stop names the owner as the payer only when the pointer says the owner pays; a new
+  owner's stop of the previous owner's billing goes without one, so it lands.
 - **Founders** rates are offered while tridant id's `founders_remaining` is above 0 (cached 5
   minutes), or when a site the owner owns is, or was, billed at the founders rate on that plan:
   tridant id keeps the rate for that organization past the cap (`foundersHeld` in
-  `/api/account/plan`, read from the pointers on the sites the owner still owns). If tridant id
+  `/api/account/plan`, read for each site the owner still owns from tridant id's answer while it
+  bills the site, else from its pointer). If tridant id
   refuses it anyway with `founders_sold_out`, the dialog asks the owner to confirm the list price.
   Nothing is retried silently.
 - Every change writes a `billing_mutated` audit row.
@@ -598,6 +733,7 @@ Refusals are problem+json with these codes:
 | `billed_by_previous_owner` | 409 | upgrading or switching a transferred site while the previous owner's billing runs |
 | `link_required` | 409 | the owner's email already has a tridant organization. Also marks the account, so the plan page offers the link |
 | `site_billed_elsewhere`, `site_is_default` | 409 | the site is billed under, or belongs to, another tridant organization |
+| `payer_mismatch` | 409 | switching or stopping a site tridant id bills under another organization than the owner's: "this site is billed under another tridant account. its plan can change once that billing ends." |
 | `founders_sold_out` | 409 | the founders places are taken |
 | `subscription_paused` | 409 | the owner's subscription is paused in Stripe |
 
@@ -607,8 +743,9 @@ Refusals are problem+json with these codes:
   that period, and the pointer keeps their `payerUid` with an `endsAt`. Until then the new owner
   can stop but not upgrade or switch (`billed_by_previous_owner`; `/api/sites/{siteId}/plan`
   answers `billedByPreviousOwner: true`). After it, the new owner upgrades on their own
-  subscription. If the stop fails at transfer time it is logged `[plan] billing not stopped for a
-  transferred site`, and the next `plan-daily` run stops it.
+  subscription. The stop names the recorded payer. If it fails at transfer time, `payer_mismatch`
+  included, it is logged `[plan] billing not stopped for a transferred site`, and the next
+  `plan-daily` run stops it (step 2 of [the daily job](#the-daily-job)).
 - tridant id keeps a transferred site under the previous owner's organization while it is billed
   there. Registration under the new owner is refused with `site_belongs_to_another_org`
   (`site_running`) until the period ends, and `plan-daily` asks again each night. `[plan] site
@@ -618,13 +755,24 @@ Refusals are problem+json with these codes:
   is in their trial (`402`, `entitlement: owlette.sites`). The free machine limit is not checked on
   transfer.
 - **Deleting a site** stops its billing first, when the site carries a pointer or tridant id says
-  it bills the site (a paid checkout whose return never loaded leaves no pointer). A failed stop is
-  logged `[plan] billing not stopped for a deleted site` and is not retried: stop it in tridant id.
+  it bills the site (a paid checkout whose return never loaded leaves no pointer). The stop names
+  no payer, so it lands whoever pays. A failed stop is logged `[plan] billing not stopped for a
+  deleted site`.
+- **Then the site is removed from tridant id** (`DELETE /v1/sites/owlette:{siteId}`), once tridant
+  id is configured. A site tridant id no longer holds counts as removed. tridant id refuses while a
+  trial or billing still runs on the site (`site_running`), and a stopped site's billing closes
+  only once its period is invoiced, so a billed site waits to the end of its period. That refusal,
+  or no answer, writes `tridant_site_removals/{siteId}`, and the daily job retries it: removed, the
+  record goes; still `site_running`, it re-reads the site and stops a billing that still runs with
+  no end (the failed stop above), logged `[plan] billing still ran for a deleted site, stopped
+  again` at warn. A record older than 45 days is dropped and logged `[plan] deleted site still not
+  removed from tridant id after 45 days, record dropped` at error: remove it in tridant id. Any
+  other refusal is logged `[plan] deleted site not removed from tridant id` at error.
 - **Deleting an account** unlinks it from its tridant organization, both from the admin panel
   (`DELETE /api/users/{uid}`, which transfers the account's sites first) and by the account itself
-  (`DELETE /api/users/me`, which deletes the sites it owns alone, stopping each one's billing as a
-  site delete does). The organization stays, and so does the billing of any site it did not
-  delete. A failed unlink is logged `[account delete] tridant unlink failed`.
+  (`DELETE /api/users/me`, which deletes the sites it owns alone, stopping each one's billing and
+  removing it from tridant id as a site delete does). The organization stays, and so does the
+  billing of any site it did not delete. A failed unlink is logged `[account delete] tridant unlink failed`.
 
 ### linking a tridant account
 
@@ -707,11 +855,15 @@ Accepted in review:
   and the rules are unchanged.
 - `lastHeartbeat` is written by the agent, so active-machine metering can be forged. Hardening
   would stamp it at `agent/auth/refresh`.
-- A report after the 1st is lost for that month: a machine first seen after the last 23:30 run of a
-  month is not billed for it, and a missed last run under-bills the machines first seen that day.
+- The settle pass never settles a month whose saved report a `plan-daily` run after midnight
+  replaced, or a billed site whose answer had no period end; each bills on the last report tridant
+  id received (see [the settle pass](#the-settle-pass)). A machine first seen on a month's last day
+  after 23:30 and still online at 06:00 is billed in the new month, not that one.
 - The scheduled-rollout gate lags a lapse by up to a day, and fan-out after firing is ungated.
-- A core site bought during the trial reads pro until the trial ends.
+- A core site bought during the trial reads pro until the trial ends. Its usage is not floored at
+  3: the floor follows the billed product.
 - After a stop, tridant id's `cancel_at_period_end` stays false. Owlette reads `ends_at`.
-- A failed stop on delete is not retried.
+- A failed stop on delete is not retried as a stop. The removal retry stops a billing it finds
+  still running with no end, for as long as the removal record lasts (45 days).
 - The ID token from the link flow is not verified by owlette. It is only used to choose the
   organization, and tridant id verifies it.

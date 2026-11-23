@@ -1,12 +1,12 @@
 ---
 title: "plans"
-description: "owlette free, the 14-day pro trial, and core and pro billed per site and per active machine: what each plan covers once the beta ends, why every site after your free one is created on core or pro, how a site's owner upgrades it and what they are billed, what happens when a site's billing ends, and the plan_required error. none of it applies during the beta."
+description: "owlette free, the 14-day pro trial, and core and pro billed per site and per active machine: what each plan covers after 1 April 2027, why every site after your free one is created on core or pro, how a site's owner upgrades it and what they are billed, what happens when a site's billing ends, and the plan_required error. none of it applies before then."
 keywords: ["pricing", "billing", "free plan", "free tier", "subscription", "trial", "upgrade", "downgrade", "lapse", "expired", "active machines", "machine limit", "site limit", "plan_required", "402", "cost", "per site", "site billing", "billing period", "checkout", "card", "invoice", "tridant account", "link account", "stop billing", "transfer ownership", "past due", "new site", "second site", "create site", "free site", "siteCreation", "onPlan"]
 ---
 
-<Callout type="info" title={"plans are not active during the beta"}>
+<Callout type="info" title={"plans are not active before 1 April 2027"}>
 
-owlette is in beta, and every feature is free while it lasts. nothing on this page is enforced yet, and nobody is billed. it describes how plans will work once the beta ends.
+owlette is in beta, and every feature is free until 1 April 2027. nothing on this page is enforced before then, and nobody is billed. it describes how plans will work after that.
 
 </Callout>
 
@@ -14,7 +14,7 @@ owlette is in beta, and every feature is free while it lasts. nothing on this pa
 
 ## the plans
 
-after the beta, a plan belongs to a **site**, and each site is on one of three:
+after 1 April 2027, a plan belongs to a **site**, and each site is on one of three:
 
 - **owlette free** is the plan of a site nobody pays for, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included. it is counted per account: one free site, with 1 machine. every further site you create is on core or pro, as you [add it](#adding-a-site).
 - **core** and **pro** are the paid plans. a site on either is billed on its own, per active machine per month, with unlimited machines. core adds remote control: commands, process control, display layouts, screenshots and email alerts. pro adds deployments, swoop, hoot, talons, roost, webhooks and API keys, bills at least 3 machines per site and includes 1 TB of project storage per site. an account can own any number of sites on core and on pro, mixed: the two differ by features and by pro's minimum, never by how many sites they allow. the full lists and the prices are on the [pricing page](/#pricing).
@@ -61,19 +61,19 @@ the two limits are per account, and only your sites on owlette free count toward
 
 ## the trial
 
-after the beta, every account gets a 14-day pro trial, no card. it starts the first time you open owlette with a verified email address. an email-and-password account is on owlette free until its address is verified, and the dashboard shows a banner with **send verification email** until then. a Google sign-in is verified already. accounts that already exist when plans start get the same trial then.
+after 1 April 2027, every account gets a 14-day pro trial, no card. it starts the first time you open owlette with a verified email address. an email-and-password account is on owlette free until its address is verified, and the dashboard shows a banner with **send verification email** until then. a Google sign-in is verified already. accounts that already exist when plans start get the same trial then.
 
 the trial covers every site you own, including one you create while it runs. it does not cover a site you are only a member of: that site has its owner's trial, or its own plan.
 
 when the trial ends, each site you haven't upgraded goes to owlette free. you can upgrade a site during the trial: its billing starts when the trial ends, and nothing in the trial is billed.
 
-there is one trial per tridant account, ever.
+there is one trial per owlette account and one per tridant account, ever. an owlette account whose trial ran on an earlier tridant account gets no second one, and the plan page reads **no pro trial**. if tridant extends your trial, the plan page shows its new end.
 
 ### if your email already has a tridant account
 
 tridant makes owlette, and your tridant account is where the card and the invoices for your sites are kept. owlette makes one for you when your trial starts or when you first upgrade a site.
 
-if the email you use for owlette already has a tridant account, owlette does not join the two by email. the plan page and the dashboard banner say **this email already has a tridant account**, with **link it**. you sign in to tridant to confirm the account is yours, and come back to owlette with the two linked. the trial then starts, unless that tridant account has already had one.
+if the email you use for owlette already has a tridant account, owlette does not join the two by email. the plan page and the dashboard banner say **this email already has a tridant account**, with **link it**. you sign in to tridant to confirm the account is yours, and come back to owlette with the two linked. the trial then starts, unless that tridant account has already had one, or your owlette account already used its trial.
 
 - if you own more than one tridant account, owlette asks which to link.
 - the sign-in has to be fresh. one more than 10 minutes old is refused, and linking again asks you to sign in.
@@ -100,7 +100,7 @@ each site is upgraded, switched and stopped on its own, in **site settings → b
 
 - **upgrade** puts a site on core or pro. the first site you pay for goes through a checkout, where you enter a card, and you come back to the billing section once it is paid. you need a verified email.
 - **later sites** need no checkout. the checkout starts your subscription, which keeps running, at no charge, even once every site on it has stopped, so every later upgrade puts the site on the same card. while one of your sites is billed, the dialog says there is no checkout; once none is, it says either may follow, since a subscription can also have been cancelled after failed payments.
-- **switch plan** moves a billed site between core and pro at once. the whole billing period is billed at the plan the site is on when the period ends.
+- **switch plan** moves a billed site between core and pro at once. the whole billing period is billed at the plan the site is on when the period ends. a site tridant bills under a tridant account other than yours can't be switched: "this site is billed under another tridant account. its plan can change once that billing ends."
 - **stop billing** ends the site's billing at the end of the billing period. the site keeps its plan until then, that period is still billed, and after it the site goes to owlette free. until then, **resume billing** undoes the stop.
 
 your card and invoices are in your tridant account, which the plan page links to.
@@ -119,7 +119,7 @@ if the payments keep failing and the subscription is cancelled, its sites' billi
 
 - **transferring ownership** stops the site's billing. the previous owner pays to the end of the billing period, and the site keeps its plan until then. the new owner can stop that billing, but cannot upgrade the site or switch its plan until the period has ended; after that they upgrade it on their own card.
 - **a site on owlette free** can only be transferred to someone whose free site isn't taken, or who is in their trial.
-- **deleting a site** stops its billing. so does deleting your account, for each site it deletes with it.
+- **deleting a site** stops its billing, and removes the site from your tridant account once nothing runs on it there: for a billed site, after its last billing period. so does deleting your account, for each site it deletes with it.
 
 ---
 
@@ -129,7 +129,7 @@ core and pro are billed per active machine per month. **a machine counts if it w
 
 each site is billed for its own machines, and a pro site for at least 3. a site you are only a member of costs you nothing.
 
-owlette counts once a day, at 23:30 UTC: every machine that sent a heartbeat in the previous 26 hours is recorded on the UTC day of that heartbeat. a billing period's active machines are the distinct machines across its days, and the count that stands when the month ends is the one billed.
+owlette counts once a day, at 23:30 UTC: every machine that sent a heartbeat in the previous 26 hours is recorded on the UTC day of that heartbeat. a billing period's active machines are the distinct machines across its days. at 06:00 UTC the morning after a period ends, owlette counts that period once more, so a machine online only in its last half hour is counted too, and the period's last count is the one billed.
 
 once plans apply, the plan page at `/settings/plan` shows your trial, how much of owlette free your account uses, and every site you own with its plan and its active machines this period; `GET /api/account/plan` answers the same as JSON. a site's billing section shows its billing period, its active machines and its price.
 
@@ -189,9 +189,9 @@ background work does not refuse; it skips and logs. alert emails, webhook delive
 
 ## faq
 
-### am I being charged during the beta?
+### am I being charged before 1 April 2027?
 
-no. plans are not enforced during the beta and nothing is billed. owlette free stays free after it.
+no. plans are not enforced before 1 April 2027, and nothing is billed before then. owlette free stays free after that date.
 
 ### what happens to my machines if I don't upgrade a site after the trial?
 

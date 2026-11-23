@@ -189,7 +189,7 @@ set it on every origin Cloudflare fronts. unset, every request's network reads a
 
 | variable | what it does |
 |----------|-------------|
-| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the eleven `/api/cron/*` routes (`activity-watch`, `api-key-expiry`, `display-alerts`, `health-check`, `plan-daily`, `plan-trials`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
+| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the twelve `/api/cron/*` routes (`activity-watch`, `api-key-expiry`, `display-alerts`, `health-check`, `plan-daily`, `plan-settle`, `plan-trials`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
 
 `CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent. it has no default: without it an alert email to a person is not sent, since its unsubscribe link cannot be signed, and every unsubscribe link is refused.
 
@@ -277,6 +277,8 @@ the page counts as configured only when the API key, the page ID and the seven n
 
 with `PLAN_ENFORCEMENT=on` but `TRIDANT_API_URL` or `TRIDANT_LICENSE_KEY` unset, plans stay off and the server logs a warning. a wrong or expired key also fails every plan gate open. without all three `TRIDANT_OIDC_*`, linking a tridant account answers `503 tridant_link_not_configured`.
 
+once `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY` are set, the daily `/api/cron/plan-daily` run asks tridant id what `TRIDANT_LICENSE_KEY` and `TRIDANT_RELEASE_KEY` can do, and logs an error for a key that lacks a scope owlette needs or cannot be read. a blank `TRIDANT_RELEASE_KEY` shows in the run's summary only. the bulk trial start (`/api/cron/plan-trials`) answers the same check, and will not start trials while the license key fails it.
+
 ---
 
 ## public API
@@ -308,17 +310,6 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
 needed only for autonomous hoot, which investigates process crashes on its own. it also needs the site owner to have saved an LLM API key in their account settings, since autonomous runs spend the owner's key, and autonomous mode turned on (`sites/{siteId}/settings/cortex` → `autonomousEnabled: true`).
-
----
-
-## audit log (optional)
-
-the web app sends audit records to the `recordAuditEvent` Cloud Function. its URL is composed from `FIREBASE_PROJECT_ID`, so neither override is normally set.
-
-| variable | what it does |
-|----------|-------------|
-| `AUDIT_LOG_REGION` | the function's region; defaults to `us-central1` |
-| `AUDIT_LOG_URL` | the full function URL, overriding the composed one |
 
 ---
 

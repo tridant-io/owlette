@@ -39,9 +39,15 @@ jest.mock('@/lib/planTrial.server', () => ({
   registerSite: (...args: unknown[]) => mockRegisterSite(...args),
 }));
 
+// every argument, so a payer sent on a stop before delete shows.
 const mockStopSite = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
-  stopSite: (siteId: string) => mockStopSite(siteId),
+  stopSite: (...args: unknown[]) => mockStopSite(...args),
+}));
+
+const mockRemoveTridantSite = jest.fn();
+jest.mock('@/lib/tridantSiteRemoval.server', () => ({
+  removeTridantSite: (...args: unknown[]) => mockRemoveTridantSite(...args),
 }));
 
 // what tridant bills for a site with no billing pointer: none, unless a test says so.
@@ -722,6 +728,7 @@ describe('site CRUD actions', () => {
     mockTridantConfigured.mockReturnValue(false);
     mockRegisterSite.mockResolvedValue(null);
     mockStopSite.mockResolvedValue({ ok: true, endsAt: 1793600000000 });
+    mockRemoveTridantSite.mockResolvedValue(undefined);
   });
 
   /** Run createSite against `db` with the fixed clock and stable inputs. */
@@ -1336,6 +1343,7 @@ describe('site CRUD actions', () => {
       expect(result).toEqual({ kind: 'move_switching', direction });
       expect(db.docs).toEqual(before);
       expect(mockStopSite).not.toHaveBeenCalled();
+      expect(mockRemoveTridantSite).not.toHaveBeenCalled();
       expect(mockEmitMutation).not.toHaveBeenCalled();
     },
   );
@@ -1410,6 +1418,22 @@ describe('site CRUD actions', () => {
       expect(mockStopSite).toHaveBeenCalledTimes(1);
       expect(mockStopSite).toHaveBeenCalledWith('site-a');
       expect(intactAtStop).toBe(true);
+    });
+
+    it('removes the site from tridant right after the stop, before anything is destroyed', async () => {
+      const db = billedSite();
+      let intactAtRemoval = false;
+      mockRemoveTridantSite.mockImplementation(async () => {
+        intactAtRemoval = Boolean(db.docs.get('agent_refresh_tokens/tok-1')) && Boolean(db.docs.get('sites/site-a'));
+      });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(mockRemoveTridantSite).toHaveBeenCalledTimes(1);
+      expect(mockRemoveTridantSite).toHaveBeenCalledWith('site-a');
+      expect(mockStopSite.mock.invocationCallOrder[0]).toBeLessThan(mockRemoveTridantSite.mock.invocationCallOrder[0]);
+      expect(intactAtRemoval).toBe(true);
     });
 
     it('deletes the site when tridant cannot be reached, and logs the stop that did not land', async () => {

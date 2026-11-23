@@ -2,7 +2,7 @@
 
 /**
  * Asks a password account to verify its email, with a rate-limited resend.
- * Blocks nothing: after beta, a verified email is what starts the trial.
+ * Blocks nothing: after the free period, a verified email is what starts the trial.
  *
  * Mounted under the app header. Renders null for signed-out users, federated
  * (Google) accounts, which arrive verified, and verified accounts.

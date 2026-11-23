@@ -28,7 +28,9 @@ export interface ActivityRow {
 export type RuleId =
   | 'superadmin_promoted' | 'mfa_removed' | 'site_deleted' | 'second_factor_burst'
   | 'destructive_burst' | 'new_network_sign_in' | 'refusal_burst'
-  | 'ownership_transferred' | 'user_deleted';
+  | 'ownership_transferred' | 'user_deleted' | 'audit_queue_stuck'
+  // written by the audit drainer (functions/src/auditLog.ts), not by these rules
+  | 'audit_rejected';
 
 export interface Finding {
   id: string;            // deterministic, no '/'
@@ -41,6 +43,10 @@ export interface Finding {
   facts: { label: string; value: string }[];
   rowIds: string[];
 }
+
+// the site id platform-wide audit events (siteId '') chain under, as functions' PLATFORM_AUDIT_SITE_ID.
+// not the `__platform__` target id: firestore reserves that as a doc id
+export const PLATFORM_AUDIT_SITE_ID = '_platform';
 
 export const ACTIVITY_STATE_DOC = 'global/activity_watch';
 export const ACTIVITY_FINDINGS_COLLECTION = `${ACTIVITY_STATE_DOC}/findings`;

@@ -33,11 +33,15 @@ jest.mock('firebase-admin/firestore', () => ({
   },
 }));
 
-// the two billing hooks have their own suites (siteBilling.stranded, userDeleteCascade); here it
-// only matters when this cascade calls them.
+// the billing hooks have their own suites (siteBilling.stranded, tridantSiteRemoval.server,
+// userDeleteCascade); here it only matters when this cascade calls them.
 const mockStopBillingBeforeDelete = jest.fn();
 jest.mock('@/lib/siteBilling.server', () => ({
   stopBillingBeforeDelete: (...a: unknown[]) => mockStopBillingBeforeDelete(...a),
+}));
+const mockRemoveTridantSite = jest.fn();
+jest.mock('@/lib/tridantSiteRemoval.server', () => ({
+  removeTridantSite: (...a: unknown[]) => mockRemoveTridantSite(...a),
 }));
 const mockUnlinkTridantAccount = jest.fn();
 jest.mock('@/lib/userDeleteCascade.server', () => ({
@@ -362,6 +366,7 @@ beforeEach(() => {
   loggerWarnSpy.mockClear();
   loggerErrorSpy.mockClear();
   mockStopBillingBeforeDelete.mockResolvedValue(undefined);
+  mockRemoveTridantSite.mockResolvedValue(undefined);
   mockUnlinkTridantAccount.mockResolvedValue(undefined);
 });
 
@@ -389,13 +394,34 @@ describe('deleteOwnAccount — billing', () => {
     expect(fake.deleteCalls).toContain(`users/${userId}`);
   });
 
-  it('stops and unlinks nothing on a dry run', async () => {
+  it('removes each sole-owner site from tridant right after its billing is stopped', async () => {
+    const userId = 'uid_alice';
+    const seedDocs = seedUser(userId, ['site-a', 'site-b']);
+    seedDocs['sites/site-b'] = { exists: true, data: { name: 'site-b', owner: 'uid_bob' } };
+    const fake = buildFakeDb({ seedDocs, seedCollections: seedSubs(['site-a'], { machines: 1, deployments: 0, logs: 0 }) });
+    let intactAtRemoval = false;
+    mockRemoveTridantSite.mockImplementation(async () => {
+      intactAtRemoval = fake.batchDeleteCalls.length === 0 && !fake.deleteCalls.includes('sites/site-a');
+    });
+
+    await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null });
+
+    expect(mockRemoveTridantSite).toHaveBeenCalledTimes(1);
+    expect(mockRemoveTridantSite).toHaveBeenCalledWith('site-a');
+    expect(mockStopBillingBeforeDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRemoveTridantSite.mock.invocationCallOrder[0],
+    );
+    expect(intactAtRemoval).toBe(true);
+  });
+
+  it('stops, removes and unlinks nothing on a dry run', async () => {
     const userId = 'uid_alice';
     const fake = buildFakeDb({ seedDocs: seedUser(userId, ['site-a']) });
 
     await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null, dryRun: true });
 
     expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
+    expect(mockRemoveTridantSite).not.toHaveBeenCalled();
     expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
     expect(mockCancelMovesForSite).not.toHaveBeenCalled();
   });
@@ -418,7 +444,7 @@ describe('deleteOwnAccount — billing', () => {
     expect(siteStillThere).toBe(true);
   });
 
-  it('stops and unlinks nothing when it refuses for a shared site', async () => {
+  it('stops, removes and unlinks nothing when it refuses for a shared site', async () => {
     const userId = 'uid_alice';
     const seedDocs = seedUser(userId, ['site-a']);
     seedDocs['users/uid_bob'] = { exists: true, data: { sites: ['site-a'] } };
@@ -428,6 +454,7 @@ describe('deleteOwnAccount — billing', () => {
 
     expect(result.kind).toBe('needs_successor');
     expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
+    expect(mockRemoveTridantSite).not.toHaveBeenCalled();
     expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
   });
 });

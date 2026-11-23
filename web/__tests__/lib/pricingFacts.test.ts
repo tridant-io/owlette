@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   AFTER_BETA,
+  FREE_PERIOD,
   FREE_SCOPE,
   GUARDRAILS,
   PRICE_LINE,
@@ -111,6 +112,36 @@ describe('pricing is single-sourced from PRICING_FACTS', () => {
     expect(AFTER_BETA).toContain('once its email is verified');
     // assistants read the guardrails, not the landing page.
     expect(GUARDRAILS.join(' ')).toContain(AFTER_BETA);
+  });
+
+  it('dates the free period from PRICING_FACTS and keeps owlette free apart from it', () => {
+    expect(FREE_PERIOD).toBe(`free until ${PRICING_FACTS.freeUntil}`);
+    expect(PRICE_LINE).toContain(FREE_PERIOD);
+    expect(AFTER_BETA).toContain(`after ${PRICING_FACTS.freeUntil}`);
+    expect(GUARDRAILS[0]).toContain('owlette is in beta');
+    expect(GUARDRAILS[0]).toContain(FREE_PERIOD);
+    for (const name of ['core', 'pro']) {
+      expect(PRICING.find((t) => t.name === name)?.price).toBe(FREE_PERIOD);
+      expect(PRODUCT_JSONLD.offers.offers.find((o) => o.name === name)?.description).toContain(FREE_PERIOD);
+    }
+    // owlette free is a plan, not the free period: it must not read as ending on the date.
+    expect(PRICING.find((t) => t.name === 'owlette free')?.price).toContain(`after ${PRICING_FACTS.freeUntil}`);
+    // billing is pegged to the date, never to the end of the beta.
+    const serialized = JSON.stringify({ PRICING, GUARDRAILS, PRODUCT_JSONLD, AFTER_BETA, PRICE_LINE });
+    expect(serialized).not.toMatch(/(during|after) (the )?beta/);
+  });
+
+  it('dates the free period in the docs and the README, which cannot import it', () => {
+    // mdx and the readme are plain text, so this is their only link to the fact.
+    const dated = ['content/docs/plans.mdx', 'content/docs/getting-started.mdx', '../README.md'];
+    expect(dated.filter((f) => !fs.readFileSync(path.join(process.cwd(), f), 'utf8').includes(PRICING_FACTS.freeUntil))).toEqual([]);
+
+    // the changelog keeps its history; every other page pegs plans to the date.
+    const dir = path.join(process.cwd(), 'content', 'docs');
+    const pegged = (fs.readdirSync(dir, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.mdx') && path.basename(f) !== 'changelog.mdx')
+      .filter((f) => /(during|after) the beta|once the beta ends|while it lasts/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
+    expect(pegged).toEqual([]);
   });
 
   it('quotes core and pro per site', () => {

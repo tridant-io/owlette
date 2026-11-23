@@ -22,13 +22,14 @@ export type PlanOffReason =
 /** a site's plan as the api names it. */
 export type SiteTier = 'free' | 'trial' | 'core' | 'pro';
 
-export type AccountTrialStatus = 'none' | 'unverified' | 'active' | 'ended' | 'link_required';
+export type AccountTrialStatus = 'none' | 'unverified' | 'active' | 'ended' | 'link_required' | 'used';
 
 export interface AccountPlanTrial {
   /**
    * `unverified`: verify the email and the trial starts on the next read.
    * `link_required`: the email already has a tridant account, which must be linked first.
    * `ended` also covers an account that paid before it ever had a trial.
+   * `used`: tridant refused the trial, because this account had one on an earlier tridant account.
    */
   status: AccountTrialStatus;
   /** epoch ms. null unless a trial was started. */

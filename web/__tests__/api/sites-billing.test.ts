@@ -360,41 +360,9 @@ describe('POST: upgrade a site', () => {
     expect(mockStartCheckout).toHaveBeenCalledWith(expect.objectContaining({ name: 'owner' }));
   });
 
-  it('switches a resumed site to the plan asked for when tridant brought it back at its old one', async () => {
+  // tridant applies the plan asked for when it resumes a stopped site, so no switch follows the add.
+  it('resumes a stopped site at the plan asked for, with no switch after it', async () => {
     stageSite({ billing: { ...POINTER, endsAt: ENDS_AT } });
-    mockStartCheckout.mockResolvedValue(refused('subscription_exists'));
-    mockAddSite.mockResolvedValue({
-      ok: true,
-      already: false,
-      sites: [{ siteId: SITE, productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null }],
-    });
-
-    const { status, body } = await parseResponse(await post({ tier: 'core', founders: false }));
-
-    expect({ status, body }).toEqual({ status: 200, body: { added: true } });
-    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', false);
-    expect(pointerWrites()).toEqual([
-      { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
-    ]);
-  });
-
-  it('records the plan tridant resumed when the switch to the one asked for is refused', async () => {
-    stageSite({ billing: { ...POINTER, endsAt: ENDS_AT } });
-    mockStartCheckout.mockResolvedValue(refused('subscription_exists'));
-    mockAddSite.mockResolvedValue({
-      ok: true,
-      already: false,
-      sites: [{ siteId: SITE, productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null }],
-    });
-    mockSwitchTier.mockResolvedValue({ ok: false, reason: 'unreachable' });
-
-    await expectProblem(await post({ tier: 'core', founders: false }), 503, 'billing_unavailable');
-    expect(pointerWrites()).toEqual([
-      { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
-    ]);
-  });
-
-  it('does not switch when the added site is already at the plan asked for', async () => {
     mockStartCheckout.mockResolvedValue(refused('subscription_exists'));
     mockAddSite.mockResolvedValue({
       ok: true,
@@ -402,8 +370,45 @@ describe('POST: upgrade a site', () => {
       sites: [{ siteId: SITE, productId: 'prd_owlette_core', founders: false, status: 'active', endsAt: null }],
     });
 
+    const { status, body } = await parseResponse(await post({ tier: 'core', founders: false }));
+
+    expect({ status, body }).toEqual({ status: 200, body: { added: true } });
+    expect(mockSwitchTier).not.toHaveBeenCalled();
+    expect(pointerWrites()).toEqual([
+      { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
+    ]);
+  });
+
+  it('records the plan and rate tridant answers it bills, over the ones asked for', async () => {
+    mockStartCheckout.mockResolvedValue(refused('subscription_exists'));
+    mockAddSite.mockResolvedValue({
+      ok: true,
+      already: false,
+      sites: [
+        { siteId: 'site-other', productId: 'prd_owlette_core', founders: false, status: 'active', endsAt: null },
+        { siteId: SITE, productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null },
+      ],
+    });
+
     expect((await post({ tier: 'core', founders: false })).status).toBe(200);
     expect(mockSwitchTier).not.toHaveBeenCalled();
+    expect(pointerWrites()).toEqual([
+      { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
+    ]);
+  });
+
+  it('records the plan asked for when tridant answers a product owlette does not know', async () => {
+    mockStartCheckout.mockResolvedValue(refused('subscription_exists'));
+    mockAddSite.mockResolvedValue({
+      ok: true,
+      already: false,
+      sites: [{ siteId: SITE, productId: 'prd_other', founders: true, status: 'active', endsAt: null }],
+    });
+
+    expect((await post({ tier: 'core', founders: false })).status).toBe(200);
+    expect(pointerWrites()).toEqual([
+      { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
+    ]);
   });
 
   it('refuses an upgrade while the previous owner still pays for the site', async () => {
@@ -446,9 +451,11 @@ describe('POST: upgrade a site', () => {
       tier: 'core',
       founders: false,
     });
+    // tridant's answer lists no entry for the site, so the plan asked for is recorded.
     expect(pointerWrites()).toEqual([
       { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
     ]);
+    expect(mockSwitchTier).not.toHaveBeenCalled();
     expect(mockInvalidate).toHaveBeenCalledWith(SITE);
     expect(mockRecordCheckout).not.toHaveBeenCalled();
     expect(mockEmitMutation).toHaveBeenCalledWith(
@@ -572,7 +579,7 @@ describe('PATCH: switch plan', () => {
     const { status } = await parseResponse(await patch({ tier: 'core' }));
 
     expect(status).toBe(200);
-    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', undefined);
+    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', undefined, SITE_OWNER);
     expect(pointerWrites()).toEqual([
       { tier: 'core', founders: false, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
     ]);
@@ -586,12 +593,12 @@ describe('PATCH: switch plan', () => {
     await expectUntouched(await patch({ tier: 'core' }), 409, 'billed_by_previous_owner');
   });
 
-  it('switches the tier and keeps the site\'s rate when founders is left out', async () => {
+  it('switches the tier, naming the owner as payer, and keeps the site\'s rate when founders is left out', async () => {
     const { status, body } = await parseResponse(await patch({ tier: 'core' }));
 
     expect(status).toBe(200);
     expect(body).toEqual({ billing: { tier: 'core', founders: true, endsAt: null } });
-    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', undefined);
+    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', undefined, SITE_OWNER);
     expect(pointerWrites()).toEqual([
       { tier: 'core', founders: true, payerUid: SITE_OWNER, endsAt: null, updatedAt: '__SERVER_TS__' },
     ]);
@@ -607,8 +614,22 @@ describe('PATCH: switch plan', () => {
   it('passes founders on when it is given', async () => {
     const { body } = await parseResponse(await patch({ tier: 'core', founders: false }));
 
-    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', false);
+    expect(mockSwitchTier).toHaveBeenCalledWith(SITE, 'core', false, SITE_OWNER);
     expect(body).toEqual({ billing: { tier: 'core', founders: false, endsAt: null } });
+  });
+
+  // the record says the owner pays, and tridant bills the site under another organization.
+  it('answers 409 payer_mismatch when tridant says the owner does not pay for the site', async () => {
+    mockSwitchTier.mockResolvedValue(refused('payer_mismatch'));
+
+    const body = await expectProblem(await patch({ tier: 'core' }), 409, 'payer_mismatch');
+
+    expect(body.detail).toBe(
+      'this site is billed under another tridant account. its plan can change once that billing ends.',
+    );
+    expect(pointerWrites()).toHaveLength(0);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(mockLogError).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -656,29 +677,39 @@ describe('DELETE: stop billing', () => {
 
     expect(status).toBe(200);
     expect(body).toEqual({ billing: { tier: 'pro', founders: false, endsAt: ENDS_AT } });
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, SITE_OWNER);
+  });
+
+  it('stops a pointerless site billed under another organization without a payer', async () => {
+    stageSite();
+    mockSiteEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+    mockGetPlanAccount.mockResolvedValue({ orgId: 'org_other' });
+
+    expect((await del()).status).toBe(200);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, undefined);
   });
 
   it('stops a billed site while plans are switched off: tridant id bills it whatever the switch says', async () => {
     delete process.env.PLAN_ENFORCEMENT;
 
     expect((await del()).status).toBe(200);
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, SITE_OWNER);
   });
 
-  it('lets a new owner stop a site the previous owner still pays for', async () => {
+  // the new owner is not the payer, and the stop must land.
+  it('lets a new owner stop a site the previous owner still pays for, without a payer', async () => {
     stageSite({ billing: { ...POINTER, payerUid: 'user-previous' } });
 
     expect((await del()).status).toBe(200);
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, undefined);
   });
 
-  it('stops billing and records when the site\'s plan ends', async () => {
+  it('stops billing, naming the owner as payer, and records when the site\'s plan ends', async () => {
     const { status, body } = await parseResponse(await del());
 
     expect(status).toBe(200);
     expect(body).toEqual({ billing: { tier: 'pro', founders: true, endsAt: ENDS_AT } });
-    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE, SITE_OWNER);
     expect(pointerWrites()).toEqual([
       { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: ENDS_AT, updatedAt: '__SERVER_TS__' },
     ]);
@@ -691,6 +722,7 @@ describe('DELETE: stop billing', () => {
   });
 
   it.each([
+    ['tridant says the owner does not pay for the site', refused('payer_mismatch'), 409, 'payer_mismatch'],
     ['tridant cannot be reached', { ok: false, reason: 'unreachable' }, 503, 'billing_unavailable'],
     ['the answer is unreadable', { ok: false, reason: 'malformed_response', status: 200 }, 502, 'billing_upstream'],
   ])('answers a problem when %s, and leaves the pointer alone', async (_case, failure, status, code) => {

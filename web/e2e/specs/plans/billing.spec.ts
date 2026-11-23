@@ -13,14 +13,25 @@
  *   who creates three more: one left unpaid, one on pro and one on core;
  * - a site admin on that first site;
  * - an owner whose email tridant id says already has an account;
- * - an owner whose trial starts when they first sign in.
+ * - an owner whose trial starts when they first sign in, and which tridant id then extends;
+ * - an owner whose trial tridant id says was used on an earlier tridant account.
  */
 
 import crypto from 'crypto';
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { formatDay } from '@/lib/timeUtils';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
-import { FREE, clearPlanState, endTrial, signIn, siteEntitlements } from '../../helpers/plans';
+import {
+  CORE,
+  DAY_MS,
+  FREE,
+  clearPlanState,
+  endTrial,
+  orgFor,
+  signIn,
+  siteEntitlements,
+  trialing,
+} from '../../helpers/plans';
 import { releaseFixtureSite, revokeMembership, seedSite, seedUser, type TestUser } from '../../helpers/seed';
 
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -33,6 +44,7 @@ const ON_CORE = { id: 'billing-core-site', name: 'Site Z (Billing Core)' };
 const LINK_SITE = { id: 'billing-link-site', name: 'Site Z (Billing Link)' };
 const TRIAL_SITE = { id: 'billing-trial-site', name: 'Site Z (Billing Trial)' };
 const TRIAL_SECOND = { id: 'billing-trial-second-site', name: 'Site Z (Billing Trial Two)' };
+const USED_SITE = { id: 'billing-used-site', name: 'Site Z (Billing Used)' };
 /** the sites the owner creates. */
 const CREATED = [UNPAID, ON_PRO, ON_CORE];
 
@@ -76,7 +88,17 @@ const TRIALIST: TestUser = {
   displayName: 'E2E Billing Trial',
 };
 
-const USERS = [OWNER, SITE_ADMIN, LINKER, TRIALIST];
+const TRIAL_USED: TestUser = {
+  uid: 'billing-used-uid',
+  email: 'billing-used@e2e.test',
+  password: 'e2e-billing-used-password',
+  role: 'member',
+  sites: [USED_SITE.id],
+  siteRoles: { [USED_SITE.id]: 'owner' },
+  displayName: 'E2E Billing Used',
+};
+
+const USERS = [OWNER, SITE_ADMIN, LINKER, TRIALIST, TRIAL_USED];
 const trialConfig = () => getAdminDb().doc('e2e_billing_config/trial');
 const pointer = async (siteId: string) => (await getAdminDb().doc(`sites/${siteId}`).get()).get('billing');
 const siteExists = async (siteId: string) => (await getAdminDb().doc(`sites/${siteId}`).get()).exists;
@@ -173,28 +195,34 @@ test.beforeAll(async () => {
     [FIRST, OWNER],
     [LINK_SITE, LINKER],
     [TRIAL_SITE, TRIALIST],
+    [USED_SITE, TRIAL_USED],
   ] as const) {
     await seedSite({ id: site.id, name: site.name, owner: owner.uid, timezone: 'UTC' });
   }
   // tridant id answers a site nobody pays for as owlette free, but the fake leaves a site it never
   // billed unanswered, which fails open. so the seam answers free for every site here until it is
   // billed, the ones the owner creates included.
-  await Promise.all([FIRST, LINK_SITE, TRIAL_SITE, ...CREATED].map((site) => siteEntitlements(site.id).set(FREE)));
+  await Promise.all(
+    [FIRST, LINK_SITE, TRIAL_SITE, USED_SITE, ...CREATED].map((site) => siteEntitlements(site.id).set(FREE)),
+  );
   await Promise.all(USERS.map(seedUser));
   // read by the fake's trial start, which owlette asks on the account's first plan read.
-  await trialConfig().set({ linkRequired: [LINKER.uid] });
+  await trialConfig().set({ linkRequired: [LINKER.uid], trialUsed: [TRIAL_USED.uid] });
   await endTrial(OWNER.uid);
 });
 
 test.afterAll(async () => {
   const uids = USERS.map((user) => user.uid);
-  const sites = [FIRST, ...CREATED, LINK_SITE, TRIAL_SITE, TRIAL_SECOND];
+  const sites = [FIRST, ...CREATED, LINK_SITE, TRIAL_SITE, TRIAL_SECOND, USED_SITE];
   await clearPlanState(uids, sites.map((site) => site.id));
   await trialConfig().delete();
+  // the tombstone of the core site's delete, so a retry can create it again.
+  await getAdminDb().doc(`site_ids/${ON_CORE.id}`).delete();
   await revokeMembership(FIRST.id, SITE_ADMIN.uid);
   for (const site of [FIRST, ...CREATED]) await releaseFixtureSite(site.id, OWNER.uid);
   await releaseFixtureSite(LINK_SITE.id, LINKER.uid);
   for (const site of [TRIAL_SITE, TRIAL_SECOND]) await releaseFixtureSite(site.id, TRIALIST.uid);
+  await releaseFixtureSite(USED_SITE.id, TRIAL_USED.uid);
   await Promise.all(uids.map((uid) => getAdminDb().doc(`users/${uid}`).delete()));
   await Promise.all(uids.map((uid) => getAdminAuth().deleteUser(uid).catch(() => undefined)));
 });
@@ -232,6 +260,24 @@ test('an account tridant id already knows sees the link notice on the plan page'
   expect(account.get('trialStartedAt') ?? null).toBeNull();
 });
 
+test('an account whose trial tridant id says was already used gets no trial, and the plan page says why', async ({
+  page,
+}) => {
+  await signIn(page, TRIAL_USED);
+  await page.goto('/settings/plan');
+
+  const card = page.getByTestId('trial-card');
+  await expect(card).toHaveAttribute('data-trial-state', 'used');
+  await expect(card).toContainText('no pro trial');
+  await expect(card).toContainText(
+    "this account's pro trial was already used on an earlier tridant account. a site you haven't upgraded is on owlette free.",
+  );
+
+  const account = await getAdminDb().doc(`plan_accounts/${TRIAL_USED.uid}`).get();
+  expect(account.get('trialUsed')).toBe(true);
+  expect(account.get('trialEndsAt') ?? null).toBeNull();
+});
+
 test('during the trial a second site is created with the plain dialog', async ({ page }) => {
   const firstRead = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/account/plan' && res.ok());
   await signIn(page, TRIALIST);
@@ -255,6 +301,20 @@ test('during the trial a second site is created with the plain dialog', async ({
   await expect(page.getByText(`${TRIAL_SECOND.name} is ready for its first machine.`)).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/admin/sites/${TRIAL_SECOND.id}$`));
   expect((await getAdminDb().doc(`sites/${TRIAL_SECOND.id}`).get()).get('owner')).toBe(TRIALIST.uid);
+});
+
+test('a trial tridant id extends shows its new end on the plan page', async ({ page }) => {
+  // the fake starts a 14-day trial; tridant id now answers a later end for the site under the trial.
+  const extended = Date.now() + 30 * DAY_MS;
+  await siteEntitlements(TRIAL_SITE.id).set(trialing(TRIALIST.uid, extended));
+  await signIn(page, TRIALIST);
+  await page.goto('/settings/plan');
+
+  const card = page.getByTestId('trial-card');
+  await expect(card).toHaveAttribute('data-trial-state', 'active');
+  await expect(card).toContainText(`pro trial until ${formatDay(extended)}`);
+  await expect(badges(page.getByTestId(`plan-site-${TRIAL_SITE.id}`))).toHaveText(['pro trial']);
+  expect((await getAdminDb().doc(`plan_accounts/${TRIALIST.uid}`).get()).get('trialEndsAt')).toBe(extended);
 });
 
 // a checkout opens only until the owner has completed one; after the first upgrade, every site goes on the
@@ -411,6 +471,79 @@ test.describe.serial("an owner changes a site's billing", () => {
     ] as const) {
       await expect(badges(page.getByTestId(`plan-site-${site.id}`))).toHaveText([plan]);
     }
+  });
+
+  // tridant id moved the pro site to core at the list rate (support, or its own portal); owlette's record still says pro.
+  test("the section and the plan page show the plan and rate tridant id bills, not owlette's record", async ({
+    page,
+  }) => {
+    const billed = (await siteEntitlements(ON_PRO.id).get()).data()!;
+    await siteEntitlements(ON_PRO.id).update({
+      ent: CORE.ent,
+      'billing.productId': 'prd_owlette_core',
+      'billing.founders': false,
+    });
+    await signIn(page, OWNER);
+    const section = await openBilling(page, ON_PRO.id);
+    await expect(badges(section)).toHaveText(['core']);
+    await expect(section).toContainText('$20 per active machine per month.');
+    await expect(section).not.toContainText('founders rate');
+
+    await page.goto('/settings/plan');
+    const row = page.getByTestId(`plan-site-${ON_PRO.id}`);
+    await expect(badges(row)).toHaveText(['core']);
+    await expect(row).not.toContainText('billed as');
+    expect(await pointer(ON_PRO.id)).toMatchObject({ tier: 'pro', founders: true });
+    await siteEntitlements(ON_PRO.id).set(billed);
+  });
+
+  // owlette's record names the owner as payer, while tridant id bills the site under another organization.
+  test('a switch is refused while another organization pays for the site, and nothing changes', async ({ page }) => {
+    await siteEntitlements(ON_CORE.id).update({ orgId: orgFor('someone-else') });
+    await signIn(page, OWNER);
+    const section = await openBilling(page, ON_CORE.id);
+    await section.getByRole('button', { name: 'switch plan' }).click();
+    const dialog = page.getByRole('dialog', { name: 'switch plan' });
+    await dialog.getByRole('button', { name: 'switch to pro' }).click();
+
+    await expect(
+      page.getByText('this site is billed under another tridant account. its plan can change once that billing ends.'),
+    ).toBeVisible();
+    // the open dialog hides the section from the accessibility tree.
+    await dialog.getByRole('button', { name: 'cancel' }).click();
+    await expect(badges(section)).toHaveText(['core', 'founders rate']);
+    expect(await pointer(ON_CORE.id)).toMatchObject({ tier: 'core', payerUid: OWNER.uid, endsAt: null });
+    expect((await siteEntitlements(ON_CORE.id).get()).get('billing.productId')).toBe('prd_owlette_core');
+  });
+
+  test('deleting a billed site stops its billing, and its removal from tridant id waits for the period to end', async ({
+    page,
+  }) => {
+    await signIn(page, OWNER);
+    await page.goto(`/admin/sites/${ON_CORE.id}?section=danger`);
+    await page.getByRole('button', { name: 'delete site', exact: true }).click();
+    await page
+      .getByRole('dialog', { name: /^delete site$/ })
+      .getByRole('button', { name: 'delete site', exact: true })
+      .click();
+    await expect(page.getByText(`${ON_CORE.name} and everything on it are gone.`)).toBeVisible();
+    await expect(page).toHaveURL(/\/admin\/sites$/);
+    expect(await siteExists(ON_CORE.id)).toBe(false);
+
+    // the stop before a delete names no payer, so it lands though another organization pays (above).
+    expect((await siteEntitlements(ON_CORE.id).get()).get('billing.endsAt')).toBeGreaterThan(Date.now());
+    const removals = await getAdminDb()
+      .collection('e2e_billing_calls')
+      .where('fn', '==', 'removeSite')
+      .where('siteId', '==', ON_CORE.id)
+      .get();
+    expect(removals.docs.map((doc) => doc.get('answer'))).toEqual(['site_running']);
+    // the daily job retries it.
+    expect((await getAdminDb().doc(`tridant_site_removals/${ON_CORE.id}`).get()).data()).toMatchObject({
+      siteId: ON_CORE.id,
+      attempts: 0,
+      lastCode: 'site_running',
+    });
   });
 
   test('stops billing, and the section shows the day it ends', async ({ page }) => {

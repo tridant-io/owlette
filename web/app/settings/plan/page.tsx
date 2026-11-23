@@ -229,6 +229,9 @@ function TrialCard({ plan }: { plan: AccountPlanOn }) {
     // an account that was paying before it ever read its plan.
     title = 'no pro trial';
     detail = `this account was already paying for a site, so no trial started. ${ON_FREE}`;
+  } else if (status === 'used') {
+    title = 'no pro trial';
+    detail = `this account's pro trial was already used on an earlier tridant account. ${ON_FREE}`;
   } else {
     title = "your pro trial hasn't started";
     detail = `owlette tries again when this page loads. until then, ${ON_FREE}`;
@@ -482,7 +485,7 @@ function PlanSettings() {
               </p>
             ) : (
               <p data-testid="plans-not-active" className="mt-1 text-sm text-muted-foreground">
-                plans aren&apos;t active during beta, so every feature is included.
+                plans aren&apos;t active before {PRICING_FACTS.freeUntil}, so every feature is included.
               </p>
             ))}
         </div>

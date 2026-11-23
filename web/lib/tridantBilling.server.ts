@@ -1,9 +1,10 @@
 /**
  * tridant id's site billing api as owlette calls it: checkout, the trial,
- * linking, billed sites, usage and site registration. the shapes follow
- * tridant-id `internal-docs/api/billing.md` and `entitlements.md`
- * (`POST /v1/sites`). never throws, and never logs an email or a token. under
- * OWLETTE_E2E every call is answered by tridantBillingE2e.server.ts instead.
+ * linking, billed sites, usage and site registration and removal. the shapes
+ * follow tridant-id `internal-docs/api/billing.md` and `entitlements.md`
+ * (`POST /v1/sites`, `DELETE /v1/sites/:ref`). never throws, and never logs an
+ * email or a token. under OWLETTE_E2E every call is answered by
+ * tridantBillingE2e.server.ts instead.
  */
 
 import 'server-only';
@@ -78,6 +79,14 @@ export type CheckoutConfirmation = {
 export type AddSiteInput = { uid: string; siteId: string; siteName: string; tier: BillingTier; founders: boolean };
 export type TrialInput = { uid: string; email: string; name: string };
 export type Trial = { orgId: string; expiresAt: number; already: boolean };
+
+const PREVIEW_PAYERS = ['linked', 'would_create', 'link_required'] as const;
+const PREVIEW_TRIALS = ['would_start', 'already', 'already_subscribed', 'used'] as const;
+/** `trial` is null when tridant names no outcome, as with `payer: 'link_required'`. */
+export type TrialPreview = {
+  payer: (typeof PREVIEW_PAYERS)[number];
+  trial: (typeof PREVIEW_TRIALS)[number] | null;
+};
 export type PushSiteInput = { uid: string; siteId: string; name: string };
 export type LinkInput = { uid: string; orgId: string; idToken: string };
 /** null: the tier has no founders cap, or tridant does not list it. */
@@ -98,8 +107,15 @@ const USAGE_STATUSES = [
 
 /** tridant's per-entry status, or why the entry's chunk got no usable answer. */
 export type UsageStatus = (typeof USAGE_STATUSES)[number] | 'unreachable' | 'rejected' | 'malformed_response';
-export type UsageEntry = { siteId: string; machines: number };
-export type UsageOutcome = { siteId: string; status: UsageStatus; recorded: boolean };
+/** `asOfMs` overrides the call's moment for this entry. */
+export type UsageEntry = { siteId: string; machines: number; asOfMs?: number };
+/** `settlesAt` is set on an entry recorded into a period that has closed: tridant holds its invoice open until then. */
+export type UsageOutcome = {
+  siteId: string;
+  status: UsageStatus;
+  recorded: boolean;
+  settlesAt: number | null;
+};
 
 const e2e = () => process.env.OWLETTE_E2E === '1';
 
@@ -135,7 +151,8 @@ async function request<T extends object>(
   if (!parsed) {
     logger.warn('[tridant] billing answer has an unexpected shape', {
       context: 'tridant',
-      data: { method, path },
+      // as tridantFetch logs it: a query can carry the payer.
+      data: { method, path: path.split('?')[0] },
     });
     return { ok: false, reason: 'malformed_response', status: response.status };
   }
@@ -217,49 +234,99 @@ export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: b
       product: PRODUCT[input.tier],
       founders: input.founders,
     },
-    // a site whose removal was pending comes back at the plan it had, whatever was asked for.
+    // a stopped site still inside its period comes back at the product and rate asked for, with `already: false`.
     (json) => ({ already: json.already === true, sites: parseSites(json.sites) ?? [] }),
   );
 }
 
-/** without `founders`, tridant keeps the site's current rate. */
-export function switchTier(siteId: string, tier: BillingTier, founders?: boolean): Promise<BillingResult> {
-  if (e2e()) return fake.switchTier(siteId, tier, founders);
-  return request(sitePath(siteId), 'PATCH', { product: PRODUCT[tier], founders }, () => ({}));
+/**
+ * without `founders`, tridant keeps the site's current rate. with `payerUid`,
+ * a payer whose organization does not pay for the site gets 409
+ * `payer_mismatch`, and nothing changes.
+ */
+export function switchTier(
+  siteId: string,
+  tier: BillingTier,
+  founders?: boolean,
+  payerUid?: string,
+): Promise<BillingResult> {
+  if (e2e()) return fake.switchTier(siteId, tier, founders, payerUid);
+  return request(
+    sitePath(siteId),
+    'PATCH',
+    {
+      product: PRODUCT[tier],
+      founders,
+      ...(payerUid === undefined ? {} : { payer: { subject: subjectFor(payerUid) } }),
+    },
+    () => ({}),
+  );
 }
 
-/** the site runs, and is billed, to `endsAt`. */
-export function stopSite(siteId: string): Promise<BillingResult<{ endsAt: number }>> {
-  if (e2e()) return fake.stopSite(siteId);
-  return request(sitePath(siteId), 'DELETE', undefined, (json) =>
+/** the site runs, and is billed, to `endsAt`. `payerUid` as for `switchTier`. */
+export function stopSite(siteId: string, payerUid?: string): Promise<BillingResult<{ endsAt: number }>> {
+  if (e2e()) return fake.stopSite(siteId, payerUid);
+  const payer = payerUid === undefined ? '' : `?payer_subject=${encodeURIComponent(subjectFor(payerUid))}`;
+  return request(`${sitePath(siteId)}${payer}`, 'DELETE', undefined, (json) =>
     typeof json.ends_at === 'number' ? { endsAt: json.ends_at } : null,
   );
 }
 
-/** one trial per organization, ever: a repeat answers the first one with `already: true`. */
+/**
+ * forgets the site at tridant. 409 `site_running` while a licence or billing
+ * runs on it (a stopped site's billing closes once its period is invoiced);
+ * 404 `site_not_found` means it is gone already.
+ */
+export function removeSite(siteId: string): Promise<BillingResult<{ removed: boolean }>> {
+  if (e2e()) return fake.removeSite(siteId);
+  return request(`/v1/sites/${REF_PREFIX}${encodeURIComponent(siteId)}`, 'DELETE', undefined, (json) => ({
+    removed: json.removed === true,
+  }));
+}
+
+function trialBody(input: TrialInput) {
+  return {
+    payer: { subject: subjectFor(input.uid), email: input.email, name: input.name },
+    product: PRODUCT.pro,
+    days: PRICING_FACTS.trialDays,
+  };
+}
+
+/**
+ * one trial per organization, ever: a repeat answers the first one with `already: true`. one per
+ * payer too: a payer whose organization with a trial was closed gets 409 `trial_already_used`.
+ */
 export function startTrial(input: TrialInput): Promise<BillingResult<Trial>> {
   if (e2e()) return fake.startTrial(input);
-  return request(
-    '/v1/billing/trial',
-    'POST',
-    {
-      payer: { subject: subjectFor(input.uid), email: input.email, name: input.name },
-      product: PRODUCT.pro,
-      days: PRICING_FACTS.trialDays,
-    },
-    (json) => {
-      const expiresAt = isRecord(json.license) ? json.license.expires_at : null;
-      return typeof json.org_id === 'string' && typeof expiresAt === 'number'
-        ? { orgId: json.org_id, expiresAt, already: json.already === true }
-        : null;
-    },
-  );
+  return request('/v1/billing/trial', 'POST', trialBody(input), (json) => {
+    const expiresAt = isRecord(json.license) ? json.license.expires_at : null;
+    return typeof json.org_id === 'string' && typeof expiresAt === 'number'
+      ? { orgId: json.org_id, expiresAt, already: json.already === true }
+      : null;
+  });
+}
+
+/** what `startTrial` would answer, without writing anything. */
+export function previewTrial(input: TrialInput): Promise<BillingResult<TrialPreview>> {
+  if (e2e()) return fake.previewTrial(input);
+  return request('/v1/billing/trial/preview', 'POST', trialBody(input), (json) => {
+    const payer = PREVIEW_PAYERS.find((known) => known === json.payer);
+    if (!payer) return null;
+    return { payer, trial: PREVIEW_TRIALS.find((known) => known === json.trial) ?? null };
+  });
+}
+
+const numberOrNull = (value: unknown) => (typeof value === 'number' ? value : null);
+
+function unanswered(siteId: string, status: UsageStatus): UsageOutcome {
+  return { siteId, status, recorded: false, settlesAt: null };
 }
 
 /**
  * machines active at each site so far in its billing period, counted at
- * `asOfMs`. one outcome per entry, in the order given; a chunk tridant did not
- * answer marks its entries with the reason, and the other chunks still go.
+ * `asOfMs` or the entry's own. one outcome per entry, in the order given; a
+ * chunk tridant did not answer marks its entries with the reason, and the
+ * other chunks still go.
  */
 export async function reportUsage(
   entries: UsageEntry[],
@@ -270,12 +337,16 @@ export async function reportUsage(
   for (let start = 0; start < entries.length; start += USAGE_CHUNK) {
     const chunk = entries.slice(start, start + USAGE_CHUNK);
     const response = await call('/v1/usage', 'POST', {
-      sites: chunk.map(({ siteId, machines }) => ({ site: siteRef(siteId), machines, as_of: asOfMs })),
+      sites: chunk.map((entry) => ({
+        site: siteRef(entry.siteId),
+        machines: entry.machines,
+        as_of: entry.asOfMs ?? asOfMs,
+      })),
     });
     if (!response.ok) {
       if (response.reason === 'not_configured') return failure(response);
       const status = response.reason;
-      results.push(...chunk.map(({ siteId }) => ({ siteId, status, recorded: false })));
+      results.push(...chunk.map(({ siteId }) => unanswered(siteId, status)));
       continue;
     }
     // tridant answers per entry, in the order sent.
@@ -286,10 +357,15 @@ export async function reportUsage(
         isRecord(answer) && answer.site === siteRef(siteId)
           ? USAGE_STATUSES.find((known) => known === answer.status)
           : undefined;
+      if (status === undefined || !isRecord(answer)) {
+        results.push(unanswered(siteId, 'malformed_response'));
+        return;
+      }
       results.push({
         siteId,
-        status: status ?? 'malformed_response',
-        recorded: status !== undefined && isRecord(answer) && answer.recorded === true,
+        status,
+        recorded: answer.recorded === true,
+        settlesAt: numberOrNull(answer.settles_at),
       });
     });
   }
