@@ -19,6 +19,7 @@ import session_state
 import watchdog_state
 import config_sync
 import configure_site
+import desktop_freeze
 import fleet_session
 import site_move_commands
 import sleep_watch
@@ -198,6 +199,12 @@ KEEP_AWAKE_REPORT_MAX_AGE_SECONDS = 180
 # How far ahead of this clock a report may claim to be before it is refused.
 _KEEP_AWAKE_REPORT_CLOCK_SKEW_SECONDS = 60
 _KEEP_AWAKE_REPORT_LIMIT = 4096
+# A desktop app that has stopped without exiting (desktop_freeze) is looked
+# for this often. One restart per cooldown: an app the system suspends again
+# at once is not helped by a kill every two minutes.
+DESKTOP_FREEZE_CHECK_INTERVAL_SECONDS = 30
+DESKTOP_FREEZE_CHECK_ITERATIONS = max(1, DESKTOP_FREEZE_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+DESKTOP_RESTART_COOLDOWN_SECONDS = 600
 # A scheduled instant older than this is MISSED: skipped and marked fired for the
 # day. Prevents a catastrophic late reboot after a restart, deploy or schedule
 # edit.
@@ -1341,6 +1348,12 @@ class OwletteService:
         self._display_awake_daemon = None
         self._display_awake_thread = None
         self._display_awake_mirrored = None
+        # a frozen desktop app (_check_desktop_frozen): the watch, its pacing,
+        # the restart under way and when the last one was ordered.
+        self._desktop_freeze = desktop_freeze.FreezeWatch()
+        self._desktop_freeze_counter = 0
+        self._desktop_restart_thread = None
+        self._desktop_restarted_at = None
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -2675,6 +2688,52 @@ class OwletteService:
             logging.debug("Could not launch tray icon")
             return False
 
+    def _check_desktop_frozen(self):
+        """Replace a desktop app that has stopped running without exiting.
+        macOS only; runs on the 5s tick, after _try_launch_tray has named the
+        app's pid.
+
+        The read is two syscalls on one pid. The restart is a kill and a
+        launchctl round-trip, so it goes to a thread of its own.
+        """
+        if sys.platform != 'darwin':
+            return
+        self._desktop_freeze_counter += 1
+        if self._desktop_freeze_counter < DESKTOP_FREEZE_CHECK_ITERATIONS:
+            return
+        self._desktop_freeze_counter = 0
+        if sleep_watch.WATCH.asleep_since() is not None:
+            # a dark wake runs the daemon; the user's apps may not get a turn.
+            self._desktop_freeze.reset()
+            return
+        pid = self.tray_icon_pid
+        activity = desktop_freeze.read_activity(pid) if pid else None
+        if not self._desktop_freeze.frozen(pid, activity):
+            return
+        if self._desktop_restart_thread is not None and self._desktop_restart_thread.is_alive():
+            return
+        now = time.monotonic()
+        if (self._desktop_restarted_at is not None
+                and now - self._desktop_restarted_at < DESKTOP_RESTART_COOLDOWN_SECONDS):
+            return
+        self._desktop_restarted_at = now
+        self._desktop_freeze.reset()
+        stood_still = desktop_freeze.FLAT_READS_TO_FROZEN * DESKTOP_FREEZE_CHECK_INTERVAL_SECONDS
+        logging.warning(
+            f"Desktop app (PID {pid}) is still there but has not run for "
+            f"{stood_still}s; restarting it")
+        thread = threading.Thread(
+            target=self._restart_frozen_desktop, args=(pid, activity[0]),
+            daemon=True, name='desktop-restart',
+        )
+        thread.start()
+        self._desktop_restart_thread = thread
+
+    def _restart_frozen_desktop(self, pid, started):
+        """Off the loop (see _check_desktop_frozen)."""
+        if desktop_freeze.restart(pid, started):
+            logging.info("Desktop app restarted")
+
     def _is_restart_prompt_active(self):
         """True while a reboot countdown prompt is believed to be on screen.
 
@@ -3848,7 +3907,9 @@ class OwletteService:
         """
         # Off Windows the init system starts the app and the daemon never
         # launches it (plan decision 2), so there is no token ladder to run and
-        # no `.exe` under the install root to name in a warning either.
+        # no `.exe` under the install root to name in a warning either. A frozen
+        # app on macOS is killed and launchd asked for another
+        # (_check_desktop_frozen): still launchd's start.
         if sys.platform != 'win32':
             return False
 
@@ -10056,6 +10117,8 @@ class OwletteService:
                     logging.debug(f"session_state.update_alive failed: {e}")
 
                 self._try_launch_tray()
+
+                self._check_desktop_frozen()
 
                 self._try_launch_cortex()
 

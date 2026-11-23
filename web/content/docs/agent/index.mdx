@@ -39,7 +39,7 @@ the service starts the desktop app itself, in the signed-in user's session, as s
 
 the service is the LaunchDaemon `app.owlette.agent`, defined in `/Library/LaunchDaemons/app.owlette.agent.plist`. launchd starts it at boot, runs `owlette_runner.py` as root on the bundled Python under `/Library/Application Support/Owlette/runtime`, and relaunches it after any exit, at most once every 5 seconds.
 
-the desktop app, `/Applications/owlette.app`, is started by launchd at every graphical login through the LaunchAgent `/Library/LaunchAgents/app.owlette.desktop.plist`. the service never launches it. launchd starts the app again if it crashes; quitting it from its menu is honoured until the next login.
+the desktop app, `/Applications/owlette.app`, is started by launchd at every graphical login through the LaunchAgent `/Library/LaunchAgents/app.owlette.desktop.plist`. the service never launches it. launchd starts the app again if it crashes; quitting it from its menu is honoured until the next login. if the app is still there but has stopped running, which macOS can do to it when the machine runs out of memory, the service ends it after two minutes and has launchd start it again.
 
 ### on Linux
 

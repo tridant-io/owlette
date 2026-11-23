@@ -271,7 +271,7 @@ def test_schedule_window_stop_terminates_out_of_window_process(
     svc.last_started['proc-sched'] = {'time': datetime.datetime.now(),
                                       'pid': pid}
 
-    for stub in ('_enable_privileges', '_try_launch_tray',
+    for stub in ('_enable_privileges', '_try_launch_tray', '_check_desktop_frozen',
                  '_check_update_status', '_migrate_legacy_roost_cache',
                  '_sweep_legacy_launch_tasks', '_classify_startup_session',
                  '_repair_install_acls', '_sweep_stale_update_installers',
