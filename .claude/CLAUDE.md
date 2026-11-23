@@ -244,17 +244,17 @@ For non-trivial features, use the wave-based planning and execution system. Each
 - `/next` — Execute the next single task in the current context (for smaller features or when you want to review each step)
 
 ### Verification & Lifecycle
-- `/verify` — Checks, then a standards reviewer and a spec reviewer in parallel on the diff, plus evidence from where the owner looks
+- `tridant:verify` — The checks for each area the diff touches, then a standards reviewer and a spec reviewer in parallel on the diff, plus evidence from where the owner looks. Its checks step in this repo is the table in the testing-guidelines skill; `/preflight` stays the gate before a web push and is not part of every verify. The standards reviewer also reads the dev-guidelines skill for the area (`.claude/skills/frontend-dev-guidelines/`, `.claude/skills/backend-dev-guidelines/`)
 - `/save` — Save progress to dev docs before context compaction
 - `/resume` — Restore context in a new session from dev docs
 
 ### Debugging
-- `/debug` — A command that reproduces the bug red comes first, then hypotheses, a regression test, the fix, and proof where the owner saw it
+- `tridant:debug` — A command that reproduces the bug red comes first (this repo's runners are in the testing-guidelines skill), then hypotheses, a regression test, the fix, and proof where the owner saw it
 
 ### Build
 - `/build-and-fix` — Build web + agent, fix all errors, repeat until clean
 
-Skip `/plan` for single-file tweaks or small fixes. Use `/debug` for any non-obvious bug.
+Skip `/plan` for single-file tweaks or small fixes. Use `tridant:debug` for any non-obvious bug. `tridant:verify`, `tridant:debug` and their two reviewers come from the tridant plugin (`tridant-io/skills`, private to the team), one copy for every tridant repo; without the plugin, follow the same order by hand.
 
 ---
 
@@ -272,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-11-20
+**Last Updated**: 2026-11-22

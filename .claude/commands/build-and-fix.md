@@ -1,5 +1,5 @@
 ---
-description: Build both web and agent, then fix all errors
+description: "Typecheck the web app and compile-check the agent, fix every error at its root, and repeat until both are clean. Use when the owner says build, fix the build, make it compile or fix the type errors, or after a merge or wide change that left types or imports red. Not for building the installer, which is the build-system skill."
 ---
 
 Build both projects and fix any errors found. Repeat until zero errors.

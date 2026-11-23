@@ -1,5 +1,5 @@
 ---
-description: Resume work from dev docs in a new session
+description: "Load the active plan's context, tasks and plan from dev/active/ and report where the work stands. Use at the start of a session when the owner says resume, pick up where we left off, continue the plan or where were we."
 ---
 
 Load dev docs and resume implementation from where you left off.

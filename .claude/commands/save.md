@@ -1,5 +1,5 @@
 ---
-description: Save progress to dev docs before context compaction
+description: "Write this session's progress, decisions and next steps into the active plan's files in dev/active/, so a fresh session can pick the work up. Use when the owner says save, save progress, checkpoint or hand off, before stopping in the middle of a plan, or when the context is about to be compacted."
 ---
 
 Save current progress to dev docs so work can resume seamlessly in a fresh session.

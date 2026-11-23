@@ -1,5 +1,5 @@
 ---
-description: Research codebase and create wave-based implementation plan
+description: "Research the codebase with parallel researcher agents, then write a wave-based plan and its task files to dev/active/. Use when the owner asks to plan, scope or break down a feature, a refactor or any change bigger than a single-file tweak, before code is written."
 ---
 
 You are planning a feature or task. Follow this process strictly.

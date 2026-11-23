@@ -1,11 +1,11 @@
 ---
 name: testing-guidelines
-description: "How Owlette is tested and how to run each suite: web Jest, Playwright e2e on the Firebase emulators (npm run e2e), Firestore rules tests (npm run test:rules), agent pytest via agent/.venv, the live smoke suite against dev.owlette.app (npm run smoke:dev), and the mocks and fixtures to reuse. Use when writing, adding or running tests, e2e, a failing or flaky test, coverage, mocks, CI test failures, or checks before a push."
+description: "How Owlette is tested and how to run each suite: web Jest, Playwright e2e on the Firebase emulators (npm run e2e), Firestore rules tests (npm run test:rules), agent pytest via agent/.venv, the desktop app and Rust service host checks, the live smoke suite against dev.owlette.app (npm run smoke:dev), and the mocks and fixtures to reuse. Use when writing, adding or running tests, e2e, a failing or flaky test, coverage, mocks, CI test failures, reproducing a bug with a test, or deciding which checks a change needs before a commit, PR or push."
 ---
 
 # Testing Guidelines
 
-**Applies To**: `web/` (Jest, Playwright, the live smoke suite), `agent/` (pytest)
+**Applies To**: `web/` (Jest, Playwright, the live smoke suite), `agent/` (pytest), `desktop/` (vitest), `agent/host` (cargo)
 
 ---
 
@@ -29,6 +29,22 @@ cd web && npm run smoke:dev
 ```
 
 Before pushing web changes, run `/preflight`: security alerts, lint, typecheck, unit, rules and e2e, in the order CI runs them. The commit/push hook (`.claude/hooks/pre-commit-check.mjs`) runs `tsc --noEmit` + the whole jest suite for web edits, and `py_compile` + `pytest agent/tests/ -x` for agent edits.
+
+---
+
+## Checks for a change, by area
+
+Run the row for every area the diff touches. This table is this repo's checks step for `tridant:verify` (`/preflight` is the gate before a web push, not part of every verify), and the first place to look for the one command that reproduces a bug (`tridant:debug`).
+
+| Touches | Run |
+|---------|-----|
+| `web/` | `cd web && npx eslint <changed files> && npx tsc --noEmit && npx jest --bail`; `/preflight` before a push that touches `web/**`, `firestore.rules` or `firebase.json` |
+| `agent/` | `agent/.venv/Scripts/python -m pytest agent/tests/ -q` |
+| `desktop/` | `cd desktop && npm run typecheck && npm run lint && npm test` |
+| `agent/host` | `cargo clippy --all-targets -- -D warnings && cargo test --locked`, in that folder |
+| `.claude/` | `node scripts/check-claude-hooks.mjs` |
+
+One Playwright spec: `cd web && npm run e2e:build && cd .. && firebase emulators:exec --only auth,firestore,storage --project demo-playwright-e2e "cd web && npx playwright test e2e/specs/<spec> --project=chromium"` (`npm run e2e -- <spec>` hands the spec to firebase, not to Playwright).
 
 ---
 
