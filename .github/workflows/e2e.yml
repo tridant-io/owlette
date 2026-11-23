@@ -44,9 +44,10 @@ jobs:
   playwright:
     name: run suite against firebase emulators
     runs-on: ubuntu-latest
-    # the suite alone takes about 27 minutes on a hosted runner (measured
-    # 2026-11-01, 608 tests), before the functions suite that follows it.
-    timeout-minutes: 45
+    # the suite alone takes 31 to 44 minutes on a hosted runner (measured
+    # 2026-11-22), before the functions suite that follows it; at 45 the
+    # last two dev push runs timed out after the suite had passed.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
