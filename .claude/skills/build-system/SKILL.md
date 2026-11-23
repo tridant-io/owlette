@@ -106,7 +106,17 @@ alerts that were already fixed on `dev` is what made nobody look. The
 
 **IMPORTANT: Always version up AND update the changelog BEFORE building the installer.** Bump with `node scripts/sync-versions.js X.Y.Z` and commit BEFORE running `build_installer_full.bat` — the installer bakes the version into the exe filename and binary.
 
-**IMPORTANT: the changelog MUST be updated before every installer build.** Add a new `## [X.Y.Z] - YYYY-MM-DD` section summarising all changes since the last release. Never build or upload an installer without a matching changelog entry.
+**IMPORTANT: the changelog MUST be updated before every installer build.** Add a new `## [X.Y.Z] - YYYY-MM-DD` section. Never build or upload an installer without a matching changelog entry.
+
+**Release notes are short: about 150 words a release.** The section is what customers read on the changelog page and on the tridant id app page, and the owner cut the whole log to a fifth on 2026-11-23 because nobody read it. Use the `release-notes` skill when it is installed; until then, this is the rule:
+
+- One bullet per change a user would notice. One line, about 15 words: what is different for them, in their words (the screen, the button, the email they get).
+- Group under `### added`, `### changed`, `### fixed` (`### removed` and `### security` when needed). Skip an empty heading.
+- No why, no mechanism, no list of every place a fix reaches, no compatibility notes unless the user must act. More to say? End the bullet with `[more](url)` to the docs page that says it.
+- Leave out what users can't see: refactors, tests, CI, dependency bumps, internal docs.
+- A dozen changes or more: merge related ones, keep the ten a user is likeliest to notice, end with "and N smaller fixes."
+- Security: nothing before it ships (the repo is public), then one line, never how it worked.
+- Count the section with `wc -w`; over budget, cut again. The same applies to `## [Unreleased]` entries as they are added.
 
 **Build before anything is pushed.** Nothing goes to GitHub for a release (no push, PR merge or tag) until all three installers are built, uploaded to dev with `--set-latest` and their downloads verified. The owner set this for 4.1.9 and it has held since: a pushed bump with no installer behind it is a release that does not exist yet. Work on a `release/X.Y.Z` branch in its own worktree, so the bump commit stays local until step 6.
 

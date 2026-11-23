@@ -11,4670 +11,1544 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
-### changed — audit events are queued and drained in order
-
-each change the web app records joins its site's audit queue, and the functions drain every queue in order into the site's hash-chained audit log, so no audit event waits on a single request. an event that cannot be added is set aside. **admin** → **activity** raises one high finding a site per hour for the events set aside, with their count, and one an hour, raised when a queue first goes 5 minutes without draining, listing the sites whose queues were stuck then.
-
-if you self-host, deploy the functions before the web app: `onAuditQueued` and `sweepAuditQueue` are new and `recordAuditEvent` now only queues, and changes the new web app records wait in the queue until they run. the web app no longer reads `AUDIT_LOG_URL` or `AUDIT_LOG_REGION`.
-
-### changed — a site's billing reads what tridant bills
-
-where plans are on, a billed site's section in **site settings** → **billing** and its row on **settings** → **plan** show the plan, founders rate and end date tridant bills it at, not owlette's own copy. a trial that tridant extends shows its new end. an account whose trial already ran on an earlier tridant account, since closed, reads **no pro trial** and gets no second one. switching the plan of a site that tridant bills under another tridant account now says so and changes nothing. deleting a site also removes it from your tridant account once its last billing period is invoiced. a month's machine count is sent once more at 06:00 UTC the next morning, so a report missed on the last evening, or a machine online only in its last half hour, still reaches that month's bill. see [plans](https://owlette.app/docs/plans).
-
-if you self-host with plans on, register `GET /api/cron/plan-settle` on cron-job.org at `0 6 * * *` UTC with your `X-Cron-Secret`, beside `plan-daily`. the bulk trial start's dry run (`GET /api/cron/plan-trials`) now asks tridant what each account's trial would do and answers those counts, with a check of both tridant keys, and `?apply=1` answers 503 while the license key fails that check. see [web deployment](https://owlette.app/docs/setup/web-deployment).
-
-### changed — owlette is free until 1 April 2027
-
-every feature stays free for everyone, and nobody is billed, until 1 April 2027. the pricing page, the faq, the plans docs and the API reference now give that date where they said "free during the beta". after that date, every account starts with the 14-day pro trial, and owlette free stays free. owlette is still in beta. see [plans](https://owlette.app/docs/plans).
-
-### fixed — panels slide open and closed
-
-the **log tail** on an issue, a key's details, its **edit scopes** editor and the **revoked** keys under **api keys**, a webhook's **recent deliveries**, a talon's **recent runs**, a roost's **contents**, **targets** and **version history**, **customize site ID** and **change timezone** when you create a site, **close running processes before install** when you deploy software, the **schedule configuration** in the process dialog, the **site** list in the phone menu, **change password** in account settings, and the **history** beside a screenshot opened and closed in one jump, and now slide, as the rows on the activity, logs and deployments pages do.
-
-### changed — activity rows start with an arrow
-
-each row on **admin** → **activity** now starts with a small arrow, as the machine rows on the dashboard do, so you can see it opens. the arrow turns while the row is open.
-
-### changed — pick several users or sites on the activity page, and an x clears them
-
-the user and site filters on **admin** → **activity** take several at once, up to 10 of each: a row checks or unchecks a person or a site, the list stays open, and the filter reads **2 users** or **2 sites**. an x on a filter clears it, as **anyone** and **every site** still do. the address repeats each one, `user=…&user=…`, and so does `GET /api/admin/activity`, which refuses more than 10 of either.
-
-## [4.2.4] - 2026-11-20
-
-### added — a Mac that goes to sleep reads asleep, not offline
-
-a Mac's agent now marks the machine asleep on its way to sleep (idle sleep on battery, a closed lid, sleep from the Apple menu) and keeps it asleep through the Mac's dark wakes. the dashboard shows a blue **asleep** pill instead of **offline**, and the machine is never paged as not responding. people with **machine offline alerts** get two emails per sleep instead: **machines asleep** once it has slept for 5 minutes, and **machines awake** when it fully wakes, with how long it slept. a shorter sleep sends nothing. it needs the Mac on this agent version; Windows and Linux machines that sleep still page as offline. see [asleep machines](https://owlette.app/docs/dashboard/admin/email-alerts#asleep-machines).
-
-### fixed — activity rows slide open and closed
-
-a row on **admin** → **activity** opened and closed in one jump. it now slides, as the rows on the logs and deployments pages do.
-
-### fixed — focus outlines are no longer cut off at the edge of a form
-
-the outline around a focused field lost its left edge in the **add process** dialog: the form scrolls, and a box that scrolls clips whatever reaches past its sides. the same thing cut the outlines of the fields that open on the **sign in** and **sign up** pages, the fields in the talon editor, the schedule editor and schedule presets, the buttons in the list of shared hoot links and, on a short window, the last link in the admin sidebar. each now leaves room for the whole outline, and inside a dialog that scrolls, a control that tabbing brings in at the top or bottom edge keeps its whole outline too. nothing moves.
-
-### fixed — a pending reboot no longer emails as an agent error
-
-the email sent when a machine is waiting for a reboot, an operating system update ready to install for example, now reads **reboot pending** in amber, with the subject `[owlette] reboot pending on {machine}` and no error code. it used to arrive as `[ALERT] owlette agent error`, though nothing had failed. the server writes the email, so this holds for every agent version.
-
-### changed — fleet session renewals are no longer recorded, and the activity page reads past old ones
-
-a hoot mcp sender renews its fleet session every 10 minutes, and each renewal wrote a change row. with several senders those rows filled the activity page's reach, so it showed **nothing here** with only **load more** below it. renewals are no longer recorded: the grant that allows a session, a sender dropping its grant and every fleet call made with a session still are. the rows already written stay, hidden as before, and the page now reads on past them by itself instead of stopping at an empty or nearly empty page.
-
-### fixed — the activity page names the machine a command went to
-
-a command sent to a machine read `sent update owlette to cmd_…`, the id of the command. it now names the machine the command went to.
-
-### added — a date range on the activity page
-
-**admin** → **activity** has the logs page's date range beside its user and site filters: all time, the last hour or 24 hours, today, yesterday, the last 7 or 30 days, this week, this month, last month, or a custom range of days. the range is kept in the address, so a shared link opens the same range, read from the moment it is opened. the API takes it as `since` and `until` on `GET /api/admin/activity`, unix milliseconds or ISO 8601, both included.
-
-### changed — the activity page's user and site filters search
-
-the user and site lists on **admin** → **activity** open on a filter past ten entries, as the site switcher does: type part of an email or a site's name, and enter picks the first match.
-
-## [4.2.3] - 2026-11-17
-
-### added — an activity page that flags risky changes and sign-ins
-
-**admin** → **activity** (superadmins only, under support) is one timeline of what people, API keys and machines did across every site, newest first. its views are **all**, **flagged**, **changes**, **refused** and **sign-ins**, and it can be narrowed to one user (their API keys included) or one site. changes made through hoot are shown under the user they were made for. opening a row shows its details.
-
-sign-ins are now recorded: who signed in and with what (a password, Google or a passkey), who passed a second factor, and who failed one. each row keeps the network the request came from (the internet provider) and a shortened address: its /24 range for IPv4 or /64 range for IPv6, so the full address is never stored. a failed password is not shown, because Firebase handles passwords and never tells owlette; a failed sign-in here means a failed second factor, a failed passkey or a rejected session. routine reads that were allowed are not shown either.
-
-a check runs every five minutes and flags what looks wrong. flagged at once and emailed: a user made a superadmin, 2fa turned off or force-reset for a user, a site deleted, five failed sign-in or second-factor attempts for one user within 15 minutes, five destructive changes by one actor within 15 minutes, and a superadmin signing in from a network they have not used before. flagged and sent in a daily digest from 16:00 UTC: a site's ownership transferred, a user deleted, 20 refusals for one actor within 15 minutes, and a site owner or admin signing in from a new network. a new network only counts for someone who has signed in before. finding emails and the daily digest go to the addresses superadmins list on admin → alerts. the check needs the `activity-watch` scheduled job; without it nothing is flagged and nobody is mailed.
-
-### added — superadmins choose who gets the activity emails
-
-on **admin** → **alerts**, superadmins now see a **platform** section with a switch for the activity emails and a list of up to ten addresses to send them to. turned off, no finding email or daily digest goes out, and the high findings of the last day are mailed once it is turned back on. the list starts with `ACTIVITY_EMAIL`, or the admin address when that is not set, and it is who gets mail: remove every address and nothing is sent.
-
-### added — move a machine to another site from the admin panel
-
-in a site's settings, under **machines**, each row has a **move to another site** button: pick a site under **move to** and the machine goes there with nobody at it. superadmins can move a machine, and so can anyone who is owner or admin of both sites. the machine keeps its name and its processes. its agent fetches the new site's tokens with the one it holds, switches and reconnects on the new site, and only then is the old site's copy removed, as remove machine removes it: its history, screenshots and logs there are deleted, and members limited to it there lose it. a machine that is offline follows when it comes back, for up to 7 days, and the row reads **moving to** the new site meanwhile. a waiting move can be cancelled from the same button until the machine starts switching; after that, removing the machine from the old site ends the move. the machine needs owlette 4.2.3 or later, and a move is refused while it is installing, updating or syncing, or when the new site already has a machine of that name. if the new site gains a machine of that name, or runs out of room on its plan, before the machine comes for its tokens, the move ends there and the row goes back to normal. while a machine is switching, neither site can be deleted. the API is `POST` and `DELETE /api/sites/{siteId}/machines/{machineId}/move`, which API keys cannot call.
-
-### changed — the activity page leaves out a machine's routine fleet session renewals
-
-a machine that may act on others renews its fleet session every ten minutes, and each renewal filled the feed with a `fleet session minted` row. the all and changes views now leave those rows out, so what people and machines did to something is on the first screen. the audit trail still keeps them.
-
-### changed — the sites page drops its count card
-
-**admin** → **sites** showed the count of sites as a tall card beside the filter and **new site**. it is gone; while the filter is on, the list still says `showing 3 of 15 sites`.
-
-### fixed — the activity page names the person a swoop host's refusal was about
-
-when a swoop host refused a viewer, for example for input it was not allowed to send, the activity page showed only the host as the actor and the session id, so you could not tell who it was or which machine. a refused row now leads with the person, works it out from the session's start, and names the machine: `sam@example.com was refused: input not permitted on LOBBY-01`, with `reported by owlette · swoop host` under it. opening the row shows the viewer and the machine, and **everything from this actor** filters by that person. the user filter itself still skips these rows, because the host is their actor.
-
-### fixed — settings > hoot describes the hoot mcp switch
-
-The hoot mcp steps under **settings** > **hoot** in the dashboard pointed to a desktop menu item 4.2.2 removed and gave a command to paste. They now describe the switch in the owlette app's settings and the admin's allow, and link to the guide for other MCP clients.
-
-### security — next 16.4.6
-
-next in the web app moves to 16.4.6, which fixes an information disclosure across root params when a `use cache` function is called through `unstable_cache()` (GHSA-mfr8-8qww-v76h). owlette uses neither, so it was never exposed.
-
-## [4.2.2] - 2026-11-14
-
-### changed — hoot mcp is turned on from the machine's settings
-
-The desktop app has a settings window: appearance and start on login move into it from the menu, and **connect an ai agent** is replaced by a **hoot mcp** switch (not on Linux; macOS also gets a permissions page). Turning it on asks a site admin, whose admin panel opens at that machine with a card that allows it. Once allowed, the app adds hoot to the AI tools it finds for the signed-in user (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex) within about a minute, each one untickable, and removes it when an admin or the machine turns it off. A different `hoot` entry or a config file it cannot parse is reported, never overwritten. The Windows installer has an optional "AI tools" page that offers "allow it to use hoot" after pairing. A machine can drop its own grant, never raise it (`DELETE /api/agent/fleet/grant`, audited as `fleet_grant_dropped`).
-
-### fixed — a mac with a dot in its machine name can send logs and screenshots
-
-A Mac paired under a name with a dot in it, such as `Mac.localdomain`, was turned away by the server when it attached logs to submit issue or uploaded a screenshot, the API would not read back its commands or processes, and a site admin could not limit a member to it. The server now accepts a dot in a machine name.
-
-## [4.2.1] - 2026-11-14
-
-### changed — the swoop step-up and app sign-in pages are one small card
-
-The browser pages that ask "allow control of this machine?" and "sign in to owlette swoop?" are a single compact card: a short question, one line of context, the signed-in account and the one action. The code entry on the step-up page opens from "enter a code instead".
-
-### fixed — a mac comes back online after an update
-
-On a fast Mac, an upgrade could leave the agent stopped until someone ran the installer again by hand: the desktop app showed the new version while the machine stayed offline on the dashboard and could not take another fleet update. The macOS installer now waits for the old agent to stop completely before it starts the new one, and a failure to start it is written to the installer log that submit issue attaches.
-
-### fixed — links read as links without an underline
-
-Every link in the dashboard, the docs and the emails is accent-coloured with the highlight sweep on hover and focus, instead of an underline. This includes the "not you? sign in as someone else" link and the docs article links.
-
-## [4.2.0] - 2026-11-12
-### changed — a new password or a factor change signs your other sessions out
-
-A dashboard session started before your password was reset or changed now stops working
-within a minute, and one started before a second factor was added or removed stops at once,
-except in the browser that made that change. A superadmin's 2FA reset now signs the account
-out the same way. A browser that was signed out signs in again and is asked for its second
-factor. Sessions on an account that changed none of these carry on.
-
-### changed — two-factor codes have a per-account limit, and work once
-
-Each account gets 10 two-factor code attempts, authenticator or backup code, in any 15
-minutes, counted together at sign-in, when removing the authenticator app, when generating
-new backup codes and at swoop's prompt, from any address. Past that the answer is
-`429 mfa_attempts_exceeded` until the window moves on. An authenticator code is accepted once, so a second sign-in in
-the same 30 seconds waits for the next code. Passkeys are not counted.
-
-### changed — an account with no second factor sets one up before using the API
-
-An account that has to set up a second factor now gets `403` with `mfa_setup_required` from
-the API on its dashboard session or Firebase ID token, as the dashboard already sent it to
-`/setup-2fa`. The routes that set up a factor still answer, and its API keys keep working.
-
-### changed — hoot always asks before it changes what a machine launches
-
-A hoot call that changes what a machine runs, or when, or that can run code, now waits for
-a person's approval in the chat, at any tier and whether or not the site's tier-3 approval
-is on, which now governs only reboot, shutdown and file reads: a process's
-launch target, arguments, working directory, launch mode, schedule, launch delay, restart
-limits, adding or deleting a process, scheduled tasks, a service's startup and failure
-recovery, installing or removing a Windows feature, scheduled update installs, registry
-writes, a talon that acts by itself, and shell commands, scripts, file writes and
-deployments. The card spells out the values, and an approval runs only the call the card
-showed, once: the same input, on the machines it named or fewer. Where nobody can answer a card
-the change doesn't run: talons with "let hoot act", autonomous hoot and the public
-conversations API refuse it and say why, and a follow-up waits for you. Autonomous hoot also
-refuses the tools that can run anything, whatever `maxTier` says, and autonomous hoot,
-talons and follow-ups are no longer offered `manage_scheduled_task`,
-`manage_windows_service` or `registry_operation`, including their read actions.
-
-`registry_operation` no longer reaches Winlogon's password, Shell or Userinit, or what a
-service runs. Local hoot no longer has `set_launch_mode` or the tools that run code, and a
-conversation goes to it only on an agent of this version or later. Every command a chat tool
-queues now writes an audit row with the tool and a hash of the call, and an approved launch
-change records its old and new values first, and doesn't run if that record can't be written.
-Free-form values such as arguments and scripts go in as a keyed hash and a length.
-
-### changed — API calls need the second factor on accounts that have one
-
-On an account with a second factor, a dashboard session now reaches the API only once its
-sign-in has passed that factor, and a Firebase ID token for the account is refused: both
-get `403 mfa_challenge_required`. A script that calls the API with an ID token for such an
-account needs an API key instead, and managing keys, which `/api/keys` won't do through a
-key, moves to the dashboard. API keys and machines are unaffected. Nothing to update on the
-machine.
-
-### changed — renaming or removing a passkey asks for your second factor
-
-Renaming or removing a passkey now asks you to verify a factor you have first, as adding
-one already did. Adding or removing a passkey or the authenticator app, and a superadmin's
-reset of your second factors, now emails your account's address. Nothing to update on the
-machine.
-
-### changed — API keys have a tool tier
-
-Each API key now has a tool tier, `maxToolTier`, which caps the hoot tools it runs through
-`mcp_tool_call` on the machine commands route: 1 runs read-only tools, 2 adds process,
-service and system setting changes, and 3 adds commands, scripts, files, deployments,
-restarts and anything that changes what a machine launches. Every existing key is tier 1,
-so a script that runs a tier-2 or tier-3 tool that way gets `403 max_tool_tier_exceeded`
-until the key's owner raises its tier, in the key's editor under settings → api keys or
-with `PATCH /api/keys/{keyId}`. Creating, raising or rotating a key above tier 1 needs a
-dashboard session that passed its second factor; anything else, an ID token included, gets
-`403 verified_session_required`. A call that changes what a machine launches, such as
-`update_process` with a new target or `manage_scheduled_task` `create`, counts as tier 3
-whatever its tool's tier, so a tier-2 key no longer runs it. A person's tier-3 call through
-that route now needs an open step-up window on the machine, the one swoop's control uses,
-else `401 step_up_required`. The other command types have no tier. `owlette key create` and
-`owlette auth login` make tier-1 keys, and hoot conversations through a key stay read only.
-Nothing to update on the machine.
-
-### changed — the commands route checks a tool call before it queues it
-
-`mcp_tool_call` now checks `tool_params` against the tool's definition: an unknown tool or
-parameter, a missing required one, or a value the tool doesn't take answers
-`400 tool_params_invalid`, naming the parameter, and nothing is queued. Hoot refuses such a
-call with the same code. A tool call to a machine with hoot switched off answers
-`423 hoot_disabled`. `update_owlette` takes only a published installer, from any caller: its
-`installer_url` and `checksum_sha256` must match a file of `target_version`, or of the
-latest version when none is named, else `403 installer_not_published`. A tool call's audit
-row records the tool, its parameter names and a hash of the call, never the values. Nothing
-to update on the machine.
-
-### changed — Firestore rules 2.13.0: only the server adds commands
-
-An agent's token can now only take entries out of its machine's `commands/pending`, and the
-server adds every command. Every agent from 3.2.0 on works as before. Nothing to update on
-the machine.
-
-### changed — on macOS and Linux, an administrator moves a paired machine
-
-From owlette 4.2.0 on macOS and Linux, **leave site** in the owlette app, and pairing a
-machine that already belongs to a site, need an administrator account on the machine: root,
-or a member of `admin`, `sudo` or `wheel`. Anyone else is told that only an administrator
-can change the site this machine belongs to, and nothing changes. A machine with no site
-pairs for whoever is signed in. A paired machine stays with the server and machine ID it
-paired with, whatever `config.json` or `config/machine_id` say. Windows asks for an
-administrator to leave, as it already did.
-
-### changed — API keys go in a header
-
-A key in the query string, `?api_key=`, no longer authenticates a request: send it as
-`Authorization: Bearer` or `x-api-key`. A browser `EventSource`, which cannot set headers,
-needs a fetch-based stream reader for `/api/events/stream`, and `owlette listen` sends its
-key in a header. Nothing to update on the machine.
-
-### changed — promoting an installer needs installer admin
-
-An installer upload that marks its version latest now needs `installer=*:admin` on the API
-key, as set-latest does; with `installer=*:write` alone it answers `403 scope_insufficient`
-before anything is uploaded. An upload marks its version latest by default, so a write-only
-key sends `setAsLatest: false`, `set_as_latest=False` from the Python SDK, or
-`owlette installer upload --no-set-latest`. Nothing to update on the machine.
-
-### changed — webhooks and the audit log are for site owners and admins
-
-Reading a site's webhooks, their deliveries and the site's audit log now needs a site owner
-or admin, as changing a webhook already did, and so do retrying a delivery and the test
-probe. A member who opens settings → webhooks is told the site's admins manage them, and the
-API answers a member's session or key with `403 forbidden`. Nothing to update on the
-machine.
-
-### changed — webhook deliveries follow no redirects
-
-A webhook delivery, and a talon's webhook output, no longer follows a redirect: a `3xx`
-answer fails the delivery at once with `http_<status>`, so point the subscription at its
-final URL. Each delivery attempt checks the URL again by the rules for creating one, and one
-that no longer passes fails with `url_refused_<code>`. The test probe reports a redirect as
-its status, and each person can probe 60 times an hour. Nothing to update on the machine.
-
-### changed — adding a member needs a verified address
-
-Adding someone to a site by email now answers `409 email_unverified` when they signed up
-with a password and have not verified that address yet. Ask them to verify it from the email
-owlette sent them, then add them again. People who sign in with Google are never asked.
-Nothing to update on the machine.
-
-### changed — unsubscribe asks first
-
-The **unsubscribe** link at the foot of an alert email now opens a page whose **turn off
-alert emails** button turns them all off, because mail scanners open links on their own.
-Opening the link alone changes nothing, and `POST /api/unsubscribe` with the link's token
-does what the button does. Nothing to update on the machine.
-
-### changed — screenshots open through a signed link
-
-A screenshot's `url`, on the machine's `lastScreenshot` and in its screenshot history, is
-now `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which sends anyone
-with access to the machine on to a link that works for an hour. The record also carries the
-image's storage `path`. Hoot and talons hand their model a fresh link the same way. Nothing
-to update on the machine.
-
-### changed — pairing a machine already on the site asks first
-
-Authorizing a pairing phrase for a machine that is already on the site now asks you to
-**replace machine** first, at `owlette.app/add`, in the dashboard's **add machine** dialog
-and on the getting-started card, which all show the machine's name before you authorize. A
-generated code pairs a machine already on the site only when it names that machine, or when
-**let this code reinstall any machine already on this site** was ticked; any other machine
-gets `409` with a message it shows, and the code stays unspent. Over the API, the authorize
-route answers `409 machine_exists` until the body names the machine as `replaceMachineId`,
-and `preview: true` looks the machine up without changing anything. Nothing to update on the
-machine.
-
-### changed — the agent fetches hoot's key itself
-
-From owlette 4.2.0, when you set hoot's key on a machine, the agent fetches it from owlette
-with its own credentials, once, and the server deletes its copy then, or when the command
-ends.
-
-### changed — swoop starts the picture once the viewer has verified
-
-From owlette 4.2.0, the machine sends a swoop viewer nothing, no picture, sound, cursor,
-viewer list or clipboard, until the viewer has presented its connect token, which it does the
-moment the session opens. A viewer that presents none within 30 seconds is disconnected.
-
-### changed — hoot reads what a machine reports as data
-
-Process names, logs, error messages, file contents and an agent's alert reach hoot's model
-inside a marked block, and hoot's instructions say that nothing in a tool result or such a
-block is an instruction: hoot reports on it, and says so when any of it asks for something.
-This covers chats and autonomous investigations. Nothing to update on the machine.
-
-### changed — the owlette app loads only its own files
-
-From owlette 4.2.0, the owlette app's window runs under a content security policy: it loads
-only the app's own scripts, styles and images, and talks only to the app itself.
-
-### added — the tray and menu bar icon turn yellow while someone is connected through swoop
-
-While a swoop session is capturing this screen, the owlette icon in the tray
-(Windows, Linux) or the menu bar (macOS) turns yellow, whatever the site's
-indicator setting says: a machine always shows that someone is connected.
-Errors still show red, and the yellow goes out when the capture stops.
-
-### fixed — agent token rotation keeps one current token per machine
-
-A machine's tokens no longer pile up on the admin agent tokens page, and the
-version shown for a token follows the agent that last refreshed it. Tokens left
-over from before clear themselves the next time the machine refreshes.
-
-### changed — a plan belongs to a site, and its owner pays for it
-
-None of this is enforced or billed yet: plans stay switched off during the
-beta, and every feature stays included. This is how they work once they are
-switched on.
-
-A plan is now a site's, not an account's. Each site is on owlette free, core
-or pro on its own, and what can be done on a site follows that site's plan,
-whoever does it. Core no longer stops at one site: core and pro are billed per
-site, per active machine, by calendar month from the 1st (UTC). The first month
-an owner is billed is charged by the day, and a site added later is charged for
-the whole month it is added in. Pro bills at least three machines per
-site. owlette free is counted per account: one free site, with one machine
-across an account's free sites. Every further site is created on core or pro,
-picked per site, and an account can own any number of each: new site asks for
-the plan with its price, creates the site and goes straight to its upgrade. A
-site whose checkout is left unpaid stays on owlette free, and no other site
-can be created until it is upgraded or deleted. The 14-day pro trial needs a
-verified email and no card, comes once per tridant account, starts the first
-time such an account opens owlette, and covers the sites it owns; during it,
-any number of sites can be created.
-
-Only a site's owner can change its billing, in a new billing section of site
-settings that appears when plans are switched on: upgrade, switch between core
-and pro, or stop. While plans are off, the section appears only for a site
-still billed, and offers only stop. The first purchase goes through a
-checkout; every later site goes on the card on file with no checkout, since the
-subscription keeps running, at no charge, even once every site on it has
-stopped. Stopping runs to the end of the billing period, and that period is
-still billed. A transferred site stays billed to its previous owner until that
-period ends, and its new owner upgrades it after that. Deleting a site, or an
-account with the sites it owns alone, stops their billing. A site whose
-subscription was cancelled after failed payments is on owlette free and can be
-upgraded again. An account whose email already has a tridant account links it by
-signing in to tridant. The plan page becomes an overview: your trial, your free
-usage and each site you own with its plan.
-
-API keys are checked against the plan of each site they act on, on every
-request, so creating a key or signing in the CLI is no longer held to a plan.
-A site whose trial or billing has ended is on owlette free; when a site's plan
-cannot be read, nothing on it is limited. Active machines are now counted at
-23:30 UTC, and the last count of a month is the one that month is billed on.
-If you self-host, move the `plan-daily` job to `30 23 * * *` UTC. See
-[plans](https://owlette.app/docs/plans). Nothing to update on the machine.
-
-### changed — the issues list shows each description, and opening an issue marks it triaged
-
-In the admin panel's issues list, each row shows the issue's description beside
-its title. Opening a new issue marks it triaged, since someone has now looked at
-it; its status can still be set back to new.
-
-### changed — settings › hoot shows hoot mcp beside hoot api
-
-Account settings › hoot now names both ways to use hoot. **hoot api** is the
-provider, model and key that run hoot in the dashboard, as before. **hoot mcp**,
-for developers, sets out how an AI agent on one of your machines gets hoot's
-tools: an admin turns the machine on, then the Claude Code command for Windows
-or macOS, ready to copy. The show-key button appears only while you type a new
-key: a saved key never leaves the server, so there was nothing for it to show.
-
-### changed — swoop's text stays clear at any window size
-
-Small text on a machine shown smaller than its own screen could look
-stair-stepped in swoop, because browsers shrink video with a filter that drops
-parts of thin strokes. The picture now lands on whole pixels of your screen, and
-a window a little bigger than the machine's screen, or than half of it, shows it
-at exactly full size or half size, where text is crisp. The quality menu gains
-two settings for how the picture is drawn on your screen. Its **size** row
-offers **sharp**: the largest of full size, a half, a third and so on that fits
-the window, for the clearest text (a third and smaller need smooth scaling). Its
-**smooth scaling** setting averages the picture down at any other size, so thin
-text keeps its strokes. It is on by default in Chrome, Edge and other Chromium
-browsers on a computer, and in owlette swoop on Windows; elsewhere it is off and
-you can turn it on, and wherever the picture lags or looks wrong you can turn it
-off. Both are kept in this browser and never sent to the machine. The latency
-stats add **shown at**, the picture's size against the machine's own pixels,
-**scaling**, how it is drawn, and, while smooth scaling draws, an estimate of
-the time it adds. Nothing to update on the machine: reload the swoop page.
-
-### changed — swoop keeps the machine's resolution on a slow connection
-
-On a connection that could not keep up, the machine lowered swoop's frame rate
-and then its resolution, down to 720p, where a big screen's small text could
-not be read. From agent 4.2.0 a slow connection costs frame rate and bitrate,
-never resolution: the picture keeps the resolution you chose in the quality
-menu, at down to 15 frames a second. When you would rather have smooth motion
-than readable text on a slow connection, pick 1080p or 720p there yourself.
-
-Text is sharper from a machine with an NVIDIA GPU: its encoder runs a slower,
-higher-quality setting, and goes back to its fastest one for the rest of the
-session when the GPU cannot keep up, which the machine's swoop log records. On
-an Intel or AMD GPU the streamer asks the GPU's encoder for balanced quality,
-under the same check. With an NVIDIA GPU a picture that stops moving also
-sharpens in about half a second instead of several: after a scroll or a drag
-ends, the machine sends the still picture again at the session's frame rate for
-half a second, then at the usual two frames a second.
-
-A Windows machine with no GPU, such as a virtual machine, now averages its
-screen when it scales it down, instead of skipping pixels, so thin text keeps
-its strokes. These need the machine's agent updated to 4.2.0; the viewer needs
-nothing.
-
-### fixed — a portrait display streams upright in swoop
-
-A display turned to portrait on a Windows machine reached swoop on its side.
-From agent 4.2.0 the machine turns the picture of a rotated display upright
-before it sends it, and the pointer and taps land where you point on the
-upright picture. A Mac already sent rotated displays upright.
-
-### fixed — swoop lets go of a viewer whose connection never comes back
-
-After a network change, a viewer's browser could ask the machine to restart
-the connection and then never finish. The machine kept that viewer in the
-session for good, so everyone else saw an extra, nameless watch-only viewer.
-From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
-already did for a viewer whose connection dropped.
-
-### fixed — an install queued behind one that ended at once is no longer refused
-
-When an install on a machine ended within five seconds, because it was refused
-or cancelled, the next install waiting for that machine was refused as rate
-limited and failed. Installs already run one at a time, so the limit no longer
-applies to them. A deployment refused inside active hours can also be retried
-with a reason straight away. Takes an agent update.
-
-### fixed — cancelling a deployment stops it on the machine
-
-Cancelling a target the machine had already picked up marked it cancelled while
-the install carried on: the cancel waited in line behind the install it was
-meant to stop. The agent now acts on a cancel at once. An install that is still
-waiting never starts. One that is downloading stops the download and deletes
-what it fetched, with nothing closed and nothing installed. One that is closing
-processes does not run the installer, and the processes start again. Once the
-installer is running it is left to finish, because an installer stopped part-way
-can leave the machine without the program; the target then shows how that
-install ended, and the deployments page says so on the cancel button. Each
-stopped install writes a deployment cancelled row to the activity log, and two
-deployments cancelled one after the other are both stopped. A cancel never
-touches another deployment, a later retry, or a new install of the same
-installer. Takes an agent update.
-
-### changed — a failed download's error names the link without its query string
-
-When an installer or an agent update cannot be downloaded, the error on the
-target and in the activity log now shows the link up to its question mark. Takes
-an agent update.
-
-### fixed — a process closed by name stays closed until the install ends
-
-A managed process closed because its program name was listed, and not because it
-was ticked, started again a few seconds later, while the installer was still
-running. It is now held until the install ends, like a ticked one, and starts
-again then. Other managed processes that run the same program are held with it.
-Takes an agent update.
-
-### fixed — an install closes your apps only when it is ready to run
-
-A deployment closed the processes you chose first, and only then downloaded the
-installer and checked it. A download that failed, a checksum that did not match,
-or a machine with nobody logged in stopped the show and installed nothing. The
-agent now downloads and checks first, and closes the processes last, right
-before it runs the installer. An install with no checksum is refused before
-anything is downloaded. On a Mac or Linux machine, where a deployment cannot
-install, nothing is closed any more. A target now reads downloading, then
-closing processes, then installing, and the show keeps running through the
-download. Takes an agent update.
-
-### added — hoot mcp: an AI agent on one machine can act on the others
-
-An AI agent running on a paired Windows machine or Mac (Claude Code, or any MCP client)
-can now use hoot's tools on the other machines of its site. The owlette agent
-on that machine is the MCP server and the machine's pairing is the credential:
-there is no API key and nothing to sign in to. It is off until a site owner or
-admin turns it on, in the admin panel under hoot, and says for each machine how
-far it may go (read, bounded changes or privileged, which any change to what a
-machine launches needs, and raising it takes a session that passed a second
-factor) and on which machines.
-Beside hoot's own machine tools it can read a machine's metrics history,
-installed software, recent screenshots (as pictures), saved display layout and
-reboot schedule; set that schedule; list, start and cancel software
-deployments; update owlette on a machine; and list, deploy and roll back
-roosts. A call that names several machines is refused whole unless every one
-of them is a machine it may act on, and what belongs to the whole site (alert
-rules, the audit log, display settings) is read only by a machine allowed on
-the whole site. A machine can also hand hoot a task in words and read the
-answer back; that runs on the site owner's LLM key, at tier 2 at most, six
-times an hour. What a machine changes is in the audit log under the machine.
-Update the machine the AI agent runs on to use it; the machines it acts on
-need no update. The desktop app's menu has a new item, connect an ai agent,
-that shows the command to run. See the
-[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp) and the
-[tool reference](https://owlette.app/docs/reference/hoot-mcp-tools).
-
-### changed — hoot's site settings have their own page in the admin panel
-
-The admin panel has a hoot page, under fleet. It holds the
-switch that makes hoot wait for approval before a privileged (tier 3) tool,
-which used to be the shield button in the hoot chat header, and the new
-settings for machines that act on other machines. The setting itself and its
-default are unchanged: approval is on unless a site owner or admin turns it
-off. Nothing to update on the machine.
-
-### changed — swoop is turned on from the admin panel's swoop page
-
-The admin panel's swoop page, under fleet, lists each site you own or administer
-with its swoop switch, above the live sessions. A site's settings page no longer
-has a swoop & screens section:
-keep screens awake is in its machines section. Old links to the swoop & screens
-section, turn on swoop… in a machine's menu, and open swoop settings in the swoop
-picker and the viewer all open the swoop page. Nothing to update on the machine.
-
-### fixed — saving a talon edit keeps the switch where it is now
-
-The talon editor sent the on or off state from the moment it was opened. If the
-talon was switched off in the meantime, by the system after repeated failures or
-by someone else, saving the edit switched it back on. The editor now saves the
-state the talon has when you save. Nothing to update on the machine.
-
-### fixed — a talon switched back on gets its ten tries back
-
-A talon that failed ten runs in a row switched off, and when someone switched it
-back on it kept that count of ten, so its first failed run switched it off
-again. Switching a talon from off to on, from its card, through hoot or over the
-API, now starts the count over; switching it off keeps the count. An API update
-that switches a talon on now also clears why it was off and schedules its next
-run from now, as the switch on its card always did. Nothing to update on the
-machine.
-
-### fixed — hoot's replies are saved in API conversations
-
-A send through the hoot conversations API (`owlette chat send`, the SDKs) saved
-your message but never hoot's reply, so the conversation held only your side and
-every follow-up reached hoot without its own earlier answers. The reply's text
-is now saved when it finishes. A reply that ends in an error is not saved, and
-tool calls are not stored. Nothing to update on the machine.
-
-### fixed — a failed local hoot turn reads as an error
-
-When hoot ran on the machine (local hoot) and its turn failed, the conversations
-API sent the agent's error message as if it were hoot's answer and saved it as
-hoot's reply, so later turns treated it as something hoot had said. The error
-now arrives as the stream's error line, which `owlette chat send` and the SDKs
-already report as an error, and nothing is saved for that turn. Nothing to
-update on the machine.
-
-### fixed — hoot sees a restarted process as running
-
-For up to five minutes after a process was restarted, hoot's `get_process_list`
-tool reported it as killed and not running while the dashboard showed it
-running: the tool read the record of the instance that had been stopped, not
-the new one's. A hoot chat, a talon and hoot mcp all read that tool, so each
-could report a healthy process as down. The tool now reads the record the
-dashboard reads, and a launch that failed outright can no longer make the tool
-fail. Takes an agent update.
-
-### fixed — hoot acts on the machine you name in a chat on several
-
-In a hoot chat aimed at several machines, or at all machines, every tool call
-went to all of them, so "restart TouchDesigner on kiosk-02" restarted it on
-every machine in the chat. Each tool call now names the machines it runs on,
-out of the chat's machines, and it is sent nowhere else. A tool that changes
-something is refused unless its call names its machines, and hoot names all of
-them only when you ask for all of them; a read that names none still runs on
-every machine in the chat. The approval card names the machines that one call
-is for. Site-wide conversations in the API and the CLI work the same way.
-Nothing to update on the machines.
-
-### fixed — hoot's approve and deny buttons no longer spin forever
-
-When hoot asked for approval and a later message had already been sent in the
-chat, the server refused the answer, and the card kept its spinner with both
-buttons dead until the page was reloaded. A refused answer now hands both
-buttons back, and an approval that a later message has left behind reads
-**approval expired** with nothing to press: ask hoot again to run it.
-
-### fixed — a hoot approval whose answer fails goes back to waiting
-
-When you approved or denied a hoot tool call and the answer could not be
-delivered (hoot switched off on the machine in the meantime, a server error, no
-network), the card read **executing...** with nothing running until the page
-was reloaded. The card now goes back to waiting with both buttons, and the
-error is shown in the chat, so the approval can be answered again.
-
-### fixed — hoot's deployments install instead of closing the show and failing
-
-A deployment hoot started carried no installer checksum, so every machine closed
-the processes it named, downloaded the installer and then refused to run it.
-Hoot now pins the checksum first: a preset's own, or one the server computes by
-downloading the installer, which can take a few minutes for a large one.
-Stopping the reply meanwhile deploys nothing. If the checksum cannot be had,
-nothing is deployed and nothing is closed, and hoot says why. Its deployments now
-also time out like any other when a machine never answers, and list in date
-order with the rest in the API and CLI. Nothing to update on the machine.
-
-### fixed — the deployments page offers cancel and retry only where they work
-
-The x on a machine that was already installing did nothing: the server refused
-the cancel and the page said nothing. The x now shows only on a machine that has
-not started installing, and a cancel or retry the server refuses, because the
-machine moved on while the click was on its way, says so in plain words. A
-machine whose uninstall failed no longer offers retry this machine, and retry
-failed shows only when an install failed: a retry installs, and would put the
-program back. Nothing to update on the machine.
-
-### fixed — a cancel that cannot reach a machine still cancels what it stopped
-
-When the cancel command could not be written to one machine, a cancel had
-already removed the queued installs but marked nothing, so those machines stayed
-pending with nothing left to run until they timed out. Every machine whose
-queued install was removed is now marked cancelled before the error is reported,
-and one whose install could not be removed is left as it was. Nothing to update
-on the machine.
-
-### fixed — a cancelled deployment target that was already installing shows how the install ended
-
-A cancel cannot stop an install the agent has already started, and the agent's
-answer to that cancel arrives after the install, so a machine that finished
-installing was switched back to cancelled with the program in place. That answer
-no longer changes the deployment: the machine shows the install's own result,
-completed or failed. A cancel still stops every machine whose install had not
-started. Nothing to update on the machine.
-
-### fixed — stuck deployment targets time out again
-
-The server fails a target still `pending` after 15 minutes, or `downloading` or
-`installing` after 30, counted from the deployment's creation or its last retry.
-Since late May it did that only for sites it was already watching, so most stuck
-targets stayed in flight for good and could not be retried. A machine that was
-only offline still runs its install when it reconnects. Nothing to update on the
-machine.
-
-### fixed — a retry no longer undoes results or installs twice
-
-A retry that first had to download and hash the installer wrote back the record
-it had read before the download, erasing results that arrived meanwhile, and two
-retries at once could each send an install to the same machine. A retry now
-claims its targets on the latest record before it queues anything, and replaces
-an install still queued for a machine that was offline, so each machine runs
-one. Nothing to update on the machine.
-
-### fixed — retry failed no longer reinstalls a program whose uninstall failed
-
-A deployment target whose uninstall failed could be picked up by retry failed,
-which installs, and so put the program back. A failed target now records which
-command failed, and a retry skips a failed uninstall: the page offers no retry
-on that machine, and over the API a retry that reaches only failed uninstalls is
-refused. Over the API the target carries `failedCommandType`. Nothing to update
-on the machine.
-
-### fixed — an uninstall started from a deployment updates that deployment
-
-Uninstall software from a deployment's menu removed the program but left the
-deployment showing completed. Each machine the deployment finished on now turns
-uninstalled, or failed with the reason, when its agent reports. Over the API,
-the machine uninstall route takes the same optional `deployment_id`. Nothing to
-update on the machine.
-
-### fixed — uninstalling a deployment over the API works, and needs the program's name
-
-`POST …/deployments/{id}/uninstall` and `owlette deploy uninstall` queued a
-command every agent rejected, which marked every machine failed. The call now
-requires `software_name` (`--software` in the CLI): a script that sends none
-gets `400 validation_failed` until it names the program. The program is
-uninstalled from each machine that finished the install, is still on the site
-and lists that exact name once; the rest come back in `skipped` with the
-reason. Nothing to update on the machine.
-
-### fixed — cancelling one machine in a deployment cancels only that machine
-
-The x on a machine in a deployment cancelled every machine still queued in it.
-It now cancels that machine only, and two cancels in quick succession no longer
-undo each other. Over the API, the cancel route takes an optional `machines`
-list, as retry does; without it every machine that can still be cancelled is,
-as before. Nothing to update on the machine.
-
-### fixed — a deployment keeps every machine's result
-
-When several machines reported on one deployment at the same moment, only one
-result was kept. The others stayed installing until they were marked failed,
-or, after an uninstall, stayed completed. Each result is now applied to the
-latest record, and a machine whose result arrives while stale installs are
-being checked is no longer marked failed. Nothing to update on the machine.
-
-### fixed — on Windows, kill and restart in the desktop app reach the running instance
-
-When the newest row for a process held a pid that Windows had since given to
-something else, kill and restart stopped there with "refusing to terminate".
-They now move on to the instance the service actually recorded. Arrives with
-the next agent version.
-
-### fixed — on Windows, kill and restart in the desktop app cannot close the wrong process
-
-A pid that Windows had handed to another instance of the same program (two
-TouchDesigner entries, or any cmd.exe for a script entry) passed the app's name
-check and could be closed. The app now also checks the start time and executable
-the service recorded for that pid, the same check the service's own kills make.
-macOS and Linux keep the name check. Arrives with the next agent version.
-
-### fixed — the desktop app no longer nudges the start times the service records
-
-Whenever the desktop app wrote the process table (a kill, a restart, a launch
-mode change), about one recorded start time in twenty came back a hair off. The
-service then took that running process for a recycled pid: it dropped its row,
-refused a kill from the dashboard, or launched it again after a service restart.
-The app now reads and writes those times exactly, on Windows, macOS and Linux.
-Arrives with the next agent version.
-
-### fixed — the CLI publishes the same files as the same version from any machine
-
-Pushing a roost from a second CI runner, another computer or a newer CLI made a
-new version of unchanged files and rolled it out to every target again. The CLI
-no longer writes its host name, platform or version into the version, so the
-same files get the same version wherever they are pushed from. The first push
-of unchanged files onto a version an older CLI published still makes one new
-version. Nothing to update on the machine.
-
-### changed — the CLI and SDK pages say how to install them today
-
-The CLI and SDK pages opened with npm and pip commands for packages that are
-not published yet. They now open with the install from source, which works, and
-show the registry command as what it becomes once the packages are out. The SDK
-reboot examples no longer pass `delay_seconds`, which the agent ignores. Nothing
-to update on the machine.
-
-### fixed — the landing page's developer samples
-
-The developer section showed install commands for npm packages that are not
-published yet, and a sign-in command that does not exist. It now shows the API
-and the CLI installed from source, and signs in with `owlette auth login`.
-Nothing to update on the machine.
-
-### fixed — machine.offline for a connection failure, and none for a pending restart
-
-When an agent reported a connection failure, its `machine.offline` webhook was
-sent only on a site where someone takes the offline email; it is now sent
-whatever the email settings are. A machine reporting a pending restart was
-announced as `machine.offline` as well. It is online, so it sends its email and
-no webhook. Nothing to update on the machine.
-
-### fixed — roost writes a changed file of the same size
-
-A roost rollout or rollback skipped every file whose size had not changed, so a
-file edited without changing its length kept its old contents. A file is now
-skipped only when the version already on the machine had the same bytes. The
-integrity check reads only the version on disk instead of every older one, and
-a sync cut off by a restart no longer holds on to the chunks it downloaded.
-Arrives with the next agent version.
-
-### fixed — swoop refused sessions after a few failed starts
-
-A swoop session that failed before its streamer started still counted toward
-the limit on streamer starts, twice, so a short outage could leave the machine
-refusing swoop for a while. Only real starts count now. Arrives with the next
-agent version.
-
-### changed — download links stay out of the agent's logs
-
-A failed installer or roost download wrote its signed link into the agent's log
-and into the error the dashboard shows. The link is now cut off after its path.
-Arrives with the next agent version.
-
-### fixed — the agent reconnects on a network that only lets https out
-
-After a dropped connection the agent looked for the internet by reaching a
-public DNS resolver, so on a network that blocks that it stayed disconnected
-until the service was restarted. It now also tries owlette itself over https.
-Arrives with the next agent version.
-
-### fixed — small things in the dashboard
-
-A failed clear logs now says why. The screenshot and live view dialogs could
-show the previous machine's picture; they show the machine they were opened on,
-and a picked history screenshot stays picked. swoop's bar said disconnected
-while a failed start was being retried; it counts down, as the picture area
-does. An owlette update sent again to a machine that had timed out kept reading
-"may have failed"; it reads updating. A metrics chart could draw the range you
-had just switched away from. A failed sign-in, sign-up or Google sign-in showed
-two messages, and a new account was told "you can now sign in" while already
-signed in. Switching site while an alert rules save was on its way showed one
-site's rules under the other. The deploy dialog asked for the installer URL when
-only its file name was missing; it asks for the file name. /demo, /swoop and the
-swoop sign-in pages name their browser tab, and the sitemap lists the docs and
-legal pages. Nothing to update on the machine.
-
-### fixed — api answers that were wrong or missing
-
-The machine detail API, and `owlette machine get`, always returned an empty
-process list; they list the machine's processes. A chat listing ended early
-when it met deleted chats; each page now fills. The rollout list refused
-`stage=fleet`; it filters on it. A cancelled command read as failed with no
-reason; the reason is in `error`. A talon could take an install's progress
-report as the command's answer; it waits for the end. Nothing to update on the
-machine.
-
-### fixed — deleting a site removes its process configs too
-
-Deleting a site left its process configs, display layouts, restart schedules
-and presets behind. They are deleted with it, and a machine on 4.1.8 or later
-leaves the site when that happens. A preset with a very long name could be
-created but then neither edited nor deleted; its id is now short enough for
-both. Nothing to update on the machine.
-
-### fixed — schedule days and restart times the agent cannot match are refused
-
-A process schedule day sent through the API as `Monday` or `TUE` was stored as
-sent and never ran; it is now stored as `mon` or `tue`, and anything that is not
-a weekday is refused. A restart schedule accepted `99:99`, `24:00` or `Monday`,
-and the agent skipped it; those are refused too, naming the field. A schedule
-saved earlier with such a day gets the same refusal the next time it is saved,
-until the day is corrected. Nothing to update on the machine.
-
-### fixed — a webhook switched off after ten failures can be turned back on
-
-A webhook that failed ten times in a row was switched off for good: neither the
-dashboard switch nor the API could turn it back on, and the API reported it as
-active. Turning it on from the dashboard, or a `PATCH` with `paused: false`, now
-clears it and starts the failure count over, and the API reports it as paused
-with its failure count. Nothing to update on the machine.
-
-### fixed — two people in one swoop session
-
-With two people in one swoop session, a reconnect could cost everyone but the
-last to join their picture, and one person muting their tab silenced the machine
-for the others. Each viewer now reconnects on its own, and the machine's audio
-stays on while anyone is listening. A ctrl+alt+del whose answer was lost no
-longer stops it working for the rest of the session. Arrives with the next agent
-version.
-
-### fixed — three things in the owlette app
-
-The start service button in the app's footer showed nothing when the start
-failed; it now says why. The start on login checkbox in the app's menu kept its
-old value after a change from the tray until the app restarted; it now follows
-the tray. The 15-minute steppers beside a schedule time ignored Enter and Space
-and did not say which time they moved; they work from the keyboard and name the
-time. Arrives with the next agent version.
-
-### fixed — two answers from the owlette CLI
-
-`owlette key list` stopped with "Invalid time value" for anyone who had a key;
-it lists the keys again. `owlette site add-member` said "added" when the person
-was already a member and nothing had changed; it now says they keep their role
-and names the command that changes it, `owlette site set-role`. Nothing to
-update on the machine.
-
-### fixed — three sentences that were out of date
-
-The page for AI assistants called owlette Windows-only in three places; it
-covers Windows, macOS and Linux. The webhooks page said publishes and rollbacks
-are not sent; they are, and only `deployment.*` is still to come. The CLI sign-in
-page named a command that does not exist; it is `owlette auth login`. Nothing to
-update on the machine.
-
-### fixed — retrying a deployment closes the apps first, like the first attempt
-
-A deployment set to close processes and hold their projects during the install
-did neither when it was retried, so the retry installed over the running app.
-A retry now does both. Nothing to update on the machine.
-
-### fixed — offline webhooks and talons fire when nobody takes the email
-
-On a site where every user had turned the offline email off, a machine going
-offline sent no `machine.offline` webhook and started no talon either. Both now
-fire whatever the email settings are. Nothing to update on the machine.
-
-### fixed — the missing-executable alert keeps appearing
-
-Once a site had more than twenty missing-executable alerts in its logs, a new
-one usually no longer popped up on the dashboard. It does again, with its "use
-path" action. Nothing to update on the machine.
-
-### fixed — hoot reads the agent's log
-
-Asked for a machine's agent log, hoot could read a different log from the same
-folder, such as the one submit issue writes, and report on that. It now reads
-the agent's log. Arrives with the next agent version.
-
-### fixed — display changes are refused while NVIDIA Mosaic is on
-
-A display change sent from the dashboard to a machine running NVIDIA Mosaic is
-meant to be refused, because changing one display there can break up the Mosaic
-grid. The check never ran, so the change went through. It is now refused with a
-message that says why. Arrives with the next agent version.
-
-### fixed — scrolling a page at a time through swoop
-
-A mouse wheel set to scroll a page at a time barely moved the machine: one page
-arrived as a sixty-fourth of a page. It now scrolls the page. Arrives with the
-next agent version.
-
-### fixed — a schedule time or launch delay the agent could not read no longer stops it
-
-A process schedule with a time no clock has (`24:00`), or a launch delay or
-init timeout left empty in the dashboard's edit form, made the agent stop and
-start again over and over, so nothing on that machine was kept running. The
-dashboard and the API now refuse a time like that and store the default for an
-empty field, so no machine is sent one. Nothing to update on the machine; the
-agent's own guard, which skips a value it cannot read, arrives with the next
-version.
-
-### fixed — a config file that could not be read is no longer written over
-
-Saving hoot's key at a moment when the machine's config file could not be read
-(another program holding it, for one) wrote the file back with only hoot's
-section, and the machine came up unpaired. The agent now leaves the file as it
-is and reports that the key was not saved. Arrives with the next agent version.
-
-### fixed — local hoot starts on macOS and Linux
-
-On a Mac or a Linux machine, local hoot never started. It runs as the
-signed-in user, who could neither write the agent's log folder nor read its
-token store, so every launch ended at once and the agent tried again every
-30 seconds. hoot now logs to `logs/cortex/cortex.log` there, and the agent
-hands it a one-hour access token, so hoot never holds the agent token.
-Windows is unchanged. Takes an agent update.
-
-## [4.1.28] - 2026-11-10
-### added — a member can be limited to some machines
-
-A site admin can now give someone access to only some of the site's machines, up
-to 30: in the site's members section, **change access...** → **some machines**, or
-the same choice when adding them. That person sees only those machines on the
-dashboard, in swoop, in hoot and in the activity log, gets alert emails only for
-them, and acts on them at their site role, with their swoop mode applying there:
-give a member **control** and they can take control of just those machines.
-Nothing that spans machines reaches them, whatever their role: no site settings,
-members, deployments, roost, talons, webhooks, audit log or admin panel. Their API
-keys carry the same limit. Everyone else keeps the whole site, as before. A
-machine that is removed or leaves the site drops out of everyone's access, and
-limiting someone's access stops the talons they wrote. The API takes `machineIds`
-on `POST /api/sites/{siteId}/members` and `PATCH /api/sites/{siteId}/members/{uid}`
-(`null` gives back the whole site) and returns it from the members list.
-Firestore rules 2.12.0 enforce the same limit on every read.
-
-### changed — the swoop bar's connection pill fades
-
-The pill on the swoop bar that says poor connection, connection lost,
-reconnecting or disconnected now fades up into place when it comes and fades
-out when it goes, instead of popping on and off. With reduced motion on, it
-comes and goes at once, as the rest of the app does. Nothing to update on the
-machine.
-
-### changed — the site filter is a search row
-
-Past ten sites, the filter in the site switcher and in owlette swoop's site
-list is a search row at the top of the menu, with a magnifier and an x to
-clear it, instead of a boxed field. Nothing to update on the machine.
-
-### changed — the bar's warnings are an icon
-
-A warning the swoop bar has for you (fullscreen refused, the keyboard or the
-mouse not captured, the clipboard not shared or a copy held back) is now a
-warning icon on every layout, with the sentence on hover, instead of a
-sentence that took the bar's room beside the people in the session. The five
-sentences are plainer too: they say what happened and what to do about it.
-Nothing to update on the machine.
-
-### changed — every search in a menu is a search row
-
-The machine switcher on the metrics page and the timezone picker now have the
-same search row the site switcher got: a magnifier, a plain field with no box,
-a rule under it and an x to clear it. Hoot's conversation search is an enclosed
-field with the same magnifier and x, and focusing it tints its border rather
-than lighting it up. Nothing to update on the machine.
-
-### added — a release's notes can be corrected
-
-`PATCH /api/installer/{version}` changes a published version's release notes,
-on the version and on the latest release when it is that one, and
-`scripts/upload-installer.mjs --notes-only` sends the version's changelog
-section through it. The installer files never change. Nothing to update on the
-machine.
-
-### fixed — swoop types every key you type, on a link that drops packets
-
-On a link that lost some of its packets, swoop lost some of the keys typed
-through it: a sentence reached the machine with letters missing. Swoop's input
-now goes reliably and in order, so every key lands, in the order it was typed.
-Nothing to update on the machine: reload the swoop page.
-
-### changed — owlette swoop's window buttons cover less of the picture
-
-In owlette swoop on Windows and Linux, with the bar down a side, minimize,
-maximize and close are now half height at the window's top right, so they cover
-less of the picture's top corner and the picture keeps the window's full height.
-The close button asks first while you are in a session. Nothing to update on the
-machine or in owlette swoop.
-
-### fixed — caps lock from a mac stays in step
-
-Caps lock turned on and off on a mac viewing another machine through swoop
-could leave that machine's caps lock the other way round: still on after you
-turned it off, then off when you turned it on. A mac tells the browser only
-half of each caps lock press, and swoop now sends the machine the whole press.
-Nothing to update on the machine: reload the swoop page.
-
-## [4.1.27] - 2026-11-04
-### added — each person's swoop on a site
-
-A site's owners and admins can now set each person to no swoop, watch or
-control in the site's members section, without changing their site role. A
-member set to control takes control after a second factor and gets nothing
-else: no commands, no configuration, nothing site-wide. An admin held to watch
-keeps the rest of what an admin does. Without a mode of their own, the site
-role decides as before: members watch, and owners and admins control. The
-site's members-may-watch setting (`membersMayWatch`) is now the default for
-members without a mode, and a member's own mode wins over it. Kill and the
-admin panel's swoop page stay with the site's owners and admins, whatever their
-own swoop mode.
-
-### added — each site has a settings page
-
-A new page, **admin panel → sites**, lists your sites, with a gear on each one
-you own or administer; owlette's superadmins see every site. The gear opens the
-site's settings page, one section at a time: general (its name and timezone),
-members, machines, swoop & screens (the swoop and keep screens awake switches)
-and danger zone, which only the site's owner and owlette's superadmins see. The
-site switcher offers **site settings** (the current site's page) to that site's
-owners and admins, **manage sites** (the list) to anyone who administers a
-site, and **new site** to people who administer none yet.
-
-### added — finding someone to add
-
-Adding a member now suggests people as you type: those on your other sites, the
-ones you own or administer, who are not on this site yet. A full email still
-adds anyone with an owlette account. owlette never searches every account for
-you, so someone who is on none of your sites is added by their email.
-
-### added — a pill lights up while its viewer moves the pointer
-
-In swoop's bar, a person's pill now lights up while they move the pointer on
-the picture: its edge and its pointer turn cyan, so everyone in the session can
-see who is working the machine. Your own pill also fills in while you click;
-others' clicks light up in a later agent release. The pointer of someone else
-in control no longer carries their name over the picture: its colour matches
-their pill. Nothing to update on the machine.
-
-### added — kick someone from a swoop session
-
-A site owner or admin, or a superadmin, can take someone out of a live swoop
-session: click their pill in the bar (or their row in a phone's "in this
-session" list), then **kick**. They are told a site admin took them out and can
-rejoin; to keep someone out, change their swoop mode in the site's members
-section. One streamer serves everyone on a machine, so everyone else in the
-session comes back on their own within a couple of seconds. Nothing to update
-on the machine.
-
-### added — the machine picker says who is in each session
-
-The machine cards in owlette swoop and on `/swoop` now name the people in each
-machine's session: first name and last initial, with a pointer for someone in
-control and an eye for someone watching, and full names on hover. The
-dashboard's cards keep their count. Nothing to update on the machine.
-
-### added — a filter in the site switcher
-
-With more than ten sites, the site switcher and owlette swoop's site list open
-on a filter that finds a site by its name or ID. Nothing to update on the
-machine.
-
-### changed — site owners and admins change roles in the dashboard
-
-A site's owners and admins can now make a member an admin, or an admin a
-member, with **change access...** on the person's row in the members section,
-which sets their swoop mode too. It changes that site only. Nobody changes
-their own access or the owner's; the owner's role moves only with a transfer of
-ownership.
+### changed
+
+- everything is free until 1 April 2027, then a 14-day pro trial; owlette free stays free. [more](https://owlette.app/docs/plans)
+- **site settings** → **billing** and **settings** → **plan** show the plan, rate and end date tridant bills.
+- an account gets one pro trial, even if its first tridant account was closed.
+- deleting a site removes it from your tridant account after its final invoice.
+- **admin** → **activity** filters take up to 10 users and 10 sites; an x clears one.
+- if you self-host, deploy the functions before the web app.
+- if you self-host with plans on, register `GET /api/cron/plan-settle` on cron-job.org daily at 06:00 UTC. [more](https://owlette.app/docs/setup/web-deployment)
 
 ### fixed
 
-- The role dialog no longer says a role is account-wide. A role is for one
-  site, and the dialog says so.
-- Removing a member who wrote talons offers this site's owners and admins to
-  take them over, rather than people picked by their account role.
-- Adding someone who is already on the site says it changed nothing, instead of
-  "member added".
-- The swoop switch's description says members watch by default; it used to name
-  only admins.
-- Deleting a site says what goes with it: its machines lose their agent tokens
-  and stop reporting, and its ID can't be used again. It used to say machine
-  data might remain.
-- A site admin who opens an admin page in a fresh tab is no longer sent away
-  with "access denied" before their sites have loaded.
+- expandable panels, such as **log tail** and **version history**, slide open and closed instead of jumping.
+- and 6 smaller fixes.
 
-### removed — the manage sites dialog and /admin/members
+## [4.2.4] - 2026-11-20
 
-The header's manage sites dialog is gone: admin panel → sites and each site's
-settings page do what it did. `/admin/members` now redirects to `/admin/sites`.
+### added
+
+- Macs that go to sleep show **asleep**, not **offline**, and no longer page. [more](https://owlette.app/docs/dashboard/admin/email-alerts#asleep-machines)
+- for a Mac, **machine offline alerts** become **machines asleep** after 5 minutes, then **machines awake**.
+- **admin** → **activity** gets a date range and searchable user and site filters.
+
+### fixed
+
+- a pending reboot emails as **reboot pending**, not `[ALERT] owlette agent error`.
+- focus outlines are no longer cut off in **add process** and other scrolling forms.
+- activity rows slide open and name the machine a command went to.
+- the activity page no longer shows **nothing here** when hoot mcp session renewals fill it.
+
+## [4.2.3] - 2026-11-17
+
+### added
+
+- move a machine to another site: site settings → **machines** → **move to another site**.
+- the machine needs owlette 4.2.3 or later; its history on the old site is deleted.
+- **admin** → **activity** shows superadmins one timeline of changes and sign-ins across every site.
+- risky changes and sign-ins are flagged, and emailed at once or in a daily digest.
+- superadmins choose who gets these emails under **admin** → **alerts** → **platform**.
+- if you self-host, flagging and its emails need the `activity-watch` scheduled job.
+
+### changed
+
+- **admin** → **sites** drops its site count card.
+
+### fixed
+
+- **settings** → **hoot** explains the hoot mcp switch instead of a removed menu item.
+
+## [4.2.2] - 2026-11-14
+
+### changed
+
+- the desktop app has a settings window, holding appearance and start on login from the menu.
+- a **hoot mcp** switch there replaces **connect an ai agent**, except on Linux.
+- once a site admin allows it, hoot appears in Claude Code, Cursor and other AI tools.
+- the Windows installer has an optional **AI tools** page to allow hoot after pairing.
+
+### fixed
+
+- a Mac with a dot in its machine name can send logs and screenshots.
+
+## [4.2.1] - 2026-11-14
+
+### changed
+
+- the swoop **allow control of this machine?** and sign-in pages are one compact card.
+- links are accent-coloured, with a highlight on hover, instead of underlined.
+
+### fixed
+
+- a Mac comes back online after an update, instead of staying offline until reinstalled.
+
+## [4.2.0] - 2026-11-12
+
+### added
+
+- hoot mcp lets an AI agent on one machine use hoot's tools on the others. [more](https://owlette.app/docs/agent/hoot-mcp)
+- the owlette icon turns yellow while someone is connected through swoop.
+
+### changed
+
+- hoot asks before it changes what a machine launches, and never does so unattended.
+- swoop text stays sharp at any window size and on slow links; portrait displays arrive upright.
+- changing your password or 2FA signs out your other sessions.
+- send API keys in a header, not `?api_key=`; raise a key's tier for hoot tools that change things.
+- API scripts on a 2FA account need an API key; webhooks no longer follow redirects; uninstall needs `software_name`.
+- self-hosting: move the `plan-daily` job to `30 23 * * *` UTC.
+
+### fixed
+
+- cancelling a deployment stops it on the machine, and apps close only right before installing.
+- hoot acts only on the machines you name, not every machine in the chat.
+- and 71 smaller fixes.
+
+## [4.1.28] - 2026-11-10
+
+### added
+
+- site admins can limit a member to up to 30 machines: **change access...** → **some machines**.
+- that member sees and gets alerts for only those machines, and nothing site-wide.
+- the members API sets the same limit with `machineIds`.
+
+### changed
+
+- swoop's connection pill fades in and out instead of popping on and off.
+- swoop bar warnings are an icon, with plainer advice on hover.
+- searches in menus, such as the site switcher and timezone picker, share one search row.
+- owlette swoop's window buttons cover less of the picture; close asks first mid-session.
+
+### fixed
+
+- swoop no longer drops typed keys on a connection that loses packets.
+- caps lock from a Mac stays in step with the machine you control.
+
+## [4.1.27] - 2026-11-04
+
+### added
+
+- site owners and admins set each member's swoop: no swoop, watch or control.
+- each site has a settings page under **admin panel → sites**.
+- adding a member suggests people from your other sites as you type.
+- a person's pill in swoop's bar lights up while they move the pointer.
+- site owners and admins can **kick** someone out of a live swoop session.
+- swoop's machine picker names who is in each machine's session.
+- with more than ten sites, the site switcher opens on a filter.
+
+### changed
+
+- owners and admins change a member's site role with **change access...**.
+
+### removed
+
+- the manage sites dialog: use **admin panel → sites**. `/admin/members` redirects there.
+
+### fixed
+
+- a site admin's admin page in a new tab no longer says "access denied".
+- and 5 smaller fixes.
 
 ## [4.1.26] - 2026-11-04
-### added — swoop's bar shows who is in the session
 
-The bar now shows a pill for each viewer in a swoop session, beside the machine's
-name: first name and last initial, yours marked, and an eye for anyone who only
-watches. Hover one for the full name; site owners and admins also see the email.
-On a phone the pills fold into one button with the count, which lists everyone
-in full. The list that sat over the picture is gone, and the pointers of others
-in control carry their names instead of an account ID. Nothing to update on the
-machine.
+### added
 
-### fixed — a second viewer no longer ends the first viewer's swoop session
+- swoop's bar shows a pill per person in the session; hover for their full name.
 
-Opening swoop on a machine someone was already in started a session of its own,
-and the machine ended theirs. Everyone who opens a machine now joins the session
-running there, with a lease of their own: ending yours or closing the tab takes
-only you out, and an admin's kill still ends it for everyone. Two people
-opening it at the same moment land in the same session too. Removing someone
-from the site, or taking their control, ends the session at once: everyone in
-it reconnects on their own, the removed member to a notice that their access
-was removed, and the demoted one to watching. Nothing to update on the machine.
+### fixed
 
-### fixed — swoop says a machine has left the site instead of "machine is restarting"
-
-A machine removed from the site, or one that left it from its own tray, told
-everyone watching it that it was restarting, and then showed a bare "machine
-not found". Removing a machine now ends its swoop sessions, and the viewer says
-the machine has left the site, with the way back. A machine on an agent older
-than 4.1.8 says nothing as it goes, so there the viewer says it once its lease
-runs out, within about five and a half minutes. Nothing to update on the
-machine.
+- a second viewer joins the running swoop session instead of ending the first one's.
+- removing someone, or their control, takes effect in their open swoop session at once.
+- swoop says when a machine has left the site, instead of "machine is restarting".
 
 ## [4.1.25] - 2026-11-02
 
-### added — the Windows installer is signed by Tridant, Inc.
+### added
 
-The installer, its uninstaller and owlette's own programs now carry a verified
-publisher, so Windows names Tridant, Inc. instead of an unknown publisher.
-SmartScreen can still warn until that name has built reputation. Nothing changes
-in how owlette installs or updates.
+- the Windows installer and owlette's programs are signed by Tridant, Inc.; SmartScreen may still warn.
+- the dashboard and desktop app warn when a saved path won't launch, and offer **browse**.
 
-### added — the dashboard warns when a saved path won't launch
+### fixed
 
-After a save changes a path in the process editor, the dashboard asks the machine
-about it. If it isn't there, or owlette would refuse it (a folder as the launch
-target, a file as the working directory, a symbolic link, a network path), a warning
-names the process and field and offers **ok**, which leaves it as typed, and
-**browse**, which opens a folder browser on the machine at the closest folder that
-exists; picking a file saves it to that process and keeps any arguments after the
-path. The save is never held up, and moving on to another process doesn't lose the
-warning. It needs an agent newer than 4.1.24: an older agent, an offline
-machine or no answer in 15 seconds means no warning. Site admins and owners only, as
-for editing the process; API keys can't use it.
-
-### fixed — path / args reach the program as written
-
-On Windows the agent ran every `path / args` value through its path check, so
-arguments came out rewritten: `--fullscreen --display 2` reached the program as
-`<agent folder>\--fullscreen --display 2`, `/S` as `C:\S`, and a quoted path got
-the agent folder in front of it. A value is now a file when the whole string is
-one and arguments otherwise, and arguments go through unchanged.
-
-This changes what some saved values do at their next launch. Slashes in arguments
-now reach the program unflipped. A saved value the old rewriting broke, like
-`cmd.exe` with `/c ...` or `powershell.exe` with `-Command ...`, now runs.
-
-The agent refuses a value that is, as a whole, quoted or not, a network path or a
-symbolic link, and a value that opens with a network path and goes on to
-arguments. Everything else passes as written, including `--project \\server\...`,
-`file://...` and `"C:\link.toe" --flag`.
-
-Finding a running process by its `path / args` now ignores quote marks, so a
-quoted value still matches the process it started. A process already running
-keeps its old command line until it next launches.
-
-### added — the desktop app warns about a path owlette can't launch from
-
-Entering a launch target, a path or a working directory now says so as soon as it's
-saved if it won't launch: it isn't on the machine, it's a folder where a file belongs
-(a macOS `.app` is fine) or a file where a folder belongs, it's a network path on
-Windows, or it's a symbolic link. The value stays as typed: "ok" keeps it, and "browse"
-opens the picker in the nearest folder on the way up that exists. The warning names its
-process and still arrives if you've moved to another one while a slow path was checked;
-browse saves to the process it's about. Arguments and relative paths are left alone.
-
-### fixed — swoop says when a machine is gone or restarting
-
-A machine that went away left its last frame up under "poor connection". A path
-that is down now reads "connection lost" over that frame. A machine whose agent
-says it is going away to come back shows "machine is restarting" with a spinner
-through the reconnects, until its picture is back or ten minutes pass.
-
-### security — re2js, glob and minimatch
-
-re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.
-glob and minimatch in functions and the cli and sdk workspace move to their fixed
-majors. Three web packages nothing imported are gone.
-
-### security — rustls 0.23.46 and tauri 2.12.5
-
-rustls in the swoop streamer moves to 0.23.46, which fixes four advisories. Tauri
-moves to 2.12.5 with its plugins, in the desktop app and in owlette swoop.
-
-## [4.1.24] - 2026-10-27
-
-### fixed — display auto-restore on a panel stuck in a fallback mode
-
-A panel that had fallen back to 640x480 rejected every restore at Windows's
-validate step with a bare `rc=31`, three times over, and the breaker tripped.
-The restore kept the panel's current timing in the layout it asked Windows to
-apply; it now lets Windows pick the timing for the requested size and refresh.
-When Windows still refuses, the error names the monitor and the mode, and says
-whether the panel offers that mode right now. And when auto-restore is waiting
-on a stored monitor that is not connected, it logs
-`display_auto_restore_parked` once, naming the monitor, instead of saying
-nothing; a panel that came back under a new identity after a reboot had left
-the dashboard showing drift with no explanation.
-
-### fixed — the changelog's list of releases opens at once on a phone
-
-The changelog's "on this page" list held every heading on the page, about 470
-of them, and drawing it froze a phone for half a minute after a tap. It now
-lists the releases only, and opens in under a second.
-
-### added — swoop on a phone
-
-On a phone, swoop's bar keeps one row: the back arrow, the machine's name, any
-warning, and one button that opens every other control, each with its name
-under it. A tap now clicks where you tap; before, it clicked wherever the
-pointer had last been. The machine's pointer is drawn on a touch screen, and
-pressing and holding opens a magnifier above your finger with the pointer's tip
-where the lift will click. Two fingers right-click with a tap, scroll with a
-drag and zoom the picture with a pinch, and **fit** zooms back out. The phone's
-own keyboard types on the machine, with a row for esc, tab, the arrows and the
-modifier keys; typing arrives as a US keyboard's keys, so accented letters and
-emoji are not sent yet. An iPhone, which has no fullscreen for a page, no
-longer offers it. Nothing to update on the machine.
-
-### changed — the dashboard on a phone
-
-A machine card's metric row now shows an icon for each metric instead of its
-name, so cpu, memory, disk, gpu and network all fit without being cut off;
-temperatures, disk activity and packet loss are in the expanded card. The menu's site list
-starts closed, so the pages stay in reach however many sites you have. Help
-sits in the top bar where a computer has the agent download.
-
-### fixed — a machine rolled back below 4.1.21 is no longer offered a held restart
-
-An agent of 4.1.21 or later marks its machine as able to hold a restart until
-active hours end, and an older agent never clears the mark. The dashboard, hoot,
-the API and the CLI now check the agent's version too, so a machine rolled back
-below 4.1.21 is no longer sent a held restart that its agent would run at once.
-
-## [4.1.23] - 2026-10-26
-
-### fixed — swoop's pointer keeps its size while you drag a window
-
-Dragging a window by its title bar on a Windows machine shrank the pointer to
-the size of the picture until you let go, often to half its size: Windows
-paints the pointer into the picture for the drag and stops reporting it, so
-swoop stopped drawing its own. The machine now reports where the pointer is
-for the drag, and swoop keeps drawing it at its usual size; the painted one
-can trail a moment behind it while the window moves. Needs this agent on the
-machine.
-
-### changed — owlette swoop's windows fit a 16:9 screen exactly
-
-owlette swoop now opens its windows at a size where a 16:9 machine fills the
-picture to the edges, with no bars above and below: 1120×678 for the first
-session and 1280×768 for each one after it, the picture plus the session bar
-on top, where it starts. Comes with owlette swoop from this release, on the
-computer you watch from.
-
-### fixed — hoot never promises a held restart on a machine that can't hold one
-
-On an agent older than 4.1.21, or off Windows, hoot no longer sends "restart
-after active hours", which that agent would run at once, and no longer says
-owlette holds reboots, shutdowns or deployments there. The API refuses such a
-held restart too, with `409 held_restart_unsupported`, so the CLI and both SDKs
-can't send one either.
-
-### added — hoot from a machine's menu
-
-A machine's menu on the dashboard now has **hoot**: it opens hoot on that
-machine's site with a new conversation aimed at that machine alone, the cursor
-in the message box. Your saved choice of machines for the site stays as it was.
-
-### changed — owlette swoop's Mac icon fills its tile like owlette's
-
-On a Mac, owlette swoop's icon sat shrunk on a grey tile in the Dock, Finder
-and Launchpad, because macOS 26 shrinks an app icon not made for it. It now
-has one made for it, like owlette's: its dark disc fills most of the tile, the
-same size as owlette's eye.
-
-### added — release notes a click from every update and download
-
-The update owlette dialog now links the release notes beside the version it
-installs, in a new tab so your machine selection stays put, and every download
-menu ends with them: the dashboard's, and the home page's on a phone too.
-
-## [4.1.22] - 2026-10-25
-
-### changed — swoop's fullscreen leaves your mouse free
-
-Fullscreen in a browser or in owlette swoop on Windows and Linux captured the
-mouse on the first click: your own pointer vanished and the one you saw was the
-machine's, which came back a round trip late, so over a slow connection it
-lagged every move. Fullscreen now takes the keyboard and leaves the mouse free,
-so the pointer moves the moment you do, as it has in a window since 4.1.21. A
-new button beside fullscreen in the session bar, "capture the mouse in
-fullscreen", turns capture back on for a game or a 3D view that turns with the
-mouse; this browser remembers it. owlette swoop on a Mac never captured the
-mouse and has no such button.
-
-### changed — owlette's own icon is the full eye, and big in the Mac Dock
-
-owlette and owlette swoop shared one icon set, so the desktop app wore swoop's
-smaller eye. The desktop app now carries the full eye on its window, its
-Windows Start menu and login shortcuts and so its taskbar button, and the
-Linux menu, and in the Mac Dock the eye fills most of its tile where it sat at
-half its width, on the light tile and the dark one alike. owlette swoop keeps
-the smaller eye, now from icons of its own, and its Linux menu entry wears that
-one instead of owlette's. A taskbar pin made before this update keeps the old
-icon until it is pinned again.
-
-### changed — hoot's thread line shows it's working
-
-While hoot works on a reply, the thin line beside it now carries a soft light
-down its length, over and over, and goes solid once the reply is done, stopped
-or failed; under reduced motion it holds a brighter tone instead. As a reply
-grows, the chat glides down after it in a fifth of a second rather than
-jumping, and leaves you where you are once you scroll up. "new hoot" puts the
-cursor in the message box, so you can start typing.
-
-## [4.1.21] - 2026-10-25
-
-### changed — owlette swoop wears its own eye, and its name in plain words
-
-owlette and owlette swoop showed the same logo in different places, so the two
-apps looked alike on a Windows taskbar. owlette keeps its full eye; owlette
-swoop now shows the smaller one its window already carried on its Start menu
-shortcut and taskbar button, and on its sign-in pages and machine list header.
-The header reads "owlette swoop" in one size, without the monitor icon that sat
-between the words. On a Mac the machine list has no header at all, since the
-menu bar already names the app: the site picker sits beside the traffic
-lights, the sign-in page shows the logo without the name, and the installed
-version is under About owlette swoop in the menu bar. A taskbar pin made
-before this update keeps the old icon until it is pinned again.
-
-### added — owlette won't reboot, shut down or deploy to a Windows machine inside its active hours
-
-On Windows, the agent now refuses a reboot, a shutdown or a deployment while
-the machine is inside its active hours, the hours Windows holds its own update
-restarts back (08:00–17:00 unless someone set others). The dashboard asks
-first: cancel, restart when active hours end, or restart now with a reason,
-which is logged with your name. A held restart shows as an amber "restart at"
-pill, and a crash loop inside active hours waits for them to end. A held
-restart's Windows notice and log rows say it was held for active hours. hoot checks
-active hours and talons before it acts. To stop Windows restarting a machine on
-its own it now limits update restarts to outside active hours
-(`limit_auto_restart`), or turns automatic installs off (`disable_auto_install`)
-when you want no update restarts at all. `set_restart_deadline` is gone: it
-never worked.
-
-**Breaking for API and CLI scripts.** Windows always has active hours, so a
-daytime script that reboots, shuts down or deploys is now refused: the command
-ends `failed` with `Error: active_hours: …`. Send
-`active_hours_override: { reason }` to act anyway, or for a reboot
-`when: "after_active_hours"` to restart once they end. A deployment retry needs
-its own override. `owlette machine reboot` and `shutdown` and `owlette deploy
-create` and `retry` take `--override-active-hours --reason`, and `reboot` takes
-`--after-active-hours`. `reboot` and `shutdown` now wait for the agent's answer
-and exit 1 on a refusal, and their `--json` prints the final command status
-(`commandId`, `status`, `createdAt`, `updatedAt`, `result` or `error`) instead
-of `{commandId, status}`.
-
-A machine is protected once it runs this release. Older agents ignore active
-hours and the override.
-
-### fixed — owlette swoop's traffic lights sit centred on its bar on a Mac
-
-The close, minimize and full-screen buttons sat where macOS puts them for its
-own title bar, 8 points above the middle of owlette swoop's 48-point bar. The
-app now places them 16 points down and 16 points in, centred on the bar, and
-the page leaves them room to match. The page's half goes out with the web
-deploy and the buttons move with the app update; until it is installed the bar
-only leaves a little more room.
-
-### fixed — swoop's pointer moves with your mouse, not with the machine's reply
-
-Over a slow or jittery link, such as a phone's 5G, the machine's pointer
-jumped behind the mouse. Wherever the viewer draws the machine's pointer itself
-— always in owlette swoop, and in a browser for a Mac or a Windows display not
-at 100% — it drew it where the machine last said its pointer was, a round trip
-after each move. It now draws it where your mouse sent it, the moment you move,
-so a slow connection lags the picture and never the pointer. Fullscreen with
-the mouse captured still follows the machine, which is what a captured mouse
-means.
-
-### fixed — a Mac's control is the Windows key, and a held ctrl no longer sticks
-
-Under the keyboard menu's default "shortcuts match", a Mac viewing a Windows
-machine sent both cmd and control as ctrl, so no key reached the Windows key;
-a PC viewing a Mac had the same gap the other way. The setting now swaps the
-two keys: from a Mac, cmd is ctrl and control is the Windows key; from a PC,
-ctrl is cmd and the Windows key is the Mac's control. The menu draws each key's
-symbol beside its name: the Windows logo, ⌘, ⌃, ⌥ and ⇧.
-
-A key could stay down on the machine after you let go of it, until you
-switched away and back, and with ctrl that turned every key typed meanwhile
-into a shortcut. Two ways in are closed. Your own system can keep a modifier's
-release without the window losing focus, as a Mac's control+arrow for Mission
-Control does; the browser still says which modifiers are down on every key,
-click and mouse move, and the viewer now lets go on the machine of any that
-are not before passing the event on. And swoop's input travels unordered and is
-never resent, so on a lossy link such as a phone's a release could be lost or
-arrive before its own press; the release of ctrl, shift, alt, cmd or the
-Windows key now goes twice more, 100 ms and 500 ms later, unless you have
-pressed that key again.
-
-### security — dependency updates
-
-- `next` 16.4.3: fixes remote code execution in the image optimizer through the
-  sharp library it bundles (GHSA-2464-fhr4-w9xw), and the other advisories
-  closed in 16.4.1. The critical `use cache` advisory never applied: owlette
-  does not use `use cache`.
-- `@sentry/nextjs` 10.75.2: fixes a middleware bypass under the tunnel route
-  (GHSA-mchm-gjx6-7h55). owlette builds with turbopack and has no route under
-  the tunnel path, so it was not affected.
-- `dompurify` 3.4.17, `undici` 7.30.1 and `zod` 4.6.7 in the web app, and
-  `body-parser` 2.4.0 in the cloud functions.
-- The agent bundles Pillow 13.0.0, clearing the advisories against 12.3.0, and
-  setuptools 84.1.0. Pillow 13 needs Python 3.11, which every installer already
-  ships.
-- `@tailwindcss/typography` is removed from the web app; nothing loaded it.
-- `smol-toml` 1.9.1 in the cli.
-- Development only: wrangler 4.152.0 (with sharp 0.35.5 and undici 7.30.1) in
-  the swoop signal worker and its spike, vitest 5.0.5 in the worker's tests,
-  vitest 4.1.12 and source-map-js 1.2.2 in the desktop app's tests, and black
-  26.10.1.
-
-## [4.1.20] - 2026-10-21
-
-### fixed — a token file the agent can't read no longer unpairs the machine
-
-Since 4.1.8 a machine that could not read its token file took that as a revoke
-and left its site, so a file a virus scanner was holding, or one caught
-mid-write, meant pairing the machine again on site. Now only a token the server
-refuses, or a token file that is gone, unpairs a machine. A file that is still
-there but can't be read is retried like any other failed refresh.
-
-### fixed — updating from 3.2.0 no longer puts a permission prompt on the screen
-
-The installer now closes the desktop app, and keeps the old service from
-reopening it, before it stops the service. A 3.2.0 desktop app answers a stopped
-service by restarting it with elevation, so updating a 3.2.0 machine put a
-Windows permission prompt over whatever the screen was showing.
-
-### fixed — the download menu offers only builds that exist
-
-The landing page's download menu, on a desktop and in the phone menu, lists only
-the platforms the latest release has a build for. A release without a macOS or
-Linux build no longer offers a link that ends in "no macos build".
-
-## [4.1.19] - 2026-10-20
-
-### added — owlette swoop says which version it is
-
-Hover the owlette swoop mark, at the top left of the machine picker or on the
-sign-in page, and a tooltip names the installed version, such as "owlette swoop
-v4.1.19".
-
-### fixed — swoop draws the machine's pointer at its own size, and never leaves you without one
-
-In owlette swoop a Mac's pointer showed at twice its size. The streamer draws
-the pointer in the display's pixels, and the app drew those pixels as its own,
-so a Retina Mac's 28-point arrow came out 56 tall; Windows at 150% came out
-half again too big the same way. The streamer now says the dpi it drew the
-pointer at, read again with each new pointer shape so a scaling change counts
-mid-session, and the viewer draws it at the size it is on the machine, in a
-browser and in the app alike and whatever the picture is scaled to; a browser
-no longer sizes it by the picture, which also changed its size going in and
-out of fullscreen.
-
-Your own pointer no longer vanishes. The viewer hid it from the moment a
-session existed, over "connecting" and until the machine first said where its
-pointer was; it now stays until the machine's has a place on the picture. A
-machine that hides its pointer, such as a kiosk or a player, no longer leaves
-you clicking blind: yours shows, except in a title-bar drag, which Windows
-paints into the picture, and with the mouse captured in fullscreen, where a
-game that hides its pointer means it. The pointer is drawn above the viewers
-list and the latency stats, a watch-only session keeps its own pointer and
-sees the machine's where it is, and a reconnect in fullscreen hands the mouse
-back instead of holding it hidden. The size needs the machine's agent updated;
-the rest is the viewer's alone.
-
-## [4.1.18] - 2026-10-16
-
-### fixed — swoop says why a machine cannot show a picture, instead of "connecting" forever
-
-A machine whose streamer failed before it answered — its screen could not be
-captured, it had no encoder, or its agent refused to start one — left the
-viewer on "connecting" and "reconnecting in N s" for as long as the tab was
-open, and the retries themselves tripped the machine's start-rate ceiling. The
-agent now records the refusal or the exit reason on the session, and the
-viewer reads it when its retry is due, says it, and stops. Two causes behind
-the report are fixed too: on macOS the streamer asked ScreenCaptureKit for
-every window on the machine and gave up after 5 s, which a loaded laptop
-missed on every session; it now asks for displays only and waits up to 20 s,
-logging how long the answer took. And a machine removed from its site on the
-dashboard and re-paired in place kept swoop on its old, stopped cloud client,
-so it minted no doorbell and refused every session until the service next
-restarted; swoop is now rebuilt whenever the cloud client is.
-
-### added — numbered issues, an issue page and an issues API
-
-Every issue now gets a number, and the confirmation names it: "issue #42
-submitted — thank you!" in the dashboard, and "your issue was sent as #42" in
-the desktop app. Quote it when you follow up with owlette support. The issue
-email is shorter and links to a page for that issue, where owlette support sees
-its system info, log tail and attachments and sets its status. Superadmins can
-also list, read and triage issues through the owlette API with an API key that
-holds the new superadmin-only `issue` scope; an existing key gains it by
-ticking issue read and write when you edit it.
-
-### added — screenshots and videos on dashboard issues
-
-The dashboard's submit issue dialog now matches the desktop app's: a category,
-a description, and screenshots and videos, added with add screenshots or video
-or pasted, within the same limits of 10 screenshots and 100 MB in all. It no
-longer asks for a title, the category picker spans the dialog, and there is no
-attach logs box, since only the desktop app can send logs. The files are kept
-30 days and seen only by owlette support. Issues from the desktop app now get a
-real title from the first line of their description instead of all reading
-"agent feedback".
-
-### fixed — cancel on the two-factor screen reaches the login page
-
-**cancel and sign out** on the two-factor screen signed the user out but
-could leave them on that screen with only a "signed out" toast: the browser
-signed out before the server session ended, so the trip to the login page
-bounced straight back. Sign-out now ends the session first, and cancel opens
-the login page with a full page load.
-
-### fixed — quieter macOS and Linux agent logs
-
-Four Windows-only probes (the swoop console-session check, the CPU and GPU
-temperature sensors, display enumeration and the display drift count) ran on
-every tick off Windows and logged their failure each time. They now skip on
-macOS and Linux, so the agent log there carries only what the machine does.
-
-## [4.1.17] - 2026-10-15
-
-### added — videos on submitted issues
-
-The submit issue dialog now takes screenshots and videos from one add
-screenshots or video button. MP4, MOV and WebM videos go beside screenshots,
-now up to 10 rather than 5, 100 MB in all. They travel in the same zip as attached logs, which
-can now reach 150 MB, and are kept 30 days and seen only by owlette support,
-like the rest. A large video takes a while to upload on a slow connection.
-
-### changed — the sent toast names the screenshots and video that went
-
-After sending an issue, the confirmation lists everything that went with it,
-for example "system info, the logs and 2 screenshots went with it."
-
-## [4.1.16] - 2026-10-15
-
-### added — screenshots on submitted issues
-
-You can now add up to 5 screenshots to an issue from the desktop app's submit
-issue dialog, by picking files or pasting an image. PNG, JPEG and WebP images
-up to 8 MB each are accepted. They travel in the same zip as attached logs,
-with or without attach logs ticked, and like the logs they are kept 30 days and
-seen only by owlette support.
-
-## [4.1.15] - 2026-10-14
-
-### added — attached logs cover more of the machine
-
-Ticking attach logs when you submit an issue now also sends owlette swoop's
-log, `tmp/status_writer.log`, and a list of the files in owlette's data folder
-with their sizes and dates, never their contents. On Windows it adds owlette's
-installer logs and crash events for owlette's own programs; on macOS, crash
-reports for owlette's programs and the installer log's lines about owlette; on
-Linux, the journals of the agent service and the self-update unit. Tokens and
-`config.json` still never go in, and the zip is still kept 30 days and seen only
-by owlette support.
-
-### changed — submit issue's progress reads beside its buttons
-
-The step submit issue is on now sits in the button row, left of cancel, instead
-of on a line of its own above it.
-
-## [4.1.14] - 2026-10-14
-
-### added — submit issue shows what it is doing, and can go to its own inbox
-
-Sending an issue from the desktop app now shows a spinner and names each step,
-collecting system info, zipping and uploading the logs, then submitting, so a
-send that takes a minute no longer looks frozen. Each send is logged to
-`submit_issue.log` in the machine's logs, including why logs could not be
-attached. The new optional `ISSUE_EMAIL` setting sends issue alerts to their own
-inbox; without it they go where they went before.
-
-### changed — the app menu is reordered, and swoop's stats button shows when it is on
-
-The desktop app's menu now reads swoop; docs, submit issue, config, logs;
-appearance, start on login, restart service, reload window; and leave site last,
-on its own. swoop's stats button stays pressed while the stats are open, so a
-second click to hide them is obvious, and its tooltip just says stats.
-
-### fixed — swoop keeps its quality on a busy screen
-
-swoop counted every frame your screen did not get round to drawing as lost on
-the network. On a moving picture at 60 fps, two frames often arrive within one
-refresh of a 60 Hz screen and only the second is drawn, so swoop lowered the
-picture's quality every two seconds, even on a wired network where nothing was
-lost, and a busy screen went soft and blocky. swoop now counts only frames that
-were really lost.
-
-## [4.1.13] - 2026-10-13
-
-### added — send the machine's logs with an issue
-
-The desktop app's submit issue dialog has an **attach logs** box, unticked by
-default. Tick it and the machine's logs from the last 14 days, swoop's and the
-desktop app's own included, go to owlette support as one zip with the issue: no
-copying the logs folder by hand and no administrator password. The zip is kept
-30 days and only owlette support can open it; every download is audited. If
-the logs cannot be sent, the issue still is, with the reason. An issue from the
-desktop app now also records the machine and site it came from.
-
-### changed — "submit bug report" is now "submit issue"
-
-The desktop app's menu and the dashboard's help menu both say **submit issue**.
-It still takes feature requests and feedback.
-
-### fixed — swoop's picture no longer smears, and an NVIDIA machine encodes on its GPU again
-
-Since 4.1.9 a Windows machine with an NVIDIA GPU streamed swoop through the
-slower Windows encoder instead of NVENC, because checking for that encoder broke
-NVENC for the rest of the session. It also lost H.265. That encoder runs a little
-over its bitrate, and each frame swoop then held back left a hole the browser
-could not see, so the picture smeared, sometimes for seconds, until the next
-keyframe. Each hole was also mistaken for a bad network and cut the bitrate.
-
-swoop now uses NVENC again on NVIDIA machines. After a lost frame it sends
-nothing but a keyframe, so a viewer sees a brief pause instead of a smear. It
-leaves the encoder room above its bitrate and no longer cuts the bitrate for
-frames it held back itself. A 30 fps stream now uses its full bitrate, and
-renewing swoop's connection to the server no longer pauses the picture.
-
-## [4.1.11] - 2026-10-13
-
-### added — owlette free, the pro trial and per-machine billing, for after the beta
-
-The pricing page shows three plans for after the beta: owlette free, with one
-machine and one site, live status, metrics, crash-restart and updates; and
-core and pro, billed per active machine per month. Every account will start
-with a 14-day pro trial, no card. A new plans page in the docs covers each
-plan, the trial, what counts as an active machine, what happens when a
-subscription ends, and the `plan_required` (402) error. Nothing is enforced
-or billed during the beta: the plan limits ship switched off.
-
-### added — email verification at sign-up
-
-An email-and-password sign-up is sent a link to verify its address, and a
-banner offers to send it again until it is opened. Nothing waits on it.
-
-### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
-
-A Mac listed every volume macOS mounts for itself, including the iOS simulator
-runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
-nearly full by design, could show as the machine's main disk and a tunnel as its
-main network, and each one appearing or vanishing reloaded the machine's hardware
-details. A Mac now lists its startup and data volumes, external drives and real
-network interfaces only.
-
-### fixed — two Macs on one network no longer pair as one machine
-
-A Mac took its machine name from the hostname its network handed out, and some
-routers give every Mac the same one, such as `Mac.localdomain`. Two Macs on one
-network then paired onto one machine on the dashboard, each overwriting the
-other, and the dot in the name kept swoop from opening that machine. A Mac now
-takes its name from its local network name (System Settings, General, Sharing),
-which macOS keeps unique on the network. A Mac already paired keeps its name;
-leave the site from the owlette app and pair again to take the new one, on each
-of two Macs that shared one machine.
-
-### fixed — swoop stops asking a machine that never answers
-
-A machine whose swoop could not start, such as a Mac waiting for someone to
-allow screen recording, never answered the viewer, and the viewer asked again
-about every 45 seconds for as long as the tab stayed open. After ten minutes
-with no picture it now stops and says what to check: that the machine is on
-the network, and on a Mac, that the owlette app is running and macOS is not
-asking to allow screen recording. **reconnect** tries again. A slow connection from another
-network still gets the ten minutes to come through.
-
-## [4.1.10] - 2026-10-12
-
-### fixed — a re-paired machine shows its hardware again
-
-A machine removed and paired again, or moved to another site, kept showing
-`CPU0` in place of its processor's name, with no disk or GPU details, until its
-hardware changed. The agent remembered on disk what it had last uploaded and
-skipped the upload for the new machine record. It now uploads the hardware
-profile, the display profile and the display-modes catalogue once each time it
-starts or pairs, then only when they change.
-
-### fixed — owlette swoop opens on the server its machine is paired with
-
-Started for the first time from the Start menu, Applications or the Dock, owlette
-swoop always opened owlette.app, even on a computer paired with
-dev.owlette.app, so signing in there failed. With no server remembered from an
-earlier link, it now opens the one the owlette agent on the same computer is
-paired with, and owlette.app on a computer without the agent.
-
-## [4.1.9] - 2026-10-12
-
-### added — swoop hosts on Windows machines without an NVIDIA GPU
-
-A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
-comes first and gives the best picture; without it the streamer encodes h264
-through Media Foundation, which ships with Windows: on an Intel or AMD GPU's
-hardware encoder, or, on a machine with none, such as a virtual machine, on the
-CPU at up to 1280x720 and 30 frames a second on two threads, so the machine's
-own work keeps the rest of it. A bigger screen is scaled down to fit. A Windows
-N edition without the Media Feature Pack still needs an NVIDIA GPU.
-
-### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
-
-A second factor passed at sign-in in the last five minutes now counts as swoop's
-step-up for the machines opened in those five minutes, so the first machine
-after signing in takes control without asking again. That holds for owlette
-swoop signed in from a browser that has just passed one; approving the app from
-a browser that signed in earlier still asks. One step-up now covers a machine
-for 7 days instead of 12 hours. A remembered browser still asks, a kill still
-closes every window on the machine, and a step-up a sign-in stood in for is
-recorded on the audit trail (`step_up_opened`).
-
-### changed — swoop control is tied to the networks you verified (watching only, for now)
-
-Each second factor you pass records the network it ran on (the ISP, not the
-address), and every control request now logs whether it came from one of those
-networks. Nothing is refused yet: this is a two-week observation before swoop
-starts asking once on a new network. Cloudflare adds the network to each
-request; a request that reached an origin around Cloudflare counts as an
-unknown network.
-
-### fixed — a request that reached an origin around Cloudflare could pick its own rate-limit bucket
-
-The origins also answer requests that bypass Cloudflare, and there a
-client-supplied CF-Connecting-IP header chose the per-IP bucket on the sign-in
-and pairing limits. The header now counts only when the request carries the
-edge's shared secret; otherwise the proxy's own view of the address is used.
-
-### fixed — owlette swoop has a sign-in of its own
-
-owlette swoop's sign-in is now a minimal card of its own: no site footer, the
-window draggable anywhere, browser sign-in first and email and password behind
-a link. Its pages render right on the first paint instead of flashing the
-site's layout, and the signed-in email no longer wraps.
-
-### fixed — the swoop picker's loading notice
-
-In owlette swoop the loading text sat just under the title bar; it now sits
-centred in the window with the same spinner as the stage's "connecting" notice.
-
-### fixed — "not you?" on the verify and approve pages
-
-The pages that verify a second factor and approve a device now offer "not you?
-sign in as someone else".
-
-## [4.1.8] - 2026-10-10
-
-### added — owlette swoop, the desktop app for swoop
-
-owlette swoop shows the swoop viewer in a window of its own instead of a
-browser tab: native fullscreen (hold esc for two seconds to leave it), the
-session bar as the window's title bar, and a machine picker at `/swoop` laid
-out as a grid of cards. A session opens in the same window; right-click a card
-for a new one. Closing a window ends its session.
-
-Open it from **swoop** in the owlette app's tray menu or window menu, from the
-monitor icon beside **swoop** in a machine's menu or on a picker card, or with
-`owlette swoop` in the CLI, which uses the browser when the app is not
-installed. Opened from the dashboard, the app arrives signed in as you; started
-on its own, it offers **sign in with your browser**, and taking control offers
-**verify in your browser** for the second factor. On Windows the clipboard
-works both ways without a permission prompt, and while a session captures the
-tray offers **kill all swoop sessions on this machine**. Every agent installer
-now carries the app on Windows, macOS and Linux and registers
-`owlette-swoop://` links; a download for computers without the agent is not
-published yet.
-
-Known gaps: Windows gets h264 only in the app; the machine's cursor stays soft
-until the streamer sends it at full size; cmd+tab cannot be sent from macOS
-(use the keyboard menu); and the app has no pointer lock on macOS. (#325)
-
-### changed — swoop's switch is easier to find
-
-The site switcher has a **site settings** item that opens the current site's
-settings, swoop switch included, without going through the list of every
-site. On a site with swoop off, the menu of a machine that can stream offers
-a site owner or admin **turn on swoop…**, which opens those settings, and
-tells a member that swoop is off and to ask a site owner or admin. Both get
-live view in the meantime. Each row in manage sites shows whether that site
-has swoop on.
-
-### fixed — the desktop app's appearance submenu opens
-
-Choosing **appearance** in the desktop app's menu highlighted the row and
-showed nothing: the submenu was drawn inside the menu panel and clipped by
-its edge. It now opens beside the menu like any other submenu.
-
-### fixed — revoking a token now cuts the agent off
-
-**revoke token** on a machine, and **revoke** on the agent tokens page,
-deleted the token but changed nothing on the machine for up to an hour: the
-agent kept syncing on its one-hour access token, and the dashboard kept
-showing it online with live metrics. The server now also queues an `unpair`
-command, and an agent on this release acts on it within a minute: it confirms
-with the server that its token is gone, leaves the site, drops its
-credentials, ends any swoop session and the hoot process, and goes offline,
-and the owlette app on the machine offers **join site**. A machine sharing the hostname whose own
-token survived ignores the command. An agent that is offline at the time
-leaves the site the moment the server refuses its next refresh. Agents on
-4.1.7 or earlier still only wipe their token store at that refresh.
-
-### fixed — removing a machine from the dashboard now sticks
-
-**remove machine** on an online machine deleted its records and token, but
-the agent was never told: it kept writing on its one-hour access token and
-each heartbeat put the machine straight back on the dashboard, online with
-live metrics. An agent on this release notices within seconds that its config
-was deleted along with the machine, stops writing, leaves the site, drops its
-credentials, ends hoot, and deletes the row once more in case a heartbeat had
-already put it back; the owlette app on the machine offers **join site**. The
-dialog and docs now say what happens, and that pairing again from the app is
-enough. An agent on 4.1.7 or earlier still writes the machine back and stops
-only when its access token expires, within the hour; remove it again then.
-(#326)
-
-### fixed — a generated pairing phrase works on macOS and Linux
-
-**add machine → generate code** showed only the Windows `/ADD=` command and
-told macOS and Linux to pair from the app, so a phrase generated for an
-unattended install had no use there; the pairing preseed is the only way
-those platforms can spend one. The tab now also shows the preseed, ready to
-copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
-save it as `config/pairing.json` in the data root before installing the
-package. Fixes #322.
-
-### added — pair with dev.owlette.app from the app
-
-The app's **join a site** dialog could only pair a new machine with
-owlette.app; reaching dev.owlette.app took the `/SERVER=dev` installer flag
-on Windows or a pairing preseed on macOS and Linux. Now clicking the "join a
-site" title five times switches the pairing to dev: the `dev` badge appears
-and a dev phrase is requested; a click on the badge goes back to owlette.app.
-Nothing in the dialog advertises it, so customers see no choice. The flag and
-the preseed stay for unattended installs. Fixes #321.
-
-### fixed — swoop connects from strict networks through the relay
-
-A swoop session from a phone hotspot or another strict network failed with
-"even the relay could not get through" although a relay was set up: the
-machine's side never used it, so a viewer whose router allows no inbound path
-had nothing to connect to. From agent 4.1.8 the machine takes a relayed
-address of its own on the TURN server and offers it to the viewer, so a viewer
-behind any router reaches it; the browser's own relay is still tried when
-nothing has connected after three seconds, so a network that allows only TCP
-gets through too. The machine's network has to allow UDP out to the relay on
-port 3478. When no path comes up, the viewer now says which end never reached
-the relay instead of blaming the viewer's network, and the machine's swoop log
-says whether it gathered a relay candidate and why not. Fixes #328.
-
-### added — backup codes download as a file
-
-The backup codes screen at the end of two-factor setup has a **download
-codes** button next to **copy all codes**. It saves the ten codes, and the
-account they belong to, as `owlette-backup-codes.txt`, so a sheet that is
-shown only once no longer has to survive on the clipboard.
-
-### changed — agent installers download from download.tridant.io
-
-Agent installers are moving from Firebase Storage to
-`https://download.tridant.io/owlette/`, with permanent links that never
-change. A firewall or proxy that allows hosts by name must allow
-`download.tridant.io` on port 443, or machines cannot update. Versions
-published before the move keep their old links. A published installer is
-never replaced: uploading the same version again is refused, so a fix gets a
-new version number. Every version that becomes latest is also listed in
-tridant id's owlette release log, and a deleted or rolled-back version is
-pulled from it; `/admin/installers` shows each version's status there and can
-retry a failed one.
-
-### fixed — the swoop viewer says why it cannot start, and has a way back
-
-Opening swoop on a site where it is turned off showed a "connecting" spinner
-that never stopped, with the reason in small text at the bottom and no clear
-way out. The viewer now stops and says why in the middle of the screen. When
-swoop is off for the site, site admins get a link to the site's settings and
-members are told to ask a site owner or admin. A back-to-dashboard arrow
-starts the session bar in every state, and an ended or failed session also
-offers a back to dashboard button.
-
-### fixed — a frozen swoop picture recovers on its own
-
-A swoop picture could stop on one frame while the session stayed up, with
-the machine still sending, until the page was reloaded. The viewer now
-notices within a few seconds, says "picture stalled — reconnecting" and
-starts a new session in the same tab, without asking for the second factor.
-It does this at most twice in ten minutes; after that the session stays up,
-says the picture froze, and offers reconnect. When the browser's HEVC
-decoder was the cause, that tab switches to h264.
-The codec choice in the quality menu now takes effect: choosing one
-reconnects with it.
-
-### fixed — reloading swoop keeps control without the second factor
-
-Reloading the page during a swoop session no longer asks for your passkey or
-code again once the 12-hour window has passed. A tab that held control keeps
-it across a reload. A new tab still asks, and ending the session or a kill on
-the machine closes it as before.
-
-### changed — the docs cover Windows, macOS and Linux
-
-The docs and READMEs are up to date. A new platform support page says what
-each OS can and cannot do. The swoop page says which machines can host a
-session: Windows with an NVIDIA GPU, a Mac with the owlette app running, and
-not Linux yet. The agent pages cover launchd and systemd, paths, logs and
-uninstall on each OS. The API reference, the OpenAPI spec and the CLI pages
-match the routes and commands as they are.
-
-### fixed — hoot's conversation groups open as you left them
-
-hoot's conversation list no longer opens with every group expanded and then
-folds the ones you had collapsed. The list waits for your saved groups, which
-takes a moment, and appears with them already as you left them.
-
-### changed — hoot's conversation list
-
-- Conversations that were never categorized sit in their own unsorted group,
-  last, instead of inside general. They are the ones "categorize N unsorted"
-  sorts, and general is a category of its own.
-- The groups fade in one after another as the page opens, like the rest of
-  the app's pages.
-- With the sidebar collapsed, the chat sits the same distance from both edges
-  of the page.
-
-### changed — pages fade in, top to bottom
-
-Every page now fades in one row after another as it opens: the header, each
-section, then the rows of its lists and tables, about a second for the whole
-page. Nothing moves; it is opacity only. A row that arrives after the page has
-opened fades in straight away instead of waiting its turn. The admin pages do
-the same while their sidebar stays put. People who ask their system for reduced
-motion get the page without the fade.
-
-### changed — small interface polish
-
-- The breadcrumb's separators are straight rules instead of slashes.
-- A machine card's metric rows line up with the centre of their collapse
-  chevron, as the displays already did.
-- hoot's conversation list sits on a darker surface, so the conversation itself
-  comes forward.
-- On a phone, the sign-in page's "don't have an account? sign up" sits on its
-  own line instead of wrapping into "forgot password?".
-
-### fixed — hoot's model changes without the key
-
-Choosing a different model in account settings no longer means typing the API
-key again: with a key already saved and the key field left empty, the button
-reads save model and keeps the stored key.
-
-### added — the swoop bar on the left or right
-
-The session bar can run down the left or right edge instead of along the top,
-from its new bar position button, or sit on auto, the default, which puts it
-wherever the picture comes out bigger in your window and moves it when you
-resize. A 16:9
-picture in a 16:9 window has empty space at its sides, so a side bar gives the
-picture back the height a top bar takes. The machine's name runs vertically and
-the buttons stack at the bottom. The latency stats open beside a side bar, next
-to their button. Phones keep the bar on top. The choice is kept in your browser,
-and a side bar is on its side from the first frame.
-
-### added — tooltips on the swoop bar
-
-Every button in the swoop bar says what it does when you hover it, including
-one that is greyed out, such as quality before the session connects.
-
-### changed — the quality menu says which settings are limits
-
-The quality menu's footnote now names bandwidth, resolution and frame rate as
-upper limits the machine lowers when the connection needs it.
-
-## [4.1.7] - 2026-10-07
-
-### changed — swoop's machine log says why a picture stalls
-
-Every ten seconds of a swoop session, the machine's swoop log now also counts
-the keyframes it sent and the ones viewers asked for, the frames it had to
-hold back, and its slowest moment, so a frozen picture can be traced to the
-machine or to the viewer. It warns when a viewer's picture stops updating while
-frames keep going out, says when it comes back, and notes each time the screen
-capture restarts or the display changes size or refresh rate. The frame rate it
-logs is no longer overstated, and on a display faster than 60 Hz swoop sends at
-most 60 frames a second, which is what its bitrate is set for.
-
-### changed — updated components
-
-The owlette app moves to Tauri 2.12, and the agent and the swoop streamer take
-the latest minor and patch releases of their libraries, including the Claude
-agent SDK behind hoot, now 0.2.159, the newest release with a Windows build.
-
-## [4.1.6] - 2026-10-04
-
-### changed — swoop does not open the machine you are on
-
-Opening swoop on the computer you are sitting at showed a picture of the
-picture, and your clicks landed on the viewer itself. The machine now sees a
-session that comes from itself and ends it with "you're on this machine", and
-from then on that browser shows swoop greyed out for that machine.
-
-## [4.1.5] - 2026-10-04
-
-### fixed — win + l locks a Windows machine from swoop
-
-**win + l** in the special keys menu now locks the machine. Windows ignores a
-lock shortcut that a program types, so the menu item did nothing; the machine
-now locks itself when the shortcut comes through. Pressing win+l on your own
-keyboard still locks your own computer.
-
-## [4.1.4] - 2026-10-04
-
-### fixed — swoop through UAC prompts on Windows
-
-A UAC prompt during a swoop session could leave the mouse and keyboard dead,
-either on the prompt or on the desktop after it closed, until the next lock or
-prompt. The prompt runs on Windows' secure desktop, and the host followed it
-with two watchers on one thread that undid each other. The picture could also
-freeze for ten seconds and end the session when the prompt opened. Now you see
-the prompt and answer it from the viewer, including typing an administrator's
-name and password.
-
-### added — ctrl + alt + del from the viewer
-
-**ctrl + alt + del** in the special keys menu brings up the Windows security
-screen on the machine, for sign-in and UAC prompts that ask for it. It did
-nothing before. The service raises it, at most once every two seconds.
-
-## [4.1.3] - 2026-10-03
-
-### added — swoop from another network
-
-A swoop session now connects across the internet through most home and office
-routers. The machine asks a public STUN server for the address its router shows
-the world and offers it to the viewer beside its local one, as the viewer
-already did. Before, a machine offered only its local address, so a viewer on
-another network saw "connecting" and nothing else. When both ends sit behind
-strict routers, as on many mobile networks, a relay is still needed, and none is
-set up on dev yet.
-
-### changed — swoop says when it cannot connect
-
-After 20 seconds without a path the viewer says "can't reach this machine from
-your network", and whether a relay was there to try, instead of "connecting"
-for as long as the tab is open. It keeps trying, and the picture appears if a
-path comes up later.
-
-### changed — the macOS app icon follows light and dark
-
-On macOS 26 the app's icon follows the Mac's icon style: the day eye on a light
-tile in the default style, the night eye on a dark tile in the dark style. Older
-macOS shows the day icon.
-
-## [4.1.2] - 2026-10-03
-
-### added — light mode
-
-owlette now has a light theme, on every page of the dashboard, the docs, the API
-reference and the sign-in screens, and in the desktop app. It follows your
-computer's setting until you choose: pick light, dark or system under account
-settings → preferences → appearance, and the choice follows you to every browser
-you sign in on. Dark stays the default wherever there is no signal. By day the
-console is the same room in daylight: cool paper, navy ink, one deeper signal
-cyan, and a warm lamp glow under the header. The desktop app has its own
-appearance setting in its menu, and it now follows the computer's appearance
-by default, so on a computer set to light it opens light for the first time;
-it was always dark before.
-
-### fixed — keep screens awake on Windows
-
-On Windows, 4.1.1's service held nothing. Windows refuses a display request
-from a service, and the service asked for the display first, so it never asked
-for sleep either. The service now asks for system sleep only, and the owlette
-app keeps the display on in the signed-in session, as it already did in 4.1.1.
-A signed-in machine stayed awake on 4.1.1 through the app alone; a machine with
-nobody signed in is now kept out of sleep too. The dashboard reported the
-refusal as `PowerSetRequest: [WinError 50]` in the machine's `displayAwake`.
-
-## [4.1.1] - 2026-10-03
-
-### added — keep screens awake
-
-Every site now keeps its machines' screens awake, on Windows, macOS and Linux.
-It is on by default, so a site that never touches the setting keeps its screens
-on around the clock. A site owner or admin turns it off in manage sites, in the
-site's edit panel. The switch acts at once: online machines follow within
-seconds, and an offline machine picks it up when it reconnects. Turning it off
-releases every hold, and the machine goes back to its own power and lock
-settings.
-
-Each machine holds it in two parts. The agent's service holds display and
-system sleep, which works with nobody signed in: a power request on Windows,
-power assertions on macOS, and a systemd inhibitor on Linux. The owlette app
-holds the signed-in session's blanking and lock: on Windows it keeps the display
-required and switches the session's screensaver off, then puts back the user's
-own setting when it lets go; on macOS it holds a display assertion and keeps the
-user active; on Linux it holds the GNOME session's idle inhibit. Each part lets
-go when the switch goes off or its process ends.
-
-The machine record carries `displayAwake` (what the site wants, what the
-service holds, what the session holds, and why a wanted hold is not held) and
-`capabilities.keepAwake: 1`. Manage sites marks a machine `awake` while it
-holds. The setting lives at `sites/{siteId}/settings/display`, behind
-`GET` and `PATCH /api/sites/{siteId}/display-settings`, which take a signed-in
-session and refuse API keys.
-
-### changed — the swoop switch moved
-
-A site's swoop switch moved from its machines panel to its edit panel, beside
-keep screens awake. Both switches act at once, outside the panel's save.
-
-### added — who is in a swoop session
-
-The machine menu shows how many people are in a machine's swoop session, on its
-swoop row and on the menu's button, whenever anyone is. A new admin page,
-swoop, lists the live sessions across your sites, with the people in each and
-whether they control or watch, and ends a session with a click. Site admins and
-up see it, for their own sites only.
-
-### fixed — the swoop keyboard menu
-
-Its legend appears only where a key is converted between your system and the
-machine's, and the note about the Windows key says what to do about it.
-
-### fixed — the macOS app window
-
-The window now has the macOS 26 corner radius. 4.1.0 said it did, but the SDK
-link alone changed nothing: macOS draws the large radius only on a window with a
-toolbar, so the window carries an empty one. The traffic lights sit on the
-wordmark's line.
-
-### fixed — the owlette app's notifications
-
-On Linux, notifications carry the app's icon, and their name no longer reads
-`(deleted)` after an update. On every system, the app no longer says the
-service stopped while that service is updating itself; a Linux package takes
-about a minute to install, and every update raised the alert. The app that runs
-during an update is the old one, so the 4.1.0 app still raises it once, on the
-way to 4.1.1.
-
-### fixed — stopping the service on Linux
-
-The first `systemctl stop owlette-agent` after the owlette app started was
-undone a quarter second later: the app started the service again, which
-cancelled the stop. The app now starts the service only when it finds it
-stopped at launch, never after it has seen it running.
-
-### fixed — the agent
-
-Batch writes go through Firestore's `:commit`, which the agent's token may use.
-`:batchWrite` answered 403, so every batch fell back to one request per
-document, 1,754 of them for a Linux machine's package list. A machine without an
-NVIDIA driver no longer logs a GPU temperature warning every pass; the read
-backs off for five minutes, as the GPU list already did. The app reads its
-start-on-login setting every 30 seconds instead of every second, which on macOS
-and Linux was a process a second.
-
-### fixed — the dashboard
-
-The list view's metric cells show again, and keyboard focus is quiet again,
-with no strong or inset ring.
-
-### docs
-
-Pairing a Mac or Linux machine that nobody stands in front of, with the pairing
-preseed, and running owlette on Ubuntu Server without a desktop.
-
-## [4.1.0] - 2026-10-02
-
-### added — a Mac can host a swoop session
-
-A Mac on Apple silicon with macOS 15 or later can now host swoop. The streamer
-captures a display through ScreenCaptureKit at its native pixel size, encodes it
-with VideoToolbox (H.264 or HEVC in hardware, with Apple's software H.264 on a
-Mac without H.264 hardware), and takes the viewer's keyboard, mouse, double
-clicks, drags and wheel through CoreGraphics. The cursor overlay is drawn from
-the Mac's own cursor, and where the streamer cannot read the cursor's shape the
-pointer stays in the picture instead. System audio rides the same Opus track and
-mute as on Windows, and swoop never creates or switches an audio device. Every
-H.264 stream a Mac sends declares zero frame reordering, rewritten where the
-encoder leaves it out, so the browser's decoder never holds a frame back. A Mac
-resolves a viewer's `.local` candidates and restarts ICE when its network
-interfaces change, and the streamer's `probe` lists the Mac's displays and GPU.
-
-A session wakes the Mac's display and keeps it lit while it captures. macOS
-shows its screen recording indicator in the menu bar meanwhile, and stopping the
-capture from that indicator ends the session cleanly, as a kill, instead of
-restarting it over the person at the Mac. Somebody must be logged in: macOS
-does not let swoop reach the login window.
-
-A Mac offers swoop (`capabilities.swoop: 1`) once the streamer is installed and
-the owlette app reports a fresh Screen Recording grant, which takes effect when
-the app is reopened after the grant. The app asks for Screen Recording when it
-starts, as before; Accessibility, which control needs, is asked only from the
-app's notice; and the first session raises macOS's Local Network prompt, in
-owlette's name. Windows is unchanged, and a Linux machine still offers no swoop.
-
-### added — the swoop clipboard on a Mac
-
-The clipboard syncs with a Mac as it does with Windows: text and images both
-ways, up to 256 KB of text and 15 MB for an image. An image copied on the Mac
-as a TIFF reaches the viewer as a PNG, and copied files are not synced. The
-clipboard from the Mac reaches the viewer only where macOS lets owlette read it
-without asking, with owlette set to always allow under Privacy & Security →
-Paste from Other Apps, because any other read raises a paste alert at the Mac
-and swoop never raises a dialog there. Each session reads that setting once,
-when it starts. macOS lists an app under that setting only after the app has
-raised the paste alert once, which owlette never does, so on a Mac that does not
-list owlette the clipboard from the Mac stays off. macOS before 15.4 has neither
-the setting nor the alert, and syncs both ways. A paste from the viewer reaches
-the Mac whatever the setting.
-
-### added — the macOS app reports its Accessibility grant
-
-The app now checks its Accessibility grant beside Screen Recording and shows a
-notice when it is off. The notice's button asks macOS for the grant and opens
-the right pane in System Settings; nothing asks without that click. The app
-notices a grant or a revocation while it runs, and the notice clears within
-seconds of the grant, with no relaunch. Swoop needs the grant to control a Mac,
-and can show the screen without it. The app also declares why it uses the local
-network.
-
-### changed — the swoop keyboard follows the machine you control
-
-From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. The
-keyboard menu's "keys match" setting turns that off. A Mac viewing a Windows
-machine keeps cmd acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
-on a Mac, and no ctrl + alt + del on a Mac or on Linux. The Print Screen and
-Pause keys, which a Mac has no key for, are dropped there.
-
-### changed — how swoop starts on macOS and Linux
-
-The swoop streamer now builds on macOS and Linux and is tested there in every
-build, and its session loop runs on per-platform seams; Windows sessions run as
-before. On macOS and Linux the agent runs as root with no display of its own,
-so it asks the desktop app to start the streamer, through a checked `launch`
-job: the app starts only its own streamer, with allow-listed arguments and its
-socket and log paths pinned to owlette's data folder, as its own child, which is
-what gives the streamer the app's Screen Recording and Accessibility grants. The
-session bundle rides a unix socket the agent listens on, as the streamer's stdin
-and stdout, rather than a file the app would read, so it never touches disk, and
-the agent accepts the connection only from the logged-in user. When the app is
-not running, the agent logs the refusal `desktop_not_running` and starts
-nothing. The macOS installer carries the streamer inside owlette.app, signed and
-notarized with it, and the build fails if it is missing, the wrong version or
-signed by another team. A new `selfcheck` verb reports a Mac's Screen Recording,
-Accessibility and local network state without raising a prompt, and the
-streamer's log follows `OWLETTE_DATA_ROOT`.
-
-### changed — a Mac streams at its full size, at 60 fps
-
-The streamer no longer waits on each encode: VideoToolbox hands frames to the
-session from its own callback, with low-latency rate control off, which holds
-60 fps at 3420x2214 where the earlier build managed 48. A Mac is captured at
-its native pixel size again, and a settle keyframe a second after the last big
-move keeps a fast window drag from smearing. `auto` now starts any source above
-2.5 megapixels, a 4K-class display or a 1440p screen, at 80 Mbps, and the
-bandwidth menu goes to 100 Mbps. The governor no longer cuts the rate for one
-or two dropped frames in a report window, and the host logs its rate every ten
-seconds and on every cut.
-
-### changed — the swoop keyboard menu
-
-The menu names its two modifier settings, "shortcuts match" (ctrl acts as cmd
-on a Mac; the default) and "keys match" (ctrl is control), shows what each of
-your modifier keys does on the machine under the setting you chose, and outside
-fullscreen offers to hold the Windows key or cmd for your next keystroke. After
-it sends a key the keyboard goes back to the picture, so that held key takes
-your next key.
-
-### changed — the swoop quality menu is two levels
-
-One row per setting (bandwidth, resolution, frame rate, codec), each showing
-what is set, with the options beside it. "on reconnect" sits in the codec
-submenu.
-
-### fixed — the swoop clipboard
-
-A paste no longer pushes your clipboard to the machine when the machine already
-holds it, so a copy made on a Mac is pasted as copied. The session bar says
-when the machine does not share its clipboard, and when your browser held back
-a copy from the machine; the docs explain the browser's clipboard question. On
-a Mac, the owlette app says when clipboard sharing is off and takes you to the
-setting.
-
-### changed — the swoop tab and the machine menu
-
-The tab is titled `swoop - <machine>`. In the dashboard's machine menu, swoop
-wears the brand colour.
-
-### fixed — a streamer whose app has quit ends its session (macOS and Linux)
-
-The streamer is the desktop app's child and types under the app's Accessibility
-grant. When the app quit, the picture went on with a dead keyboard. The session
-now ends, and the page starts its next one under the app that comes back.
-
-### changed — the macOS app
-
-Its menu bar item starts at the right end of the menu bar, clear of the notch,
-on first run. Its menu shows the machine's name as the dashboard does, without
-`.local`. The app is built against the macOS 26 SDK, so on macOS 26 its window
-has the system's corner radius.
-
-### changed — the product no longer calls itself Windows only
-
-The landing page, the FAQ, the page titles and the facts the AI surfaces read
-now say Windows, macOS and Linux.
+- on Windows, arguments in `path / args` reach the program as typed.
+- swoop shows "connection lost" or "machine is restarting" instead of a frozen picture.
 
 ### security
 
-`@fastify/busboy` 3.2.2 (GHSA-xjh9-v7x6-24jw, a denial of service through an
-oversized multipart boundary), a dependency of firebase-admin in the web app.
+- library updates in the web app, desktop app and swoop close known vulnerabilities.
+
+## [4.1.24] - 2026-10-27
+
+### added
+
+- swoop works on a phone: tap to click, hold to magnify, pinch to zoom.
+- the phone keyboard types on the machine, plus esc, tab and arrows; no accents yet.
+
+### changed
+
+- on a phone, a machine card's metrics show as icons, so all of them fit.
+- on a phone, the menu's site list starts closed; help is in the top bar.
+
+### fixed
+
+- display auto-restore recovers a panel stuck in a fallback mode such as 640x480.
+- the changelog's list of releases opens at once on a phone.
+- a machine rolled back below 4.1.21 is no longer offered a restart after active hours.
+
+## [4.1.23] - 2026-10-26
+
+### added
+
+- a machine's menu on the dashboard has **hoot**, opening a conversation about that machine.
+- the **update owlette** dialog and every download menu link to the release notes.
+
+### changed
+
+- owlette swoop's windows open at a size where a 16:9 machine fills the picture.
+- on a Mac, owlette swoop's Dock icon fills its tile like owlette's.
+
+### fixed
+
+- swoop's pointer keeps its size while you drag a window on a Windows machine.
+- hoot offers a restart after active hours only on machines that can hold one.
+
+## [4.1.22] - 2026-10-25
+
+### added
+
+- **capture the mouse in fullscreen** turns capture back on, for games and 3D views.
+
+### changed
+
+- swoop's fullscreen leaves your mouse free, so your pointer moves without lag.
+- the desktop app wears owlette's full eye; re-pin it on the taskbar to update.
+- hoot's thread line shimmers while it works, and the chat scrolls smoothly.
+- **new hoot** puts the cursor in the message box.
+
+## [4.1.21] - 2026-10-25
+
+### added
+
+- owlette won't reboot, shut down or deploy to a Windows machine during its active hours.
+- the dashboard asks first: cancel, restart after active hours, or restart now with a reason.
+- API and CLI scripts need an override to reboot, shut down or deploy in active hours.
+
+### changed
+
+- owlette swoop wears its own smaller eye; re-pin it on the taskbar to update.
+
+### fixed
+
+- on a Mac, owlette swoop's window buttons sit centred on its bar.
+- on a slow link, swoop's pointer follows your mouse at once, not the machine's reply.
+- **shortcuts match** maps a Mac's control to the Windows key, and back.
+- a modifier key such as ctrl no longer sticks down on the machine.
+
+### security
+
+- library updates in the web app and agent close known vulnerabilities.
+
+## [4.1.20] - 2026-10-21
+
+### fixed
+
+- a token file the agent can't read for a moment no longer unpairs the machine.
+- updating from 3.2.0 no longer shows a Windows permission prompt on screen.
+- the download menu offers only the platforms the latest release has a build for.
+
+## [4.1.19] - 2026-10-20
+
+### added
+
+- hover the owlette swoop mark to see the installed version.
+
+### fixed
+
+- swoop draws the machine's pointer at its real size, including on Retina Macs.
+- your own pointer no longer vanishes while connecting or when the machine hides its pointer.
+
+## [4.1.18] - 2026-10-16
+
+### added
+
+- each issue gets a number; quote it when you follow up with owlette support.
+- the dashboard's submit issue dialog takes screenshots and videos, like the desktop app's.
+
+### fixed
+
+- swoop says why a machine can't show a picture, instead of "connecting" forever.
+- swoop starts reliably on a busy Mac and on a machine re-paired in place.
+- **cancel and sign out** on the two-factor screen goes to the login page.
+- macOS and Linux agent logs no longer repeat Windows-only errors.
+
+## [4.1.17] - 2026-10-15
+
+### added
+
+- submit issue takes videos and up to 10 screenshots, 100 MB in all.
+
+### changed
+
+- the sent confirmation lists what went with the issue, such as logs and screenshots.
+
+## [4.1.16] - 2026-10-15
+
+### added
+
+- the desktop app's submit issue dialog takes up to 5 screenshots, picked or pasted.
+
+## [4.1.15] - 2026-10-14
+
+### added
+
+- attached logs also include owlette swoop's log, installer logs and crash reports, never tokens.
+
+### changed
+
+- submit issue shows its progress in the button row.
+
+## [4.1.14] - 2026-10-14
+
+### added
+
+- the desktop app's submit issue shows each step as it sends.
+
+### changed
+
+- the desktop app's menu is reordered, with leave site last on its own.
+- swoop's stats button stays pressed while the stats are open.
+
+### fixed
+
+- swoop keeps its picture sharp on a busy screen instead of lowering quality.
+
+## [4.1.13] - 2026-10-13
+
+### added
+
+- desktop app issues can **attach logs**: the last 14 days, seen only by owlette support.
+
+### changed
+
+- "submit bug report" is **submit issue**, in the desktop app and the dashboard.
+
+### fixed
+
+- swoop's picture no longer smears, and NVIDIA machines encode on the GPU again.
+
+## [4.1.11] - 2026-10-13
+
+### added
+
+- pricing for after the beta: owlette free, core and pro. nothing is billed yet.
+- every account will start with a 14-day pro trial, no card.
+- email-and-password sign-ups get a link to verify their address.
+
+### fixed
+
+- a Mac shows its own disks and network, not simulator volumes or VPN tunnels.
+- two Macs on one network no longer pair as one machine.
+- two Macs that shared one machine: leave the site on each and pair again.
+- swoop stops retrying after ten minutes without a picture and says what to check.
+
+## [4.1.10] - 2026-10-12
+
+### fixed
+
+- a machine re-paired or moved to another site shows its hardware details again.
+- owlette swoop's first launch opens the server its computer's agent is paired with.
+
+## [4.1.9] - 2026-10-12
+
+### added
+
+- swoop hosts on Windows machines without an NVIDIA GPU, using Intel, AMD or the CPU.
+
+### changed
+
+- a second factor passed at sign-in counts as swoop's step-up for the next five minutes.
+- a swoop step-up covers a machine for 7 days, up from 12 hours.
+
+### fixed
+
+- owlette swoop has its own minimal sign-in card, with browser sign-in first.
+- owlette swoop's loading notice sits centred with a spinner.
+- the verify and approve pages offer "not you? sign in as someone else".
+
+### security
+
+- sign-in and pairing rate limits are harder to get around.
+
+## [4.1.8] - 2026-10-10
+
+### added
+- owlette swoop, an app that opens swoop sessions in their own window.
+- the swoop bar can sit on the left or right edge; its buttons have tooltips.
+- **download codes** saves your 2FA backup codes to a file.
+
+### changed
+- installers come from `download.tridant.io`; host-filtering firewalls must allow it on port 443.
+- with swoop off, a machine's menu offers site admins **turn on swoop…**.
+- pages fade in row by row as they open.
+
+### fixed
+- swoop connects from strict networks via the relay; machines need UDP out on port 3478.
+- **revoke token** cuts the machine off within a minute.
+- **remove machine** sticks; on agent 4.1.7 or earlier, repeat it after an hour.
+- swoop recovers a frozen picture, keeps control on reload, and says why it can't start.
+- and 12 smaller fixes.
+
+## [4.1.7] - 2026-10-07
+
+### changed
+- swoop sends at most 60 frames a second, even on faster displays.
+- the machine's swoop log says why a picture stalled.
+
+## [4.1.6] - 2026-10-04
+
+### changed
+- swoop won't open the machine you are sitting at, and greys it out there.
+
+## [4.1.5] - 2026-10-04
+
+### fixed
+- **win + l** in swoop's special keys menu locks the Windows machine.
+
+## [4.1.4] - 2026-10-04
+
+### added
+- **ctrl + alt + del** in swoop's special keys menu opens the Windows security screen.
+
+### fixed
+- swoop shows UAC prompts and lets you answer them; mouse and keyboard no longer go dead.
+
+## [4.1.3] - 2026-10-03
+
+### added
+- swoop connects across the internet through most home and office routers.
+
+### changed
+- after 20 seconds without a path, swoop says it can't reach the machine.
+- on macOS 26 the app icon follows the Mac's light or dark icon style.
+
+## [4.1.2] - 2026-10-03
+
+### added
+- light mode for the dashboard, docs and desktop app: **account settings → preferences → appearance**.
+
+### changed
+- the desktop app follows the computer's light or dark appearance by default.
+
+### fixed
+- **keep screens awake** works on Windows, including with nobody signed in.
+
+## [4.1.1] - 2026-10-03
+
+### added
+- **keep screens awake**, on by default for every site; switch it off in **manage sites**.
+- a new **swoop** admin page lists live sessions and who is in them, and ends them.
+- the machine menu shows how many people are in its swoop session.
+
+### changed
+- a site's swoop switch moved to its edit panel in **manage sites**.
+
+### fixed
+- the desktop app no longer says the service stopped while it updates.
+- on Linux, `systemctl stop owlette-agent` no longer gets undone.
+- the macOS app window has macOS 26 rounded corners.
+- the dashboard list view shows its metric cells again.
+- keyboard focus in the dashboard no longer draws a heavy ring.
+- on Linux, notifications carry the app's icon and name.
+- and 3 smaller fixes.
+
+## [4.1.0] - 2026-10-02
+
+### added
+- a Mac can host swoop: Apple silicon, macOS 15+, a user logged in, desktop app running.
+- the macOS desktop app warns when Accessibility, which swoop control needs, is off.
+- swoop's clipboard syncs with a Mac, depending on its **Paste from Other Apps** setting.
+
+### changed
+- ctrl acts as cmd when controlling a Mac; the keyboard menu's **keys match** turns it off.
+- a Mac streams at full resolution and 60 fps, up to 100 Mbps.
+- the swoop quality menu shows one row per setting.
+
+### security
+- the web app is patched against a denial-of-service hole.
+
+### fixed
+- pasting in swoop no longer overwrites a copy made on the machine.
+- on macOS and Linux, quitting the desktop app ends swoop instead of leaving a dead keyboard.
+- and 4 smaller fixes.
 
 ## [4.0.6] - 2026-09-28
 
-### fixed — a Mac is no longer refused its swoop token
-
-macOS names a machine `Name.local`, and the API's machine id rule allows only
-letters, digits, `_` and `-`, so a Mac paired under that name had every swoop
-token request refused. A Mac now takes its id without the `.local` suffix the
-first time it pairs. A Mac already paired as `Name.local` keeps its id, because
-its token is bound to it; re-pair it to move to the short one. Hosting a swoop
-session on macOS and Linux still waits on the streamer for those platforms.
-
-### fixed — a process that exits cleanly is no longer a crash
-
-The agent only checked whether a managed process was still alive, so a process
-that finished and exited normally was booked as a crash: an error event, an
-alert, a crash screenshot, a hoot investigation and a relaunch attempt. An app
-that exits on a schedule used up its relaunch limit and raised a restart pending
-on a machine where nothing had crashed, and so did somebody closing an app that
-kept coming back. The agent now reads the exit code. Exit code 0 is never a
-crash: it is logged as `process_exited` and the process is relaunched without
-spending its relaunch budget. After an exit 0 within a minute of launch the
-relaunch waits a minute, so a program that quits straight away is not started
-again every five seconds. A non-zero exit code is still a crash, and the code
-now appears in the event. The exit of a process the agent re-adopted after an
-update or a service restart is read as well.
-
-### fixed — pasting from your computer into a swoop session works
-
-A paste into the machine never arrived. The page read your clipboard through a
-browser permission it asked for on the first paste, gave that prompt a second
-and a half, and stopped trying after a refusal; in fullscreen the prompt could
-not be seen at all. ctrl+v now hands the page your clipboard the way a paste
-into any web page does, with nothing to allow, and the page sends it to the
-machine before the keystroke that pastes it.
-
-### fixed — an image pasted into the machine is the one that pastes
-
-The machine decoded a pasted image into a bitmap before it put anything on its
-clipboard, and on a large image the ctrl+v behind it got there first and pasted
-whatever was copied before. The image now goes on at once, and the bitmap that
-apps like Paint read is made when one of them asks for it.
+### fixed
+- a process that exits with code 0 is relaunched, not booked as a crash.
+- pasting from your computer into a swoop session works, with no permission prompt.
+- an image pasted into swoop is the one that pastes, not the previous copy.
+- a Mac pairs without `.local` in its id; re-pair an already paired Mac to drop it.
 
 ## [4.0.5] - 2026-09-27
 
-### fixed — swoop shows your own pointer over the bars around the picture
+### changed
+- swoop copies and pastes images both ways up to 15 MB, including into Paint.
 
-Over the dark bars between the toolbar and a picture that does not fill the
-window, the page hid your pointer and pinned the machine's to the picture's
-edge, so it looked stuck while your mouse moved on unseen; a click or a scroll
-there reached the machine at that edge. Now your own pointer shows over the
-bars and nothing is sent from them. A drag that starts on the picture and runs
-off it still carries on, held at the edge.
-
-### changed — swoop copies and pastes images both ways, up to 15 MB
-
-An image copied on either side of a session now pastes on the other at
-screenshot sizes. The limit rose from 2 MB to 15 MB, and a bitmap copied on the
-machine, such as a Print Screen or a copy from most Windows apps, is sent as a
-compressed PNG instead of at its raw size, so a 4K screenshot is a few megabytes
-rather than over the limit. An image pasted into the machine now also reaches
-apps that paste only bitmaps, such as Paint.
-
-A large image is sent at the pace the connection can carry, so it never holds up
-the picture or the session's own messages, and the paste reaches the machine
-only after the image has left the browser. The machine needs an agent from this
-release or later for images over 2 MB.
+### fixed
+- over the bars around a swoop picture your own pointer shows, and clicks go nowhere.
 
 ## [4.0.4] - 2026-09-26
 
-### fixed — a swoop session stays up for as long as its tab is open
-
-A network hiccup no longer ends a session. The signalling room used to tell the
-machine a viewer had left whenever the viewer's signalling socket closed, which
-the page does to refresh its token before every connection recovery after the
-first minute, and the machine then dropped a picture that was still flowing. The
-room now leaves that to the machine's own view of the connection, and does not
-announce a re-dialling viewer twice.
-
-A reconnect no longer kills itself. The page used to end the old session on
-every automatic reconnect, and that end reached the machine as a kill for
-whatever was running, which was usually the new session; the page now ends a
-session on the server only when the operator does, the room's kill reaches only
-the session it names, and the polled kill is sent only when the room could not
-deliver one.
-
-The page now stops only for the operator's end, an admin's kill, another tab or
-device taking the machine, or a policy refusal from the API. A lapsed sign-in, a
-machine that is briefly offline, a 403 from in front of the app, or a failed
-token mint during a re-dial now reconnect on the backoff ladder instead of
-ending for good. A reconnect keeps control without a new passkey, because the
-tab's continuity token no longer depends on the old session's viewer list; an
-admin's kill on the machine still voids it.
-
-There is no 12-hour cap any more: the lease route no longer refuses a long
-session, the machine is sent a cap no session reaches, and the daily sweep
-closes a session record only once its lease has lapsed.
-
-### fixed — swoop holds on through a lost network and survives an agent update
-
-The machine now holds a viewer for a minute after its connection drops, pausing
-its picture and asking the browser to restart the connection, where it used to
-drop the viewer after 15 to 25 seconds; the page no longer abandons a session
-just because its connection is down, so a short drop picks up on the same
-session, and it gives up on a silent machine only while it can actually reach
-it.
-An agent update or restart now sends viewers back to reconnect instead of ending
-their session for good. The update to this version itself still ends one,
-because the old agent does the stopping.
-
-The agent's swoop kill ends only the session it names, a late request for an
-earlier session no longer replaces the live one, a packet the machine cannot
-parse no longer ends a viewer, and the agent logs the streamer's real reason for
-exiting instead of "normal".
+### fixed
+- swoop sessions survive network hiccups and reconnect on their own, with no 12-hour cap.
+- a reconnect keeps control without asking for your passkey again.
+- an agent update or restart reconnects viewers instead of ending their swoop session.
 
 ## [4.0.3] - 2026-09-26
 
-### changed — the macOS menubar icon blends in
+### changed
+- the macOS menu bar icon is tinted to match the bar; errors still show red.
 
-The menubar shows a template glyph that macOS tints to match the bar (the owl's
-eye when the service is up and connected, a closed eye while the cloud is
-unreachable); only the error state keeps the red orb. Windows keeps its
-coloured icons.
-
-### fixed — the tray menu names the machine on macOS and Linux
-
-It read "hostname: unknown" because a launchd or systemd child carries no
-`HOSTNAME` in its environment and macOS has no `/etc/hostname`; the tray now
-asks the kernel, the same call the agent makes, so the menu and the machine
-card agree.
-
-### fixed — the swoop doorbell stops reconnecting every few minutes
-
-Its refresh margin was written for long-lived tokens, so the 300-second
-doorbell token was due for refresh the moment it arrived and the socket was
-torn down and re-dialled on every connect. A short token now refreshes at
-65–80 % of its life.
+### fixed
+- the desktop app's menu shows the machine name on macOS and Linux, not "unknown".
 
 ## [4.0.2] - 2026-09-26
 
-### fixed — a Mac reports its GPU
-
-The agent reads the Apple GPU from the IORegistry (name, utilisation, memory
-in use out of the unified pool), so the card and list show it instead of N/A.
-
-### fixed — a Mac or Linux machine no longer shows half its RAM
-
-The dashboard now reads the total the agent reports instead of recovering it
-from used ÷ percent, a sum that only holds on Windows; a 16 GB MacBook Air
-read as 7.7 GB. The agent also reports "used" the way its own percent is
-built (total minus available), so the bar and the figure agree.
+### fixed
+- a Mac shows its GPU on the machine card and list instead of N/A.
+- a Mac or Linux machine shows its full RAM, not about half.
 
 ## [4.0.1] - 2026-09-26
 
-### fixed — the macOS installer always puts the app in /Applications
-
-The package no longer lets macOS relocate the app onto another copy of the
-bundle it knows about (a build tree, an old download), which left the login
-item pointing at nothing. The Windows build no longer deletes the macOS and
-Linux build scripts, and the upload script retries once when the API answers
-with an empty body.
+### fixed
+- the macOS installer always puts the app in /Applications, so the login item works.
 
 ## [4.0.0] - 2026-09-25
 
-Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple
-silicon pkg and the Ubuntu deb under one version and one `latest` pointer;
-downloads pick the visitor's platform; the fleet update sends each machine the
-installer for its own platform; and swoop, the remote-control session, ships
-with it. Everything below landed on the way.
+### added
+- owlette runs on Windows, Apple silicon Macs (macOS 15+) and Ubuntu; the API reports each machine's OS.
+- swoop, remote screen and control, ships with owlette 4.
+- downloads pick your platform, and fleet updates send each machine its own installer.
+- remote screenshots work on a Mac, and notifications on macOS and Linux.
+- the macOS desktop app says when Screen Recording is off.
 
-### changed — the fleet update sends each machine the installer for its own platform
+### changed
+- one passkey check covers a machine for 12 hours; a tab keeps control while open.
+- your screen stays awake during a swoop session, and its bar shows just the machine name.
+- the swoop latency overlay names the codec.
+- the macOS desktop app uses native window buttons, with a Dock icon only while open.
 
-The update picks the file by the machine's os and architecture (an agent that
-reports neither is windows x64); a machine whose platform the version has no
-file for is skipped and named in the result, with the reason. One version can
-carry the windows exe, the apple silicon pkg and the linux deb.
-
-### fixed — a swoop session that lost its host reconnects instead of waiting forever
-
-The page gives the machine 20 seconds to answer; a machine that stays silent
-(a streamer the agent refused to start, a host mid-restart) ends the attempt
-with the reason on screen and the reconnect ladder carries on. The ladder now
-only resets after a session has held for five minutes, and the agent no longer
-counts a clean exit against its spawn ceiling, so a host that comes up for a
-minute and drops cannot lock the machine out of swoop. The session record and
-audit trail keep the page's own reason for ending a session (`viewerReason`).
-
-### added — the macOS app says when Screen Recording is off
-
-A notice in the window names the consequence (no remote screenshots, no swoop
-picture) and opens the Screen Recording setting; the grant takes effect on
-the next launch.
-
-### changed — the machines API reports each machine's OS
-
-`GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`
-(`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
-heartbeats them; null for an agent that predates the fields.
-
-### added — a Linux package, installed and verified on the kiosk VM
-
-`agent/build/linux/build.sh` produces one `Owlette-Installer-v<version>.deb`:
-the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
-unit, the desktop app with the user unit that starts it for every login, and
-the polkit rule that lets the owlette group control the service, with the
-app's own library dependencies declared so the agent's single-file self-update
-resolves. An upgrade restarts a running desktop app onto the new binary, and
-the python-build-standalone tarball the build fetches is checked against a
-pinned sha256 on every run. Installed on the Ubuntu 24.04 kiosk VM: the
-service came up from the new runtime and heartbeated as the new version, the
-app started for the seat, a notification went through the service, the seat
-user restarted the service without sudo, and the upgrade to the next build
-went through in one `apt-get install`.
-
-### added — a macOS installer package (unsigned build path)
-
-`agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
-and up: the service runtime (a standalone Python 3.11 with the agent's
-dependencies) under `/Library/Application Support/Owlette/runtime`, the
-LaunchDaemon and LaunchAgent that run the service and the app, and the app in
-`/Applications`. The scripts stop what is running, lay out the data tree with
-the same modes the service expects, load both jobs and hand a pairing preseed
-to the pairing flow in the background. Signing and notarisation are flags
-that wait on the Apple team id.
-
-### added — the desktop app answers the daemon's capture and notification jobs on macOS and Linux
-
-Off Windows the service has no display, so it drops a job file into the data
-tree and the app carries it out where the user is: a screenshot on macOS on the
-app's own Screen Recording grant (a typed refusal until that grant exists), a
-notification on both, and a typed refusal for anything else. On macOS the app
-also tells the service every minute whether it holds Screen Recording, asking
-for it once per launch.
-
-### changed — on macOS the app shows a Dock icon only while its window is open
-
-A menubar app the rest of the time.
-
-### changed — the desktop app uses macOS's own window buttons
-
-On macOS the window keeps the native traffic lights at top left and draws no
-Windows-style minimise, maximise and close controls of its own; the title row
-leaves them room.
-
-### changed — one passkey check covers a machine for 12 hours, not 10
-
-Taking control still needs a second factor, but one check now covers that
-machine for a working day, reconnects and new tabs included. The same tab keeps
-it for as long as it lives regardless. Ending a session from elsewhere still
-revokes the window at once.
-
-### changed — the swoop latency overlay reads cleanly and names the codec
-
-The box is wider so no label wraps, the numbers line up, and the stages say
-what they measure: "decode" is the decoder's own time, "wait for paint" is a
-decoded frame waiting for the next paint (0 to one refresh on a 60 Hz display,
-which is the jitter that used to read as decode), "paint → display" is the
-refresh after that. A "codec" row shows what the picture is arriving in.
-
-### changed — a swoop tab keeps its passkey for as long as it lives
-
-Coming back to a session after hours landed on the passkey screen: a reconnect
-mints a new session, and control needed a fresh ceremony once the 10-minute
-window had passed. A control grant now carries a continuity token the tab keeps
-in memory only; its next mint presents it instead of a passkey, and the server
-honours it for the same user on the same machine, once, unless the previous
-session was killed, ended deliberately or revoked. A new tab asks as before.
-
-### changed — a clean swoop session bar, and the screen stays awake
-
-The bar shows the machine's name and nothing else while things are fine:
-"connected" and the wifi icon are gone, the stage carries the connecting
-spinner, and a badge appears only for disconnected, reconnecting, poor
-connection or view only. Fullscreen, end session and reconnect are icons with
-tooltips. The page holds a screen wake lock for the life of a session and takes
-it again whenever the tab comes back, so a display does not sleep under a live
-picture.
+### fixed
+- a swoop session whose machine goes silent reconnects instead of hanging.
 
 ## [3.3.15] - 2026-09-24
 
-### fixed — the swoop cursor was blocky
-
-The host shrank any pointer above 32 px to the css-cursor ceiling and the page
-stretched it back, nearest-neighbour. The wire now carries the shape at full
-detail up to the 64 px message cap, and the overlay is drawn smoothly.
+### fixed
+- the swoop cursor is drawn smoothly at full detail instead of blocky.
 
 ## [3.3.14] - 2026-09-24
 
-### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
-
-A pointer bigger than 32 px (pointer size 2, or 200% scaling) was shrunk for
-the wire and drawn at the shrunk size. The host now says by how much it shrank a
-shape and the page draws it back at true size, as an overlay. In the windowed
-view the page also hides the local pointer whenever the machine hides its own
-(Windows paints the cursor into the picture during a title-bar drag) and
-whenever an overlay stands in for it, so there is one cursor, never two. The
-fullscreen letterbox is black rather than the theme's blue.
+### fixed
+- large swoop cursors draw at true size, and a title-bar drag shows one cursor, not two.
+- the fullscreen letterbox is black.
 
 ## [3.3.13] - 2026-09-24
 
-### fixed — a swoop session froze for good when the transport closed a channel
-
-The streamer's outbound channel queue stopped at the first record whose channel
-was not open, so once the transport had closed one channel under the browser
-(B4A: `swoop-feedback`, with a pong queued for it) every later cursor and meta
-record was dropped behind it and the picture, the cursor and the stats froze
-while the session stayed "live". A record for a closed channel is now dropped,
-a record for a channel that has not opened yet steps aside, and neither holds
-up the others. The overflow warning that flooded the log at sixty a second is
-now logged once and then every five hundredth, with the count, and the feature
-outbox's refusal count is logged when it moves rather than every status tick.
-
-The page's feedback loop now notices a host that answered pings and then went
-silent for eight seconds and reconnects the session with fresh channels — the
-browser owns the channels, so nothing short of a new peer brings one back.
+### fixed
+- a swoop session whose picture, cursor and stats froze for good now reconnects and recovers.
 
 ## [3.3.12] - 2026-09-24
 
-### fixed — swoop audio was refused for the whole session
+### changed
+- swoop sessions ride out a lost signalling connection and keep reconnecting until they get through.
+- the machine's cursor shows in fullscreen.
 
-The streamer packetised one queued audio frame per poll while audio arrived
-at a hundred a second, so the queue filled within a second and every frame
-after it was refused. Each poll round now packetises what is queued first.
-
-### changed — a swoop session survives the host losing its signalling socket
-
-The streamer exited the moment its room socket closed, ending a live session
-that no longer needed the room. With a viewer connected it now keeps the
-session, asks the service for a fresh token and redials.
-
-### changed — the viewer page keeps a session up
-
-The page redials the room and restarts the link for as long as it takes, and
-starts a new session after an end that was not a decision. It presents every
-renewed lease to the host, so sessions no longer end at five and a half
-minutes; a doubled answer no longer ends one either. The machine's own cursor
-is drawn in fullscreen, at the picture's scale.
+### fixed
+- swoop audio no longer cuts out a second into a session.
+- swoop sessions no longer end after five and a half minutes.
 
 ## [3.3.11] - 2026-09-24
 
-### fixed — swoop connects from a host that has a VPN up
-
-The streamer offered the one address on its internet route, which with a
-VPN connected is the tunnel's, unreachable from the LAN. It now offers the
-address that actually routes to the viewer.
+### fixed
+- swoop connects to a machine that has a VPN up.
 
 ## [3.3.10] - 2026-09-23
 
-### changed — the swoop streamer's diagnostic log covers the connection itself
-
-With the agent's log level at debug, the streamer now records how each
-viewer's connection was negotiated, so a session that never shows a picture
-leaves a trace of why.
+### changed
+- with debug logging on, swoop's log records how each connection was set up.
 
 ## [3.3.9] - 2026-09-23
 
-### fixed — swoop keeps its picture clean and its bitrate up
+### added
 
-The streamer was cutting its own bitrate every time it held a frame back,
-and again when the viewer noticed the gap, so a 50 mbps session ran at a
-fraction of that and every held frame smeared until the next keyframe. It
-no longer cuts on its own doing, allows a short burst on a screen change,
-and a keyframe no longer costs the frames behind it.
+- keyboard menu in the swoop toolbar sends Ctrl+Alt+Del, the Windows key, Alt+Tab and similar.
+- ended or failed swoop sessions offer **reconnect**.
 
-### fixed — swoop audio no longer drops most of its frames
+### changed
 
-Only the first audio frame per tick was reaching the viewer; all of them do
-now.
+- the swoop streamer's debug counters follow the agent's `logging.level` setting.
 
-### added — a keyboard menu in the swoop toolbar
+### fixed
 
-Ctrl+Alt+Del, the Windows key, Alt+Tab and the other shortcuts your browser
-keeps for itself can be sent from a menu beside the settings. The keyboard
-lock notice is gone; the fullscreen button explains what it captures.
-
-### added — reconnect from an ended or failed swoop session
-
-The toolbar offers reconnect in place of end session once a session has
-ended or failed.
-
-### changed — the swoop streamer follows the agent's logging level
-
-The separate `swoop.logLevel` key that 3.3.8 introduced is gone; setting the
-agent's `logging.level` to `debug` turns the streamer's counters on too.
+- swoop keeps its full bitrate and no longer smears the picture.
+- swoop audio no longer drops most of its frames.
 
 ## [3.3.8] - 2026-09-23
 
-### fixed — a swoop session no longer ends at the five-minute mark
+### added
 
-The host's signaling credential lives five minutes, and the streamer had no
-way to renew it, so every session froze at that point with no message. The
-agent now renews it ahead of time and the session carries on for as long
-as its cap allows.
+- `swoop.logLevel` set to `debug` turns on the streamer's counters for support.
 
-### fixed — a swoop session survives a network path it cannot use
+### changed
 
-A viewer's browser offers every address its machine has, VPN and virtual
-adapters included. One the host could not reach used to end the whole
-session; it is now skipped, and connecting is faster for it.
+- turning swoop on or off for a site adds or removes its firewall rule on each machine.
+- the machine list's OS line sits under the hostname and abbreviates when narrow.
 
-### changed — swoop's firewall rule and policy follow the site switch
+### fixed
 
-Turning swoop on for a site now creates the host's inbound firewall rule
-and the secure-attention policy on each machine; turning it off removes
-them, and uninstalling the agent removes them along with swoop's logs.
-
-### changed — the machine list's OS line sits under the hostname
-
-In list view the operating system now starts under the hostname's first
-letter, and when the column is narrow it abbreviates rather than hiding
-behind a hover: "Win 11 Pro 23H2" then "Win 11 Pro", "Ubuntu 24.04.5" then
-"Ubuntu 24.04" then "Ubuntu 24". The full name stays in the tooltip.
-
-### added — a diagnostic log level for the swoop streamer
-
-Setting `swoop.logLevel` to `debug` in the agent's config turns on the
-streamer's per-frame counters for a support investigation.
+- swoop sessions no longer freeze at the five-minute mark.
+- swoop sessions survive a VPN or virtual network path the host cannot reach.
 
 ## [3.3.7] - 2026-09-23
 
-### security — a hardening fix for the install folder's permission repair
+### security
 
-Details follow after the disclosure window.
+- hardened how the install folder's permissions are repaired.
 
-### changed — the agent catches up with the dashboard
+### changed
 
-This is the first installer to carry the agent's half of the 3.3.6 entries:
-machines report their operating system, and the swoop streamer ships
-switched off.
+- machines report their operating system, and the swoop streamer ships switched off.
 
-### fixed — docs search puts the page named for your query first
+### fixed
 
-Searching the docs for a word that is a page's title, such as "roost", now lists
-that page first. It used to lose to pages that repeat the word in short code
-samples, and could fall off the end of the list altogether.
+- docs search lists the page named for your query first.
 
 ## [3.3.6] - 2026-09-21
 
-### security — the install folder is no longer writable by every local account
+### security
 
-owlette keeps its program files and its data under one folder,
-`C:\ProgramData\Owlette`, whose permissions let any standard Windows account on
-the machine modify what was inside it. Two things followed from that: the
-agent's program files — which the service runs with full system privileges —
-could be replaced by an account that has none, and the encrypted file holding
-the machine's owlette credentials could be read by any local account rather
-than only the person using the machine. A machine whose only accounts are
-administrators was never exposed; a machine anyone else can sign in to was.
-Upgrade every machine — 3.3.6 corrects the permissions and keeps them
-corrected.
+- the install folder and credential file are no longer open to every local account; upgrade every machine.
+- re-pair machines where an account you do not trust could sign in.
 
-- The program folders (`agent`, `python`, `tools`, `app`, `scripts`), the
-  documents in the install root and the uninstaller are readable and runnable
-  by standard users, and writable only by the system account and
-  administrators.
-- The installer applies this on every install and upgrade, and the service
-  re-checks it and repairs any drift when it starts and when someone signs in,
-  so a machine whose permissions have been changed corrects itself without a
-  reinstall.
-- The machine's credential file is limited to the system account,
-  administrators and the signed-in user. Each save now writes a new protected
-  file and swaps it over the store in one step instead of rewriting it in
-  place, so there is no moment at which it sits there half-written.
-- A self-update downloads into a folder only the service can write, and the
-  installer's checksum is taken from the same open file the service hands to
-  Windows to run: the file that was verified is the file that runs.
-- The service confirms who created a file before it acts on it — its stop
-  signal, the update marker, the Cortex/hoot command queue and the result a
-  process launch reports back. A file written by an account it cannot vouch
-  for is logged and ignored.
-- The recovery watchdog can be switched off only through a registry value an
-  administrator sets, `HKLM\SOFTWARE\Owlette\WatchdogDisabled`. The old
-  `tmp\watchdog_disabled` file has no effect.
-- The agent sends its credentials only to the owlette.app API hosts. Any other
-  configured address is refused rather than used.
-- Permission checks identify the Windows built-in accounts by their fixed
-  identifiers instead of their English names, so they work on a non-English
-  Windows.
-- **Known limitation — the person signed in at the machine can still read its
-  credentials.** Pairing runs as that user, so the credential file stays
-  readable by the account at the console; 3.4.0 moves pairing and credential
-  storage behind the service and ends it. Every other local account has lost
-  the access.
-- **Known limitation — re-pair machines that had untrusted local accounts.**
-  3.3.6 changes who can read the credential file; it does not invalidate a copy
-  taken before the upgrade. On any machine where an account you do not trust
-  could sign in, re-pair the machine after upgrading so it runs on fresh
-  credentials.
-- **Known limitation — the upgrade onto 3.3.6 is carried out by the agent
-  already on the machine.** A self-update runs from the version installed, so
-  this one download still uses the old, unprotected staging folder; the
-  protected folder applies to every update from 3.3.6 onwards. Running the
-  3.3.6 installer yourself skips that last step.
-- **Known limitation — the desktop app resets one file's permissions.** The
-  tray app writes `tmp\app_states.json` itself, and its write drops the
-  protected permissions the service had set on it; the service restores them on
-  its next write.
-- **Known limitation — `configure_site.py --url` no longer accepts a local
-  development server.** It takes `https://owlette.app/api` or
-  `https://dev.owlette.app/api` and nothing else, so an agent can no longer be
-  pointed at a development API running on the machine.
-- **Known limitation — re-pairing from a remote session.** After the service's
-  permission repair, only the account signed in at the machine's console holds
-  write access to the credential file, so re-pairing from a Remote Desktop
-  session run as a standard user fails. Re-pair from the console, or from an
-  elevated prompt in the remote session; 3.4.0 removes the need.
+### added
 
-### changed — a developer grant, and a record when permissions are repaired
+- swoop, the remote screen: watch a machine live or take control with a second factor; off by default.
+- machines report their operating system on the card and list.
+- filter logs by several actions at once.
+- click a stat card under the metrics chart to pin that metric.
 
-- **`-DevGrant` for developers who deploy into an installed agent.** Run from
-  an elevated prompt, `scripts/bootstrap-windows.ps1 -DevGrant` gives the
-  developer's own account — never every user — write access to the installed
-  `agent\src` and `app` folders, so a local deploy hook keeps working against a
-  hardened tree. `-RemoveDevGrant` reverts it. An agent install resets those
-  folders, so the grant is re-run afterwards.
-- **A repaired machine says so.** When the service finds and fixes drifted
-  install permissions at start-up, it records an `install_permissions_repaired`
-  event naming the paths it corrected, rather than only noting it in the local
-  log.
+### changed
 
-### added — swoop, the remote screen, ships switched off
+- machine cards are easier to read: aligned metrics, colour only on crossed thresholds.
+- you can no longer demote or remove yourself as site owner or admin.
+- after a permission repair, re-pairing from a remote session needs the console or an elevated prompt.
+- and 3 smaller fixes.
 
-The dashboard gains swoop: watch a machine's screen live and, with a second
-factor, take its keyboard and mouse. It is off for every site until a site
-admin turns it on, and it has its own release to come; nothing changes for a
-site that leaves it off.
+### fixed
 
-### added — machines report their operating system
-
-Each machine now reports its operating system and version. The machine card
-shows it under the hostname, and the machine list carries it as a second line.
-
-### added — filter the logs by several actions at once
-
-The action filter on the logs page is a searchable list of checkboxes, so you
-can show, say, every start and stop together, and find an action by the name
-you see in a row. The filters sit on one row, with the custom date range
-joining it instead of opening a second one.
-
-### added — pin a metric to read it on its own
-
-Clicking a stat card under a machine's metrics chart pins it: its line stays
-highlighted, the other cards dim, and the readout under the cursor lists only
-that metric while you scrub along the line. Click the card again to unpin.
-
-### changed — machine cards are easier to read
-
-The metrics row lines up the same metric at the same place on every card,
-healthy temperatures are no longer coloured so colour only marks a crossed
-threshold, the online pill is a dot that shares the "last seen" tooltip, and
-the ping cell now shows whether the network interface is up. The labels in
-that row start at the same left edge as the display and process rows below
-it, instead of floating towards the middle of their cells on a wide card.
-
-### changed — docs search returns a usable number of results
-
-A search of the docs now returns a bounded, ranked list instead of every
-matching section, and the pages carry keywords for the words you type that
-the prose never uses.
-
-### changed — groundwork for the agent on macOS and Linux
-
-The agent's code now runs on all three operating systems and is tested on
-each in every build. Nothing changes on Windows, and there is no macOS or
-Linux installer yet; those ship with their own release.
-
-### changed — you can no longer demote or remove yourself
-
-A site owner or admin who tries to change or delete their own membership now
-gets a refusal instead of locking themselves out, whatever the platform's
-capability enforcement switch is set to.
-
-### changed — the capability enforcement switch no longer covers swoop
-
-Turning capability enforcement off, the break-glass step during an
-authorization misfire, no longer opens swoop's viewing, control and settings
-capabilities: during a misfire swoop stays locked rather than open.
-
-### fixed — every line on a metrics chart has a scale you can read
-
-Temperature lines now read off their own °C scale instead of the percent
-labels, and a chart showing only network or disk throughput puts its scale on
-the left rather than beside an empty percent column. Each side of the chart
-carries at most one scale, and it always belongs to what you're looking at: a
-pinned or hovered card shows only its own unit, and with usage, temperature
-and throughput on one chart the labels follow the device under the cursor,
-keeping a CPU's or GPU's percent and temperature on their sides. Throughput
-scales now step evenly, so both sides line up with the gridlines, and their
-labels no longer wrap onto two lines.
-
-### fixed — a restart-pending banner on an unreachable machine can be dismissed
-
-A machine that crashed a process and never came back carried its
-restart-pending banner indefinitely, and dismissing it did nothing because it
-only queued a command the offline machine never collected. Dismiss now clears
-the flag in the cloud and relays the command to the agent as a courtesy.
+- every line on a metrics chart has a readable scale, including temperature.
+- a restart-pending banner on an unreachable machine can be dismissed.
 
 ## [3.3.5] - 2026-09-15
 
-### changed — the agent's libraries are current again
+### changed
 
-The libraries the agent uses to watch processes and read GPU state had fallen
-years behind: the process library was from 2023 and the NVIDIA bindings were a
-major version old. This release brings both current (psutil 7, nvidia-ml-py 13)
-together with the crypto, error-reporting and timezone libraries, and the
-desktop app's Windows and Tauri crates. Nothing the agent does has changed; the
-installer simply ships the versions their authors maintain today. Every one of
-these was proven with a full installer build and a check against a real GPU and
-process table before it was tagged.
+- support is now support@tridant.io everywhere.
 
-On the web side, the Next.js framework carries two critical security patches
-and a set of routine library updates.
+### fixed
 
-### changed — one support address
-
-Support is now support@tridant.io everywhere: the dashboard footer, the docs,
-the terms and privacy pages, and the security policy. The old owlette.app
-mailboxes are retired.
-
-### fixed — the dashboard opens where you left it
-
-Reloading the dashboard could land on a half-loaded site list instead of the
-site you were viewing. It now reopens the last viewed site.
-
-### fixed — two layout glitches
-
-Between 1024 and 1065 pixels wide the machine list scrolled sideways, and a
-roost row's timestamp could sit under its action menu. Both are corrected.
+- the dashboard reopens the last site you viewed.
+- fixed a sideways-scrolling machine list and an overlapping roost timestamp.
 
 ## [3.3.4] - 2026-09-12
 
-### changed — hoot runs on a current Claude Code CLI again
+### changed
 
-hoot drives the Claude Code CLI on each machine. A single pinned dependency
-had quietly held that CLI 138 releases behind: the agent pinned `pywin32` to a
-version that capped `mcp`, which in turn capped the Claude Agent SDK, and
-nothing ever failed — the installer resolved a valid set of packages and
-reported success. This release lifts all three together, so hoot runs on the
-CLI the SDK was built against.
+- hoot runs on a current Claude Code CLI; machines pick it up on their next hoot start.
 
-There is no change to how hoot behaves, what it can do, or the approval tiers.
-Machines pick up the new CLI on their next hoot start and keep the copy they
-already have if it still matches.
+### fixed
 
-### fixed — a conversation you open shows its messages again
-
-Opening a saved hoot conversation could render it empty — the right title, the
-right machines in the header, and no messages. Nothing errored; the history had
-been loaded into the previous conversation rather than the one on screen.
-Switching away and back was the only way to see it.
+- opening a saved hoot conversation shows its messages again.
 
 ## [3.3.3] - 2026-09-12
 
-### added — a hoot chat talks to the machines you tick, and `@machine` narrows one turn
+### added
 
-The machine selector in the hoot header is now a checkbox picker: tick as many
-machines as the conversation should talk to, or leave **all machines** ticked,
-which stays dynamic — a machine added to the site later joins the target on its
-own. Changing the ticks **continues the conversation** instead of starting a new
-one, so a chat can follow a problem from one machine to its neighbours without
-losing its history; changing the site still starts a new chat. Each row says
-whether a machine is offline or has hoot off, the trigger shows how many of the
-targeted machines are online, and the selection is stored on the conversation
-and remembered per site across your devices — reopening an old chat restores the
-machines it was talking to.
+- tick the machines a hoot chat talks to; changing ticks continues the conversation.
+- type `@machine` in hoot to aim one message at that machine.
+- share a hoot conversation as a read-only public link, expiring after 30 days by default.
 
-Typing `@` in the composer completes a machine name and narrows **that turn
-only**: the chat's own ticks are untouched and the next message goes back to
-them. The parser is deliberately conservative, so a pasted PowerShell `@(...)`,
-an `@splat`, an email address or a fenced code block is never read as targeting.
-Mentions come from the dashboard composer — the public conversations API, the
-SDKs, the CLI and chat-scoped API keys get no narrowing.
+### changed
 
-A ticked machine that is offline or has hoot off is skipped: the turn runs on
-the rest, the model is told which machines were left out, and the header warns
-before you send. A machine you *named* with `@` is refused instead of skipped,
-so a mention can never quietly miss. A chat whose stored target cannot be read
-asks you to pick machines rather than falling back to the whole site.
+- a machine with hoot off now gets nothing from any chat, talon or API call, site-wide included.
+- hoot defaults to Claude Sonnet 5 and can consult Claude Opus 5 on hard problems.
+- a privileged approval runs only on the machines its turn named.
 
-### changed — hoot off on a machine now means off on every path
+### fixed
 
-A machine with the hoot toggle switched off has always been skipped by
-single-machine chats. It is now skipped by **every** dispatch: site-wide and
-multi-machine chats, scheduled follow-ups, site-wide talons, and the public
-conversations API's site mode. **This changes behaviour for sites that never
-touch the new picker** — a machine you switched hoot off on, which a site-wide
-chat has been reaching anyway, now receives nothing. A talon whose site has no
-online machine with hoot on records the run as *skipped* rather than failed, so
-it is not auto-disabled over it, and the run records which machines it skipped.
+- the hoot power toggle can switch hoot back on.
+- a process you close by hand no longer keeps showing as running.
+- offline machines and status badges are easier to read.
+- email and pairing links always point to owlette.app.
+- and 5 smaller fixes.
 
-### changed — a tier-3 approval is bound to the turn that asked for it
+### security
 
-Approving a privileged call now runs it on the machines **that turn** resolved
-to, named on the approval card, rather than on whatever the picker happens to
-show when you come back to the chat — ticking more machines while a card waits
-never widens it. If another turn has run in the conversation since the approval
-was requested — a follow-up firing, or a message sent from another device — the
-approval no longer matches the turn it belongs to and is refused with "that
-approval expired — another turn ran in this chat. ask again."; nothing is queued
-on any machine and the approval is not spent, so the request can be made again.
-Bound machines are re-checked when you answer, and an approval with nothing
-reachable left is held rather than consumed.
-
-A follow-up fires on the machines the turn that scheduled it was targeting,
-re-validated when it comes due; if none of them is still in the site, it is
-marked failed with the reason rather than dispatched somewhere else.
-
-### fixed — the hoot power toggle, and a follow-up's tool limit
-
-The per-machine hoot toggle in the chat header could switch hoot off but never
-back on: the dashboard never read the machine's stored flag, so the toggle
-always believed hoot was already on. It now reflects what is stored.
-
-A follow-up scheduled by a chat-scoped API key — a caller capped to read-only
-tools — fired later with the chat owner's tool tier, so a turn that could only
-read could schedule one that could act. A follow-up now fires with the lower of
-the tier its scheduling turn had and the tier its owner earns at fire time.
-Follow-ups scheduled before this release keep the old behaviour, since their
-records do not carry the limit.
-
-### changed — hoot runs on Claude Sonnet 5, and can consult Claude Opus 5
-
-Hoot now defaults to Claude Sonnet 5 for accounts that haven't picked a model, and
-the model picker in settings starts a new key on it; an account that already saved
-a model keeps it until you pick another. Sonnet 5 thinks before it answers, and
-"thinking..." stays up until the reply starts. On a problem it judges hard, it can
-consult Claude Opus 5 partway through an answer — Anthropic's advisor tool, at most
-twice per reply — and the chat notes each consultation. They bill at Opus rates on
-your own Anthropic key. Claude Haiku 4.5, Sonnet 4.6 and Opus 4.6–4.8 can consult
-it too; Opus 5, the Fable models, older Claude models and OpenAI models don't.
-
-A reply that comes back empty — for instance when the model declines the request —
-now says so instead of leaving a blank reply.
-
-### added — a resizable conversation list, and a simpler share dialog
-
-Hoot's conversation list can be dragged wider from its right edge — 200px to
-560px, double-click to reset — and both that width and whether the list is
-collapsed are remembered for you across sessions and devices. The list starts
-wider than before, and a row's rename and delete controls now sit over the end
-of the title instead of beside it, so a conversation's generated name has the
-full width of the column to be read in.
-
-The share dialog leads with the preview: what a link includes and leaves out is
-folded behind a "more" link, the expiry sits with the buttons that use it, and
-creating a link copies it to your clipboard and says so. Every link a
-conversation has can be copied from its row, and those rows now carry the time
-each link was made, not only the date. The dialog itself no longer scrolls — the
-preview absorbs the space as links come and go — and it renders the conversation
-on the same surface, with the same avatars and rails, that the live chat does.
-
-A tool call's inputs and outputs slide open and closed rather than snapping, at
-every tier, and editing a message to resend it now opens a full-width box that
-grows with what you type.
-
-### added — share a hoot conversation as a public page
-
-A hoot conversation you started can now be published as a read-only page at
-`/share/{token}`, readable by anyone holding the link without signing in. The
-share dialog renders that finished page before anything is created, so what you
-preview is exactly what a reader gets.
-
-What goes out is a snapshot, frozen at the moment the link is created: your
-messages and hoot's replies as text, plus each tool call collapsed to its name
-and outcome. Tool inputs and outputs — hostnames, paths, log lines, command
-output — are never published, and messages sent afterwards never join a link
-that already exists. Links expire after 30 days by default, with 7 days, 90
-days, and never-until-revoked also on offer; every link a conversation has is
-listed in the same dialog and can be revoked there, and the page is marked
-`noindex`. Autonomous conversations have no author and cannot be shared.
-
-### fixed — offline machines and status badges are readable
-
-In the list view, an offline or restarting machine's metrics were faded to 40%
-opacity, which dropped its device names and readings below the 4.5:1 contrast
-minimum for text. They are now dimmed to 80%. The red offline, restart, and
-failed-process badges use white text instead of near-black, a process on an
-offline machine reads as grey on grey instead of dark on dark, and hoot's
-sidebar group headers use the full muted text color.
-
-### security — dependency updates
-
-- `@simplewebauthn/server` 13.3.3: passkey registration checks that attestation
-  certificates chain to a trust anchor.
-- `ai` 6.0.280 with matching `@ai-sdk/*` providers: fixes uncontrolled resource
-  consumption in `@ai-sdk/provider-utils`.
-- `vitest` 4.1.11 in the desktop app's test toolchain: fixes a path traversal in
-  `@vitest/mocker` (development only; nothing ships in the app).
-
-### fixed — email and pairing links always point at the configured site address
-
-Alert, digest, and API-key-expiry emails, the unsubscribe confirmation, and the
-agent and CLI pairing links built their URLs from the host of the request that
-produced them. They now use the configured site address (`NEXT_PUBLIC_BASE_URL`),
-so a request served through another hostname — such as the failover origin — still
-sends people to owlette.app.
-
-### fixed — a process you close by hand no longer keeps reading as running
-
-Close a managed app yourself and switch its launch mode to **off** before
-owlette's next check, and the process kept showing as running — a green dot and
-a "started N seconds ago" on something that had already exited. It corrected
-itself eventually, up to five minutes later, and not at all if Windows had
-recycled the process id onto something unrelated in the meantime.
-
-owlette wrote a status when it launched a process and when it stopped one, but
-never when a process exited on its own: the stale status was only ever replaced
-as a side effect of relaunching. Take the relaunch away — by switching the mode
-off, or because a scheduled process had left its window — and nothing replaced
-it. Switching a launch mode off now checks whether the process is still alive
-and settles its status immediately, and the periodic cleanup verifies process
-identity rather than just asking whether the id exists, so a recycled id can no
-longer keep a dead entry looking alive.
-
-A process that really is running is untouched, and keeps its stop and restart
-controls. Switching a launch mode off has never stopped a running process and
-still doesn't.
+- passkey registration checks attestation certificates more strictly.
 
 ## [3.3.2] - 2026-09-09
 
-### fixed — a failed display enumeration is no longer reported as monitors being removed
+### fixed
 
-When the agent could not read the display configuration at all, it reported that
-as every monitor having been disconnected: one CRITICAL alert per panel, emailed
-immediately, naming displays that were still plugged in. The dashboard kept
-showing those monitors present the whole time, because the upload path already
-refused the bad reading while the alert path did not.
-
-It also remembered the empty reading, so the next successful check announced
-every monitor as newly *added* — a disconnect/reconnect flap for each failure.
-
-The agent now treats "I could not look" as its own case: no alert, no state
-change, and the reading is discarded rather than remembered.
-
-This only affects alerts caused by a failed enumeration. A check that succeeds
-but returns an incomplete monitor list is a separate case and still alerts; if
-you are seeing these, the agent log records `build_display_profile: enumeration
-failed` at the moment of each affected alert when this fix applies.
-
-### changed — the service host is rebuilt with version metadata, after Defender began quarantining it
-
-On 2026-09-08 Windows Defender's machine-learning classifier (definition set
-1.459.111.0) started quarantining `owlette-host.exe` — the Windows service
-that supervises the agent — as `Trojan:Win32/Bearfoos.B!ml`. It was a false
-positive on the file's shape, not its behaviour: a small, size-optimised,
-stripped, statically linked executable with no version information is also
-what a malware dropper looks like. When Defender opened the file it removed
-both the file and the `OwletteService` registration. The agent's Python
-process survived as an orphan and kept reporting the machine healthy, so the
-dashboard did not notice.
-
-Every installer from 3.2.3 to 3.3.1 ships that binary. 3.3.2 rebuilds it with
-a proper Windows version resource (company, product, description, file
-version) and an ordinary release profile; current definitions scan the result
-clean, including under real-time protection. The static CRT link introduced in
-3.2.3 is kept — it is what lets the service start on a freshly imaged machine.
-
-If a machine on 3.2.3–3.3.1 shows `OwletteService` missing while the dashboard
-still shows it online, this is why. Install 3.3.2 over it; the installer
-replaces the host and re-registers the service. No Defender exclusion is
-needed for owlette, and the installer does not add one.
+- a failed display read no longer sends alerts that every monitor was removed.
+- Defender no longer quarantines the service host; if a 3.2.3 to 3.3.1 machine lost `OwletteService`, install 3.3.2 over it.
 
 ## [3.3.1] - 2026-09-08
 
-> This release removes a public API surface and changes who may do what on a
-> site. Both are breaking changes; the version is a patch bump by release
-> decision, so read the two `breaking` sections below before upgrading.
+### changed
 
-### breaking — site roles are per site, and a global admin no longer grants access
+- site roles are per site: owner, admin or member; an account-level admin grants nothing on a site.
+- enrolling a machine now needs site admin; members who run installers get 403, so promote them.
+- self-hosters: run `scripts/migrations/backfill-per-site-membership.mjs` before promoting the web release.
 
-Who can do what on a site is now decided by that person's role **on that site**,
-not by their account-level role. The same person can own one site, administer a
-second and be a plain member of a third.
+### removed
 
-Previously an account-level `admin` was treated as an administrator of every
-site it could reach. One role, granted once, applied everywhere — so adding
-someone to a second site silently handed them administrative rights there too.
-That is closed: an account-level `admin` role now grants **nothing** on a site
-by itself. Only a platform superadmin still reaches every site.
+- the by-URL project distribution is gone; use a roost instead.
 
-**the three per-site roles**
-- **owner** — everything an admin can do, plus deleting the site and
-  transferring ownership. Every site has exactly one, and an owner cannot be
-  demoted in place; ownership moves by transfer.
-- **admin** — machine commands and configuration, deployments, roosts, talons,
-  webhooks, logs, and managing membership.
-- **member** — read-only: view machines, capture screenshots, open live view.
+### fixed
 
-**what changes for you**
-
-Adding a member as an `admin` now genuinely makes them an admin of that site.
-Before, the request was recorded and then quietly downgraded unless the account
-already held a global admin role — the dashboard, the API response and both SDKs
-all reported that downgrade even when a real site-admin grant had been written.
-Roles are also editable per site from the members page; the old advice to contact
-support to change a role no longer applies.
-
-**enrolling a machine now requires site-admin.** Generating an installer, minting
-a setup token, or authorizing a pairing code all issue a machine identity plus a
-non-expiring refresh token, and revoking one has always been an administrator's
-job — so issuing one can no longer be less. A plain **member** who currently runs
-installers will receive `403` after this release. Promote the people who deploy
-your machines to **admin** on the sites they deploy to.
-
-**for operators upgrading**
-
-Membership rows are created by a one-time backfill that must land together with
-the security rules and the collection-group index — in that order, index first.
-Until all three are live, per-site access cannot be resolved. If you self-host,
-run `scripts/migrations/backfill-per-site-membership.mjs` (it has a `--verify`
-mode and a rollback path) before promoting the web release.
-
-`roleHonored` in the add-member API response is now always `true` and is
-retained only so the response shape does not change. It previously reported
-whether an account's global role would make an `admin` request stick, which is
-no longer how any of this works.
-
-
-### fixed — agent: three faults that made the fleet quieter than it should have been
-
-**The roost kill switch had never actually stopped anything on an agent.** The agent read
-the flag through a method its Firestore client does not have, swallowed the resulting error,
-and cached the failure as "enabled" for the full TTL — so no request was ever made and the
-switch was never observed, while the changelog said it was checked before every sync. Agents
-now read `roostEnabled` from the server-mediated `/api/agent/site` projection, and a disabled
-site genuinely halts new roost work.
-
-**A stalled display enumeration could stall the heartbeat, and the machine would read
-offline.** Two watchdogs used a thread-pool context manager whose exit waits for the worker,
-so the timeout they advertised bounded nothing: the call blocked for the full duration of the
-very hang the watchdog existed to survive. One of them was the only bound on the heartbeat
-path. Both now abandon the stalled worker, as two sibling watchdogs in the same codebase
-already did.
-
-**A screenshot request could freeze process monitoring for the better part of a minute.** The
-Cortex/hoot IPC pump ran on the 5-second service loop, and a single `capture_screenshot`
-takes around 55 seconds end to end. It now runs off the loop, one at a time, with the same
-result contract.
-
-### breaking — the legacy by-URL distribution path is removed
-
-roost is now the only way to get files onto a machine. The v1 "point the fleet at a hosted ZIP and let the agent download and extract it" path is gone in one clean cut — no deprecation window, no compatibility shim. An agent that receives a `distribute_project` command now logs and skips it.
-
-**removal surface**
-- API routes: `POST|GET /api/sites/{siteId}/project-distributions`, `GET|DELETE /api/sites/{siteId}/project-distributions/{distId}`, and `POST /api/sites/{siteId}/project-distributions/{distId}/cancel` all 404. Their OpenAPI paths and the `listProjectDistributions` / `createProjectDistribution` / `getProjectDistribution` / `deleteProjectDistribution` / `cancelProjectDistribution` operations are dropped from the published spec.
-- Agent commands: `distribute_project` and `cancel_distribution` no longer have handlers, and `agent/src/project_utils.py` (download, ZIP extract, verify, cleanup) is deleted. The agent no longer extracts archives at all.
-- Dashboard: the roost dialog's `by url` source picker and its project-URL field are gone — uploading a folder is the only source. Saved distribution presets are unaffected; a stored `project_url` on one is simply no longer read.
-- Security rules (2.9.0): the `sites/{siteId}/project_distributions/{distributionId}` block is removed, so the collection falls through to default-deny for every verb.
-
-**data at rest** — existing `project_distributions` documents are **not** deleted. They stay in Firestore, unreachable from any client or server route. Nothing reads them; no archival or purge job was run.
-
-**migration** — recreate any recurring by-URL deployment as a roost: open `/roosts`, click `new roost`, drop the project folder, and pick the same target machines. You get content-addressed chunking, resumable uploads, immutable versions, and one-click rollback, none of which the URL path ever had.
+- the roost kill switch now actually halts roost work on agents.
+- a stalled display read no longer makes a machine read offline.
+- a screenshot request no longer freezes process monitoring for most of a minute.
 
 ## [3.3.0] - 2026-09-05
 
 ### changed
 
-- **owlette now only ever manages processes it launched or deliberately inherited.** every launch — and every deliberate adoption of an already-running instance — writes a durable identity record: the PID plus the process's creation time and the executable it runs. every kill, restart, stall recovery, schedule-window stop, and deployment close the agent performs first proves the live process still matches that record, and refuses rather than guesses — a PID that Windows has recycled, a process whose identity cannot be read, or a record belonging to a different entry comes back as a plain `Error:` result naming the reason. previous versions never re-verified a PID before terminating it.
-- **where owlette previously adopted an arbitrary same-image instance, it now launches a fresh one it can identify.** several instances of one executable with nothing configured to tell them apart used to be resolved by picking one — and picking wrong meant monitoring, and eventually killing, a process owlette never launched. ambiguity now means a fresh launch. this is safe because the identity record makes owlette re-recognise its own child after every service restart: an entry can produce a duplicate at most once, ever, and then converges on the instance owlette launched. setting the entry's path/args tells instances apart up front and avoids even that one duplicate.
-- **upgrading re-verifies every supervised process; most carry over untouched.** state files written by earlier versions carry no identity records, so on its first start after the upgrade owlette does not trust recorded PIDs. an instance it can still identify unambiguously — the entry's path/args in the process's command line, or the only instance of its executable on the machine — is inherited in place and recorded: no restart, no interruption. an entry whose instance cannot be told apart from look-alikes launches fresh instead, and the unidentifiable instance is left running unmanaged — owlette will not terminate a process it cannot verify — so close such stragglers by hand, or set path/args before upgrading so there are none. every service restart after that re-adopts exactly the instances owlette launched or inherited.
+- owlette only kills or restarts processes it launched or inherited, and verifies each first.
+- on upgrade, an instance owlette cannot identify is left running unmanaged; close it by hand or set path and args first.
 
 ### fixed
 
-- **a deployment's close_processes no longer kills by image name across the whole machine.** previously every process on the box whose filename matched a close name died — owlette's or not: a deployment closing `TouchDesigner.exe` took down every TouchDesigner on the machine. close names now resolve to configured entries, and from there to those entries' recorded instances only, each identity-verified before the terminate; a name matching no managed entry is logged and skipped.
-- **a process that cannot be launched or verified now shows as failed.** the red `LAUNCH_FAILED` state has been rendered by the desktop app and the dashboard for years, but nothing ever wrote it — a broken executable path or a refused operation left the entry on the hollow inactive ring, indistinguishable from a launch mode set to off. it is now written whenever the executable cannot be resolved, a launch fails, or an operation is refused because the process could not be verified as owlette's, and it clears on the entry's next successful launch. the one gap is an entry that has never launched at all: with no status row to carry the mark, it stays inactive, and the log and the command result are the only signals.
+- a deployment's close list no longer kills every same-named process on the machine.
+- a process that cannot be launched shows as failed.
 
 ## [3.2.4] - 2026-09-05
 
 ### changed
 
-- **internal cleanup only — no behaviour changes.** this release removes code that stopped being reachable when the python interface was replaced in 3.0.0, and folds several copy-pasted implementations into one each. the tkinter colour tables, window-title lookups and window-closing routine that served the old interface are gone, along with a handful of functions and parameters nothing had called since. the three near-identical screenshot pipelines, the token-cloning logic that existed in two modules, and the command-completion writers that differed only in a status word now each have a single implementation. agents on 3.2.3 gain nothing by updating; the value is in a smaller, clearer codebase for what comes next.
+- maintenance release, no visible changes.
 
 ## [3.2.3] - 2026-08-30
 
 ### fixed
 
-- **self-updates no longer raise a UAC prompt on every machine.** while an update was installing, the desktop app saw the service stop, tried to start it back up, and — lacking the right — fell back to an elevated command, putting a "Windows Command Processor" consent prompt over whatever was on screen, fleet-wide. the app now stands down entirely while an update is in progress (the installer stops the service on purpose, restarts it itself, and has a watchdog for the failure case), and automatic starts never elevate at all — the UAC path is reserved for a deliberate click on the start button or the tray menu.
+- self-updates no longer raise a UAC prompt on every machine.
 
 ## [3.2.2] - 2026-08-30
 
 ### changed
 
-- **kill and restart now follow whether a process is running, never its launch mode.** in both the dashboard and the desktop app, a running process can be restarted or killed whatever its launch mode — switching a running process to off no longer takes the controls away — and a process that is not running has both buttons greyed out. previously the dashboard offered kill on any off-mode process even when nothing was running, and the desktop app refused to kill a running process that had just been switched to off.
-- **restarting a process whose launch mode is off now actually restarts it.** the service relaunches it once and then goes back to leaving it alone; previously a restart from the desktop app only stopped it.
-- **the desktop app's process form is grouped into three collapsible sections** — what to run, when to run, how to run — and the open state of each is remembered per user across launches. delay and wait moved beside the launch mode under *when to run*; attempts, priority, and visibility make up *how to run*, absorbing the old advanced section. the compact fields flow into two or three columns when the window is wide enough.
+- kill and restart follow whether a process is running, not its launch mode.
+- restarting a process set to off relaunches it once.
+- the desktop app's process form has three collapsible sections: what, when and how to run.
 
 ### fixed
 
-- **the desktop app no longer reports "no running instance" when restarting a process that is clearly running.** when the service's process table held a stale generation alongside the live one, the app could pick the dead entry and give up; it now tries every candidate until it finds the one that is alive.
-- **the desktop kill button is red, matching the dashboard,** and the dashboard's restart icon now matches the desktop app's counter-clockwise arrow.
+- the desktop app no longer says "no running instance" for a running process.
+- the desktop kill button is red, matching the dashboard.
 
 ## [3.2.1] - 2026-08-29
 
 ### fixed
 
-- **the service now starts on machines that have never had the Visual C++ runtime installed.** `owlette-host.exe` was linked against `VCRUNTIME140.dll`, which ships with the Visual C++ redistributable rather than with Windows. on a freshly imaged machine the install completed normally and then the service refused to start with *"the code execution cannot proceed because VCRUNTIME140.dll was not found"*, leaving the dashboard reporting the machine as service not running. the host is now statically linked and depends on nothing beyond Windows itself. machines that already carried the redistributable — which is most machines with development tooling or common desktop software on them — were never affected; this only ever hit clean images, which is precisely what kiosks, signage players and media servers are.
+- the service starts on freshly imaged machines without the Visual C++ runtime.
 
 ## [3.2.0] - 2026-08-24
 
-### changed
-
-- **temperature monitoring no longer uses the WinRing0 driver.** CPU and GPU temperatures now come from LibreHardwareMonitor 0.9.6 through [PawnIO](https://pawnio.eu/) — a Microsoft-signed, sandboxed kernel driver that is HVCI-compatible and not on any vulnerable-driver blocklist. previous versions bundled a library that extracted the deprecated WinRing0 1.2.0.5 driver at runtime as `python.sys` and re-registered it as kernel service `R0python` on every boot, with no way for an operator to opt out. upgrading removes that driver, deletes its services, and prunes the library that extracted it — nothing can bring it back. the installer deploys PawnIO 2.2.0 only when it is absent or older (2.2.0 fixes boot-loops on Windows 10 1809/LTSC machines that earlier PawnIO builds caused), and leaves it in place on uninstall since other tools share it. dashboard temperature readings, history, and talons thresholds are unchanged.
-- **the Windows Defender exclusions previous installers added are retracted on upgrade.** the exclusions existed solely because Defender (correctly) flagged the WinRing0 driver; with it gone, the installer actively removes every exclusion any previous version ever added — including the whole-install directory exclusions from early versions — so owlette no longer asks Defender to look away from anything. the retraction is logged to `logs\defender_setup.log`.
-
 ### added
 
-- **temperature monitoring can be switched off.** set `"temperature": { "enabled": false }` in `config.json` to stop all sensor reads — the section is created on upgrade with the default `true`, and a missing section means enabled. machines without the PawnIO driver keep working: CPU temperatures read as blank and GPU temperatures still arrive through vendor APIs.
+- temperature monitoring can be switched off with `"temperature": { "enabled": false }` in `config.json`.
+
+### changed
+
+- temperatures no longer use the WinRing0 driver; upgrading removes it and uses PawnIO instead.
+- the installer retracts the Defender exclusions earlier versions added.
 
 ## [3.1.0] - 2026-08-22
 
 ### added
 
-- **every pairing surface now names the owlette server it is talking to.** the pairing window shows the host it will authorize against and carries a `dev` badge on anything that is not production, the desktop app's footer badges the environment the machine is actually bound to, and the authorization page states which host you are on. a phrase minted on one server and typed into the other is the most common way pairing fails, and it now announces itself before you type anything.
-- **A passkey now counts as your second factor.** Setting one up satisfies 2FA outright, and signing in with it clears both the password step and the second factor in a single ceremony — no code to type afterwards. "Passkey" means whatever already unlocks your device: Windows Hello, Touch ID, Face ID, a hardware security key, or a password manager that stores passkeys (1Password, Bitwarden, iCloud Keychain). They are all the same WebAuthn standard, so there is nothing per-vendor to enable.
-- **Backup codes for any account, not just authenticator ones.** A passkey-only account used to have no recovery material at all. Every enrolled account can now hold a sheet, and regenerate it from account settings — which invalidates the old one. Regeneration asks you to prove a factor in the same step (a current 6-digit code, an unused backup code, or your passkey), because a fresh sheet of recovery codes is powerful enough to switch 2FA off entirely.
-- **Account settings lists your second factors in one place.** Authenticator app and passkeys, when each was added, and add/remove controls for both, with a warning when you are down to your last one.
-- **Superadmins can reset the 2FA on a locked-out account.** **reset 2FA**, on the row menu of the admin users page, clears every factor — authenticator app, passkeys, and backup codes — re-arms mandatory setup, and revokes that user's trusted devices, so their next sign-in starts enrollment from scratch. It does not revoke Firebase refresh tokens, so a session they already hold stays signed in until it expires on its own. Superadmins cannot reset themselves. Recovering a locked-out user previously meant hand-editing Firestore.
+- a passkey counts as your second factor and signs you in in one step.
+- backup codes for any account, regenerated from account settings.
+- account settings lists your second factors, with add and remove controls.
+- superadmins can **reset 2FA** on a locked-out account from the admin users page.
+- pairing screens show which owlette server they use, with a `dev` badge off production.
 
 ### changed
 
-- **pairing happens in the owlette window now, not a console.** the installer hands off to the app, which opens on **join a site** showing the pairing phrase, the authorization link, and a button that opens that link on this machine. the console window that used to appear part-way through the install is gone. machines with no webview2 runtime, and `/ADD=` bulk installs, still pair on the console as before.
-- **the service is installed whether or not pairing completes.** it used to be skipped the moment pairing failed, which left the machine with no supervisor at all — the worst possible outcome of a mistyped phrase. a machine that never pairs now ends up with a registered, running service that simply has no site to talk to yet, and the installer says exactly how to finish pairing later. a silent install with no `/ADD=` phrase now skips pairing outright instead of spending ten minutes waiting on a phrase nobody can read.
-- **breaking: `--url` on the pairing helper now requires `--server`.** the url no longer implies an environment, so pointing the helper at a local or custom api base without naming dev or prod stops with an error instead of quietly writing production credentials for a development server. this affects local development only; `/SERVER=dev` and `/SERVER=prod` on the installer are unchanged.
-- **2FA setup starts with a choice instead of a QR code.** The setup screen now offers a passkey (recommended) or an authenticator app, and says plainly that authenticator apps run on **desktop as well as mobile** — 1Password, Bitwarden, and Authy all have desktop apps, so signing up no longer depends on having a phone to hand.
-- **Removing your last second factor is allowed.** The account immediately re-arms 2FA setup: you will be asked to enroll a new factor — a passkey or an authenticator app — before you can use the dashboard again, and trusted devices are revoked at the same time.
-- **Adding a factor to an account that already has one asks you to verify first.** Enrollment on a warm session now requires a cleared 2FA challenge, so someone with a signed-in browser cannot quietly attach a factor of their own. Verify with an existing passkey, or take the code prompt.
-- **`mfaEnrolled` is derived, not declared.** The user document carries an `mfaFactors` tally (`{ totp, passkeys }`), and `mfaEnrolled` / `requiresMfaSetup` are computed from it by a single server-side writer. The old `passkeyEnrolled` flag is retired.
+- pairing happens in the owlette window, not a console.
+- the service is installed even if pairing fails.
+- 2FA setup offers a passkey or an authenticator app, on desktop as well as mobile.
+- removing your last second factor re-arms 2FA setup.
+- and 3 smaller fixes.
 
 ### fixed
 
-- **a failed re-pair during an upgrade no longer leaves the machine with a stopped service.** upgrading a machine while moving it to another server, or re-pairing one whose credentials had gone stale, abandoned the service install as soon as pairing failed — so a working machine came out of the upgrade worse off than it went in. installing the service no longer depends on pairing succeeding.
-- **the dashboard's silent-install command now targets the server the phrase was generated on.** on dev the copied command was missing `/SERVER=dev`, so every machine it was pasted into installed against production, never found the phrase, and failed to pair. the flag is now part of both the command shown and the command copied.
+- the dashboard's silent-install command targets the server the phrase came from.
 
 ### removed
 
-- **the `/OPENBROWSER=` installer flag and the pairing helper's `--open-browser` option are gone.** nothing on a target machine opens a browser by itself any more — you authorize from the pairing window's own button, or from a phone or another computer. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted so existing deployment scripts keep running, but they no longer change anything.
+- the `/OPENBROWSER=` installer flag; nothing opens a browser by itself now.
 
 ## [3.0.2] - 2026-08-20
 
-### fixed
-
-- **config changes made on the machine now reach the cloud — and survive reboots.** since 3.0.0, edits made in the desktop app (launch modes, paths, schedules, everything) were applied locally but never uploaded, and the next reboot silently reverted them to the cloud's stale copy. the agent now pushes local edits within about a second of the change, and startup reconciles three ways instead of blindly preferring the cloud: a newer local change is pushed up, a newer cloud change is pulled down, and a genuine conflict prefers the cloud while logging exactly what it discarded.
-- **a clean windows shutdown is no longer reported as an "unexpected reboot".** the agent asks windows for up to 45 seconds of shutdown notice (previously ~5), receives a stop signal directly from the service host instead of polling for it, records the clean stop locally before attempting any network calls, and cross-checks the windows event log before raising the alarm.
-- **the tray icon no longer sticks on the gray "disconnected" owl after a reboot.** when the app starts before the windows taskbar exists, refused icon updates are now retried until one lands, and the icon re-asserts itself once a minute.
-- **editing a process on the dashboard no longer fails with "duplicate process name" when older duplicates already exist in the config.** only changes that introduce or worsen a name collision are rejected — cleanup renames and unrelated edits save normally.
-- **the dashboard renders display-capture timestamps synced by the agent** instead of showing "never" for string-typed values.
-
 ### changed
 
-- **new processes get unique default names** ("untitled process 2", …) instead of repeating the same name, which the dashboard rejects as a duplicate.
-- **shutting the machine down can take up to ~20 seconds longer** while the agent flushes its state gracefully — this window is what makes settings and clean-shutdown records survive the power-off.
+- new processes get unique default names such as "untitled process 2".
+- shutting down can take up to 20 seconds longer while the agent saves state.
+
+### fixed
+
+- config edits made in the desktop app reach the cloud and survive reboots.
+- a clean Windows shutdown is no longer reported as an unexpected reboot.
+- the tray icon no longer sticks on the gray disconnected owl after a reboot.
+- editing a process no longer fails with "duplicate process name" over old duplicates.
+- display-capture times show instead of "never".
 
 ## [3.0.1] - 2026-08-17
 
 ### added
 
-- **Suppress the Windows setup screens, fleet-wide.** A new hoot tool turns off the full-screen interruptions Windows shows at sign-in after updates — the privacy chooser, the Welcome Experience, "let's finish setting up your device", and the Edge first-run tour — for every profile on the machine, including accounts created later. A built-in talons preset, **update guard**, re-asserts the suppression and the update window every Sunday morning, since feature updates are known to reset these keys.
+- a hoot tool and a talons preset, **update guard**, turn off Windows post-update setup screens on every profile.
 
 ### fixed
 
-- **The tray icon stops flashing red on a machine that is actually connected.** On a cold boot the agent's health check often runs seconds before Windows finishes bringing the network up and records "network not reachable" — and that verdict was never revisited, so even after the agent connected moments later (and stayed connected) the tray flashed red for the machine's entire uptime while the window footer correctly said "connected". The health state now clears the moment a connection is established — at startup, and after any mid-run outage — and the tray itself now treats a live connection as proof that a leftover error is stale.
-- **Recovering from an internet outage clears the error, not just the badge.** A machine that lost and regained its connection kept its "connection failure" health error, with the same forever-flashing icon. Reconnection now resets it.
-- **A machine that isn't registered no longer blames the network.** When the health check ran before the network was up, its "network unreachable" verdict could stand in for the real problem. Once the network gate opens, the checks now run again, so an unauthenticated machine reports "authentication required" instead of a phantom network error.
-- **A machine whose cloud client failed to start recovers on its own.** If cloud initialization failed at startup, nothing retried it and the machine stayed invisible on the dashboard until someone restarted the service. The agent now notices "cloud enabled, but nothing serving it" and reinitializes, retrying every five minutes until it succeeds.
-- **roost's hourly maintenance no longer crashes on databases from interim builds.** Some 3.0.0 machines carried a sync-state database created with the new column names but stamped with the old schema version; the migration then failed on every run, permanently killing the on-disk scrub and the orphan-chunk cleanup. The migration now checks what actually needs renaming and brings those databases forward cleanly.
-- **The local status file reports the real time of the last heartbeat** instead of always claiming there had never been one.
+- the tray icon no longer flashes red on a machine that is connected.
+- recovering from an internet outage clears the connection error.
+- an unregistered machine reports "authentication required" instead of a network error.
+- a machine whose cloud client failed to start retries every five minutes and recovers by itself.
+- roost's hourly maintenance no longer fails on databases from interim 3.0.0 builds.
+- the local status file shows the real time of the last heartbeat.
 
 ## [3.0.0] - 2026-08-16
 
 ### added
 
-- **A new desktop app replaces the old agent window.** Process management now lives in a proper application: add a process by dragging its file onto the window, edit schedules inline, watch live status, and reach pairing, the recovery menu, and start-on-login from the tray. It ships with the installer and replaces the Python interface entirely.
-- **talons — automation that runs on your machines.** Build a rule as trigger → condition → outputs: react to a crash, a display change, a schedule, or a webhook, then restart something, send an alert, run a command, or ask hoot to look at a screenshot and decide. Presets cover the common cases, and you can bring your own LLM key per site.
-- **The dashboard works on a phone.** Machines, logs, hoot conversations, dialogs, and site management are all usable on a small screen, with touch-sized controls throughout.
+- a new desktop app replaces the old agent window: drag in a process, edit schedules inline, watch live status.
+- talons: automations built as trigger, condition, outputs, with presets and your own LLM key per site.
+- the dashboard works on a phone.
 
 ### changed
 
-- **Breaking: the agent runs under a new service host.** Owlette no longer uses NSSM; it is hosted by our own supervisor, which stops cleanly through Windows' own service controls with a grace period, backs off after a crash loop instead of restarting forever, registers real Windows failure actions, and writes its own log at `logs\service_host.log`. Upgrades migrate the service registration in place and remove `nssm.exe` — no reinstall, and supervised processes keep running through the migration. Agents older than 3.0.0 are not compatible with this host.
-- **Cortex is now hoot.** Routes, screens, and documentation use the new name, and `/cortex` links redirect permanently. The API keeps its `/api/cortex/*` paths working, so existing CLI and SDK integrations need no changes.
-- **The installer is much smaller.** The Claude CLI is downloaded and checksum-verified on first use rather than shipped inside the installer, and machines that already have a matching copy reuse it.
-- **One Start-menu entry.** "Owlette" opens the app. The old tray-only launcher, which appeared to do nothing when clicked, and the separate "Owlette Configuration" entry are both retired and removed on upgrade.
+- breaking: the agent runs under a new service host instead of NSSM; upgrades migrate in place; agents older than 3.0.0 are not compatible.
+- cortex is now hoot; `/cortex` links redirect.
 
 ### removed
 
-- **The legacy Python interface is gone**, and upgrading prunes its leftover files and logs.
-- **Site tiers and billing are removed.** The `core`/`pro` distinction no longer gates anything — every feature, including talons, is available to all sites.
+- the legacy Python interface and site tiers are gone; every feature is open to all sites.
 
 ### fixed
 
-- **Starting a process that is already running no longer launches a second copy.** Starting a process from the dashboard, or from hoot's self-healing, decided whether it was already running by looking only at the PID Owlette itself last launched. A process that was live but untracked — anything with its launch mode set to off, or an instance that outlived a service restart — looked absent, so the start landed a duplicate on top of it. Both paths now search for a matching instance first and adopt it instead. Matching is project-aware: several instances of one application are normal, so a TouchDesigner instance is identified by the `.toe` it has open, not just by `TouchDesigner.exe`. When a process entry had no file configured to tell instances apart, only the kill and restart paths declined to guess — adoption still picked the first instance matching the executable. (3.3.0 makes refusal universal.)
-- **Restarting a `.bat` or `.cmd` process no longer leaves the old one running.** Scripts start through a `cmd.exe` wrapper, so the process Owlette tracked was the wrapper rather than the script's real work. Stopping or restarting killed the wrapper and reported success while the actual process kept running — still holding its files, its port, or its GPU — and invisible to Owlette from then on. The payload is now shut down along with its wrapper. Ordinary `.exe` processes are unaffected: applications that manage their own helpers, like TouchDesigner, still close them in their own time.
-- **A hung process no longer reads as "inactive" in the local app.** When a process stops responding, the agent marks it stalled — but the desktop app didn't recognise that state, so it displayed the process as inactive and greyed out the restart button, at exactly the moment an operator would want it. It now shows as stalled and stays actionable, matching how the dashboard has always treated it.
-- **Setting relaunch attempts to 0 really does mean unlimited.** The field is documented as "0 is unlimited", and the agent's reboot-escalation check was written to honour it, but a zero was being read as "not set" and silently replaced with the default of 3 — so a machine configured never to reboot itself would reboot after three failed relaunches. A zero is now preserved end to end, through the agent, the API, and the dashboard's edit form. A blank or non-numeric value still falls back to 3.
-- **Two launches can no longer race each other.** The monitoring loop, dashboard commands, and remote config updates each run on their own thread, and nothing stopped two of them from deciding a process needed launching at the same moment. Launches are now serialised per process, a restart holds that claim across both the stop and the start, and a launch that loses the race adopts the winner's process instead of starting another.
-- **Leftover scheduled tasks from old agents are cleaned up.** Agents older than 2.1.1 started supervised processes through Windows Task Scheduler and created one task per launch, which were meant to be deleted moments later but survived whenever a launch was interrupted. Long-lived machines accumulated dozens, where they were easily mistaken for a second Owlette autostart. The agent now removes them once, on first start after upgrading. Only the two task shapes Owlette generated are matched, and only when they carry no trigger that could still fire — update tasks, and anything named by a technician, are left alone.
-- **Display alerts actually arrive again.** Display events — a monitor disappearing, a layout apply failing, genlock dropping, resolution drifting — were written to the dashboard event feed but never handed to the alert pipeline, so the emails and webhooks they were supposed to trigger had been silent fleet-wide. The agent now sends them, and the `display alerts` preference, the display digest, and display webhooks work as documented. Requires the new agent; older agents keep logging the events to the dashboard as before.
-- **roost deployments finish, roll back, and report honestly.** A rollout to a single machine could sit at in-progress after the file sync had actually completed, rollback restored a version record without restoring the files it named, and a deployment that failed part-way could still read as successful. Rollouts now complete, rollback returns the machine to the exact files it ran before, failures say so, and the `rolled_back` webhook fires. Abandoned transfers are cleaned up rather than left occupying disk.
-- **A site you create yourself is visible to you.** Signing up and creating your first site wrote the site but never added it to your own account, so the dashboard came up empty until someone else invited you to it.
-- **The online badge respects a stale heartbeat.** A machine could show as online from a cached snapshot after it had stopped reporting; the badge now checks how recent the heartbeat is before showing green.
+- starting a process that is already running no longer launches a second copy.
+- restarting a `.bat` or `.cmd` process no longer leaves the old one running.
+- display alerts arrive again by email and webhook (needs the new agent).
+- roost deployments finish, roll back to the exact previous files, and report failures honestly.
+- and 8 smaller fixes.
 
 ## [2.12.21] - 2026-08-12
 
 ### fixed
 
-- **Machines come online seconds after power-on, not minutes.** The agent previously waited out a blind two-minute startup delay, and a first connection attempt made before the network was ready could lock it out for several more minutes even after the network came up. The service now checks for real network readiness at startup and, when the network isn't up yet, retries every few seconds instead of backing off — longer waits are reserved for genuine server errors.
-- **Restarting the agent no longer flickers the machine offline.** Owlette-initiated restarts (a tray restart or the agent's own recovery watchdog) return within seconds, but used to mark the machine offline on the way out — producing a visible offline/online flap and sometimes a spurious alert. The dashboard now stays green through these restarts. Stopping the service yourself, or shutting the machine down, still marks it offline immediately.
-- **A single slow heartbeat no longer greys out a healthy machine.** The offline threshold was three minutes against a two-minute idle heartbeat — one delayed beat away from a false alarm. The dashboard and the offline-alert email now both wait five minutes, so a machine has to miss more than two consecutive heartbeats before it is called offline.
+- machines come online seconds after power-on, not minutes.
+- restarting the agent no longer flickers the machine offline.
+- one slow heartbeat no longer greys out a healthy machine; offline now waits five minutes.
 
 ## [2.12.20] - 2026-08-08
 
 ### security
 
-- **The agent's bundled dependencies are updated and trimmed.** setuptools and requests move to versions clearing several published advisories, and three unused Google API libraries left over from an old Firebase integration are removed entirely — 17 fewer packages, and a smaller installer. None of the advisories were reachable from owlette; this is dependency hygiene rather than a fix for anything exploitable.
-- **A fresh install now reports its bundled libraries accurately.** Earlier installers could record two conflicting versions of the same library, so a vulnerability scanner reading a machine might report one version while different code was what actually ran. A new install now carries exactly one version of each library, and the build fails outright if its dependencies disagree.
-- **Known limitation — upgrading in place does not clear the old versions.** Installing over an existing agent replaces files but leaves the previous version's records behind, so a machine upgraded several times still reports stale versions to a scanner even though the current code is what runs. Only a fresh install gives an accurate reading today. Uninstalling first preserves your configuration, tokens, and logs.
-
-### changed
-
-- **The agent's HTTP layer moves off an end-of-life release.** One of the removed Google libraries had been holding the networking stack on a 2024 version that no longer receives fixes. Nothing about how the agent talks to owlette changes — it is simply maintained again.
+- bundled agent libraries are updated and trimmed, with 17 fewer packages and a smaller installer.
+- only a fresh install reports library versions accurately to a vulnerability scanner; upgrading in place leaves stale records.
 
 ## [2.12.19] - 2026-08-07
 
 ### added
 
-- **Duplicate a process.** Right-click a process in the agent app or use the new duplicate action on the dashboard (list and card views) to clone its full configuration. The copy gets a "(copy)" name and starts with launch mode off, so it never spawns a second instance until you're ready.
-
-### fixed
-
-- **Hidden window mode now works for scripts and console apps.** Processes set to hidden no longer show a command-prompt window when the target is a `.bat`/`.cmd` script or a console `.exe` — including scripts under paths with spaces.
-- **`.bat` and `.cmd` are first-class process targets.** The agent's file browser now lets you pick scripts (`.exe`, `.bat`, `.cmd`, `.com`, or any file) instead of requiring a hand-typed path, and hidden script launches work end-to-end.
-- **Kill works regardless of launch mode.** Killing a process whose launch mode is off (or that owlette didn't start itself) now finds and terminates the live instance — from the dashboard, the agent app, and Cortex. The agent app previously killed a stale recorded process id and reported success while the real process kept running; it now validates the recorded id against the configured executable (so it can never terminate an unrelated recycled process id) and falls back to locating the live instance, refusing rather than guessing when several instances of the same executable are indistinguishable. Restarting such a process no longer launches a duplicate on top of the live one.
-- **The restart countdown window matches the app theme.** The countdown dialog now uses the dark navy/cyan theme instead of the legacy grey, and the timer is zero-padded (1:05, not 1:5).
-- **"open owlette" from the tray reliably shows the window.** The tray could focus one of the app's invisible tooltip popups (they share the main window's title) instead of the app itself, leaving an already-open window in the background. It now targets the real window and restores it, doesn't respawn the app while a fresh launch is still starting up, and launches the app with the bundled interpreter instead of whatever python is on PATH (which could crash silently on machines with another Python installed).
-- **"Trust this device for 30 days" now works.** Checking the box at the two-factor prompt stores a secure token in that browser, so sign-ins from it skip the code for the next 30 days. Signing out doesn't clear it; disabling 2FA or deleting the account revokes every trusted device.
-- **No more daily two-factor prompts.** A verified session now survives page reloads and new tabs for its full lifetime — previously any fresh page load could reset the session's verified state and bounce you back to the code screen.
-- **2FA codes autofill.** The verification fields identify themselves as one-time-code inputs, so password managers and phone keyboards offer the code automatically (backup codes still type normally).
+- duplicate a process from the agent app or dashboard; the copy starts with launch mode off.
 
 ### changed
 
-- **Offline alert emails are consolidated and accurate.** When several machines at a site go offline around the same time, one email now lists the full picture — machines not responding, machines that reported shutting down, and machines still offline from an earlier alert — with a subject count that matches the list. Previously a staggered site-wide outage produced several emails with partial counts. Alerts wait for the situation to stabilize (about ten minutes) before sending.
+- when several machines go offline together, you get one consolidated alert email with matching counts.
+
+### fixed
+
+- hidden window mode works for `.bat`, `.cmd` and console apps.
+- the agent file browser lets you pick `.bat` and `.cmd` scripts.
+- kill works whatever the launch mode, and restart no longer launches a duplicate.
+- **trust this device for 30 days** works at the 2FA prompt.
+- no more daily 2FA prompts; verified sessions survive reloads and new tabs.
+- 2FA codes autofill in password managers and phone keyboards.
+- and 3 smaller fixes.
 
 ### security
 
-- **The bundled cryptography library is updated to 50.0.0.** This clears three published advisories against the previous version (CVE-2026-69247, CVE-2026-69249, CVE-2026-69248). None of them were reachable from owlette — the affected PKCS#7 decryption and X.509 chain-verification routines are not used by the agent, which relies on the library only for token encryption and device-code pairing. The update keeps the bundled dependency clean for operators who run vulnerability scanners against their machines.
+- the bundled cryptography library is updated; none of the advisories were reachable from owlette.
 
 ## [2.12.18] - 2026-07-09
 
 ### fixed
 
-- **Cortex "cancel" now actually stops a running tool.** The cancel control reached the agent but couldn't identify which command to kill (it read the target command id from the wrong place), so the tool ran to its timeout as if nothing happened. Cancelling a `run_command` / `run_powershell` / `execute_script` now terminates the process tree within a few seconds and resolves the tool card to "cancelled by user".
+- cancelling a running hoot tool now stops it within seconds.
 
 ## [2.12.17] - 2026-07-08
 
 ### fixed
 
-- **Agent roost sync-state database migrates itself.** Agents whose local roost sync database predated an internal rename would fail their hourly integrity check (and any future sync) with an internal "No item with that key" error. The database now upgrades itself in place on startup, preserving existing state.
+- agents with an older roost sync database upgrade it themselves and pass the hourly check.
 
 ## [2.12.16] - 2026-07-07
 
 ### fixed
 
-- **Cancelling a running tool now works for every shell tool.** The cancel control added in 2.12.15 only stopped `execute_script` — a running `run_powershell` or `run_command` ignored the cancel and ran to completion. All three shell tools now register their process, so cancel terminates the process tree within a few seconds and the tool card resolves to "cancelled by user".
+- cancelling a running tool now works for `run_powershell` and `run_command`, not only `execute_script`.
 
 ## [2.12.15] - 2026-07-07
 
 ### added
 
-- **Antifragile Cortex chat (async turns).** A chat turn's model loop and tool execution are now decoupled from the browser connection. Long-running tools (e.g. `sfc /scannow`, DISM, multi-minute scripts) keep running and their results still land in the chat even if the connection drops, the tab is closed, or the page is reloaded mid-turn — the client reattaches to the in-flight turn and streams it live from the backend.
-- **Cancel a running tool.** Running tool calls now show a cancel control that terminates the process tree on the machine within a few seconds and reports the cancellation back to the chat.
-- **Stop a turn.** The stop control now halts the whole turn server-side instead of only the local view.
+- hoot chat keeps long-running tools going when the tab closes or the connection drops, and reattaches on reload.
+- running tool calls show a cancel control.
+- the stop control halts the whole turn, not only your view.
 
 ### fixed
 
-- **Chats can no longer be bricked by an interrupted tool call.** A tool call whose result was lost mid-stream is repaired into an honest error (or recovered from the machine's completed-command record) so the conversation always continues; sending a new message while a tool is still running no longer produces a provider error.
-- **Agent robustness.** Long tool scripts are terminated cleanly on cancellation; a mid-command service restart no longer silently re-runs the interrupted command or strands a deployment as in-progress; `execute_script` timeouts are capped to keep results retrievable.
-- **User-attached images** in Cortex chat now align with the sender's message.
+- an interrupted tool call no longer breaks the conversation.
+- cancelled or restarted commands no longer re-run or strand a deployment.
 
 ### security
 
-- **Cortex chat ownership is enforced server-side.** Sending or stopping a turn now verifies the caller owns the target conversation, preventing cross-user chat modification.
+- only the owner of a hoot chat can send to it or stop it.
 
 ## [2.12.14] - 2026-07-03
 
-### fixed
-
-- **Agent pairing no longer opens a browser without operator action.** Interactive installer pairing now prints the phrase and URL, starts polling immediately, and offers `press Enter to open the pairing page in your browser` as the opt-in path. The desktop app join-site dialog also waits for the user to click its existing open button instead of launching a browser automatically.
-
 ### added
 
-- **`--open-browser` pairing option** for operators who explicitly want the old immediate-open behavior during manual `configure_site.py` runs. `--no-browser` and `OWLETTE_NO_BROWSER=1` still suppress any local browser affordance.
+- `--open-browser` pairing option restores the old immediate browser open.
+
+### fixed
+
+- pairing no longer opens a browser unasked; the installer offers **press Enter** to open the page.
 
 ## [2.12.13] - 2026-07-03
 
-### fixed
-
-- **The desktop app's "join site" button now actually pairs the machine.** Previously it opened no browser and showed no pairing phrase — it just polled silently, so there was no way to know what to do next. It now shows the 3-word pairing phrase in a dialog (copied to your clipboard automatically, click it to copy again), opens owlette.app/add in your browser, and reports progress; the service restarts on its own once you authorize from any device. You can cancel at any time without waiting for the code to expire.
-- **Revoking a machine's token no longer risks disconnecting other machines that share its hostname.** The revoke dialog now offers "revoke current token" (only the most-recently-used token for that hostname) alongside "revoke all for hostname" (the previous behavior, now clearly labelled). Machines cloned to the same hostname are no longer knocked offline when you revoke just one.
-
 ### added
 
-- **The pairing phrase is copied to your clipboard during install.** When the installer displays the 3-word phrase, it's already on your clipboard to paste straight into owlette.app/add — no retyping. Best-effort, so a busy clipboard never blocks pairing.
-- **The agent-tokens admin can be searched, filtered, and pruned.** Search by machine id or agent, filter by version, flag hostname duplicates, and prune tokens that are provably expired. The collection previously grew without bound as tokens rotated hourly, which made it easy to revoke a token a live agent was actually using; rotation now cleans up its own dead predecessors at the source.
+- the pairing phrase is copied to your clipboard during install.
+- the agent-tokens admin can be searched, filtered by version, and pruned of expired tokens.
+
+### fixed
+
+- the desktop app's **join site** button shows the pairing phrase, opens owlette.app/add and pairs the machine.
+- revoking a token can target just the current token, leaving machines that share the hostname connected.
 
 ## [2.12.12] - 2026-06-15
 
 ### fixed
 
-- **Windows Defender no longer disables temperature monitoring on some machines.** The driver Owlette uses to read CPU/GPU temperatures is written to disk at runtime, and on some Windows 11 machines Microsoft Defender quarantined that driver file (flagged as `WinRing0`) because the installer's antivirus exclusion didn't cover its actual location. The installer now excludes the driver file itself, so temperatures keep working; existing machines pick up the fix on their next update. Temperature reads are also now time-bounded, so a driver that's blocked at the OS level can never stall the agent's startup or heartbeat.
+- Windows Defender no longer disables temperature monitoring on some Windows 11 machines.
 
 ## [2.12.11] - 2026-06-15
 
 ### fixed
 
-- **The display "events" tab now shows recent events.** The dashboard query fetched an arbitrary slice of a machine's logs (ordered by document id, which is a random UUID) instead of the newest ones, so on a machine with many logs recent monitor add/remove/drift events silently never appeared while an old one stayed pinned. The feed now filters to display events and orders by time, so the latest events always show.
-- **Auto-restore no longer gets permanently paused when a monitor is turned off.** Powering off (or sleeping / disconnecting) a monitor that's part of a stored layout made auto-restore repeatedly try to re-apply, fail because the monitor isn't present, and trip its circuit breaker after three attempts — leaving auto-restore paused until a manual reset even after the monitor came back. Auto-restore now skips the re-apply while an assigned monitor is absent and resumes on its own when it returns; a transient power-off no longer counts as a failure.
+- the display **events** tab shows the newest events.
+- auto-restore no longer stays paused after a monitor is turned off.
 
 ## [2.12.10] - 2026-06-14
 
-### fixed
-
-- **Agent pairing no longer stalls behind an unanswered prompt.** During interactive install the agent used to block on an `open browser? [y/N]` prompt *before* it started polling for authorization — so approving from the dashboard or another device did nothing until that prompt was answered, and pairing could silently time out. The agent now opens the pairing page automatically and starts polling immediately; authorization from any device completes pairing on its own.
-
 ### added
 
-- **`--no-browser` pairing option** (and the `OWLETTE_NO_BROWSER=1` env var) skips opening a local browser on kiosks, signage, media servers, and headless or RDP machines while still polling immediately — authorize from your phone or another computer.
+- `--no-browser` pairing option (or `OWLETTE_NO_BROWSER=1`) for kiosks and headless machines.
+
+### fixed
+
+- pairing no longer stalls behind an unanswered prompt; authorizing from any device completes it.
 
 ## [2.12.9] - 2026-06-09
 
 ### fixed
 
-- **Distribution management is now capability-gated end-to-end.** `roost` deploy / rollback / versions / resync / delete and chunk upload-url routes now require the distribution-manage capability; they were previously reachable by read-only site members.
-- **Soft-deleted users are blocked across the control plane.** A shared active-user guard now rejects tombstoned users on control-plane and self-service credential routes, and the delete cascade clears site membership and revokes passkeys + MFA.
-- **Alert emails no longer send to soft-deleted users.**
-- **Agent `cancel_sync` is honored during the sync setup window.** Cancels that arrived before the active sync handler was ready were previously dropped.
-- **Agent command dispatch now keys rate limits per target.** A dropped duplicate command is surfaced as failed instead of silently completed.
-- **Machine removal now revokes the agent refresh token** so a removed machine cannot keep reporting with an existing refresh session.
-- **roost rollback now re-dispatches to machines** instead of only flipping the version pointer.
-- **The one-click unsubscribe link disables all alert categories**, not just health alerts.
-- **Firestore rules block cross-tenant autonomous Cortex conversation forgery.**
+- roost deploy, rollback, resync and delete need the manage permission; read-only members can no longer use them.
+- deleted users no longer get alert emails or keep access.
+- removing a machine revokes its agent session.
+- roost rollback re-sends the version to machines.
+- the one-click unsubscribe link turns off all alert categories.
+- and 4 smaller fixes.
+
+### security
+
+- several access checks are tightened so deleted users and read-only members are blocked.
 
 ## [2.12.8] - 2026-06-07
 
 ### added
 
-- **`/for-ai` page** with `/llms.txt`, `/for-ai.json`, and structured data — an honest, machine-readable pitch to AI assistants evaluating owlette.
-- **tridant brand mark** and restructured landing footer ("a tridant system").
-- **Site members can view screenshots and live view.** Screenshot / live-view are now authorized by a new read-class `MACHINE_VIEW` capability (granted to members on their assigned sites) rather than the mutating `MACHINE_EXEC_COMMAND`. The machine-commands route dispatches the three view-only command types (`capture_screenshot` / `start_live_view` / `stop_live_view`) to a `MACHINE_VIEW`-gated handler; all other commands stay behind `MACHINE_EXEC_COMMAND`, and api-key scope is unchanged.
-- **Cortex tier-3 tool-approval gate.** Tier-3 tool calls now require explicit in-chat approval. `/api/cortex` migrated to the UIMessage protocol (`convertToModelMessages`); the per-site approval flag is default-on and forces the server-side path. Includes Cortex sidebar/UX fixes and a persistent chat layout.
-- **Scoped full-text search on the logs page**, plus an animated filters panel.
-- **Date-scoped log clearing.** Clear-logs deletion accepts a `since`/`until` range, with the date window computed in the display timezone.
-- **Themed date picker** (shadcn calendar + popover input) and dark-mode theming of native form controls via `color-scheme`.
-- **Site admins can remove machines on their assigned sites** (previously superadmin-only).
-- **Admin user management: last-seen column and deleted-user visibility.**
-- **Any authenticated user can create API keys from account settings** — the account dialog was wrongly pointed at the superadmin-only `/api/account/api-keys`; it now uses the user-scoped `/api/keys` with an explicit scope-preset selector.
-- **`GET /api/users/deletions`** is now documented in the OpenAPI spec; new Firestore composite indexes back the log filter combinations and the deletions audit feed.
-- **CLI / SDK OIDC trusted-publishing workflows** for `@owlette/cli` and the SDKs.
+- site members can view screenshots and live view.
+- hoot asks for in-chat approval before running the most powerful tools.
+- full-text search on the logs page, and clearing logs by date range.
+- site admins can remove machines on their sites.
+- any signed-in user can create API keys from account settings.
+- a themed date picker.
+- and 6 smaller additions.
 
 ### fixed
 
-- **False "machines offline" emails during scheduled reboots are fixed.** The health-check cron is now reboot-aware: it suppresses offline alerts while a machine is inside an announced reboot/shutdown window — gated on the agent's `rebooting`/`shuttingDown` flag plus the scheduled instant within a bounded ±15-minute grace, so neither a clock-skewed far-future anchor nor a stale anchor left behind by a cancel can mute a real outage — and it debounces transient staleness (`health.staleSince`) so a single missed 120-second heartbeat never pages. Agent-side, the periodic heartbeat (`_upload_metrics`) no longer reports connection success when its Firestore write fails — which had left a machine `online: true` with a frozen `lastHeartbeat` and no reconnect — and cancelling a scheduled reboot/shutdown now also clears `shutdownScheduledAt` (it had kept the dashboard countdown pill alive).
-- **Dashboard no longer shows members process write-controls they can't use.** The per-process launch-mode toggle and the edit / restart / kill / add-process actions were rendered to every viewer in both the card and list views, so a member would click them and get a 403. They're now gated on `isSiteAdmin`: non-admins see the current launch mode as a read-only pill, and the write actions are hidden.
-- **Expected authorization failures are no longer reported to Sentry as errors.** A member's launch-mode 403 was logged via `logger.firestore.error` → `Sentry.captureMessage(level: error)`, polluting error tracking with an expected outcome. `apiJson` now carries the HTTP status and `setLaunchMode` treats 401/403 as an expected denial (surfaced to the user as a toast, not a Sentry error).
-- **Dashboard "Missing or insufficient permissions" error (Sentry OWLETTE-WEB-3R).** `useUserManagement` opened a realtime listener over the whole `users` collection (superadmin-only per `firestore.rules`) for *every* user, via `ManageSitesDialog` mounted on the dashboard/roosts/logs/deployments pages — so every non-superadmin tripped a permission-denied on load. The listener is now gated to superadmins (client-side; rules unchanged).
-- **Quieted expected `permission-denied` noise** on the site-availability check (`CreateSiteDialog`) and Cortex chat-URL load, and **blocked agent ID tokens from minting user API keys** (`POST /api/keys`).
-- **Logs are ordered by timestamp across all filter combinations.**
-- **roost:** config-only republish honors content-addressed CAS on the no-op branch; a restated deploy config is applied on same-version republish.
-- **Cortex conversation rows are a11y-accessible** (no nested buttons).
-- **Dark-mode button hover repaired** and standardized on the secondary rollover.
-- **Metrics panel** persistence restored (gated on a non-empty selection; no auto-restore on load); empty metrics-slide gap removed; inline sparklines read hourly `metrics_history` buckets; disk r/w throughput right-aligned in the machine list.
-
-### changed
-
-- **Logs page refactor** — themed date pickers, date-scoped clear, aligned-column table.
-- **Sunken machine card/list surfaces** with section enclosures; metrics/displays panels darkened with brighter content.
-- **CLI pre-publish hardening** (6-wave review): request timeouts, idempotency-key surfacing on unconfirmed failures; `owlette key` removed (key management is dashboard-only).
-- Removed the dead `MachineListView` wrapper and redundant per-instance button hover overrides.
-
-### infrastructure / docs
-
-- `/preflight` pre-push gate + `post-push-e2e` watch hook; build-system skill expanded with the installer-release + version-bump flow.
-- CI: bumped checkout/setup-node/setup-java/cache to Node 24 action majors; py-sdk publish now runs pytest first.
-- Layperson video-tutorial series + Playwright video-capture harness.
+- no more false "machines offline" emails during scheduled reboots.
+- members no longer see process controls they can't use.
+- the "missing or insufficient permissions" error on the dashboard is gone.
+- and 7 smaller fixes.
 
 ## [2.12.7] - 2026-06-02
 
 ### fixed
 
-- **Scheduled restarts were silently skipped for ~30 minutes after any boot.** The reboot scheduler refused to fire *any* entry while machine uptime was under 30 minutes, and a separate 30-minute "manual-reboot grace" counted a recent boot as already satisfying an upcoming entry. Together these blocked legitimate short-interval / back-to-back scheduled restarts — a restart scheduled shortly after a boot would never fire. Both guards are removed. Reboot loops are still prevented structurally: the per-entry, per-day `lastFiredByEntry` dedup means each entry fires at most once per local day, the stale-attempt handler clears interrupted attempts, and the 5-minute missed-fire grace is retained.
-- **An already-paired agent could not be switched between dev and prod via the installer.** Two causes: (1) `configure_site._determine_environment` consulted the existing config *before* the explicit `--url` and hard-returned `development` whenever the current env was dev, so a dev-paired agent re-run with `--url https://owlette.app/api` was silently re-locked to dev (asymmetric — prod→dev worked, dev→prod did not); (2) the installer's `ShouldConfigureSite` skipped pairing entirely whenever a valid config existed, ignoring `/SERVER` and `/ADD`. Now an explicit `--url` wins, and the installer re-runs pairing when `/ADD=` is supplied or `/SERVER=` names a different environment than the config is bound to. Also tightened: an empty `site_id` no longer counts as "paired", and an explicit `/SERVER=` against a config with no recognizable `environment` field re-pairs rather than silently skipping.
-- **A stale Firestore/cache config could clobber the local dev/prod routing selection.** Firestore config sync preserved the `firebase` section but not the top-level `environment` field, so a config doc seeded while a machine was on one environment could, after a server switch, leave `config.json` with a prod `firebase` section but a dev top-level `environment` — split-brain routing (the Firebase client talks to prod while `get_api_base_url()` routes to dev). `environment` is now treated as local-only during sync, alongside `firebase`/`sentry`.
+- scheduled restarts are no longer skipped for 30 minutes after a boot.
+- an agent paired to dev can be switched to prod with the installer.
+- a stale cloud config can no longer split dev and prod routing.
 
 ### changed
 
-- **Installer docs corrected: production is the default when `/SERVER` is omitted.** The installer header comment and `INSTALLER-USAGE.md` stated dev was the default; the code has always defaulted to prod (`{param:SERVER|prod}`).
+- the installer defaults to production when `/SERVER` is omitted; the docs said dev.
 
 ## [2.12.6] - 2026-05-31
 
 ### fixed
 
-- **Exiting owlette and relaunching the tray left the machine offline behind a flashing red tray icon.** The tray's *exit* action issues a controlled `net stop OwletteService`, which NSSM intentionally does not auto-restart. Relaunching from the Start-menu "Owlette" shortcut started only the tray — not the service — so monitoring stayed down (the machine showed offline in the dashboard) and the tray flashed its red "Service: Stopped" alarm with no way to recover from the shortcut. Now, when owlette is **explicitly relaunched to resume it** (the Start-menu "Owlette" shortcut passes `--resume`), the tray starts the stopped service with a single UAC prompt, so clicking "Owlette" actually brings owlette back. The start is deliberately *not* triggered on the passive launch paths — the service launching the tray itself, or the startup-folder shortcut firing at login before the delayed-auto service has started — so it never pops an unwanted UAC prompt at boot. A disabled service (start-on-login turned off) is detected and the futile prompt skipped.
-- **Tray "restart" did nothing when the service was fully stopped — and took the tray down with it.** "Restart" wrote a restart flag for the *running* service to detect and exit-42 on (so NSSM respawns it), then stopped the tray. With the service already stopped there was no service loop to read the flag, so nothing restarted and the user lost the tray as well. It now detects the stopped state and starts the service directly, leaving the tray running.
-- **Tray log spammed the "service status file is stale" warning twice a second.** `read_service_status()` is called more than once per monitor cycle (status check + menu refresh) and logged on every stale read, doubling each line and bloating `tray.log`. The warning now logs once when the file goes stale and once when it recovers.
-- **Cortex tier-2 process control was silently doing nothing (OWL-03).** `_handle_cortex_process_command` passed the process-config dict to `graceful_terminate()`, which expects a PID — raising a `TypeError` that a broad `except` swallowed. Every Cortex tier-2 kill / restart / start (and autonomous self-healing) failed without surfacing an error. It now resolves the running PID and mirrors the proven dashboard kill/restart paths; covered by a regression test.
-- **`cancel_sync` can now interrupt an active roost sync (OWL-06).** It previously sat behind the running sync in the normal command lane; it is now routed to the fast lane so a cancel is processed promptly.
-- **Logging can no longer crash on non-ASCII content on Windows.** The log file handler is opened utf-8 with `errors='backslashreplace'`, so a non-ASCII character (e.g. the `→` used in several status messages) can't raise `UnicodeEncodeError` under the cp1252 default and take down logging.
+- relaunching **Owlette** from the Start menu after exiting starts the stopped service, with one UAC prompt.
+- tray **restart** works when the service is fully stopped.
+- hoot process kill, restart and start work again.
+- roost `cancel_sync` interrupts an active sync.
+- and 2 smaller fixes.
 
 ### changed
 
-- **Installer: consolidated the Start-menu tray shortcut.** Upgrades now remove the stale "Owlette Tray Icon" shortcut left by older versions; the single click-to-launch/resume entry is "Owlette". The in-session startup auto-launch is retained.
+- upgrades remove the stale "Owlette Tray Icon" Start-menu shortcut.
 
 ## [2.12.5] - 2026-05-28
 
 ### fixed
 
-- **Installer "DeleteFile failed: code 5" when upgrading with the GUI/tray/service running.** The locked file was `C:\ProgramData\Owlette\python\libcrypto-3.dll` (OpenSSL — loaded by every Owlette Python process). The pre-existing kill logic in `InitializeSetup()` filtered processes by `.Path -like '*\Owlette\*'`, but `Get-Process.Path` returns `$null` for processes the elevated installer can't introspect (integrity-level restrictions), so those slipped through silently; the fixed 5 s sleep also wasn't long enough when AV scanners held the libcrypto handle after process exit. Three hardening passes (verified via 4-agent codex review):
-  1. **Service-state verification after `net stop`.** Without it, a `net stop` timeout left NSSM alive — and NSSM's `AppExit=Default Restart` policy respawned the python child immediately after the kill pass terminated it, re-locking libcrypto-3.dll mid-copy. The installer now checks `Get-Service OwletteService` reports `Stopped` before proceeding, and aborts cleanly otherwise. `ServiceWasStopped` is gated on this verify.
-  2. **Second kill pass by loaded modules.** Catches processes whose `.Path` is unreadable or whose exe lives outside Owlette but loaded an Owlette `.pyd`/`.dll`.
-  3. **Poll libcrypto-3.dll for exclusive-write availability** (up to 30 s, 250 ms retry) instead of a fixed `Sleep(5000)`. If still locked at 30 s, the installer aborts with a clear "please reboot" message rather than failing mid-copy. Service-restart on abort delegated to the existing `DeinitializeSetup` to avoid double-restart.
+- upgrading with the app or service running no longer fails with "DeleteFile failed: code 5".
 
 ## [2.12.4] - 2026-05-27
 
 ### fixed
 
-- **Agent `/ADD=` silent-install pairing (dashboard "generate code") could never connect — every Firestore call returned 403.** A dashboard-generated pairing code minted the agent token at *authorize* time with a placeholder `machine_id` claim (`pending_<phrase>`), because the target hostname is unknown when the code is generated. The installed agent uses its real hostname for every Firestore document path, and `firestore.rules` `agentCanAccessMachine` requires an exact `machine_id` match — so every machine-scoped read/write was denied. (The browser and "enter code" pairing flows were unaffected; they carry the real hostname before authorize runs.) Token minting is now **deferred to poll time**: `authorize` records only the admin-authorized site (`deferTokenMint`), and the agent's `/ADD=` poll supplies its real `machineId`, which the server binds into the token via a single-use claim-lease (mint outside the transaction, atomic delete + refresh-token write on finalize). The agent machine-id is also unified on `shared_utils.get_hostname()` across `AuthManager` and `FirebaseClient` so the poll value cannot diverge from the Firestore path identity. Requires the matching web deploy; machines already paired via `/ADD=` must re-pair.
+- machines paired with a dashboard code and `/ADD=` now connect instead of being denied; machines already paired this way must re-pair.
 
 ## [2.12.3] - 2026-05-19
 
-### fixed
-
-- **Agent screenshot capture restored — properly this time.** 2.12.2 fixed the broken signed-URL flow by routing the `capture_screenshot` command back through the pre-refactor `OwletteService._handle_capture_screenshot` path (base64 upload via `/api/agent/screenshot`). That was working but architecturally wrong — Next.js was proxying multi-MB image bodies again, and `screenshot_capture.py` was effectively dead code despite being the api-sprint's intended replacement. 2.12.3 restores the signed-URL design end-to-end with the missing pieces actually built:
-  1. **User-session capture moved into `screenshot_capture.py`.** The Windows service runs as LocalSystem in Session 0; mss inside Session 0 captures a blank ~2 KB LocalSystem display. The pre-refactor working flow ran capture inside the active user's desktop session via `CreateProcessAsUser`. That mechanism (`OwletteService.execute_in_user_session` → `session_exec.py`) is now wired into `screenshot_capture.capture_in_user_session()` via dependency injection — the service passes its `execute_in_user_session` method to `capture_and_upload`, the user-session interpreter runs `mss` + `PIL` (JPEG quality 72, max-width 7680 px, PNG fallback if PIL is missing), and writes the bytes into the IPC output directory.
-  2. **`OwletteService.execute_in_user_session` now returns `outputDir` in its result envelope** so callers can read files directly without scanning `ipc/results/` for the most-recent screenshot (which was the OLD pattern and is racy under concurrent captures).
-  3. **New `POST /api/sites/{siteId}/machines/{machineId}/screenshots/finalize` endpoint.** After the signed-URL PUT lands, the agent calls finalize with the `storagePath` + `sizeKB`. Server-side: verifies the object exists, pins content-type metadata, makes the file public-read, writes `sites/{siteId}/machines/{machineId}.lastScreenshot = { url, timestamp, sizeKB }` (the Firestore field the dashboard's ScreenshotDialog subscribes to in real-time), appends a `screenshots/{docId}` history doc, and prunes to the most-recent 20. Same `lastScreenshot` field + history pruning behavior as the legacy `/api/agent/screenshot` route, but for the signed-URL upload path.
-  4. **Path → content-type alignment.** Storage paths now use `.jpg` for JPEG bodies and `.png` for PNG fallback, so the URL doesn't lie about its content.
-  5. **`machine_commands._handle_capture_screenshot` reverted** from the 2.12.2 delegation to the proper `capture_and_upload(executor=service.execute_in_user_session, ...)` call. The temp delegation path in OwletteService is no longer invoked by the public API (kept in source for now to keep the diff focused; can be removed in a follow-up cleanup pass).
-
-  Net result: multi-MB image bodies no longer transit Next.js, dashboard `lastScreenshot` updates immediately via Firestore real-time (no polling), and the signed-URL upload concept ships end-to-end as originally designed by the api-sprint (3027713).
-
-- **Login page hydration fixed (React #418).** The passkey button rendered via `{browserSupportsWebAuthn() && …}` evaluated during render — the server (no `window`) omitted the button, the client included it: a hydration mismatch. It looked harmless (React recovers by discarding the SSR tree and re-rendering client-side) but it threw away `/login`'s server HTML on every load, and in the Playwright E2E harness the in-flight re-render dropped the login click so the suite hung on `/login`. This is why E2E had been red since the 2.12.0 hardening pass — that pass switched the root layout to dynamic rendering (`await headers()` for the CSP nonce), which surfaced the latent mismatch as a thrown error in production builds. Fixed by gating the button on a `mounted` flag: server + first client render agree (no button), button revealed after hydration via `useEffect`. E2E is green again.
-
-- **Alert emails localize timestamps to the machine's IANA timezone.** The alert-email renderer passed a Windows-style zone string ("Pacific Standard Time") to `toLocaleString`, which only accepts IANA names ("America/Los_Angeles") — so every alert email threw `RangeError: Invalid time zone specified` and silently failed to send. Now uses the machine's stored IANA timezone.
-
 ### added
 
-- **owlette.app failover origin — Cloudflare Load Balancing (Railway primary, Vercel standby).** Groundwork for surviving a single-provider outage (the failure mode that took prod down on 2026-05-19 when Google Cloud blocked Railway's account):
-  - **`GET /api/health`** — unauthenticated readiness probe (shallow Firestore read, 2.5 s timeout, 200/503) so the load balancer can fail an origin out when it's up but can't reach its backend (the exact "provider lost cloud egress" mode).
-  - **`infra/cloudflare/`** — Terraform module for the load balancer: Railway primary pool + Vercel fallback pool, `/api/health` monitor, and `adaptive_routing { failover_across_pools = true }` for an instant mid-request cross-pool handoff instead of waiting ~60 s for the next health-check cycle. Apply workflow + token scope + origin-hostname gotchas documented in `.claude/skills/cf-load-balancing.md`.
-  - **`scripts/sync-env.mjs` + `scripts/env-manifest.json`** — manifest-driven env-var management across railway-dev / railway-prod / vercel-prod (status / check / diff / sync; values never printed; dry-run by default). Workflow + must-match secret rules in `.claude/skills/env-management.md`.
-  - **Vercel deploy wiring** — `web/vercel.json` removed (the auto-generated `experimentalServices` config put the project in the wrong framework mode); `.vercelignore` + `web/.npmrc` added for a correct monorepo deploy.
+- a `/api/health` readiness check for the planned failover origin; it does nothing until failover is set up.
 
-  This is groundwork: the load balancer and Vercel deploy aren't live yet, so `/api/health` ships and sits inert until failover is provisioned.
+### fixed
+
+- agent screenshot capture works again and the dashboard updates live.
+- the login page no longer hits a hydration error.
+- alert emails send again, with timestamps in the machine's timezone.
 
 ## [2.12.2] - 2026-05-19 [superseded by 2.12.3]
 
-> The screenshot fix in 2.12.2 used a temporary delegation to the
-> pre-refactor base64 upload path. 2.12.3 replaces that with the
-> proper signed-URL pipeline. The other 2.12.2 fixes (audit-export
-> guard, TimezoneChip, CSP) shipped unchanged through 2.12.3.
-
 ### fixed
 
-- **Agent screenshot capture restored (interim).** Two regressions from the api-sprint refactor (`3027713`, 2026-04-26) silently broke capture for ~3 weeks:
-  1. `/api/sites/{siteId}/machines/{machineId}/screenshots/upload-url` 404'd every agent call with `"site not found or no access"`. The new `requireMachineAuthAndScope` helper had no agent-token short-circuit, so agent IDs fell through to a `users/{uid}.sites[]` lookup — a doc agents don't have. Fixed by mirroring the agent-token branch from the sibling `requireAgentOrSiteAuthAndScope` (with a defense-in-depth check that the token's `machine_id` matches the URL path).
-  2. The new `screenshot_capture.capture_and_upload` flow ran `mss` directly in the service process. The agent service runs as LocalSystem in Session 0, so mss captured a blank ~2 KB LocalSystem display instead of the actual user desktop. The pre-refactor path ran capture inside the active user's session via `CreateProcessAsUser` and uploaded via `/api/agent/screenshot` (which also writes the `lastScreenshot` Firestore field the dashboard listens on); the new path skipped both. `machine_commands._handle_capture_screenshot` was temporarily routed back through that pre-refactor path; 2.12.3 supersedes with the proper signed-URL design.
-
-- **Audit-export Cloud Function deploys cleanly to prod.** `exportSecurityBoundaryAuditDevDaily` referenced a dedicated service account that only exists in the dev project (`security-boundary-audit-export@owlette-dev-3838a`). Cloud Functions Gen 2 validated the SA at deploy time and would reject the prod deploy of all 24 functions in `firebase deploy --only functions`. The serviceAccount config is now conditionally attached only for the dev project, and the function body early-returns with a log message outside dev. (Provisioning the prod SA + bucket + IAM is a follow-up; this lets the rest of the release ship.)
-
-- **TimezoneChip shows abbreviation, not city name.** `tz.split('/').pop()` rendered "Los Angeles" / "New York" / "Berlin" — which read more like a city than a timezone. `Intl.DateTimeFormat({ timeZoneName: 'short' })` is observance-aware and returns `PDT` / `PST` / `EDT` automatically. Zones without a stable abbreviation fall back to `GMT±N`. Chip font also reduced one step (the screenshot-dialog history sidebar where this is most visible was too prominent).
-
-- **Login page no longer fails to hydrate under the 2.12.0 CSP.** The hardening pass set `style-src` and `style-src-elem` to `'self' 'nonce-...'`, but Next 16 emits inline `<style>` blocks during client-side hydration/navigation that the request-header nonce only covers for scripts. The browser blocked those styles, the page hit a React #418 hydration mismatch, and the login form became inert (Playwright E2E suite caught the regression on every push). Both directives now use `'self' 'unsafe-inline'` — modern browsers ignore `'unsafe-inline'` when a nonce is present, so the style nonce was dropped intentionally. Script injection remains nonce + strict-dynamic locked; style injection is materially lower risk.
-
-### infrastructure
-
-- **`functions/.gitignore` tightened.** Now blocks all `.env*` overlays (e.g. `.env.owlette-prod-90a12`) except the committed `.env.example` template, preventing prod secrets from being accidentally tracked.
+- interim fix for screenshot capture, replaced in 2.12.3.
+- the timezone chip shows PST or PDT instead of a city name.
+- the login page works under the stricter security policy.
 
 ## [2.12.1] - 2026-05-18
 
 ### fixed
 
-- **Display layout no longer flags healthy monitors as "not connected" after RDP / virtual-display events.** Two changes:
-  1. The `edidHash` payload no longer includes the Windows-reported monitor friendly name. Windows reports that string inconsistently across driver state transitions (RDP attach/detach, monitor sleep, EDID re-read fallback), so the same physical panel was receiving different hashes between snapshots — which surfaced as every stored monitor showing "⚠ not connected" after a remote session, along with spurious `display_drift` / `display_monitor_added` / `display_monitor_removed` events. The hash is now identity-only: `manufacturer | productCode | device-path serial`.
-  2. Indirect display drivers (Miracast, IddCx-based indirect displays, the RDP `RdpIdd_IndirectDisplay` / "Microsoft Remote Display Adapter", dummy-plug EDIDs like `HDP-V104`) are now skipped at CCD enumeration. These appear and disappear with remote sessions and previously polluted the topology signature, the drift counter, and the events feed every time someone attached. Only physical output technologies (DVI, HDMI, DP, USB-C tunnel, internal, etc.) are enumerated.
-
-  Existing assigned layouts stored under the old hashing scheme are re-derived on read on both the agent and web sides — no manual migration required, no need to re-press "store" after upgrading.
+- healthy monitors are no longer flagged **not connected** after remote desktop sessions.
+- virtual and remote displays no longer trigger display drift events.
+- existing stored layouts keep working; no need to store them again.
 
 ## [2.12.0] - 2026-05-17
 
 ### security
 
-- **Five unauthenticated Cloud Functions hardened**: `emitWebhook`, `recordAuditEvent`, `verifyAuditChain`, `preUploadCheck`, `recordUsageEvent` all now require an `x-internal-secret` header matching `CORTEX_INTERNAL_SECRET`. Previously these `onRequest` functions defaulted to `invoker: 'public'` and could be called by anyone with the project ID, allowing webhook forgery (signed events to customer subscribers), audit-log injection, quota DoS, and billing-data poisoning. Shared helper `functions/src/lib/requireInternalSecret.ts` uses `crypto.timingSafeEqual` for constant-time comparison.
-- **MFA is now server-enforced.** Previously MFA enforcement lived in browser sessionStorage + a client-side `router.push('/verify-2fa')` that could be bypassed by navigating directly to `/dashboard`. Iron-session `SessionData` now carries `mfaRequired` + `mfaVerified` flags baked at session-create time from `users/{uid}.mfaEnrolled`. The proxy gates protected paths when `mfaRequired && !mfaVerified` and redirects to `/verify-2fa`. Successful TOTP / backup-code / MFA-setup flips `mfaVerified` server-side. Pre-deploy sessions are upgraded lazily on first protected-page hit. New `/api/mfa/disable` route is the only way to disable MFA — requires current TOTP or backup code, writes audit log, re-mints the session.
-- **Firestore rules tightened to block client-side privilege escalation.** User-doc create rule now constrains `sites[]` to `[]`, `email` to the auth token email, `mfaEnrolled`/`passkeyEnrolled` to `false`, `requiresMfaSetup` to `true`. User-doc update switched from value-equality checks to a `diff().affectedKeys().hasOnly([allowlist])` policy — sensitive fields (role/email/sites/MFA state) must go through trusted server routes. `canAccessSite()` and `isSiteOwner()` now check `users/{uid}.deletedAt` so admin-soft-deleted users immediately lose dashboard access. Rules version bumped to 2.5.0.
-- **Three new rule blocks plug agent silent-failure paths**: `sites/{s}/machines/{m}/cortex/{docId}` (local Cortex active-chat state), `sites/{s}/machines/{m}/logs/{logId}` (per-machine log shipping), and `sites/{s}/cortex-events/{eventId}` (autonomous-event log) now have explicit rules matching `agentCanAccessMachine()` / `isAgent() && site_id`. Previously these writes fell to the deny-all fallback and the entire local-Cortex feature was silently broken end-to-end.
-- **API key revocation now actually revokes.** `apiAuth.server.ts` now checks `revokedAt` before retiresAt/expiresAt. Previously the admin "revoke key" button and the user-delete cascade's revocation were no-ops.
-- **Legacy unscoped API keys rejected by default.** Pre-scope-system keys with empty/missing `scopes` arrays now fail authentication unless explicitly opted in via `LEGACY_API_KEY_BYPASS_ENABLED=true` + `LEGACY_API_KEY_ALLOW_HASH_LIST`, and even allowlisted legacy keys can't pass `requireScope()` (they resolve to `scopes: []`).
-- **Cross-machine token isolation** on `/api/agent/screenshot` and `/api/agent/alert`. Routes now verify `decodedToken.machine_id === machineId` (not just `site_id`), preventing a compromised agent token for machine A from spoofing reports for machine B in the same site.
-- **Webhook delivery pipeline reconciled.** Cloud Functions dispatcher was reading `collectionGroup('webhook_subscriptions')` while the web API was writing `sites/{siteId}/webhooks/{id}` — async roost-event webhook delivery emitted zero deliveries. Now both ends use the `webhooks` collection.
-- **Passkey login now requires user verification** (`userVerification: 'required'`, previously `'preferred'`). Single-touch FIDO keys without PIN/biometric no longer suffice for full account access.
-- **Backup code single-use guaranteed.** Backup-code verification in `/api/mfa/verify-login` now runs inside a Firestore transaction that re-reads the array before removing the matching code, preventing two concurrent same-code requests from both passing.
-- **Agent refresh tokens rotate on every refresh.** `/api/agent/auth/refresh` now generates a new refresh token, marks the old one superseded with a 5-minute grace window, and returns the new token to the agent. Captured tokens no longer grant indefinite access. Agents receive the new `refreshToken` in the response and must persist it on every refresh.
-- **Roost kill switch is now wired into web API routes** (17 `/api/roosts/*` + `/api/chunks/*` handlers). Flipping `sites/{siteId}.roostEnabled=false` now actually halts uploads, not just agent sync work.
-- **Account self-deletion no longer wipes shared sites.** Previously the cascade hard-deleted every site in the user's `sites[]` array including sites where the user was just a member — wiping out the entire site for the owner. Now classified per-site: sole-owner sites are hard-deleted (existing behavior); shared owned sites refuse with `409 needs_successor`; member sites have only `arrayRemove(uid)`. Cascade also drains previously-missed subcollections (`passkeys`, `api_keys`, top-level `api_keys/{hash}` lookups, `mfa_pending`, `agent_refresh_tokens`, `chats`, Firebase Storage avatar) and revokes + deletes the Firebase Auth user server-side rather than relying on the client.
-- **Admin soft-delete also revokes Firebase Auth tokens.** Previously `deletedAt` was written on the user doc but Firebase Auth was untouched; the user could keep using their session until the ID token expired. Now the admin cascade calls `revokeRefreshTokens` + `updateUser({disabled: true})` immediately.
-- **`x-owlette-security-version` header bumped to 2** so dashboard tabs open at deploy time will surface a reload nudge.
-- **LLM cost endpoints rate-limited.** `/api/cortex/categorize` and `/api/cortex/provision-key` are now wrapped in `withRateLimit({strategy: 'user'})` so a captured session cookie can't burn through LLM credits.
-- **Unsafe role fallback removed.** `cortex-utils.server.ts` previously defaulted unknown roles to `'admin'` (site-scoped privileged); now defaults to `'member'` (least-privileged).
-- **`/api/agent/alert` localhost fallback fixed.** When `NEXT_PUBLIC_BASE_URL` is unset, autonomous-Cortex callbacks now fall back to `https://owlette.app` (matching the email-templates pattern) instead of `http://localhost:${PORT}`.
+- 2FA and passkey sign-in are enforced by the server and can't be skipped; passkeys need a PIN or biometric.
+- agent tokens rotate on every refresh and only work for their own machine.
+- legacy api keys without scopes are rejected, and **revoke key** now really revokes.
+- deleting your account no longer wipes sites you only belong to.
+- users deleted by an admin lose access immediately.
+- internal cloud functions are locked down.
+
+### fixed
+
+- roost webhooks now deliver.
+- the roost kill switch now halts uploads.
+- local hoot chat on a machine works again.
 
 ### changed
 
-- **Cloud Functions reconcilers now exported.** `reconcileDeploymentStatus` and `reconcileDistributionStatus` were defined but missing from `functions/src/index.ts`. With the rules lockdown live, deployment/distribution status writes would have been silently dropped. Both are now exported and deploy.
-- **Scheduled-function batch sizes capped at 400.** `chunkGc.tombstoneStore.create` and `aggregateTelemetry.trimOlderThan` previously committed all matched docs in a single batch, which fails past Firestore's 500-op limit. Now chunked.
-- **`apiKeyExpire` query bounded.** Added `.where('expiredMarkedAt', '==', null)` filter so the daily scan doesn't grow linearly with historical expired-key count.
-- **Rate limiter `setInterval` no longer leaks Jest workers.** `web/lib/rateLimit.ts` cleanup timer now calls `.unref()` so test processes exit cleanly.
-
-### added
-
-- New composite Firestore index `webhook_deliveries(state, nextAttemptAt)` for the retry-queue pump.
-- New composite Firestore index `api_keys(expiresAt, expiredMarkedAt)` for the bounded `apiKeyExpire` query.
-- One-shot deprecation warnings for legacy API keys with empty scopes and for API keys passed via query string. Both log a keyHash prefix once per process so operators can identify which integrations need to migrate.
-
-### required env vars (new)
-
-- `CORTEX_INTERNAL_SECRET` — must be set on Cloud Functions (in `functions/.env`) for the 5 internal-only HTTPS functions to operate. Without it, all 5 return 503.
-- Optional `LEGACY_API_KEY_BYPASS_ENABLED` + `LEGACY_API_KEY_ALLOW_HASH_LIST` — emergency-only allowlist for legacy unscoped keys during the migration window.
-
-### migration notes
-
-- **Agents on 2.11.x and earlier**: still compatible. Refresh tokens are issued under the new rotation scheme on next `/api/agent/auth/refresh` call; older tokens stay valid until first refresh.
-- **CLI clients on 1.0.0-rc and earlier**: still compatible. No CLI behavior changes in 2.12.0.
-- **Pre-deploy iron-session cookies**: lazily upgraded on first protected-page hit (one Firestore read per cookie). After the upgrade the cookie carries the new MFA flags. Cookies expire naturally within 7 days.
+- self-hosters: set `CORTEX_INTERNAL_SECRET` in `functions/.env`, or those functions return 503.
+- and 13 smaller fixes.
 
 ## [2.11.3] - 2026-05-08
 
 ### added
 
-- New Cortex Tier 2 tools `update_process`, `add_process`, and `delete_process` bring the chat to feature parity with the GUI/web for process management. The tools accept the full set of process config fields (name, exe_path, file_path, cwd, priority, visibility, time_delay, time_to_init, relaunch_attempts, launch_mode, schedules, schedulePresetId) and execute server-side via the existing validated action functions — no agent relay, no command-queue latency.
-- Agent now surfaces missing-executable failures as dashboard toast notifications with up to two suggested alternative paths (sibling versions discovered by walking up from the missing path). The toast offers a one-click "use path" action that opens the process edit dialog with the suggested path pre-filled.
-- New canonical `firebase_client.send_alert(event_type, data)` method with retry-on-failure queueing (drains on reconnect, capped at 100 pending alerts). The previous `send_process_alert` and `send_display_alert` are now thin wrappers that delegate to it.
-
-### changed
-
-- `/api/agent/alert` route now accepts both the new generic `{eventType, data}` shape and the legacy flat process-alert shape, so older agent callers keep working unchanged while new event types (`exe_missing`, etc.) flow through cleanly.
+- hoot can add, edit and delete processes from chat.
+- a process whose executable is missing shows a toast with suggested paths and a one-click **use path**.
 
 ### fixed
 
-- Missing-executable failures (e.g. when a process's configured `exe_path` no longer exists after an app upgrade) are now surfaced to the operator instead of silently failing every tick. Previously the agent only logged the error to its local log file, leaving operators with no signal that a managed process couldn't launch. Rate-limited so it fires once per failed-state transition, not every 5-second main-loop tick.
+- missing executables are no longer a silent failure.
 
 ## [2.11.2] - 2026-05-06
 
-### fixed
+### added
 
-- Agent GUI process-details panel now stays in sync with external `launch_mode` changes. The dropdown and schedule label refresh immediately even while a text entry is focused; entry-field updates are deferred and retried after focus leaves so Firestore changes are no longer permanently dropped.
-- GUI `launch_mode` changes no longer trigger a brief command-prompt flash. `GPUtil.getGPUs()` (called transitively from the GUI's post-toggle metrics push) now spawns `nvidia-smi` with `CREATE_NO_WINDOW` via a Windows-only monkey-patch in `shared_utils._get_gputil()`.
-- `launch_mode` transitions originating from the GUI now run the same runtime cleanup as web-originated changes. The service maintains an in-memory snapshot of last-applied modes and diffs it on every main-loop tick, applying transitions through a single `_apply_launch_mode_transition` helper. Previously the GUI flow bypassed the smart-transition path because it wrote disk before uploading to Firestore, leaving stuck `killed`/cooldown markers that prevented relaunch.
-- `off → scheduled` transitions outside the schedule window now clear stale runtime markers on the transition itself, so a previously-killed process will launch when the schedule window next opens (was stuck before).
-- Cortex `set_launch_mode` IPC handler called `shared_utils.write_config(config)` with the wrong signature, so launch-mode changes from Cortex were silently not persisted. Now uses `save_config(config)`.
-- Cortex chat tool calls for `set_launch_mode` (and other Tier 2 tools dispatched through `executeExistingCommand`) now forward all LLM-supplied parameters — `mode`, `schedules`, `schedulePresetId`, etc. — to the agent. Previously only `process_name` was forwarded, so the agent's command handler defaulted `mode` to `off` regardless of what the user asked for.
+- restart process works from the API, CLI and agent.
+- the desktop app asks for confirmation before killing a process.
 
 ### changed
 
-- Firebase `set_launch_mode` / `toggle_autolaunch` command handler now matches by `process_id` first with a `process_name` fallback, making it robust to processes with duplicate names.
+- roost and webhooks are labeled developer preview.
 
-### added - post-2.11 updates
+### fixed
 
-- Site-tier billing now gates beta sites as `core` or `pro`, defaulting beta sites to `pro`.
-- Process control now includes `restart_process` end to end across the public API, CLI, and agent control surfaces.
-- Agent GUI `kill_process` actions now require a confirmation dialog before dispatch.
+- the desktop app process panel follows launch mode changes made elsewhere.
+- changing launch mode in the desktop app no longer flashes a command prompt.
+- processes no longer get stuck killed after a launch mode change.
+- hoot launch mode changes now save and use the mode you asked for.
+- metrics charts refresh when you return to the tab.
 
-### changed - post-2.11 updates
+### security
 
-- Landing and pricing pages were refreshed across the redesign, use-case, developer, proof, pricing, and GPU-label sections.
-- roost and webhooks UI surfaces are now labeled as developer preview.
-
-### fixed - post-2.11 updates
-
-- Metrics charts refresh their time window when a dashboard tab regains focus.
-- Streaming API responses no longer enter the idempotency cache.
-- Status page readiness checks are hardened against partial service readiness.
-
-### security - post-2.11 updates
-
-- Remote installer requests now require a SHA-256 checksum before an agent accepts the installer.
-- `getUsageSummaryHttp` now requires site-scoped auth before returning usage data.
-- Site-member and project-distribution routes now enforce their capability gates before mutations.
-- Chat routes now enforce conversation ownership before returning or mutating conversations.
-
-### added - security-boundary migration prep
-
-Adds the production-readiness material for the security-boundary migration: W8.2 observability, W9.0 operator runbooks, customer communication draft, and scheduled audit-export plan.
-
-**admin impact**: expected to be no user-visible change for admins and superadmins. Control-plane writes now stay server-mediated through scoped REST routes, capability checks, rate limits, and blocking audit writes; existing dashboard workflows should keep the same behavior.
-
-**member impact**: milestone A intentionally keeps direct member control-plane command capability denied after rules lockdown. Members may continue read-only and explicitly allowed flows, but machine commands and other privileged control-plane writes remain admin/superadmin-only until the configurable policy work lands in milestone B.
-
-**operations**: both enforcement switches are documented (`capability_enforcement`, `rate_limit_enforcement`), including when to flip them, the 4-hour incident window, audit implications, alert wiring, and re-enable checklist. The incident playbook covers capability denial spikes, Cortex system-bucket 429s, and account-deletion cascade recovery.
-
-**audit retention**: security-boundary audit rows under `sites/*/audit_log` and platform rows under `global/audit_log/entries` now have a GCS managed-export schedule plan with retention longer than the Firestore hot-store window and a restore drill.
-
-### added — api-sprint: 30+ scoped REST endpoints across 6 capability tracks
-
-Promotes the internal admin-gated capabilities (machine commands, processes, classic-installer deploys, agent-installer mgmt, cortex chat, user/member admin) to public, scoped, api-key-friendly REST endpoints. Closes 35 cli stubs in `owlette-cli`. New: full Node + Python SDK coverage. The roost data-plane (chunks/versions/deployments/keys/webhooks) was already public from the prior cycle; this release fills out the rest of the platform surface.
-
-**Versioning**: this is **additive** — no breaking changes to existing callers, no removals. Sits in `[Unreleased]` until cut. The 3.0.0 major-bump moment is deferred to `roost-public-api` W8 (public launch) which will combine this surface + the v1-agent compat cutover noted in `project_roost.md`.
-
-**new public endpoints (~30)** — every endpoint accepts `Authorization: Bearer owk_*` (api key) or session/ID-token; mutations require `Idempotency-Key` (24h replay window, body-hash mismatch → 422 `idempotency_key_mismatch`); errors are RFC 7807 problem+json with stable `code` strings; collections are cursor-paginated per AIP-158; every mutation emits a fire-and-forget audit-log event under one of seven `MutationKind` taxonomies.
-
-- **`/api/sites/{siteId}/deployments/*`** — classic installer deploy CRUD + retry/cancel/uninstall/delete (7 verbs). Quota-enforced (max-targets-per-deploy=100, configurable via `sites/{id}.deployQuota`; 413 `over_quota`). Cancel actively purges queued commands so a stale entry can't be picked up. Uninstall requires `site=<id>:admin`.
-- **`/api/installer/*`** — agent-installer binary management (list, latest, 3-step upload, set-latest, delete). Superadmin-only (gated by new `requirePlatformAuthAndScope` helper that composes Wave-0 primitives + a defense-in-depth role check). Soft-delete protects the current latest version and enforces min-active-versions ≥ 2.
-- **`/api/sites/{siteId}/machines/{machineId}/commands/*`** — dispatch + status-poll for `reboot_machine` / `shutdown_machine` / `capture_screenshot`. Live-view streaming explicitly out of scope (deferred Wave-4 spike). Offline machine returns 409 `machine_offline` (not queued). Screenshot uses a 3-step CLI flow: dispatch → poll → download from 1-hour signed URL.
-- **`/api/sites/{siteId}/machines/{machineId}/processes/*`** — full process CRUD + control verbs (kill / restart / start / stop / schedule). 10 verbs total. Race-safe via the new `withProcessLock()` helper — Firestore transaction enforces duplicate-name rejection (409 `duplicate_process_name`) inside the txn boundary; lazy backfill of `processId` UUIDs on legacy rows. Schedule verb writes through the lock (no command queue); the other four control verbs queue commands.
-- **`/api/cortex/conversations/*`** — canonical Cortex conversation API (5 verbs: create, list, send+stream, soft-delete, rename). Reuses Cortex's dual-path streaming engine (local agent vs server-side LLM) via the extracted `cortexStream.server.ts` helper. Older `/api/chat/*` routes remain compatibility aliases. Conversations are stored at `chat_conversations/{id}` with embedded messages capped at 200; overflow splits into `chat_messages/{conversationId}/{messageId}` subcollection.
-- **`/api/users/*`** — platform user administration (7 verbs: list/get/promote/demote/assign-sites/remove-sites/delete). Superadmin-gated. Last-superadmin guard runs inside the demote transaction (409 `last_superadmin`). DELETE cascade with explicit failure modes: orphan-sites guard (409 `orphan_sites` if user owns sites and `successorUid` not provided); successor validation; api-key revocation across both subcollection + top-level lookup; background `setImmediate` command-cancel sweep.
-- **`/api/sites/{siteId}/members/*`** — site membership (3 verbs: list/add/remove). Site-admin-gated. Add with `role: 'admin'` against a member-tier user returns `roleHonored: false` rather than silently promoting globally — explicit promotion goes through `/api/users/{uid}/promote`.
-
-**owlette CLI** — `@owlette/cli` (binary `owlette`) prepared as v1.0.0-rc.0 with 6 promoted command groups: `chat` (5 verbs), `user` (7), `deploy` (classic installer; 7), `installer` (4), `process` (10), `machine` mutations (3 — reboot/shutdown/screenshot; live-view stays as the only C-tier stub). Plus `whoami`, `version`, `site`, `quota`, `audit-log`, `machine` reads from the prior cli wave. Every mutation auto-generates `Idempotency-Key: cli-<noun>-<verb>-<uuid>`; stable error codes (`machine_offline`, `duplicate_process_name`, `over_quota`, `min_versions_violated`, `last_superadmin`, `orphan_sites`, `scope_insufficient`) get human-readable hints; destructive verbs honor `--yes`.
-
-**Node + Python SDKs** — extended to the 1.0.0 RC package line: `@owlette/sdk@1.0.0-rc.1` and `owlette-sdk==1.0.0rc0` (PEP 440 spelling). Both add 6 new resource modules (`installerDeployments`/`installer_deployments`, `installer`, `processes`, `chat`, `users`, `members`) plus extension of `machines` with command-dispatch + screenshot orchestration (queue → poll → download). Both auto-generate `Idempotency-Key: sdk-<resource>-<verb>-<uuid>` if not supplied. Streaming `chat.send()` parses the AI-SDK v3 line protocol (`0:` deltas, `d:` end markers, `3:` errors) — Node exposes `{ deltas: AsyncIterable, complete: Promise }`; Python yields `async for delta in chat.send(...)`.
-
-**scope grammar extended** — `ApiKeyResource` enum extended from 3 → 8 types: added `chat`, `deploy`, `process`, `user`, `installer`. New constants `ALL_RESOURCES` + `SUPERADMIN_ONLY_RESOURCES` exported from `web/lib/apiKeyTypes.ts` so route validators + the dashboard scope picker can't drift.
-
-**shared infrastructure** — three new helpers landed in Wave 0 of the sprint and are now used everywhere:
-- `withIdempotency(request, ctx, rawBody, handler)` in [`web/lib/idempotency.ts`](../web/lib/idempotency.ts) — collapses the 12-line check→handler→save pattern into 4 lines for every mutating route. The existing `web/lib/idempotency.ts` was extended in-place; no parallel helper file was created.
-- `emitMutation({kind, siteId, actor, targetId, attributes})` in [`web/lib/auditLogClient.ts`](../web/lib/auditLogClient.ts) — single parameterized helper covering all 7 mutation kinds (`deployment_mutated`, `process_mutated`, `machine_command_dispatched`, `user_mutated`, `site_member_mutated`, `installer_mutated`, `chat_mutated`). Fire-and-forget; never awaited.
-- `requireMachineAuthAndScope` + `requirePlatformAuthAndScope` in [`web/app/api/_shared.ts`](../web/app/api/_shared.ts) — joined the existing `requireSiteAuthAndScope` / `requireRoostAuthAndScope` family. Single-line scope check at every route; no per-route boilerplate.
-
-**cortex auth** — `web/app/api/cortex/route.ts` swapped from session-only `requireSession()` to `resolveAuth()` + `requireScope('chat', siteId, 'write')`. Dashboard callers (session/ID-token) bypass scope and continue to work unchanged; CLI / 3rd-party api-key callers must hold `chat=<siteId>:write`. SSE streaming context preserved.
-
-**site membership canonical** — audited and locked: site membership lives **only** at `users/{uid}.sites[]`. The hypothesized inverse `sites/{siteId}.members[]` does not exist anywhere in the codebase; firestore.rules pins to the canonical model. New `getUserSiteIds(uid)` helper in [`web/lib/apiHelpers.server.ts`](../web/lib/apiHelpers.server.ts) so future callers don't reinvent the read pattern. Decision memo at `dev/completed/api-sprint/reference/membership-decision.md`.
-
-**OpenAPI spec** — every new endpoint shipped with its spec entry alongside the route. Total: ~50 public scoped endpoints documented in `web/openapi.yaml`. Interactive reference at `/docs/api` (Scalar) and raw JSON at `/api/openapi`. Three pre-existing `Problem` → `ProblemDetails` ref typos fixed during the sprint-close verify.
-
-**testing** — 1447/1447 web tests passing across 75 jest suites (was 1142 before the sprint, +305 new). 237/237 CLI tests passing across 29 suites (was 108, +129 new). 55 Node SDK tests + 57 Python SDK tests. 47 new Playwright e2e specs across 7 files in `web/e2e/specs/api-sprint/`. 6 new k6 scripts in `load-tests/k6/` covering the highest-traffic new endpoints with smoke/sustained/spike scenarios and per-VU per-iteration unique idempotency keys.
-
-### deprecated
-
-- Historical `/api/admin/*` docs are no longer the public contract. Use the scoped public equivalents (`/api/sites/{s}/deployments/*`, `/api/installer/*`, etc.); individual admin aliases may be internal, removed, or dashboard-only depending on the domain.
-
-### removed
-
-Nothing. The api-sprint is purely additive — internal callers and existing public roost endpoints are unaffected.
+- remote installers must pass a checksum, and several routes now check permissions before changes.
 
 ## [2.11.1] - 2026-05-05
 
-### fixed — display-helper IPC permission denied on non-admin console users
+### fixed
 
-`apply_display_topology`, `enumerate_display_modes`, and the related revert / self-test paths failed with `[Errno 13] Permission denied: 'C:\WINDOWS\TEMP\owlette_display_apply_*.req.json'` on any machine where the active console user wasn't a local admin. After 3 retries the auto-restore breaker latched and stopped attempting drift correction.
-
-**root cause**: the agent service (running as `LocalSystem` in Session 0) wrote helper request JSON via `tempfile.gettempdir()` — which resolves to `C:\Windows\Temp` for `LocalSystem` — then spawned the helper as the console user via `CreateProcessAsUser`. Default ACLs on `C:\Windows\Temp` deny standard-user reads of SYSTEM-owned files, so the helper couldn't open the request file the service had just written. Worked fine when the console user happened to be a local admin, which is why it didn't surface universally.
-
-**fix**: every cross-session display-helper IPC file (request, response, stderr) now lives under `%PROGRAMDATA%\Owlette\ipc\display\` via a new `_ipc_tempdir()` helper. The directory's DACL is set explicitly at first use — `SYSTEM:Full + Administrators:Full + console-user-SID:Modify`, with `PROTECTED_DACL` inheritance disabled so the installer's `users-modify` ACE on `ProgramData\Owlette` doesn't propagate down and let any interactive user tamper with IPC payloads between SYSTEM-write and helper-read.
-
-Also covers the two enumeration paths (`--enumerate-json`, `--enumerate-modes-json`) that had the same bug, sweeps stale `owlette_display_*.{req,out}.json` and `*.tmp` files >1h old at first use, and adds a distinct `DisplayErrorCode.IPC_FAILURE` so request-read / response-write / stderr-redirect failures stop getting bucketed as generic `bad_request` (which was the reason this took 3 retries to surface as something operators could diagnose).
+- display layout apply and auto-restore now work when the signed-in Windows user isn't an admin.
 
 ## [2.11.0] - 2026-04-25
 
-### added — display alert routing (Feature B)
+### added
 
-owlette now emits structured display events when monitor topology changes — drift, monitor added/removed/swapped, mosaic disabled, sync lost, apply succeeded/failed, auto-revert fired, apply-refused-mosaic. The new alert pipeline routes these through the existing email + webhook infrastructure with severity-aware delivery.
+- display alerts: emails and webhooks when a monitor is removed, an apply fails, a layout auto-reverts or sync is lost.
+- monitor removed and auto-revert emails arrive in seconds; other display events are batched.
+- no emails for drift caused by your own apply.
+- **display alerts** toggle in account settings, plus an **events** tab on the display panel.
+- per-machine auto-restore reapplies your layout when displays drift, and stops after 3 failures until you reset it.
+- **test_display_apply** checks the apply path without changing anything.
 
-**routing table** — single source of truth at `web/lib/alerts/displayEventRouting.ts`. Severity decisions:
-- **email + webhook (critical)**: `display_monitor_removed`, `display_apply_failed`, `display_auto_revert_fired`, `display_sync_lost`
-- **webhook only (warning)**: `display_drift`, `display_monitor_swapped`, `display_mosaic_disabled`, `display_apply_refused_mosaic`
-- **dashboard only (info)**: `display_monitor_added`, `display_apply_succeeded`
+### changed
 
-**critical-path bypass** — `display_monitor_removed` and `display_auto_revert_fired` skip the 3-min digest cron and email inline so operators see them in seconds. Everything else queues to `pending_display_alerts` and ships via the new `/api/cron/display-alerts` cron (3 min interval, 2 min accumulation window — same cadence as `pending_process_alerts`).
-
-**operator-caused-drift suppression** — agent stamps `suppressAlert: true` + `correlatedApplyId` on display events that fire within 90s of a successful apply. The `/api/agent/alert` route honors the flag: skips email, still fires webhook. Closes the recall-then-N-drift-emails avalanche.
-
-**rate limiting** — 1 per `(machineId, eventType)` per hour for most events; `display_drift` gets a tighter 1 per 4h window because cable-flap drift can fire repeatedly on rack-mount installations.
-
-**preferences** — new `displayAlerts: boolean` toggle in account settings (opt-out, defaults to true). 30-day migration banner on `/admin/alerts` directs existing operators to the new control. Webhook config UI exposes all 10 new event ids as opt-in subscriptions (existing webhooks NOT auto-subscribed).
-
-**dashboard surface** — new `events` tab on the display panel renders the last 50 display events for the selected machine, severity-color-badged, with relative timestamps. Subscription opens only when the tab is visible.
-
-### added — auto-restore (Feature C)
-
-opt-in per-machine toggle: when enabled, the agent automatically reapplies the stored layout on detected drift instead of waiting for a human to click recall.
-
-**state machine** — drift detected → 30s topology-check tick → drift persists across 2 ticks (~60s) → fixability check (every drifted edidHash present in assigned) → cooldown clear → spawn worker thread → `apply_topology(..., auto_restore=True)` → emit `display_auto_restore_fired` audit. No watchdog (no operator to ack), no sentinel (next topology check re-fires from clean state if anything goes wrong).
-
-**circuit breaker** — 3 consecutive auto-restore failures trip the breaker (`circuitBreaker.tripped: true` in the config doc). While tripped, `_maybe_auto_restore` short-circuits at gate 3 — no thread spawned, no further failures counted. Operator resets via the panel's banner (single click → `circuitBreaker.tripped: false, failures: 0`). Rate-limited responses (`AUTO_RESTORE_RATE_LIMITED`) and unfixable skips (`AUTO_RESTORE_SKIPPED_UNFIXABLE`) do NOT count toward the failure counter.
-
-**fixability model** — only `display_drift` triggers auto-restore. `_monitor_added` (new monitor in live, not in assigned) and `_monitor_removed` (assigned monitor unplugged) are unfixable by re-applying assigned and would loop infinitely if attempted. The unfixable-skip emits `display_auto_restore_skipped_unfixable` (info severity) so operators see why the auto-fix didn't fire.
-
-**dashboard surface** — `<Switch>` toggle in the panel header (any site member with write access; not admin-gated). When armed, a small "auto" micro-label + green dot renders next to the recall button. When tripped, a red banner appears at the top of the panel body with the last error and a single-click reset. Fleet-view: small red dot next to existing drift indicator on both `MachineCardView` + `MachineListView` so operators can spot tripped machines without expanding any panel.
-
-**permissions** — `displays.autoRestore.enabled` writable by any site member (matches existing config-doc write rule). Admin role is reserved for cross-site administration, not per-site feature toggles. `circuitBreaker.tripped: false` reset uses the same gate. Agent retains exclusive write on `circuitBreaker.{failures, lastError, lastFailureAt, lastSuccessAt, trippedAt}`.
-
-### added — remote-apply master kill switch + helper self-test (Wave 6)
-
-Defence-in-depth gate over the apply path so a fresh agent doesn't auto-trust remote layout writes until an operator explicitly opts in.
-
-**kill switch** — `apply_topology` now also reads `displays.remoteApplyEnabled` from the agent's local config. Anything other than literal `True` rejects the apply with `remote apply disabled by config` *before* any locks, audit events, or CCD calls. Distinct from `displays.enabled` (which gates the entire feature including drift detection); this flag scopes only the write path. Defaults `False` on fresh installs (`generate_config_file`); existing installs without the field also read as off.
-
-**self-test** — `test_display_apply` command runs the apply helper in read-only mode (`QueryDisplayConfig` + `SetDisplayConfig(SDC_VALIDATE)` against the live config — never `SDC_APPLY`) so operators can verify the helper IPC plumbing (CreateProcessAsUser, env block, atomic response file) works end-to-end on a given machine *before* flipping the kill switch on. New `_self_test_via_user_session` service-side wrapper + `_helper_self_test_to_json` helper-mode entry. Surfaced in the dashboard panel only while `remoteApplyEnabled` is off.
-
-### migration
-
-- New Firestore subcollection: `pending_display_alerts/*` (digest queue). Created on first display event. No backfill needed.
-- New machine config field: `displays.autoRestore.{enabled, enabledBy, enabledAt, circuitBreaker}`. Default-absent = disabled, breaker reads as not-tripped via the typed default sentinel in `useDisplayState`.
-- New machine config field: `displays.remoteApplyEnabled: boolean`. **Default false on fresh installs and on existing installs with the field missing — operators must explicitly enable per machine via Firestore (or the upcoming dashboard toggle) before remote apply / auto-restore writes will land.** Existing operators relying on the v2.10 apply button must flip this to `true` after upgrading the agent.
-- New user preference: `displayAlerts: boolean`. Missing field treated as `true` (opt-out semantics — existing users continue to receive display events until they explicitly disable).
-- New cron required: `/api/cron/display-alerts` every 3 minutes via Railway cron (same cadence as `/api/cron/process-alerts`). Set the `X-Cron-Secret` header to the existing `CRON_SECRET` env var.
-- No agent-side migration. v2.10+ agents emit display events through the existing log_event path; pre-2.10 agents simply don't emit them and the dashboard's events tab stays empty for those machines.
+- remote display apply is off by default: set `displays.remoteApplyEnabled` to `true` per machine after upgrading.
+- self-hosters: call `/api/cron/display-alerts` every 3 minutes with the `X-Cron-Secret` header.
 
 ## [2.10.0] - 2026-04-24
 
-### breaking — roost: `manifest` → `version` rename + per-roost version numbering
-
-The release-engineering noun renamed end-to-end. What was a `manifest` (OCI/Docker borrow that confused TD-artist + signage operators) is now a `version` everywhere: API routes, SDK types, CLI commands, dashboard labels, Firestore sub-collection name, mediaType string, webhook events, error codes. Clean break — no backcompat shim, no redirect layer. **v2.10.0 is the cutover release.** Pre-2.10 agents cannot speak to a 2.10 web/api (wire protocol changed: `manifest_id`/`manifest_url`/`folder_id` in `sync_pull` payloads → `version_id`/`version_url`/`roost_id`); upgrade agents in lockstep with web.
-
-**rename surface (mechanical)**
-- API routes: `/api/roosts/{id}/manifests/*` → `/api/roosts/{id}/versions/*`. `/manifest-url` → `/version-url`. Old paths 404.
-- Path param grammar: `{manifestId}` → `{versionRef}`. The `versionRef` resolver accepts six forms — see *new capabilities* below.
-- Field names (camelCase): `manifestId` → `versionId`, `currentManifestId` → `currentVersionId`, `previousManifestId` → `previousVersionId`, `targetManifestId` → `targetVersion` (now `string | number`), `manifestUrl` → `versionUrl`, `manifestMetadata` → `versionMetadata`. Same renames in snake_case across Python SDK + agent (`manifest_id` → `version_id`, etc.).
-- TypeScript types: `Manifest*` → `Version*` (`ManifestSummary` → `VersionSummary`, `ManifestDetail` → `VersionDetail`, etc.).
-- SDK accessor: `client.manifests` → `client.versions` (Node + Python).
-- CLI flags: `--manifest <id>` → `--version <ref>`; `--against <manifestId>` → `--against <versionRef>`; `--to <manifestId>` → `--to <versionRef>`.
-- Webhook events: `manifest.published` → `version.published`. `Roost-Event` header values follow.
-- Error codes: `manifest_stale` → `version_stale`, `manifest_not_found` → `version_not_found`, plus new `version_ref_malformed` (400) + `version_content_immutable` (400).
-- mediaType: `application/vnd.owlette.manifest.v1+json` → `application/vnd.owlette.version.v1+json`.
-- Firestore sub-collection: `sites/{s}/roosts/{r}/manifests/{id}` → `sites/{s}/roosts/{r}/versions/{id}`. Migration script at `scripts/migrate-manifest-to-version.mjs` (idempotent, supports `--dry-run` + `--rollback`, handles roost-doc field rename + `versionNumber` backfill).
-- Agent wire protocol: `sync_pull` command payloads now use `version_id`/`version_url`/`roost_id` (was `manifest_id`/`manifest_url`/`folder_id`). Agent code at `agent/src/sync_version.py` (was `sync_manifest.py`).
-- Firestore security rule: `match /manifests/{manifestId}` → `match /versions/{versionId}` under the roost sub-collection.
-
-**new capabilities introduced alongside the rename**
-- **Auto-incrementing per-roost `versionNumber`**: every push to a roost gets a 1-indexed integer (#1, #2, #3...) minted inside a Firestore transaction. Monotonic + gap-free even under concurrent publishes. Surfaced in API responses, dashboard list rows (`v3` badge), and CLI output.
-- **Optional `description` field per version** (≤500 chars, plaintext): commit-message-style "what changed?" annotation. Set on push via SDK options or CLI `-m / --description <text>`. Editable after publish via `PATCH /api/roosts/{id}/versions/{ref}` — version *content* (files, chunks) stays immutable; only description can change. Denormalized to roost doc as `currentVersionDescription` so the dashboard list renders without N+1 reads.
-- **Version-addressing resolver** (`web/lib/resolveVersion.ts`): every `{versionRef}` path param + CLI `--to`/`--against` accepts six forms — plain integer (`3`), `#3`, `v3`/`V3`, stable id (`vrs_*`), or alias (`current` / `previous` / `first`). Server resolves; SDKs/CLIs forward raw input verbatim.
-- **New `roost roost versions <roostId>` CLI subcommand**: lists all versions for a roost with `#`, id, description, createdAt columns. Cursor-paginated, honors `--json`.
-- **Dashboard UI**: roost rows show current `v{N}` badge + description preview + relative timestamp. Expanding a row reveals chronological version history with per-row three-dot menu (rollback to this version, copy version id, view files, diff against current). New "+ new version" button inside each expanded panel opens the push modal with name/extract-path/targets locked + pre-populated, so adding a version to an existing roost is one flow distinct from creating a new project. New-roost modal now requires a non-empty name.
-
-**migration tooling**
-- Firestore migration: `node scripts/migrate-manifest-to-version.mjs --project dev --dry-run` first, then run for real. Idempotent — skips already-migrated roosts. Backfills `versionNumber` (1, 2, 3...) sorted by `createdAt`. Renames roost-doc pointer fields. `--rollback` reverses via the per-run log file.
-- Local agent state: SQLite columns renamed in `sync-state.db` schema. `SCHEMA_VERSION` was not bumped — existing dev installs need the file deleted before the new agent boots, or upgrade will throw `OperationalError` on first INSERT. Acceptable per the 2.10.0 clean-cutover semantics; flagged for installer-side cleanup follow-up.
-
-**deferred follow-ups (post-rename)**
-- R2 physical bucket migration: object keys still live under `project-manifests/{roostId}/{versionId}` in R2. Code references the prefix string with a marker comment (`web/lib/r2Client.server.ts`) until a dedicated migration script copies+deletes from `project-manifests/` → `project-versions/`. No wire impact — just a storage-layer rename.
-- Browser-app `manifest.json` (PWA) is intentionally untouched — that's a Next.js metadata convention, not a roost concept.
-
-**verification**
-- 200 functions tests + 1,017 web tests + 28 node SDK tests + 101 CLI tests + 376 agent unit tests all green. Final repo-wide grep returns 17 hits, all in `dev/active/roost-version-rename/reference/rename-sweep-allowlist.txt` (R2 deferral, PWA reference, verb forms, intentional compat note, defensive test fixtures).
-- Migration guide for any dev tester or early SDK user: `dev/active/roost-version-rename/MIGRATION.md`.
-
-### added — roost (project distribution v2)
-
-A content-addressed sync layer replacing v1's single-URL ZIP model. Turns roost into the release-engineering layer: deploy via drag-drop or URL, atomic rollback via pointer flip, dedup at chunk granularity, real retry + resume across tab close.
-
-**storage + manifest model**
-- 4 MiB fixed-chunk content addressing with per-tenant prefix `project-content/{siteId}/{hash[0:2]}/{hash}` on Cloudflare R2 — picked over S3/GCS for free egress, the only economic axis that matters at fleet fan-out.
-- OCI Image Manifest v1.1 derivation (`application/vnd.owlette.manifest.v1+json`), immutable once written. A firestore pointer at `sites/{siteId}/roosts/{roostId}.currentManifestId` is the only mutable head.
-- Schema spec + threat model + v1-to-v2 migration design at `docs/internal/{manifest-format,threat-model,v1-v2-migration}.md`.
-
-**browser upload pipeline (dashboard)**
-- `ProjectDistributionDialog` rebuilt as a two-mode dialog: `new deploy` (configure a new deployment — source is a sub-choice within: url vs upload files) + `history` (past manifests + rollback). Shared fields (distribution name, extract path, verify files, target machines, preset bar) apply across both sources. Dialog is mobile-responsive at 375px.
-- Off-main-thread chunker + SHA-256 hasher in a web worker (`web/lib/chunking.ts`); AbortSignal-aware between chunks, streamed-slice memory (O(1) per chunk regardless of file size).
-- IndexedDB-backed upload queue (`web/lib/uploadQueue.ts`) with parallelism (default 4), exponential backoff + jitter, 10-attempt cap. Crashed tabs leave `in_flight` tasks that get demoted to `pending` on re-open — close-and-re-drop resumes from wherever it stopped.
-- Pre-upload confirmation (`PreUploadSummary`) showing file count, total size + dedup preview, est. upload time, per-target disk-free check (warns on unknown, blocks on insufficient + 20% margin), quota check (80% warning, exceed-cap error). Start button gated on blocking checks.
-- Rollback confirmation dialog (`RollbackConfirmDialog`) with file-level diff (added/removed/changed), net byte delta, canary-vs-all-at-once strategy picker (canary default), problem+json error parsing.
-- Filename sanitization (`web/lib/sanitize.ts`) — NFC normalisation, strips C0/C1 control chars + zero-width/RTL-override invisibles (ZWSP, LRM/RLM, LRO/RLO, BOM, etc.), windows-canonical trailing-dot/space trim, codepoint-safe 255-char truncation, rejects NUL bytes, path separators, `.`/`..`/empty-after-clean.
-
-**server-side — web API surface (roost routes)**
-- New routes at clean paths (no `/v2/` prefix — deliberate decision): `POST /api/chunks/{check,upload-urls,download-urls}`, `GET/POST /api/roosts/{roostId}/manifests`, `POST /api/roosts/{roostId}/rollback`. All 6 currently return 501 `notImplementedYet` stubs pending R2 wiring.
-- RFC 7807 `application/problem+json` error envelope (`web/lib/apiErrors.ts`) — stable problem-type URIs, per-occurrence requestId for trace correlation, field-level error detail for 400/422. Replaces the legacy `{error: string}` shape for roost routes.
-- OpenAPI 3.1 spec extended (`web/openapi.yaml`) with roost tag, all 6 paths, `ProblemDetails` + `OciManifest` + `ManifestSummary` schemas, reusable `Problem4xx` + `Problem501` responses, bearer-token scheme for firebase ID tokens. Live docs at `/docs/api` (Scalar renderer).
-- Strict CI drift gate: `.github/workflows/openapi-validate.yml` runs on PR + push; any undocumented route under `/api/chunks/*` or `/api/roosts/*` hard-errors.
-
-**server-side — cloud functions**
-- `onRoostWritten` + `onTargetStateWritten` (`functions/src/distributionFanout.ts`) — canary-first fan-out. 10%/floor-1/cap-50 canary cohort via stable FNV-1a hash of `machineId + manifestId` (deterministic across retries). Abort threshold evaluates against total-not-settled, so a rollout already past 25% failure aborts without waiting for stragglers. Cloudflare 2025-11-18 all-at-once lesson explicitly honored.
-- `verifyChunk` (`functions/src/chunkVerify.ts`) — SHA-256 verify on every R2 PUT via Cloudflare Worker webhook; planted-bytes get deleted + alerted.
-- `chunkGcNightly` (`functions/src/chunkGc.ts`) — two-phase mark-and-sweep with 30-day tombstone TTL. Resurrection guard: a chunk referenced again before TTL elapses has its tombstone cleared (never deleted). `CHUNK_GC_MODE=dry-run` default for the first production month.
-- `preUploadCheck` + `reconcileQuota` (`functions/src/quotaEnforce.ts`) — per-tenant storage quota. Admit reserves pending-bytes atomically (concurrent uploads can't both fit when sum > cap). Daily reconcile fires only newly-crossed 50%/80%/100% alarms (no refire at steady state). Pricing tiers: free 5 GB / starter $8 25 GB / pro $15 100 GB / enterprise BYO.
-- Telemetry + cost attribution (`functions/src/telemetry.ts`) — R2 pricing model ($0.015/GB-month storage, $4.50/M class-A, $0.36/M class-B, $0 egress), GB-day averaging on storage snapshots (not latest), OTLP-shaped structured logs for downstream collector.
-- Append-only audit log (`functions/src/auditLog.ts`) — SHA-256 hash-chained records; deletion + mutation both detectable. 7-year retention, BigQuery cold-storage sink.
-- Webhook dispatcher (`functions/src/webhookDispatch.ts`) — 7 event types (`distribution.{queued,started,succeeded,failed}`, `chunk.uploaded`, `manifest.published`, `rollback.executed`), HMAC-SHA256 signed (`sha256=<hex>`), retry queue with exponential backoff (5 s × 3 × 1 h cap × ±20% jitter, 10-attempt cap). `classifyResponse` maps 2xx=success, 408/425/429/5xx=retry, other-4xx=permanent.
-
-**agent sync pipeline (windows service)**
-- `sync_commands` / `sync_manifest` / `sync_downloader` / `sync_state` / `sync_assembler` / `sync_scrub` modules (`agent/src/`) implementing the end-to-end v2 pipeline. ~350 new unit tests covering fetch + diff + cache, range resume (`Range: bytes=N-`), verify failure, URL refresh, atomic assembly, drift detection.
-- Destination allowlist (`agent/src/destination_allowlist.py`) — fail-closed: empty/missing rejects all writes. Realpath-based; rejects symlinks/junctions (via `FILE_ATTRIBUTE_REPARSE_POINT` check — catches cve-2022-21658 / cve-2025-4330 class), windows reserved device names (NUL/CON/PRN/COM1-9/LPT1-9, any case, with or without extension), alternate data streams, path traversal.
-- Path-traversal + TOCTOU hardening (`sync_assembler.py`) — post-rename realpath check catches parent-dir symlink-swap between allowlist validation and the rename landing; suspect files get quarantine-deleted. Sibling-prefix regression (`/foo/bar-extra` must NOT satisfy root `/foo/bar`) covered via separator-suffixed prefix match.
-- Explicit ACL on extracted files — `SYSTEM` + `Administrators` only, inheritance stripped. Fixed a 0x80000000 overflow on python 3.9 + pywin32 that was silently no-op'ing the ACL hardening in prior builds.
-- Long-path support (`\\?\` prefix for >260-char paths), throttled progress reporting (every 5% or 30 s, not every chunk), real cancellation (flag checked between chunks, atomic rename completes if in flight, no corrupted files), locale + accented filename support (French/Spanish/German/Nordic accents, CJK, Arabic/Hebrew RTL, emoji with surrogate pairs, NFC/NFD).
-
-**security / ops / observability**
-- Per-site kill switch (`sites/{siteId}.roostEnabled`) — agent checks before every `sync_pull`; web routes gate via `gateOrProceed()` returning 503 problem+json. Fail-open on read error (a transient firestore blip must not silently disable a customer). 30 s TTL on both sides → flip propagates within 60 s. Matching python + ts implementations, field-name-pinned on both sides.
-- No-token-logs lint gate (`scripts/check-no-token-logs.mjs`) — scans TS/JS/TSX/MJS + Python for log calls that interpolate auth-token identifiers, handles f-strings and template literals, 6 must-flag + 5 must-pass self-test fixtures. Runs via `.github/workflows/no-token-logs.yml` on PR + push. Plus an ESLint `no-restricted-syntax` rule for dev-time IDE feedback.
-- SLSA Build Level 3 pipeline (`.github/workflows/build-installer.yml`, doc at `docs/internal/slsa-build-l3.md`) — hermetic windows build with pinned Inno Setup 6.2.2 + Python 3.11, keyless sigstore signing via github OIDC, reusable workflow pinned to `slsa-framework/slsa-github-generator@v2.0.0` (not `@main`, prevents silent chain-of-trust degradation). Verify job runs `slsa-verifier v2.6.0` against artifact + provenance before the release ships.
-- k6 load-test suite (`load-tests/k6/`) with SLO targets enforced as thresholds — chunks/check p99 < 200 ms, upload-urls < 500 ms, download-urls < 400 ms, finalize-manifest < 800 ms, rollback < 400 ms. Base reliability gate: `http_req_failed < 0.01`. Includes a **race scenario** on finalize-manifest (20 VUs × same `expectedCurrentManifestId` → P0 CAS regression guard: exactly one 201, rest 412).
-- Architecture doc (`docs/architecture.md`) extended with the roost section: storage layout, manifest format, browser upload pipeline mermaid, agent sync pipeline with per-module links, canary-first rollout algorithm, security floor, explicit restatement of the clean-cutover decision.
-
-### added — playwright e2e suite
-
-A Playwright end-to-end test suite running the full web dashboard against Firebase emulators (Auth :9099, Firestore :8080, Storage :9199). Covers 50+ specs across six phases:
-
-- **Phase A** — emulator wiring + smoke (4 specs): Admin SDK branch routing, sentinel canary for `firebase-admin.ts`
-- **Phase B** — auth flows (4 specs): login, logout, signup, HttpOnly session cookie round-trip via `page.evaluate(fetch)` pattern
-- **Phase C** — account + settings (8 specs): profile update, passkey enrol/delete, preferences, password change with fixture-isolation (dedicated `password-test-user` prevents Firebase token revocation from poisoning other specs)
-- **Phase D** — dispatch flows (22 specs): reboot, shutdown, kill-process, recall/store/clear display layouts, deployment create/progress/cancel/retry, roost create, rollback auth + validation
-- **Phase E** — time-travel flows (10 specs): `page.clock`-driven specs for reboot countdown, cancel-lockout threshold, display-apply deadline auto-revert, heartbeat staleness → offline flip, heartbeat recovery via onSnapshot overwrite
-- **Phase F** — CI + hardening: `.github/workflows/e2e.yml` with Temurin JDK 21, Playwright browser caching keyed on `@playwright/test` version, `firebase emulators:exec` wrapper, artifact upload on failure (14-day retention)
-
-Infrastructure highlights: `roleState()` helper for pre-authenticated specs, `stubCommand` / `completeCommand` agent-stub helpers, `seedMachine` + `seedBaseline` deterministic seeding, per-spec `page.clock.install({ time: Date.now() })` pattern (must precede `page.goto` for React's setInterval to bind to the fake clock). Full guide at `web/e2e/README.md`.
-
-### decisions locked (roost)
-
-- **No `/api/v2/` URL prefix** — the new routes ARE the API.
-- **No backwards compatibility with v1 agents** — clean cutover, the v2.10.0 agent is a hard requirement. No dual-write window, no shadow-read, no `project_url` fallback. Operators re-roost on v2; existing v1 distributions end at cutover.
-- **No header-based versioning** (no `Accept: application/vnd.owlette.v2+json`).
-- **v3-deferred** (do NOT rebuild in v2): bidirectional sync, LAN swarm, Ed25519 manifest signing, public CLI + GitHub Action, FastCDC, chaos rack.
-
 ### changed
-- **Three-role permission model** — `member` / `admin` / `superadmin` replaces the two-tier `user` / `admin` scheme. Superadmins retain platform-wide god-mode (user management, installer uploads, access to every site regardless of assignment). The new `admin` tier is site-scoped: site admins get elevated rights only on the sites in their `sites[]` — they can edit site config, delete machines, and manage display layouts without holding any platform-level powers. Members keep standard site-scoped access.
-- **User-management page redesigned** for the new model: role selector is now a three-option dropdown (with icons, colour, and inline descriptions of each role's capabilities); stats cards show per-role counts; admin rows display the specific sites each admin is responsible for (small pills, easy to scan). Self-demotion guard narrowed — superadmins are still blocked from self-demotion (platform-lockout risk), but admins can demote themselves since no cross-site powers are in play.
-- **Superadmin visual indicator** — small red "superadmin" Crown pill appears next to the user avatar on every authenticated page when signed in as a superadmin. Signals god-mode so routine site ops don't accidentally use elevated access.
 
-### migration
-- **Deploy order is load-bearing**: run `node scripts/migrate-roles.mjs --env=<dev|prod>` first, then `firebase deploy --only firestore:rules`, then the web deploy. The migration flips existing `role: 'user'` → `'member'` and `role: 'admin'` → `'superadmin'` idempotently; supports `--dry-run`. Existing admins become superadmins automatically (semantics preserved). The new site-scoped `admin` tier starts empty — superadmins promote members via the user-management page. Reversed deploy order would transiently lock current admins out of their sites until the migration runs.
-- **`scripts/migrate-profiles.mjs`** — one-shot bootstrap script for the multi-device metrics schema (shipped at 2.8.1). Iterates every `sites/*/machines/*` doc and writes a best-effort `hardware/profile` subdoc from legacy singular `metrics.cpu/disk/gpu/network.interfaces` fields. Skips machines that already have a profile or are on schemaVersion 2. Idempotent; supports `--env=<dev|prod>`, `--site=<id|all>`, `--dry-run`, `--force`. Useful for offline/stale fleets that haven't upgraded to the 2.8.1+ agent yet — gives the dashboard something renderable until the agent overwrites the bootstrap on its next startup.
+- roost **manifests** are now **versions** everywhere; upgrade agents together with the web app.
+- three roles: **member**, **admin** (site-scoped) and **superadmin** (platform-wide), with a redesigned user page and a superadmin badge.
+- self-hosters: run `node scripts/migrate-roles.mjs`, then deploy rules, then web; also `scripts/migrate-manifest-to-version.mjs`.
 
----
+### added
+
+- roost: upload files from the dashboard with resume, a pre-upload summary and a rollback dialog with file diff.
+- every roost version gets a number (`v3`) and an optional description.
+- reference versions by number, `#3`, `v3`, id, or `current` / `previous` / `first`.
+- roost rows show the current version, with history and **new version** inside.
+- canary-first rollouts, per-site roost kill switch and storage quotas.
+- and 4 smaller fixes.
 
 ## [2.9.0] - 2026-04-18
 
 ### added
-- **Per-logical-volume disk IO monitoring** — agent now collects per-drive read/write throughput, IOPS, and busy% via WMI's `Win32_PerfFormattedData_PerfDisk_LogicalDisk`. Each drive (`C:`, `L:`, etc.) reports its own rates instead of one system-wide aggregate; selecting a different drive in the dashboard shows that drive's specific IO. New Firestore field `metrics.diskio` is keyed by volume id (mirrors `metrics.disks` shape). History samples carry per-volume entries under `sample.dios = [{i, rb, wb, bu}]`.
-- **Disk IO surfaces on machine cards and list rows** — selected drive's read/write rates shown as stacked `r <rate>` (green) / `w <rate>` (orange) lines, hidden when idle. Auto-scales between B/s, KB/s, MB/s, GB/s. List-view disk cell widened to 160px with a 2-column layout (usage stats left, IO right).
-- **Disk IO chart series in the metrics detail panel** — per-volume sub-toggles for read/write/busy% with volume-qualified labels (`C: read`, `L: busy`). Read/write render on the hidden axis (throughput); busy% shares the default 0-100% axis. Tooltip and stats grid both volume-qualified.
-- **Friendly GPU names in the detail panel** — UUID stays as the chart-data key (stable, unique) while toggle labels, chart legend, stats grid, and tooltip all show "NVIDIA GeForce RTX 2080 Ti" via a lookup against the static profile.
+
+- disk read and write speeds per drive, on machine cards, list rows and the detail chart.
+- the detail panel shows friendly GPU names.
 
 ### changed
-- **Network cards now use arrow notation** (`↑ <rate>` / `↓ <rate>`) instead of `TX` / `RX` text on both card and list views — language-independent, more compact, and a cleaner visual rhythm with the new disk r/w letters.
-- **Metric cell clicks SWAP the detail panel** instead of merging — clicking disk then GPU shows only GPU lines, not both. Click expansion still adds every per-device id (all disks, all GPUs, all NICs) so the panel shows all devices of the clicked type.
-- **Toggles can deselect everything** — the "must keep at least one selected" guard is gone. Empty chart is a valid state; the stats grid hides cleanly.
-- **Stats grid headers lowercased** (`avg` / `max` / `min`) for consistency with the rest of the panel's UI copy.
+
+- network shows `↑` and `↓` instead of TX and RX.
+- clicking a metric swaps the detail panel instead of adding to it.
+- you can deselect every chart toggle.
 
 ### fixed
-- **MetricsDetailPanel chart now re-measures when the tab becomes visible** — Recharts' ResponsiveContainer would occasionally hold a stale width while the tab was backgrounded (rAF + ResizeObserver throttling), then render the plot area offset to the right with blank space on the left. A synthetic `window.resize` event on `visibilitychange → visible` forces all charts to re-measure.
-- **Watchdog timeouts actually unblock the metrics loop** — both `_wmi_logical_disk_with_timeout` (disk IO) and `_disk_usage_with_timeout` (disk partitions) used `with ThreadPoolExecutor` whose `__exit__` calls `shutdown(wait=True)`, blocking forever on a hung WMI/network-mount worker. Switched both to manual lifecycle with `shutdown(wait=False, cancel_futures=True)` so a hung worker leaks instead of stalling.
-- **NSSM runner crash on first metrics tick** — `MockService` in `owlette_runner.py` was missing four attributes that `OwletteService.__init__` defines (`_display_check_counter`, `_cached_display_hash`, `_shutting_down`, `_reboot_attempt_started_monotonic`). The display topology check at the top of every loop iteration crashed with `AttributeError`, causing NSSM to thrash-restart. Added the missing initializations plus two more (`_last_status_signature`, `_last_status_write_time`) for the status-throttle path.
-- **NaN-guarded disk IO history extraction** — cloud function now uses `Number.isFinite()` checks before pushing IO entries to a sample. Prevents a poisoned NaN field (rare but possible from upstream perf-counter glitches) from causing Firestore to reject the entire history write.
-- **Disk IO detail-panel UX rebuild** — toggle list collapsed from a wall of `C: read` / `C: write` / `C: busy%` / `HarddiskVolumeN ...` labels (12+ buttons on a typical machine) to two camps with icons: `<HardDrive> C:` (storage / disk usage %) and `<ArrowDownUp> C:` (activity — when on, plots both read% and write% lines). `HarddiskVolumeN` raw partitions are filtered out at the agent so they never enter Firestore in the first place; existing entries fall out of the live doc on the next metrics upload (Firestore dot-notation replaces the field). Read/write rates are now plotted as % of max bandwidth on the same 0-100 axis as everything else — agent ships a hardware-class `maxBps` per volume (NVMe ≈ 3.5 GB/s, SATA SSD ≈ 550 MB/s, HDD ≈ 150 MB/s, etc., detected via `MSFT_PhysicalDisk` at first call) that ratchets up on observed peaks.
-- **Disk IO watchdog timeout 2s → 10s** — the old 2s budget skipped the perflib LogicalDisk stalls that occur when the BITS service flips state during Windows Update / Delivery Optimization polling, causing ~12% of metrics ticks to report empty disk IO. Empirical: 2s and 5s both still skipped (3.6-3.7 timeouts/hr, perfectly spaced ~16 min apart matching SCM 7040 BITS demand↔auto cycles); the perflib provider lock during a BITS state change consistently exceeds 5s. 10s captures them — verified at zero timeouts over 23 min observation post-fix. The metrics loop runs in its own thread (not the main service loop) so a 10s WMI call doesn't stall anything else. (A persistent-worker variant of the WMI call was tried first but reproducibly triggered RPC_E_WRONG_THREAD on every call after the first — the python `wmi` package binds proxies to the apartment that created them, and reusing a cached proxy from a long-lived thread is incompatible with how the package hands off to the COM runtime. The per-call pattern stays.)
 
----
+- detail charts no longer render offset after the tab was in the background.
+- a hung disk query no longer stalls metrics.
+- the agent no longer crash-loops on its first metrics tick.
+- disk activity no longer drops out during Windows Update.
+- and 2 smaller fixes.
 
 ## [2.8.1] - 2026-04-14
 
 ### added
-- **Per-device metrics schema (v2)** — metrics now key cpus/disks/gpus/nics by stable device id instead of the old singular `cpu`/`disk`/`gpu` fields. Each machine publishes a `hardware/profile` subcollection document (schemaVersion 1) describing its physical devices; heartbeats reference those ids and include a `primary` pick per kind (selected by busyness with 5% hysteresis so the display doesn't flicker). Multi-GPU rigs, multi-disk setups, and multi-NIC hosts now render every device instead of collapsing to the first one.
-- **Per-user device selection preferences** — dashboard list and card views remember which device each user wants to see per machine, persisted to `users/{uid}/devicePrefs/global` in Firestore (no localStorage). The list view shows a column-header dropdown when any visible machine has >1 of a kind; each row falls back to its own `primary` when the selection isn't present locally.
-- **`deviceResolvers` utility** — `resolveDevice`, `shouldShowDeviceDropdown`, and `unionIds` helpers with unit tests; shared by list view, card view, and the metrics detail panel.
-- **Metrics detail panel persistence** — selected metric tabs (and selected NIC, when relevant) now persist per machine via `userPreferences.graphTabs`, so refreshing or switching sites no longer resets your view.
 
-### changed
-- **Agent hardware profile is built on-device** (`hardware_profile.py`) with signature-hash change detection and a 5-minute rate-limit gate; only re-uploads when hardware actually changes. Gate stamps its timestamp *before* `build_profile()` so a persistent WMI/disk failure doesn't storm the heartbeat loop.
-- **`shared_utils.get_system_metrics_with_config` retained its legacy snake_case shape** (`cpu`/`memory`/`disk`/`gpu`/`network`) for in-process consumers (`mcp_tools`, `report_issue`, tray GUI) while also carrying the camelCase keys the v2 uploader needs; `skip_gpu` is honored again to keep the tray GUI free of `nvidia-smi` console-window flashes.
-- **WMI calls from the metrics thread now initialize COM** via `pythoncom.CoInitialize()` so per-socket CPU detection works on dual-socket workstations instead of silently falling through to the psutil fallback.
-- **Legacy singular metrics fields are deleted on v2 upload** (`metrics.cpu`/`metrics.disk`/`metrics.gpu` → `DELETE_FIELD`) so doc size doesn't grow with both schemas side by side.
+- multi-GPU, multi-disk and multi-network machines show every device, not just the first.
+- the dashboard remembers which device you picked per machine.
+- the metrics detail panel remembers your selected tabs across refreshes and site switches.
 
 ### fixed
-- **Cloud `metricsHistory` function reads v2 per-device maps** (via `primary` + first-entry) with v1 fallback, so sparklines and threshold alerts keep working across the rollout window instead of flatlining the moment a v2 agent reports.
-- **`shimLegacyMachine` no longer clobbers a real profile** during the mixed-version window when a v2 agent has uploaded its profile doc but its next metrics write is still legacy-shaped.
-- **`hardware_profile._mac_for` return type** tightened to `Optional[str]`.
 
----
+- sparklines and threshold alerts keep working while the fleet moves to the new metrics format.
+- dual-socket workstations report CPUs correctly.
 
 ## [2.8.0] - 2026-04-12
 
 ### added
-- **Per-machine Cortex kill switch** — operators can toggle Cortex off on a specific machine from the Cortex header (`CortexPowerToggle`). The agent reads the `cortexEnabled` flag before every poll and, when disabled, rejects pending messages with a clear error back to the web UI instead of executing tool calls. Firestore security rules were extended to allow dashboard writes to `cortexEnabled` without granting write access to agent-only fields (`online`, `lastHeartbeat`).
-- **Profile photo upload/remove** — users can upload an avatar from account settings (`AccountSettingsDialog`). Photos are stored in Firebase Storage at `users/{uid}/avatar.jpg` and surfaced throughout the UI via the new `UserAvatar` component (Cortex chat bubbles, page header). New `storage.rules` grant each user read/write access to their own avatar path only.
-- **Copy-message button in Cortex chat** — hover-revealed `CopyButton` on each chat bubble copies the full message text (cortex or user) to the clipboard.
-- **Cortex suggested-question additions** and new `docs/dashboard/timezones.md` reference page.
+
+- turn hoot off on a single machine from the hoot header.
+- upload or remove a profile photo in account settings.
+- copy button on every hoot chat message.
 
 ### changed
-- **Relicensed from AGPL-3.0 to FSL-1.1-Apache-2.0** (Functional Source License, Version 1.1, Apache 2.0 Future License). Self-hosting, internal use, non-commercial use, and professional services remain freely permitted; only competing commercial products or services are restricted. Each release automatically converts to Apache License 2.0 two years after it is made available. Copyright holder is The Experiential Company.
-- Updated license references across web dashboard footers, landing page, terms page, OpenAPI spec, docs site footer, agent GUI, and repository README to reflect the new license.
-- **`run_powershell` allow-list removed** — the first-token regex was security theater (a semicolon-prefixed `Get-Date; Remove-Item` bypassed it trivially) and caused constant false rejections on legitimate multi-statement scripts (`foreach`, `if`, `try`, `$var = ...`). Accountability now comes from the Firestore audit trail (`cortex-events` + site logs) and the `[MCP-AUDIT]` local log, which captures a 500-char preview of every script. `run_command` retains its binary allow-list.
-- **Tier 3 audit previews expanded from 100 → 500 chars for script-bearing tools** (`run_powershell`, `execute_script`). One-line commands still truncate at 100. Multi-line PowerShell/Python bodies are now actually readable in the site log instead of showing only the first line.
-- **`mcp_tool_call` exempted from the per-type command rate limit.** Cortex fires tool calls in parallel by design and is already authenticated + audit-logged per call; a 5-second throttle broke parallel queries. Other command types remain rate-limited.
-- **`get_event_logs_filtered` wrapped in `try`/`catch`** — "no matching events" now returns `[]` cleanly instead of surfacing as a non-zero exit with empty stderr.
-- **`sync-versions.js`** now updates the shields.io README version badge, the "Current" lines in `docs/internal/version-management.md`, and "Last Updated" date stamps automatically.
+
+- relicensed from AGPL-3.0 to FSL-1.1-Apache-2.0; self-hosting and internal use stay free.
+- `run_powershell` no longer has an allow-list; every script is logged for audit, with a longer preview.
+- hoot can run tool calls in parallel without being rate limited.
 
 ### fixed
-- **`_get_agent_health` MCP tool** was calling a `HealthProbe()` API that no longer existed; rewired to the current `HealthProbe(config_path, api_base).run()` shape and now returns `status`, `error_code`, `error_message`, `checked_at`, and `checks` alongside version/hostname/uptime.
+
+- hoot's agent health check works again.
+- filtered event log searches with no matches return an empty list.
 
 ## [2.7.0] - 2026-04-11
 
 ### added
-- **14 new MCP tools for Cortex** — purpose-built Tier 2 admin tools with validated parameters. Eliminates most fallbacks to `execute_script` for common sysadmin scenarios and produces cleaner chat UX (one green tool call instead of 2-4 red-then-green retries).
-    - **`manage_process`** — kill / suspend / resume any OS process by name or glob pattern. Refuses to touch critical system processes (lsass, winlogon, csrss, etc.).
-    - **`manage_windows_service`** — full services.msc parity: start / stop / restart / pause / continue / set_startup / set_recovery / get_details. `set_recovery` configures the auto-restart-on-crash safety net (first/second/subsequent failure actions, restart delay, reset counter). `get_details` returns status, startup type, binary path, dependencies, and recovery config in one call.
-    - **`configure_gpu_tdr`** — set Windows GPU TDR (Timeout Detection and Recovery) registry values (TdrDelay, TdrDdiDelay). Critical for TouchDesigner/Unreal workloads with heavy shaders.
-    - **`manage_windows_update`** — pause/resume + full scheduling: set_active_hours, set_scheduled_install, set_restart_deadline, set_feature_deferral, set_quality_deferral.
-    - **`manage_notifications`** — suppress Windows toast notifications, enable Focus Assist (priority_only/alarms_only), disable notifications per-app. Essential for kiosks so Windows/Teams/Defender toasts don't appear on exhibit displays.
-    - **`configure_power_plan`** — set power plan + disable sleep/hibernate/screen blanking. Required for every 24/7 unattended installation.
-    - **`check_pending_reboot`** (Tier 1) — detect whether a reboot is pending and why (Windows Update, CBS, pending file renames, SCCM).
-    - **`manage_scheduled_task`** — full taskschd.msc parity: list / enable / disable / delete / run_now / stop / create / get_details / get_history. `create` supports full trigger schema (boot/logon/once/daily/weekly/on_event/on_idle), run-as principals (SYSTEM/LOCAL_SERVICE/NETWORK_SERVICE), and settings (start_when_available, restart_count, execution_time_limit, multiple_instances, etc.).
-    - **`network_reset`** — flush_dns / renew_ip / restart_adapter / reset_winsock.
-    - **`registry_operation`** — allowlisted registry read / write / delete. Explicit allowlist of safe prefixes (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services); SAM / SECURITY / Cryptography hives blocked.
-    - **`clean_disk_space`** — clean temp / windows_temp / prefetch / recycle_bin / owlette_logs with age filter and dry-run mode.
-    - **`get_event_logs_filtered`** — fast event log queries via `Get-WinEvent -FilterHashtable`. Orders of magnitude faster than the older `get_event_logs` when filtering by process, event ID, or time window.
-    - **`manage_windows_feature`** — add / remove / list Windows Optional Features, Capabilities, or AppX packages. Removes OneDrive / Xbox Game Bar / Cortana / Teams consumer bloat during kiosk provisioning. Critical Windows features are blocklisted.
-    - **`show_notification`** — display an on-screen toast or modal message (opposite of manage_notifications). Useful when a tech is physically nearby.
-- **Background reboot-pending auto-alert** — agent checks for pending reboot every 15 min and emits a site event via the existing `/api/agent/alert` pipeline. Dashboard admins see "Reboot pending on [machine]" alerts; configured email/webhook alerts fire automatically. Idempotent — alerts once per pending-state transition.
+- 14 new hoot admin tools: processes, services, GPU timeouts, windows update, power plan, scheduled tasks.
+- more hoot tools: network reset, registry, disk cleanup, fast event log search, windows features, on-screen messages.
+- the dashboard alerts **reboot pending** on a machine, checked every 15 minutes, with email and webhook alerts.
 
 ### changed
-- **Cortex CLAUDE.md** — new "Prefer Tier 2 tools over Tier 3" section with a mapping table. Cortex will now reach for purpose-built tools first and fall back to `execute_script` only for novel tasks.
-- All new Tier 2 tools emit structured `[MCP-AUDIT]` log entries for security monitoring.
-- `mcp_tools.py` gained `_CRITICAL_PROCESSES` blocklist and `_SAFE_REGISTRY_PREFIXES` allowlist as hardcoded safety helpers.
+- hoot reaches for these tools first and runs free-form scripts only for unusual tasks.
 
 ### security
-- `manage_process` refuses to kill critical Windows processes (lsass, winlogon, csrss, services, etc.) and Owlette's own service — can't be bypassed via tool parameters.
-- `registry_operation` has explicit allowlist + blocklist; hives like SAM and SECURITY are unreachable regardless of params.
-- `manage_windows_feature` has a hardcoded blocklist of features Owlette itself depends on (NetFx4, WMI-*, PowerShell*, core networking).
-- Scheduled task creation uses argument-list subprocess calls and PowerShell string escaping to prevent command injection via task names, programs, or arguments.
-
----
+- the new tools refuse critical system processes, protected registry areas and features owlette needs.
 
 ## [2.6.6] - 2026-04-11
 
 ### fixed
-- **Screenshot capture restored** — the v2.6.5 `run_python` sandbox blocked internal screenshot callers (`mss`, `PIL`, `os` imports denied), breaking the dashboard screenshot panel, Cortex `capture_screenshot` tool, crash screenshots, and live view. `execute_in_user_session` now accepts a `trusted=True` flag for first-party callers that bypasses the sandbox; the LLM-facing `run_python` MCP tool remains sandboxed (`trusted=False` default).
-
----
+- screenshots work again: the dashboard panel, hoot, crash screenshots and live view broke in 2.6.5.
 
 ## [2.6.5] - 2026-04-11
 
 ### security
-- **MCP tool hardening** — `run_command` now uses `shell=False` with `shlex.split(posix=False)` to prevent shell injection via metacharacters (`&&`, `|`, `;`). Allowlist still validates the first token.
-- **Python sandbox** — `run_python` restricts `__builtins__` (no `eval`, `exec`, `compile`, `os`, `subprocess`). Imports gated to safe stdlib modules only (math, json, re, datetime, etc.). `open()` and `getattr` are allowed for file I/O and introspection.
-- **File I/O path validation** — `read_file` and `write_file` MCP tools validate paths against allowed directories (Owlette data, user profile, temp, configured process dirs). Blocks system directory access and path traversal.
-- **PowerShell audit logging** — `execute_script`, `run_command`, `run_python`, `read_file`, `write_file` now emit `[MCP-AUDIT]` log entries for security monitoring.
-- **Token exchange race fix** — registration code exchange uses two-phase pattern: validate → generate tokens → atomically mark used. Prevents burning codes on transient Firebase Auth failures.
-- **Token refresh race fix** — refresh endpoint wrapped in Firestore transaction to prevent concurrent requests from creating inconsistent token state.
-- **Command field allowlist** — `commands/send` API filters data fields per command type before writing to Firestore. Prevents field injection (e.g., overriding `timestamp` or `status`).
-- **Error sanitization** — 60 API routes now use centralized `apiError()` helper that returns generic messages in production, hiding Firebase internals and stack traces.
-- **Firestore rules hardened** — site creation requires `owner == auth.uid`, agent logs require `machineId == token.machine_id`, chat creation requires `userId == auth.uid` (with autonomous exception).
-- **HSTS header** — `Strict-Transport-Security: max-age=31536000; includeSubDomains` added.
-- **Redirect validation** — login and MFA pages validate redirect/return URLs (must be relative paths, blocks protocol-relative `//` redirects).
-- **Cortex nonce dedup** — autonomous endpoint accepts optional `nonce` field to prevent replay attacks.
-- **Deployment checksum validation** — API validates SHA-256 format when provided; agent already enforces verification.
+- hoot's command, script and file tools are locked down against injection and access to system folders.
+- hoot's tool calls are written to an audit log.
+- pairing codes and token refresh are more reliable and safer against concurrent requests.
+- api errors no longer reveal internals, and stricter firestore rules and redirect checks protect sign-in and sites.
+- added an HSTS header and replay protection for autonomous hoot calls.
 
 ### changed
-- Updated `next` 16.2.1 → 16.2.3 (Server Component DoS fix)
-- Updated `iron-session` 8.0.3 → 8.0.4 (cookie out-of-bounds char fix)
-- Updated `cryptography` 41.0.7 → ≥44.0.0 (hygiene; CVE-2023-50782 not exploitable in Fernet-only usage)
-- `-ExecutionPolicy Bypass` retained on `execute_script` (required for Group Policy–hardened kiosks)
-
----
+- updated web and agent dependencies for security fixes.
 
 ## [2.6.4] - 2026-04-10
 
 ### added
-- **Session state classifier** — new `session_state.py` module persists shutdown intent and last-alive timestamps across reboots. On startup, the agent classifies how the previous session ended and emits a warning event to the dashboard for anomalous shutdowns:
-    - `external_reboot` — operator or Windows Update restarted the machine outside Owlette
-    - `unexpected_reboot` — no shutdown signal detected (BSOD, power loss, hard reset)
-    - `unexpected_service_restart` — agent process crashed or was killed (NSSM auto-restart)
-    - Silent for Owlette-initiated reboots/shutdowns, version upgrades, and first runs
-- Tooltips on event log action and detail text — truncated entries now show full text on hover (shadcn Tooltip, matching dashboard style)
+- after a restart the dashboard warns about external reboots, unexpected reboots and crashed agents; owlette's own restarts stay silent.
+- hover long event log entries to read the full text.
 
 ### changed
-- Reboot event log details cleaned up — human-readable info leads, entry UUID shortened to 8-char prefix for correlation (was full 36-char UUID)
-
----
+- reboot log entries lead with readable details and a shorter entry id.
 
 ## [2.6.3] - 2026-04-09
 
 ### fixed
-- **CRITICAL**: scheduled reboot scheduler no longer fires entries that are more than 5 minutes late. A 5-minute "missed-fire grace window" silently skips any entry observed past its scheduled instant + 5 min, marks it as fired-for-the-day, and logs a `scheduled_reboot_missed` event to the dashboard. Previously, if the agent restarted (or a schedule entry was edited) AFTER the scheduled time, the agent would catastrophically fire the missed reboot the next time it observed the entry — hours late, with no warning, with no chance for the operator to cancel. This was the cause of an unintended reboot that destroyed days of in-progress rendering work on a dev machine
-- Scheduled reboot scheduler no longer retries failed reboots. The previous 3-attempts-with-7-min-timeout retry loop is gone — a failed reboot is logged and dropped, never re-fired automatically
-- Scheduled reboot scheduler now resolves entry times against the **machine's local timezone**, not the site timezone. A `14:00` entry on a Tokyo installation and a `14:00` entry on a New York installation in the same Owlette site now reboot at their respective local 14:00s, not synchronized to one shared timezone. The dashboard reboot-schedule editor was always timezone-agnostic — the agent was incorrectly applying the site timezone
-- Tray icon "Exit" now actually stops the Owlette service. Previously it wrote a `tmp/shutdown.flag` file that the service detected and exited from, but NSSM's `AppExit Default Restart` immediately re-started the service, so Exit was a no-op the user couldn't see. Exit now triggers a UAC-elevated `net stop OwletteService` via the Service Control Manager, which is the only stop NSSM respects
-- Latent `firestore_rest_client.set_document(merge=True)` bug fixed. When called without any `SERVER_TIMESTAMP` fields (e.g. every `set_machine_flag()` call), the function silently sent a PATCH without `updateMask.fieldPaths`, which the Firestore REST API treats as a full document REPLACEMENT — every field not in the request body was DELETED. This wiped `lastHeartbeat`, `online`, and `metrics` from the machine doc on every flag write, then the next `_upload_metrics` call (within ~1s) silently restored them. The bug had been latent in the codebase for an unknown length of time — only became visible when the new atomic startup flag-clear in this same release made the wipe gap large enough for the dashboard pill to flicker offline. Now correctly sends `updateMask` when `merge=True`
-- Dashboard `MachineStatusPill` heartbeat parser hardened to handle every shape Firebase JS SDK v12 can return for a Timestamp field — `Timestamp` instance via `.toMillis()`, plain `{seconds, nanoseconds}` from cache rehydration, legacy `{_seconds, _nanoseconds}`, JS `Date`, plain number, ISO string. Previously, only the strict `Timestamp` instance shape was recognised; cache rehydrations dropped silently to `0`, which the staleness check then treated as "infinitely stale", flipping the dashboard pill offline
-- Dashboard `rebootMachine()` and `shutdownMachine()` now write `configChangeFlag: true` alongside the optimistic countdown anchor. Without it, the firestore.rules `allow update` predicate rejected the write, so the optimistic countdown never appeared on the dashboard until the agent's own write came through (~5-10s later) — the perceived "the cancel button only appears right before the restart" bug
+- scheduled reboots more than 5 minutes late are skipped and logged, never fired hours late.
+- failed scheduled reboots are no longer retried automatically.
+- scheduled reboot times use each machine's own timezone, not the site's.
+- tray icon **Exit** now really stops the owlette service.
+- machine status no longer flickers offline after flag writes or cached heartbeats.
+- the reboot countdown and cancel button appear on the dashboard right away.
 
 ### changed
-- Reboot countdown anchors `rebootScheduledAt` and `shutdownScheduledAt` are now Unix-seconds NUMBERS representing the TARGET reboot time (when the OS will actually restart). Previously they were Firestore server timestamps representing the START of a fixed 30-second countdown. The new semantic supports the new agent-side announce → 5-second pre-roll → 60-second OS countdown sequence, and the dashboard pill renders the countdown the moment the listener fires (no second round trip required)
-- Agent reboot scheduler state file moved from `C:\ProgramData\Owlette\state\reboot_state.json` to `C:\ProgramData\Owlette\tmp\reboot_state.json`, alongside the existing `app_states.json` and `service_status.json`. The unused `state\` directory is removed entirely
-- Tray Exit no longer writes `tmp/shutdown.flag`. The flag handler in the service main loop is also removed (it was dead code — see "fixed" above)
-
-### added
-- New `firebase_client.set_machine_flags(dict)` helper for atomic multi-field writes to the machine doc. Used by the new reboot announce path so the dashboard sees `rebootScheduledAt + rebooting + rebootSource + rebootCancellable + rebootEntryId` in a single listener tick instead of multiple intermediate states. Raises on failure (unlike the silent-log `set_machine_flag`) so callers can react
-
----
+- reboot countdown now counts to the actual restart time: announce, short pause, then 60 seconds.
 
 ## [2.6.2] - 2026-04-08
 
 ### added
-- Live cancel-reboot countdown on the dashboard — the status pill becomes a red pulsing `MM:SS` timer the moment a reboot or shutdown starts, anchored to a server-side `rebootScheduledAt` / `shutdownScheduledAt` timestamp so all viewers stay in sync and the countdown survives page refreshes
-- Hover the countdown pill to reveal a "cancel" affordance; clicking it sends `cancel_reboot` and the pill returns to "online" once the agent confirms
-- Context menu adapts during a pending reboot/shutdown — the reboot/shutdown items are replaced with a single red "cancel reboot" / "cancel shutdown" item, keeping the discoverable cancel path intact for users who don't notice the pill
-- Final-5-seconds safety: pill becomes non-clickable and shows "rebooting…" because Windows `shutdown /a` is unreliable in the final phase
-- Scheduled (cron) reboots now write the same countdown anchor, so they get the same live timer + cancel UX as manual reboots
-- New shared `MachineStatusPill` component used by both list and card views — eliminates the duplicated status badge JSX and the now-redundant standalone cancel button in card view
+- a red pulsing `MM:SS` countdown on a machine's status pill during a reboot or shutdown, synced across viewers.
+- hover the countdown to cancel; the right-click menu also offers **cancel reboot** or **cancel shutdown**.
+- scheduled reboots show the same countdown and cancel.
 
 ### fixed
-- Reboot/shutdown confirmation dialogs no longer claim "you can cancel during the countdown" without exposing any cancel UI — copy now reads "you'll have 30 seconds to cancel from the dashboard"
-- `rebooting` and `shuttingDown` flags written by the agent are now actually read by the dashboard's Firestore listener — they were declared on the `Machine` interface but never propagated, so the existing "rebooting…" amber pill never displayed in production
-
----
+- confirmation dialogs now say you have 30 seconds to cancel from the dashboard.
+- the **rebooting…** pill now actually shows on the dashboard.
 
 ## [2.6.1] - 2026-04-05
 
 ### added
-- Batched process alert emails — crash alerts are queued for 2 minutes then grouped by site into a single digest email, preventing spam when multiple machines restart simultaneously
-- New cron endpoint `/api/cron/process-alerts` drains the alert queue every 3 minutes and sends one digest email per site with a table of all affected machines/processes
-- Digest email adapts: single alert uses the familiar single-process layout, multiple alerts show a grouped table
+- crash alerts are batched for 2 minutes into one digest email per site.
 
 ### fixed
-- Owlette's built-in process restart (kill-and-relaunch for hung processes) no longer triggers false "process crashed" emails — writes KILLED status before terminating
-- Scheduled and dashboard-initiated machine reboots/shutdowns no longer trigger crash alert emails — agent suppresses alerts during the shutdown window
-- Removed unused `buildProcessAlertEmail` from alert route (moved to cron digest)
-
----
+- owlette's own restart of a hung process no longer sends a false crash email.
+- planned reboots and shutdowns no longer send crash alert emails.
 
 ## [2.6.0] - 2026-04-04
 
 ### added
-- Sentry error monitoring for both web dashboard and agent — captures unhandled exceptions with full stack traces, machine identity tags (hostname, site_id, project_id), and user context
-- Agent Sentry events include structured machine context (hostname, site, version) for quick triage
-- Sentry tunnel route on web to bypass ad-blockers
-- `sentry` config section in agent config.json (disabled by default, preserved during Firestore sync)
+- error monitoring for the dashboard and agent, off by default on agents.
 
 ### fixed
-- Firestore config sync now preserves local-only keys (`firebase`, `sentry`) via `LOCAL_ONLY_KEYS`
-- Sentry init added to NSSM runner (owlette_runner.py) — previously only in unused OwletteService.__init__
-- Pre-existing stale test failures fixed: apiAuth NextRequest type, installer_utils terminate vs kill, shared_utils config/metrics API mismatches, removed deleted sanitize_process_name test
-
----
+- config sync from the dashboard no longer overwrites a machine's local-only settings.
 
 ## [2.5.9] - 2026-04-03
 
 ### added
-- Rich startup diagnostics logged on every service start: version banner (hostname, timezone, environment, Python version, Windows edition + build, install/data paths), system snapshot (CPU model + cores, RAM, disk free space, GPU name + VRAM, IP addresses), config summary (Firebase enabled, site ID, process count, Cortex status), startup phase timings (health probe, Firebase init, Firebase start), and a startup-complete summary block (version, total elapsed time, Firebase status, process count)
-
----
+- the agent log now records a detailed system snapshot and startup timings on every start.
 
 ## [2.5.8] - 2026-04-03
 
 ### fixed
-- `requireAdmin` middleware now accepts both API keys and Firebase ID tokens — previously only one auth method worked depending on route
-- Firestore collection renamed from `apiKeys` to `api_keys` for naming consistency
-- Cortex lowercase enforced across all user-facing text
-- Phantom QR code references removed from device pairing flow
-- Firestore timestamps standardised to `serverTimestamp()` across all writes
-- Dead `presence?.online` fallback patterns removed from web reads
-- Device code documents now deleted on consumption/expiry instead of being marked with a status field
-
----
+- admin api routes accept both api keys and sign-in tokens.
+- removed leftover qr code wording from device pairing.
+- used pairing codes are deleted instead of marked.
 
 ## [2.5.7] - 2026-04-02
 
 ### added
-- FAQ section on landing page
-- Pricing section on landing page
+- faq and pricing sections on the landing page.
 
 ### fixed
-- Update log event no longer writes version string into the `level` field
-- Update log messages lowercased; version strings prefixed with `v`
-- "Updating owlette" label shown in dashboard while agent update is in progress
-- Landing page explore link spacing polished
-
----
+- update log entries are cleaner and lowercase, and the dashboard shows **updating owlette** during an update.
 
 ## [2.5.6] - 2026-04-02
 
 ### added
-- API and Webhooks promoted to top-level nav section in docs
-
-### fixed
-- `presence?.online` dead fallback patterns removed from web dashboard reads
-
----
+- docs: api and webhooks are now a top-level section.
 
 ## [2.5.5] - 2026-04-02
 
 ### added
-- Per-user alert emails — each user receives alerts for their own assigned machines
-- Timezone labels in email alerts
-- Centered unsubscribe link in alert emails
-
-### fixed
-- Missing Firestore indexes added; `claude-agent-sdk` dependency pinned
-
----
+- each user gets alert emails for their own assigned machines.
+- email alerts show timezones and a centered unsubscribe link.
 
 ## [2.5.4] - 2026-04-01
 
 ### added
-- **Process scheduling UX overhaul** — redesigned schedule editor with overnight schedule support (e.g. 22:00–06:00 spanning midnight)
+- redesigned process schedule editor with overnight schedules, such as 22:00 to 06:00.
 
 ### fixed
-- Site members can now access machine controls without requiring admin role
-
----
+- site members can use machine controls without being admin.
 
 ## [2.5.3] - 2026-04-01
 
 ### fixed
-- **Auto-update now reliably replaces Python files** — replaced deprecated WMIC `call terminate` with PowerShell `Stop-Process -Force` in the installer's `InitializeSetup()` phase. WMIC was silently failing to kill Python processes before file overwrite, causing Inno Setup to schedule locked DLLs for next-reboot replacement (which never comes during auto-update). Two-pass kill with verification ensures all handles are released before file copy begins.
-
----
+- auto-update reliably replaces the agent's files.
 
 ## [2.5.2] - 2026-03-31
 
 ### changed
-- Version bump
-
----
+- maintenance release, no visible changes.
 
 ## [2.5.1] - 2026-03-31
 
-### added
-- Agent longevity hardening for 24/7 uptime — fixed resource leaks, unbounded queue growth, and error handling across all background threads
-- Windows console event signal handling (`CTRL_SHUTDOWN_EVENT` etc.) in the agent runner
-- Version number logged at service startup
+### changed
+- the agent is hardened for 24/7 uptime, with fewer leaks and better shutdown handling.
 
 ### fixed
-- Dashboard machine online/offline status delay reduced from ~27s to ~4s
-- Slow command worker thread must start after `self.running = True` (previously caused worker to exit immediately)
-- Killed processes no longer trigger crash detection and relaunch
-- Parallel install support for Cortex `deploy_software` — existing registry keys hidden from installer to prevent unintended removal of previous versions
-- Cortex now requires explicit user confirmation before calling `deploy_software`
-- `install.bat` service detection switched to registry query — `nssm status` returned non-zero for stopped services, causing upgrade installs to skip removal and fail on re-registration
-
-### performance
-- Landing page Lighthouse score improved from 69 to 89
-
----
+- the dashboard shows a machine going online or offline in about 4 seconds, down from 27.
+- killed processes are no longer treated as crashes and relaunched.
+- hoot asks for your confirmation before deploying software, and keeps older installed versions.
+- upgrade installs no longer fail on a stopped service.
+- landing page loads faster.
 
 ## [2.4.4] - 2026-03-31
 
 ### added
-- **Cortex `deploy_software` tool** — AI-driven software deployment with full pipeline tracking (download, silent install, verify, Deployments page visibility). Server-side tool with user confirmation required
-- **Cortex `get_system_presets` tool** — Retrieves admin-configured software presets (installer URLs, silent flags, verification paths) for use with `deploy_software`
-- **12h/24h time format preference** — User preference persisted to Firestore, applied across schedule editor, time pickers, and dashboard
-- `listen_to_document` returns a `wake_event` for instant polling on Firestore writes
+- hoot can deploy software and use your saved software presets.
+- 12h or 24h time format preference, applied across schedule editors and the dashboard.
 
 ### fixed
-- `deploy_software` overrides `/DIR` flag to match the target version install path
-- Bidirectional config sync between agent and Firestore
-- Network metrics flickering on dashboard
-- Process list not detecting running processes; added Deployments link
-- Cortex sidebar categories sorted by recency, batch categorize fixed
-- Schedule editor time picker opens upward when near bottom of viewport
-- `timeFormat` preference not persisting due to missing equality check
-
----
+- network charts no longer flicker, and the process list detects running processes.
+- config now syncs both ways between agent and dashboard.
+- hoot sidebar categories sort by recency, and the schedule time picker opens upward near the bottom.
+- the time format preference now persists.
 
 ## [2.4.2] - 2026-03-27
 
 ### added
-- **Feedback / Bug Reporting** — Report bugs from the web dashboard and the agent GUI (system tray → "Report Issue"), with log attachments and direct Firestore submission
-- **Branded email templates** — Dark-theme HTML emails with shared layout system (header, footer, logo, site name in all transactional emails)
-- **Landing page overhaul** — New hero with eye ignition animation, Blade Runner easter egg, rotating word, typewriter text, interactive background, use case and value prop sections, demo mode
-- **Demo mode** — Full dashboard preview with simulated data, no login required
-- SEO overhaul — new OG image, lowercase brand voice, sitemap, robots.txt, proper metadata
-- File path, arguments, and PID displayed on process rows in the dashboard
-- Download link in landing page nav; `/download` redirect route
+- report a bug from the dashboard or the desktop app tray menu, with logs attached.
+- branded dark-theme emails and a redesigned landing page.
+- demo mode: a dashboard preview with simulated data, no login.
+- process rows show file path, arguments and PID.
+- download link in the landing page nav.
 
 ### fixed
-- Agent Bearer token auth in bug-report API route
-- Email template: logo URL fallback, auto-link color, footer links, Gmail clipping
-- Landing page layout: 4K centering, mobile accordion, hero vertical alignment, subheadline jitter
-
----
+- email template and landing page layout glitches.
 
 ## [2.4.1] - 2026-03-26
 
 ### changed
-- **Agent pairing replaces browser OAuth** — Agents now authenticate via device code flow. The installer displays a 3-word pairing phrase, auto-opens the pairing page in a browser, or users enter the phrase on the dashboard
-- Installer publisher, URLs, and fallback version updated
+- agents pair with a 3-word phrase shown by the installer, replacing browser sign-in.
+- installer pairing opens the browser automatically and handles failure gracefully.
 
 ### fixed
-- Installer pairing UX — auto-opens browser, improved colors, handles failure gracefully
-- Rate limits increased; pause added on pairing failure
-- Dashboard button and status badge hover states
+- button and status badge hover states.
 
 ### removed
-- Browser-based OAuth flow (replaced by device code pairing)
-
----
+- browser-based OAuth sign-in for agents.
 
 ## [2.4.0] - 2026-03-25
 
 ### added
-- **Network Monitoring Dashboard** — Per-NIC throughput charts with historical data (upload/download MB/s per adapter)
-- **Agent GPU Process Monitoring** — Per-process VRAM usage via Windows Performance Counters (cross-vendor: NVIDIA, AMD, Intel)
-- **Cortex `execute_script` tool** — Unrestricted PowerShell execution on the remote machine (Tier 3, requires confirmation)
-- **Screenshot Vision Analysis** — Cortex can analyze captured screenshots and provide behavioral guidance
-- **Cortex Chat Improvements** — Markdown rendering, conversation categorization, process context awareness
-- **Live View** — Real-time screenshot stream modal in the dashboard
-- **Reboot Scheduling** — Schedule recurring reboots with cron-style configuration
-- **Threshold Alerts** — Configurable alerts when CPU, memory, or disk usage exceeds thresholds
-- **Webhook Platform Formatting** — Slack, Teams, and Discord formatted payloads for webhook notifications
-- **OpenAPI Documentation** — Auto-generated API docs via Scalar at `/docs/api`
-- **Admin Tools API** — REST endpoints for all Cortex tools, usable by external integrations
-- **Logs Improvements** — Infinite scroll, date range filters, auth re-render optimization
-- React Markdown rendering with GFM support in Cortex chat
+- network monitoring with per-adapter throughput charts and history.
+- per-process GPU memory usage on NVIDIA, AMD and Intel.
+- hoot can run PowerShell scripts, with confirmation, and analyze screenshots.
+- hoot chat renders markdown, sorts conversations into categories and knows your processes.
+- **live view**: a real-time screenshot stream on the dashboard.
+- recurring scheduled reboots.
+- alerts when CPU, memory or disk usage passes a threshold.
+- slack, teams and discord formatting for webhooks.
+- api docs at `/docs/api`, plus rest endpoints for every hoot tool.
+- logs get infinite scroll and date range filters.
 
 ### fixed
-- Screenshot max width increased to 8K; lower JPEG quality for reduced payload size
-- Cortex language and tone improvements
-
----
+- screenshots go up to 8K at smaller file sizes.
 
 ## [2.3.1] - 2026-03-24
 
 ### changed
-- Version bump for documentation audit and accuracy pass
-
----
+- maintenance release, no visible changes.
 
 ## [2.3.0] - 2026-03-22
 
 ### added
-- **Cortex AI Chat** — AI-powered chat interface with 29 specialized tools across three tiers for machine management via natural language
-  - Tier 1 (read-only): system info, process lists, logs, metrics, network, disk
-  - Tier 2 (process management): restart, kill, start, set launch mode, screenshot
-  - Tier 3 (privileged): run commands/scripts, read/write files, reboot/shutdown
-  - Autonomous mode: AI auto-investigates process crashes with configurable directives
-  - Escalation system: emails admins when Cortex can't resolve an issue
-  - Per-user and per-site LLM key management (encrypted at rest)
-- **Passkey Authentication (WebAuthn)** — Passwordless login using biometrics or device PIN
-  - Discoverable credentials (no email needed to start login)
-  - Passkey login skips 2FA entirely (passkey IS the second factor)
-  - Clone detection via signature counter validation
-  - Management UI: list, rename, and delete registered passkeys
-- **Webhook Notifications** — Configurable webhooks for process events, machine status changes, and deployment updates
-- **Process Scheduling** — Schedule processes to run during specific time windows with launch modes (off, always, scheduled)
-  - Schedule presets for reuse across processes
-  - Admin schedule management page
-- **Screenshot Capture** — Remote desktop screenshots with multi-monitor support
-- **Health Probes** — Agent-side health monitoring with configurable checks
-- **Server-Side Deployment Status** — Firebase Cloud Functions for automatic deployment status tracking
-  - Firestore trigger updates deployment status on command completion
-  - Scheduled sweeper marks stale deployments as failed (15 min pending, 30 min active)
-- **Software Inventory** — Agent reports installed software to Firestore
-- **Admin Webhook Management** — Dashboard page for configuring site webhooks
-- **Admin Schedule Presets** — Dashboard page for managing schedule presets
-- **MkDocs Documentation** — Complete documentation rewrite with MkDocs Material theme
+- hoot ai chat with 29 tools to read, manage and control machines in plain language.
+- hoot can investigate crashes on its own and email admins when it cannot resolve one.
+- per-user and per-site ai key management.
+- passkey sign-in with biometrics or a device pin, no email or 2FA step.
+- manage your passkeys: list, rename, delete.
+- webhooks for process events, machine status and deployments.
+- process scheduling with launch modes **off**, **always** and **scheduled**, plus reusable presets.
+- remote screenshots with multi-monitor support.
+- health probes and software inventory reported by the agent.
+- deployments that never finish are marked failed automatically.
+- rewritten documentation.
 
 ### changed
-- Agent monitoring loop interval reduced from 10s to 5s
-- Deployment system now uses Firebase Cloud Functions for status aggregation
-- Process launch mode replaces simple autolaunch toggle (`set_launch_mode` replaces `toggle_autolaunch`)
-
-### removed
-- `owlette_updater.py` — self-update logic moved into main service command handler
-
----
+- the agent checks processes every 5 seconds, down from 10.
+- launch mode replaces the autolaunch toggle.
 
 ## [2.1.8] - 2026-03-15
 
 ### added
-- Remote reboot/shutdown commands with dashboard UI
-- Process crash email alerts
-- Installer setup logging enabled by default
+- remote reboot and shutdown from the dashboard.
+- process crash email alerts.
 
 ### fixed
-- `useSites` hook fetches assigned sites individually instead of collection query
-- Setup page fetches assigned sites individually instead of collection query
-
----
+- setup and site lists load faster.
 
 ## [2.0.49] - 2025-11-28
 
 ### fixed
-- **VBS Cleanup Race Condition** — VBS wrapper files for hidden process launches are now cleaned up in a background thread after 10s delay, preventing "file in use" errors
-- **Reduced Log Noise** — GUI config change detection logs moved from INFO to DEBUG; verbose tray status logging removed
-
----
+- hidden process launches no longer hit "file in use" errors.
+- quieter agent logs.
 
 ## [2.0.48] - 2025-11-26
 
 ### fixed
-- **Windows Defender False Positive** — Installer now adds Defender exclusion for owlette directory (WinRing0 driver flagged as `VulnerableDriver:WinNT/Winring0`). Exclusion removed on uninstall.
-- **Join Site Performance** — Fixed extremely slow "Join Site" operation (2+ minutes to instant) by removing redundant Firebase client initialization from GUI
-- **Silent Browser Launch** — Changed from `webbrowser.open()` to `os.startfile()` to prevent flashing command prompt windows during OAuth flow
-
----
+- the installer adds a Windows Defender exclusion for the owlette folder, removed on uninstall.
+- **join site** takes seconds instead of two minutes.
+- no more flashing command windows during sign-in.
 
 ## [2.0.47] - 2025-11-24
 
 ### fixed
-- **Token Encryption Key Stability** — Changed encryption key derivation from `uuid.getnode()` (MAC address) to Windows `MachineGuid`. MAC address can return different values after reboot; `MachineGuid` is stable. Resolves "Agent not authenticated" errors after restart.
-
----
+- "agent not authenticated" errors after a restart are gone.
 
 ## [2.0.46] - 2025-11-19
 
 ### added
-- **Email Testing Page** — New admin-only page at `/admin/test-email` for testing email notifications, templates, and delivery
-- **Update Panel Layout** — Improved spacing and organization for machine update dialog
+- admin page at `/admin/test-email` to test email notifications.
 
----
+### changed
+- cleaner spacing in the machine update dialog.
 
 ## [2.0.44] - 2025-11-13
 
 ### added
-- **Config & Logs Buttons** — Quick access buttons in GUI footer to open config.json and logs folder
-- **Custom Messagebox** — Improved text wrapping (92% width), compact layout, dark theme matching
-- **Firebase Reconnection Auto-Detection** — Service detects when Firebase is re-enabled and automatically restarts the client
+- **config** and **logs** buttons in the desktop app footer.
+- the service restarts its connection when you re-enable it.
 
 ### changed
-- **Unified Site Management** — Join/Leave Site consolidated into single dynamic button
-- **Increased Deployment Timeout** — Extended from 20 to 40 minutes for large installers
-- **Force Close on Uninstall** — Inno Setup uninstalls now automatically close running applications
+- **join site** and **leave site** are one button.
+- deployments time out after 40 minutes, up from 20.
+- uninstalling closes running owlette apps for you.
 
 ### fixed
-- **Firebase Client Reference Errors** — Fixed incorrect global variable usage in uninstall handler
-- **Firebase Client Not Restarting** — Service now detects enable/disable transitions and reinitializes
-
----
+- reconnection errors after enabling or disabling the connection.
 
 ## [2.0.29] - 2025-11-12
 
 ### fixed
-- **Config Version for New Installs** — Fixed hardcoded version in configure_site.py; new installs now use correct `CONFIG_VERSION` constant
-
----
+- new installs get the correct config version.
 
 ## [2.0.28] - 2025-11-12
 
 ### added
-- **Environment Configuration** — New `environment` setting in config.json (production vs development)
+- `environment` setting in config.json: production or development.
 
 ### fixed
-- **Tray Icon Launch Failure** — Added `get_python_exe_path()` helper to locate bundled Python interpreter
-- **Incorrect Server URL** — "Join Site" now correctly defaults to production URL
-- **Port Conflict on Retry** — Enabled `allow_reuse_address` on OAuth callback server
-
----
+- the tray icon launches reliably.
+- **join site** defaults to the production url.
+- sign-in no longer hits a port conflict on retry.
 
 ## [2.0.27] - 2025-11-11
 
 ### fixed
-- **Software Inventory Sync Error** — Fixed `NameError` in post-installation inventory sync
-- **Real-Time Deployment Status** — Fixed deployment status staying on "downloading" until manual refresh; now transitions in real-time
-
----
+- the software inventory sync after install works.
+- deployment status updates live instead of sticking on **downloading**.
 
 ## [2.0.26] - 2025-11-11
 
 ### added
-- **Process Launch via Task Scheduler** — Complete rewrite using `schtasks` for service restart resilience
-- **Enhanced Event Logging** — Agent lifecycle events, process crash detection, GUI kill tracking
+- processes launch through Task Scheduler and survive service restarts.
+- more event logging: agent start and stop, crashes, and kills from the desktop app.
 
 ### fixed
-- **Agent Stopped Logging** — Implemented restart flag mechanism for graceful shutdown event logging
-- **Process Crash False Positives** — Crash events no longer logged for manually killed processes
-
----
+- manually killed processes no longer log as crashes.
+- the agent logs a clean stop on shutdown.
 
 ## [2.0.15] - 2025-11-11
 
 ### added
-- **Event Logs Page** — Dedicated page for monitoring process events with filtering, pagination, and color-coded severity
-- **Hidden Process Launch** — VBScript wrapper for truly invisible console application launches
-- **Event Logging to Firestore** — Automatic logging of process starts, kills, crashes, and command executions
-
----
+- event logs page with filters, pagination and color-coded severity.
+- console apps can launch fully hidden.
+- process starts, kills, crashes and commands are logged automatically.
 
 ## [2.0.0] - 2025-01-31
 
-### major release — cloud-connected architecture
+### added
+- web dashboard for remote monitoring and control.
+- real-time sync through Firebase.
+- remote silent software deployment across machines, with reusable templates.
+- reconnect to running processes after a service restart.
+- multi-site management.
 
-Version 2.0.0 transforms owlette from a standalone Windows process manager to a cloud-connected system.
-
-#### added
-- **Next.js Web Dashboard** — Remote monitoring and control from any browser
-- **Firebase/Firestore Backend** — Real-time bidirectional data sync
-- **Remote Software Deployment** — Silent installation across multiple machines
-- **Deployment Templates** — Save and reuse installer configurations
-- **PID Recovery** — Reconnect to existing processes after service restart
-- **Multi-Site Management** — Organize machines by location
-
-#### changed
-- **Monorepo Structure** — Unified `agent/` and `web/` directories
-- **Firebase as Primary Backend** — Gmail/Slack marked as legacy
-- **Configuration Schema** — Updated to v1.3.0 with Firebase settings
-
-#### deprecated
-- Gmail and Slack notifications (replaced by web dashboard alerts)
-
----
+### changed
+- owlette is now cloud-connected; gmail and slack notifications give way to dashboard alerts.
 
 ## [0.4.2b] - legacy
 
-### standalone architecture
-
-The original owlette — a standalone Windows service with local configuration.
-
-- Windows service process monitoring with auto-restart
-- System tray icon and GUI configuration
-- Gmail API and Slack API notifications
-- Local JSON configuration
-- Process priority and visibility control
+### added
+- windows service with process monitoring and auto-restart.
+- tray icon and gui configuration.
+- gmail and slack notifications.
+- local json configuration, process priority and visibility control.
 
 ---
 
