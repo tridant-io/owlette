@@ -8,6 +8,10 @@ tocDepth: 2
 
 ## [Unreleased]
 
+### fixed — a frozen desktop app on a Mac is restarted
+
+when a Mac runs out of memory, macOS can suspend the owlette desktop app and never resume it: the menu bar icon stays but ignores clicks, and screenshots, swoop and **keep screens awake** stop answering on that machine while it still reads online. the agent now notices a desktop app that has not run for two minutes and restarts it, at most once every ten minutes.
+
 ### changed — audit events are queued and drained in order
 
 each change the web app records joins its site's audit queue, and the functions drain every queue in order into the site's hash-chained audit log, so no audit event waits on a single request. an event that cannot be added is set aside. **admin** → **activity** raises one high finding a site per hour for the events set aside, with their count, and one an hour, raised when a queue first goes 5 minutes without draining, listing the sites whose queues were stuck then.
