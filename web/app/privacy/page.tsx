@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'November 21, 2026';
+  const lastUpdated = 'November 23, 2026';
   const router = useRouter();
 
   return (
@@ -108,7 +108,8 @@ export default function PrivacyPage() {
                 <li>audit and activity records identifying which user performed a privileged action</li>
                 <li>event logs (errors, crashes, status changes)</li>
                 <li>IP addresses and request metadata, used for session management, rate limiting, and abuse prevention</li>
-                <li>the network (internet provider) you pass two-factor authentication from, recorded by its autonomous system number rather than your IP address</li>
+                <li>the network (internet provider) you pass two-factor authentication from, kept as a verified network by its autonomous system number rather than your IP address</li>
+                <li>each time you sign in, each second-factor check you pass or fail while signing in, and some refused sign-ins (such as a passkey that fails to verify): the time, the method, the network (internet provider) the request came from, recorded by its autonomous system number, and a shortened IP address (the first three parts of an IPv4 address, or the first half of an IPv6 one). a wrong password is checked by Firebase Authentication and is not recorded. these records are kept in owlette&apos;s platform audit records, not in your site&apos;s audit log, so your site&apos;s admins cannot read them</li>
                 <li>for swoop remote control, the network and a shortened IP address (the first three parts of an IPv4 address, or the first half of an IPv6 one) that each step-up and control request came from; control requests are recorded in your site&apos;s audit log, which your site&apos;s admins can read</li>
                 <li>error and performance diagnostics, including stack traces, collected via our monitoring provider</li>
                 <li>timestamps of activities</li>
@@ -124,7 +125,7 @@ export default function PrivacyPage() {
                 <li>execute remote commands and deployments</li>
                 <li>send alerts and notifications</li>
                 <li>authenticate users and secure accounts</li>
-                <li>detect, investigate, and prevent abuse, fraud, and security incidents</li>
+                <li>detect, investigate, and prevent abuse, fraud, and security incidents, including by letting owlette staff view activity (changes, refusals and sign-ins) across all sites, and by flagging risky activity automatically and emailing owlette staff about it</li>
                 <li>maintain audit records of privileged actions</li>
                 <li>improve and optimize our service</li>
                 <li>count visits to the website and see how its pages perform</li>
@@ -213,11 +214,12 @@ export default function PrivacyPage() {
                 <li><strong>queued machine commands:</strong> pending commands expire after 1 hour; completed command records are removed after 24 hours.</li>
                 <li><strong>machine metrics:</strong> automatically deleted 400 days after collection.</li>
                 <li><strong>event logs:</strong> automatically deleted 400 days after the logged event.</li>
+                <li><strong>sign-in records:</strong> automatically deleted 400 days after the sign-in or second-factor check.</li>
                 <li><strong>process and configuration data:</strong> until the machine is removed from your account.</li>
                 <li><strong>hoot conversations:</strong> until you delete them. deleting a conversation removes it from every listing and hides it from the interface; the underlying record is retained in a deleted state. ask us if you need it erased.</li>
                 <li><strong>deployment content:</strong> until you delete the associated release or roost.</li>
                 <li><strong>visit counts:</strong> as Cloudflare&apos;s policies set.</li>
-                <li><strong>audit and security logs:</strong> retained for as long as needed to investigate incidents and meet legal obligations.</li>
+                <li><strong>audit and security logs:</strong> retained for as long as needed to investigate incidents and meet legal obligations, including the records of risky activity flagged for owlette staff, which can repeat a sign-in&apos;s network and shortened IP address.</li>
               </ul>
               <p className="mt-4">
                 you may request deletion of your data at any time &mdash; see section 9.

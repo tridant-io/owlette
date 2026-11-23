@@ -23,6 +23,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { serverTimestamp: () => 'SERVER_TS' },
+  Timestamp: { fromMillis: (ms: number) => ({ ms }) },
 }));
 
 jest.mock('@/lib/auditLog.server', () => ({
@@ -44,10 +45,46 @@ function request(headers: Record<string, string> = {}): NextRequest {
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
+const NOW_MS = Date.UTC(2026, 10, 23, 12);
+// 400 days is privacy policy §6's promise for sign-in records: pinned here, not read from the module
+const EXPIRES = { ms: NOW_MS + 400 * 24 * 60 * 60 * 1000 };
+
+let dateNow: jest.SpyInstance;
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockCreate.mockResolvedValue(undefined);
   mockAdd.mockResolvedValue(undefined);
+  dateNow = jest.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+});
+
+afterEach(() => {
+  dateNow.mockRestore();
+});
+
+describe('deleteAt', () => {
+  it('stamps every row 400 days after the server clock at write time', async () => {
+    recordSignIn(request(), { userId: 'user-1', role: 'member', method: 'password', authTime: nowSeconds() });
+    recordSecondFactorPassed(request(), { userId: 'user-1', method: 'totp' });
+    recordAuthFailure(request(), {
+      userId: 'user-1',
+      capability: 'AUTH_SECOND_FACTOR',
+      event: 'second_factor_failed',
+      reason: 'invalid_totp_code',
+    });
+    await flush();
+
+    expect(mockCreate.mock.calls[0][0].deleteAt).toEqual(EXPIRES);
+    expect(mockAdd.mock.calls.map((call) => call[0].deleteAt)).toEqual([EXPIRES, EXPIRES]);
+  });
+
+  it('moves with the clock', async () => {
+    dateNow.mockReturnValue(NOW_MS + 1234);
+    recordSecondFactorPassed(request(), { userId: 'user-1', method: 'passkey' });
+    await flush();
+
+    expect(mockAdd.mock.calls[0][0].deleteAt).toEqual({ ms: EXPIRES.ms + 1234 });
+  });
 });
 
 describe('recordSignIn', () => {
@@ -76,6 +113,7 @@ describe('recordSignIn', () => {
         network: { key: 'unknown', prefix: '203.0.113.0/24', viaEdge: false },
       },
       timestamp: 'SERVER_TS',
+      deleteAt: EXPIRES,
     });
   });
 
@@ -132,6 +170,7 @@ describe('recordSecondFactorPassed', () => {
         network: { key: 'unknown', prefix: null, viaEdge: false },
       },
       timestamp: 'SERVER_TS',
+      deleteAt: EXPIRES,
     });
   });
 
@@ -170,6 +209,7 @@ describe('recordAuthFailure', () => {
         network: { key: 'unknown', prefix: null, viaEdge: false },
       },
       timestamp: 'SERVER_TS',
+      deleteAt: EXPIRES,
     });
   });
 

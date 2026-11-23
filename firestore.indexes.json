@@ -374,6 +374,12 @@
         { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION" },
         { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
+    },
+    {
+      "collectionGroup": "entries",
+      "fieldPath": "deleteAt",
+      "ttl": true,
+      "indexes": []
     }
   ]
 }
