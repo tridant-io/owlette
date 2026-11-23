@@ -34,6 +34,7 @@ import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { ActivityEmailSettings } from '@/components/admin/activity/ActivityEmailSettings';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
+import { DEFAULT_LOW_DISK_RULE, alertRulesOrDefault } from '@/lib/defaultAlertRules';
 
 /**
  * [B4.3] Display-alerts launch banner cutoff — 30 days after launch. Auto-hides
@@ -93,16 +94,8 @@ const PRESET_TEMPLATES: Omit<AlertRule, 'id'>[] = [
     enabled: true,
     cooldownMinutes: 30,
   },
-  {
-    name: 'Low Disk',
-    metric: 'disk_percent',
-    operator: '>',
-    value: 90,
-    severity: 'warning',
-    channels: ['email', 'webhook'],
-    enabled: true,
-    cooldownMinutes: 60,
-  },
+  // the rule every unsaved site starts with, to add back after deleting it; adding gives it a new id
+  DEFAULT_LOW_DISK_RULE,
   {
     name: 'High Memory',
     metric: 'memory_percent',
@@ -190,11 +183,7 @@ export default function AlertsPage() {
     try {
       const alertsRef = doc(db, 'sites', siteId, 'settings', 'alerts');
       const snap = await getDoc(alertsRef);
-      if (snap.exists() && Array.isArray(snap.data()?.rules)) {
-        setLoaded({ siteId, rules: snap.data().rules as AlertRule[] });
-      } else {
-        setLoaded({ siteId, rules: [] });
-      }
+      setLoaded({ siteId, rules: alertRulesOrDefault(snap.data()?.rules) as AlertRule[] });
     } catch (err: unknown) {
       console.error('Failed to fetch alert rules:', err);
       toast.error('Failed to load alert rules');

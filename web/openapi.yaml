@@ -1312,6 +1312,11 @@ paths:
         send an empty array to clear it. Every rule is validated and rule `id`s
         must be unique. Requires `ALERT_RULES_MANAGE` (site admin or owner); API
         keys need `site=<siteId>:write`.
+
+        A site that has never saved its rules has one default rule, id
+        `default-low-disk` (`disk_percent > 90`, warning, email and webhook,
+        cooldown 1440 minutes). The first save replaces it like any other rule,
+        so include it to keep it.
       security:
         - apiKey: []
         - bearerApiKey: []

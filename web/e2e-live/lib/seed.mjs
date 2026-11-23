@@ -348,11 +348,16 @@ async function ensureSite(ctx) {
   // Threshold rules are the only site-level alert setting (getAlertRules in
   // functions/src/metricsHistory.ts); offline and process alerts are the per-user
   // preferences held off in ensureTestUser. Empty the rules, not the doc: the
-  // evaluator keeps sibling fields there.
+  // evaluator keeps sibling fields there. No rules array at all is a site that
+  // never saved its rules, which gets the default low disk rule, so save [].
   const alertsRef = siteRef.collection('settings').doc('alerts');
   const alerts = await alertsRef.get();
   const rules = alerts.exists ? alerts.data().rules : undefined;
-  if (Array.isArray(rules) && rules.length > 0) {
+  if (!Array.isArray(rules)) {
+    await act(ctx, actions, `${alertsRef.path}: save an empty threshold rule list`, () =>
+      alertsRef.set({ rules: [] }, { merge: true }),
+    );
+  } else if (rules.length > 0) {
     await act(ctx, actions, `${alertsRef.path}: clear ${rules.length} threshold rule(s)`, () =>
       alertsRef.update({ rules: [] }),
     );

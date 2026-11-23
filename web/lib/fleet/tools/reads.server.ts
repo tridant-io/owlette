@@ -144,7 +144,7 @@ const alertRulesTool: FleetServerTool = {
   target: 'site',
   definition: {
     name: 'list_alert_rules',
-    description: "List the site's alert rules: what each watches (metric, operator, value), its severity, channels, cooldown and whether it is on. The rules belong to the whole site, so only a machine that may act on every machine of the site can read them; any other is refused.",
+    description: "List the site's alert rules: what each watches (metric, operator, value), its severity, channels, cooldown and whether it is on. A site that never saved its rules has the default low disk rule (id default-low-disk). The rules belong to the whole site, so only a machine that may act on every machine of the site can read them; any other is refused.",
     tier: 1,
     parameters: {
       type: 'object',

@@ -14,6 +14,7 @@ import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getFirestore } from 'firebase-admin/firestore';
 import { metricsWriteDisposition } from './lib/metricsAlertLogic';
+import { alertRulesOrDefault } from './lib/defaultAlertRules';
 import https = require('https');
 import http = require('http');
 
@@ -379,7 +380,7 @@ async function readLastSampleTime(
   return candidates.length > 0 ? Math.max(...candidates) : null;
 }
 
-/** Alert rules for a site, via the 5-minute in-memory cache. */
+/** Alert rules for a site, or the default rules if it never saved any, via the 5-minute in-memory cache. */
 async function getAlertRules(siteId: string): Promise<AlertRule[]> {
   const cached = alertRulesCache.get(siteId);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
@@ -389,14 +390,10 @@ async function getAlertRules(siteId: string): Promise<AlertRule[]> {
   const alertsDoc = await db.doc(`sites/${siteId}/settings/alerts`).get();
   const rules: AlertRule[] = [];
 
-  if (alertsDoc.exists) {
-    const data = alertsDoc.data();
-    if (Array.isArray(data?.rules)) {
-      for (const r of data.rules) {
-        if (r && typeof r.id === 'string' && typeof r.metric === 'string') {
-          rules.push(r as AlertRule);
-        }
-      }
+  for (const r of alertRulesOrDefault(alertsDoc.data()?.rules)) {
+    const rule = r as Partial<AlertRule> | null;
+    if (rule && typeof rule.id === 'string' && typeof rule.metric === 'string') {
+      rules.push(rule as AlertRule);
     }
   }
 

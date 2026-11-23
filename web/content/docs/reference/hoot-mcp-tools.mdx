@@ -51,7 +51,7 @@ the process tools that run on the machine itself, such as `restart_process` and 
 |---|---|---|---|
 | `get_metrics_history` | 1 | one machine | reads a machine's recorded CPU, memory, disk and GPU usage and temperatures over the last `hours` (up to 168, 24 by default), thinned to at most `max_points` (up to 500, 200 by default) |
 | `list_installed_software` | 1 | one machine | lists the software the agent last reported as installed, with version and publisher, up to `limit` entries (100 by default, at most 500) |
-| `list_alert_rules` | 1 | nothing | lists the site's alert rules and whether each is on |
+| `list_alert_rules` | 1 | nothing | lists the site's alert rules and whether each is on, with the [default low disk rule](/docs/dashboard/admin/email-alerts#the-default-low-disk-rule) on a site that never saved its own |
 | `get_audit_log` | 1 | nothing | reads the site's audit log, newest first, up to `limit` entries (50 by default, at most 200) |
 
 `list_alert_rules` and `get_audit_log` belong to the whole site, so only a machine allowed on every machine of the site can read them. any other machine is refused.

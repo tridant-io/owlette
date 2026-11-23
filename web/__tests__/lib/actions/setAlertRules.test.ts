@@ -136,6 +136,19 @@ describe('setAlertRules', () => {
     });
   });
 
+  it('names the default rule as removed when a site that never saved rules saves without it', async () => {
+    await setAlertRules({ actor, siteId: 'site-a', auditActor: AUDIT_ACTOR }, { rules: [validRule] });
+
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          addedRuleIds: ['rule-1'],
+          removedRuleIds: ['default-low-disk'],
+        }),
+      }),
+    );
+  });
+
   it('still emits the audit when the previous rules cannot be read', async () => {
     mockGet.mockRejectedValueOnce(new Error('read_failed'));
 

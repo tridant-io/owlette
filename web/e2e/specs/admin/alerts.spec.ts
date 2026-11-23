@@ -6,13 +6,15 @@
  * operator, value, severity, channels, enabled, cooldownMinutes).
  *
  * Covers list rendering, create, add-preset, toggle-enabled and delete — each
- * asserted through the UI and then read back with the Admin SDK.
+ * asserted through the UI and then read back with the Admin SDK — and the
+ * default low disk rule a site has until it first saves its list.
  */
 
 import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { DEFAULT_LOW_DISK_RULE } from '@/lib/defaultAlertRules';
 
 test.use(roleState('superadmin'));
 
@@ -160,6 +162,50 @@ test('toggling the enabled switch flips the rule in Firestore', async ({ page })
   const updated = rules.find((r) => r.id === SEEDED_RULE.id);
   expect(updated).toBeDefined();
   expect(updated!.enabled).toBe(false);
+});
+
+test.describe('the default low disk rule', () => {
+  // no doc at all is a site that never saved its rules; the outer beforeEach saved []
+  test.beforeEach(async () => {
+    await getAdminDb().collection('sites').doc(SITE_ID).collection('settings').doc('alerts').delete();
+  });
+
+  const defaultRow = (page: Page) =>
+    page.locator('div.rounded-lg.border').filter({ hasText: DEFAULT_LOW_DISK_RULE.name });
+
+  test('a site that never saved rules has it, and turning it off sticks', async ({ page }) => {
+    await gotoAlertsForSeededSite(page);
+
+    const row = defaultRow(page);
+    await expect(row).toContainText(`> ${DEFAULT_LOW_DISK_RULE.value}`);
+    await expect(row).toContainText(`cooldown ${DEFAULT_LOW_DISK_RULE.cooldownMinutes}m`);
+    const toggle = row.getByRole('switch');
+    await expect(toggle).toHaveAttribute('data-state', 'checked');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('data-state', 'unchecked');
+
+    expect(await getAlertRules()).toEqual([{ ...DEFAULT_LOW_DISK_RULE, enabled: false }]);
+
+    await gotoAlertsForSeededSite(page);
+    await expect(defaultRow(page).getByRole('switch')).toHaveAttribute('data-state', 'unchecked');
+  });
+
+  test('deleting it sticks', async ({ page }) => {
+    await gotoAlertsForSeededSite(page);
+
+    await defaultRow(page).getByRole('button', { name: `delete ${DEFAULT_LOW_DISK_RULE.name}` }).click();
+    const confirm = page.getByRole('dialog', { name: /^delete alert rule$/i });
+    await confirm.getByRole('button', { name: /^delete$/i }).click();
+    await expect(page.getByText('Rule deleted', { exact: true })).toBeVisible();
+
+    // a saved empty list, not a missing one, which would read as the default again
+    const stored = await getAdminDb().collection('sites').doc(SITE_ID).collection('settings').doc('alerts').get();
+    expect(stored.data()?.rules).toEqual([]);
+
+    await gotoAlertsForSeededSite(page);
+    await expect(page.getByText('no alert rules configured', { exact: true })).toBeVisible();
+    await expect(defaultRow(page)).toHaveCount(0);
+  });
 });
 
 test('deleting a rule removes it from the Firestore rules array', async ({ page }) => {

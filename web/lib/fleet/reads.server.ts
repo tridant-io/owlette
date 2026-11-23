@@ -4,6 +4,7 @@
  */
 
 import { FieldPath, type Firestore } from 'firebase-admin/firestore';
+import { alertRulesOrDefault } from '@/lib/defaultAlertRules';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import { downsampleTimeUniform } from '@/lib/metricsDownsample';
 import { formatDayBucketId, formatHourBucketId, DAY_BUCKET_ID_RE, HOUR_BUCKET_ID_RE } from '@/lib/metricsHistoryBuckets';
@@ -156,11 +157,10 @@ export interface AlertRuleView {
   cooldownMinutes: number;
 }
 
-/** `sites/{siteId}/settings/alerts`, `rules`, as the alerts page reads it. */
+/** `sites/{siteId}/settings/alerts`, `rules`, as the alerts page reads it, defaults included. */
 export async function readAlertRules(db: Firestore, siteId: string): Promise<AlertRuleView[]> {
   const snap = await db.collection('sites').doc(siteId).collection('settings').doc('alerts').get();
-  const rules = snap.exists ? snap.data()?.rules : null;
-  if (!Array.isArray(rules)) return [];
+  const rules = alertRulesOrDefault(snap.data()?.rules);
 
   const views: AlertRuleView[] = [];
   for (const rule of rules) {

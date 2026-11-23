@@ -13,6 +13,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import logger from '@/lib/logger';
 import type { UserActor } from '@/lib/capabilities';
+import { alertRulesOrDefault } from '@/lib/defaultAlertRules';
 import { SITE_ID_RE } from '@/lib/sitePolicy.server';
 
 const VALID_OPERATORS = new Set(['>', '<', '>=', '<=']);
@@ -183,8 +184,8 @@ export async function setAlertRules(
 }
 
 /**
- * Rule ids currently stored on the alerts doc, or `null` when they could not
- * be determined (doc absent, malformed `rules` field, or a failed read).
+ * Ids of the site's rules before this save, the default rules included while it
+ * has never saved a list, or `null` when the read failed.
  */
 async function readExistingRuleIds(
   alertsRef: DocumentReference,
@@ -192,10 +193,7 @@ async function readExistingRuleIds(
 ): Promise<string[] | null> {
   try {
     const snap = await alertsRef.get();
-    if (!snap.exists) return null;
-    const existing = snap.data()?.rules;
-    if (!Array.isArray(existing)) return null;
-    return existing
+    return alertRulesOrDefault(snap.data()?.rules)
       .map((r) => (r && typeof r === 'object' ? (r as { id?: unknown }).id : undefined))
       .filter((id): id is string => typeof id === 'string');
   } catch (err) {

@@ -21,6 +21,7 @@
 import { expect, test } from '@playwright/test';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { verifyRecord, type AuditRecord } from '@/lib/auditLogVerify';
+import { DEFAULT_LOW_DISK_RULE } from '@/lib/defaultAlertRules';
 import { getAdminDb } from '../../helpers/emulator';
 
 const SITE_ID = 'e2e-functions-triggers';
@@ -77,6 +78,39 @@ test.describe('firestore triggers', () => {
     // too — a daily-keyed regression would land elsewhere and time out above.
     expect(snap.exists).toBe(true);
 
+    await machineRef.collection('metrics_history').get()
+      .then((s) => Promise.all(s.docs.map((d) => d.ref.delete())));
+    await machineRef.delete();
+  });
+
+  test('onMetricsWrite fires the default low disk rule on a site that never saved its rules', async () => {
+    const db = getAdminDb();
+    // a site of its own: the function caches each site's rules for 5 minutes
+    const siteId = `e2e-default-low-disk-${Date.now()}`;
+    const machineId = 'disk-probe';
+    const machineRef = db.collection('sites').doc(siteId).collection('machines').doc(machineId);
+
+    const now = new Date();
+    await machineRef.set({
+      name: 'disk-probe',
+      online: true,
+      lastHeartbeat: Timestamp.fromDate(now),
+      metrics: {
+        timestamp: Timestamp.fromDate(now),
+        disks: { '/': { percent: DEFAULT_LOW_DISK_RULE.value + 5 } },
+      },
+    });
+
+    // the cooldown is stamped before the alert is sent, and the emulator has no
+    // CORTEX_INTERNAL_SECRET, so it stops there and mails nobody
+    const cooldownRef = db
+      .collection('sites')
+      .doc(siteId)
+      .collection('alert_cooldowns')
+      .doc(`${DEFAULT_LOW_DISK_RULE.id}_${machineId}`);
+    await waitFor('the default low disk rule to fire', async () => ((await cooldownRef.get()).exists ? true : null));
+
+    await cooldownRef.delete();
     await machineRef.collection('metrics_history').get()
       .then((s) => Promise.all(s.docs.map((d) => d.ref.delete())));
     await machineRef.delete();
