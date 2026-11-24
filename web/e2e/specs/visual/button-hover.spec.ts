@@ -1,8 +1,9 @@
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { seedLogEvents } from '../../helpers/coverageSeed';
 import { seedMachine } from '../../helpers/seed';
+import { attachPicture } from '../../helpers/picture';
 import { expectSweepAtRest, expectSweepSize, sweepState, sweptContrast } from '../../helpers/sweep';
 
 // Guards the button hover standard — hover once went dead on the logs toolbar
@@ -54,14 +55,6 @@ test.describe('row buttons hover alike', () => {
     return sweepState(button);
   }
 
-  async function picture(page: Page, around: Locator, name: string) {
-    const box = (await around.boundingBox())!;
-    const clip = { x: box.x - 24, y: box.y - 12, width: box.width + 48, height: box.height + 24 };
-    const path = test.info().outputPath(`${name.replace(/[^a-z0-9]+/gi, '-')}.png`);
-    await page.screenshot({ clip, path });
-    await test.info().attach(name, { path, contentType: 'image/png' });
-  }
-
   for (const scheme of ['dark', 'light'] as const) {
     test(`restart and remove share the muted fill under the sweep, ${scheme}`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: scheme });
@@ -72,12 +65,12 @@ test.describe('row buttons hover alike', () => {
       const cluster = remove.locator('xpath=..');
 
       const restartHover = await hovered(restart, 'restart');
-      await picture(page, cluster, `row buttons, restart hovered, ${scheme}`);
+      await attachPicture(page, cluster, `row buttons, restart hovered, ${scheme}`);
       const removeHover = await hovered(remove, 'remove');
       expect(removeHover.color, 'remove takes the same fill as restart').toBe(restartHover.color);
       // a glyph, so the 3:1 of a graphic; danger-bright clears 4.5 here anyway
       await expect.poll(() => sweptContrast(remove), { message: 'the red glyph reads on the sweep' }).toBeGreaterThanOrEqual(3);
-      await picture(page, cluster, `row buttons, remove hovered, ${scheme}`);
+      await attachPicture(page, cluster, `row buttons, remove hovered, ${scheme}`);
     });
   }
 });
