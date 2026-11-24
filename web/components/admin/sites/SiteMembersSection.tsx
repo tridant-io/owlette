@@ -325,7 +325,7 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
                                     <DropdownMenuItem
                                       onClick={() => openRemove(member)}
                                       disabled={busy}
-                                      className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
+                                      className="text-danger cursor-pointer focus:text-danger"
                                     >
                                       {busy ? (
                                         <>

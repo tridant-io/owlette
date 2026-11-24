@@ -157,16 +157,19 @@ for (const scheme of ['dark', 'light'] as const) {
     await picture(page, `download menu, row keyboard-focused, ${scheme}`);
     await closeMenu(page);
 
-    // a tinted row keeps its tint under the sweep, as a bespoke hover:bg does on a button
+    // a tinted row keeps only its text colour and sweeps like the rest, as ghost-destructive does on a button
     const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
     await openMenu(page, card.getByTestId('machine-context-menu-trigger'));
     const remove = page.getByTestId('machine-context-menu-remove');
-    await expectAtRest(remove, 'remove machine');
+    const revoke = page.getByTestId('machine-context-menu-revoke-token');
+    const tintedRest = await expectAtRest(remove, 'remove machine');
     await remove.hover();
     await expectSize(remove, '100% 100%', 'the tinted row should sweep in');
+    expect((await sweep(remove)).color, 'no tinted fill under the sweep').toBe(tintedRest.color);
     await picture(page, `machine menu, tinted row hovered, ${scheme}`);
     await page.keyboard.press('ArrowUp');
-    await expectSize(page.getByTestId('machine-context-menu-revoke-token'), '100% 100%', 'the arrowed-to tinted row should sweep in');
+    await expectSize(revoke, '100% 100%', 'the arrowed-to tinted row should sweep in');
+    expect((await sweep(revoke)).color, 'no tinted fill under the keyboard sweep').toBe(tintedRest.color);
     await picture(page, `machine menu, tinted row keyboard-focused, ${scheme}`);
     await closeMenu(page);
   });

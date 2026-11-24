@@ -1043,7 +1043,7 @@ export const MachineRow = memo(function MachineRow({
                                       </DropdownMenuRadioGroup>
                                       <DropdownMenuItem
                                         onClick={() => onConfigureSchedule?.(process)}
-                                        className="text-info focus:bg-info-surface focus:text-info cursor-pointer pl-8"
+                                        className="text-info focus:text-info cursor-pointer pl-8"
                                       >
                                         <Settings2 className="mr-2 h-3.5 w-3.5" />
                                         configure schedule

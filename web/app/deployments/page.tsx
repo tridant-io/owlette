@@ -266,7 +266,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                   e.stopPropagation();
                   onDelete(deployment.id);
                 }}
-                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger cursor-pointer"
               >
                 <X className="h-4 w-4 mr-2" />
                 delete record

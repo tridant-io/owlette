@@ -75,11 +75,11 @@ function DropdownMenuItem({
       data-variant={variant}
       className={cn(
         // menu-sweep (globals.css) is the highlight: the buttons' hover sweep,
-        // keyed on radix's highlight. a neutral focus:bg-accent, here or in a
-        // caller, snaps in as the pointer arrives (radix focuses the row) and
-        // hides it; a semantic tint may stay under it, as a bespoke hover:bg
-        // does on a Button
-        "menu-sweep focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        // keyed on radix's highlight. no focus:bg-* here or in a caller: radix
+        // focuses the row as the pointer arrives, so a fill snaps in under the
+        // sweep. a tinted row (danger, warning) keeps only its text colour, as
+        // ghost-destructive does on a Button
+        "menu-sweep focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:!text-destructive [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
