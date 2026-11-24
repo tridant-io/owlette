@@ -130,9 +130,14 @@ const SWEPT_TEXT = [
   'primary',
   'accent-warm-hover',
 ] as const;
-const SWEPT_PAIRS: Array<[string, string]> = SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
-  (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
-);
+const SWEPT_PAIRS: Array<[string, string]> = [
+  ...SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
+    (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
+  ),
+  // a row-destructive button on a dense list row
+  ['danger-bright', 'card-sunken'],
+  ['danger-bright', 'background'],
+];
 
 /** a `color-mix(in oklab, <colour> N%, transparent)` scrim, as the hover tints are written */
 function scrim(value: string): Paint {
