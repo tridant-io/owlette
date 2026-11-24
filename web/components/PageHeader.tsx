@@ -20,6 +20,7 @@ import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
 import { TrialBanner, planBannerKind } from '@/components/plan/TrialBanner';
 import { usePlan } from '@/hooks/usePlan';
 import { createSite } from '@/hooks/useFirestore';
+import { useSiteMachineCounts } from '@/hooks/useSiteMachineCounts';
 
 // out of the first bundle of every page the header is on: few people are offered "new site".
 const CreateSiteDialog = dynamic(
@@ -137,6 +138,7 @@ export function PageHeader({
   const [openMenuCount, setOpenMenuCount] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [drawerSitesOpen, setDrawerSitesOpen] = useState(false);
+  const [siteMenuOpen, setSiteMenuOpen] = useState(false);
   const feedbackIndex = useRef(0);
   const drawerRef = useRef<HTMLDivElement>(null);
   const drawerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -226,6 +228,11 @@ export function PageHeader({
     canManageSites ? { label: 'manage sites', icon: Settings, onSelect: () => router.push('/admin/sites') } : null,
     canCreateSite ? { label: 'new site', icon: Plus, onSelect: () => setCreateSiteOpen(true) } : null,
   ].filter((entry) => entry !== null);
+  const machineCounts = useSiteMachineCounts(
+    sites.map((s) => s.id),
+    machineScope,
+    !!selectSite && (siteMenuOpen || (navDrawerOpen && drawerSitesOpen)),
+  );
   const scopedHere = !!currentSiteId && machineScope(currentSiteId) !== null;
   const navItems = NAV_ITEMS.filter((item) => !(scopedHere && item.wholeSiteOnly));
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
@@ -278,7 +285,7 @@ export function PageHeader({
             {selectSite && (
               <>
                 {CRUMB_DIVIDER}
-                <DropdownMenu onOpenChange={handleMenuOpenChange}>
+                <DropdownMenu onOpenChange={(open) => { setSiteMenuOpen(open); handleMenuOpenChange(open); }}>
                   <DropdownMenuTrigger asChild>
                     <button
                       data-testid="site-switcher-trigger"
@@ -289,7 +296,7 @@ export function PageHeader({
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`} {...siteFilterHostProps}>
-                    <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} />
+                    <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} counts={machineCounts} />
                     {siteEntries.length > 0 && <DropdownMenuSeparator className="bg-border" />}
                     {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                       <DropdownMenuItem
@@ -544,6 +551,7 @@ export function PageHeader({
                       selectSite(siteId);
                       setNavDrawerOpen(false);
                     }}
+                    counts={machineCounts}
                   />
                 </CollapsibleContent>
               </Collapsible>
