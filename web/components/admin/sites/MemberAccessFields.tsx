@@ -41,7 +41,7 @@ function swoopHint(swoop: SwoopChoice, role: AddableSiteMemberRole, membersMayWa
 }
 
 const TRIGGER_CLASS = 'w-full border-border bg-secondary text-foreground';
-const ITEM_CLASS = 'text-foreground focus:bg-accent focus:text-foreground';
+const ITEM_CLASS = 'text-foreground focus:text-foreground';
 
 export function MemberAccessFields({
   idPrefix,

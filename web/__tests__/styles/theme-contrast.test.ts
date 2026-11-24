@@ -118,26 +118,36 @@ const TEXT_PAIRS: Array<[string, string]> = [
 /**
  * text set on the hover sweep (.btn-sweep, .menu-sweep): the --btn-hover scrim
  * over a menu, popover or card. a highlighted menu row or hovered ghost button
- * reads in these, the tinted ones through their -bright steps.
+ * reads in these, the tinted ones through their -bright steps, and a row's quiet
+ * line through accent-foreground at 80%.
  */
 const SWEPT_TEXT = [
   'foreground',
   'accent-foreground',
+  'accent-foreground@0.8',
   'danger-bright',
   'info-bright',
   'series-display-bright',
   'warning',
   'primary',
   'accent-warm-hover',
+  'accent-cyan',
 ] as const;
-const SWEPT_PAIRS: Array<[string, string]> = [
-  ...SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
-    (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
-  ),
-  // a row-destructive button on a dense list row
-  ['danger-bright', 'card-sunken'],
-  ['danger-bright', 'background'],
+const SWEPT_PAIRS: Array<[string, string]> = SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
+  (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
+);
+/**
+ * glyphs on the sweep, held to the 3:1 of a graphic: muted-foreground stays on a
+ * highlighted row only as an icon (quiet text takes accent-foreground@0.8, above),
+ * and row / row-destructive are icon-only buttons that hover with a muted fill
+ * under the sweep.
+ */
+const SWEPT_ICONS: Array<[string, string]> = [
+  ...(['raised', 'popover', 'card'] as const).map((surface): [string, string] => ['muted-foreground', surface]),
+  ['accent-cyan', 'muted'],
+  ['danger-bright', 'muted'],
 ];
+const GRAPHIC = 3;
 
 /** a `color-mix(in oklab, <colour> N%, transparent)` scrim, as the hover tints are written */
 function scrim(value: string): Paint {
@@ -172,9 +182,16 @@ describe.each([
     expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
   });
 
+  const swept = (surface: string): Rgb => over(scrim(resolve('btn-hover')), paint(surface));
+
   it.each(SWEPT_PAIRS)('--%s on the hover sweep over --%s clears 4.5:1', (text, surface) => {
-    const behind = over(scrim(resolve('btn-hover')), paint(surface));
+    const behind = swept(surface);
     expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
+  });
+
+  it.each(SWEPT_ICONS)('--%s icons on the hover sweep over --%s clear 3:1', (icon, surface) => {
+    const behind = swept(surface);
+    expect(contrast(paint(icon, behind), behind)).toBeGreaterThanOrEqual(GRAPHIC);
   });
 });
 

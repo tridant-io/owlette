@@ -144,11 +144,12 @@ describe('DownloadButton', () => {
     // userEvent.setup() installs its own clipboard; read the copy back through it
     const user = await openMenu('download v3.4.0 for windows');
 
-    await user.click(screen.getByRole('button', { name: 'copy linux download link' }));
+    await user.click(menuItem('copy linux download link'));
 
     expect(await navigator.clipboard.readText()).toBe(ALL_FILES.linux_x64!.download_url);
     expect(open).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'copy macos download link' })).toBeEnabled();
+    // the menu stays open for the next copy
+    expect(menuItem('copy macos download link')).not.toHaveAttribute('aria-disabled');
     open.mockRestore();
   });
 

@@ -101,7 +101,7 @@ export function TalonSuccessorPicker({
           <SelectContent className="border-border bg-card">
             <SelectItem
               value={NO_SUCCESSOR}
-              className="text-foreground focus:bg-accent focus:text-foreground"
+              className="text-foreground focus:text-foreground"
             >
               nobody — let these talons stop
             </SelectItem>
@@ -109,7 +109,7 @@ export function TalonSuccessorPicker({
               <SelectItem
                 key={candidate.uid}
                 value={candidate.uid}
-                className="text-foreground focus:bg-accent focus:text-foreground"
+                className="text-foreground focus:text-foreground"
               >
                 {candidate.label}
               </SelectItem>

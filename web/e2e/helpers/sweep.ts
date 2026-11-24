@@ -1,13 +1,41 @@
-import type { Locator } from '@playwright/test';
+import { expect, type Locator } from '@playwright/test';
 
 /**
- * WCAG contrast of an element's text over its hover sweep, from computed colours.
+ * the hover sweep (.btn-sweep, .menu-sweep in globals.css) as a spec reads it.
  *
- * The browser does the colour work: each computed colour (lab, oklch, rgba) is
+ * the sweep is a --btn-hover gradient whose background-size runs 0% -> 100% over
+ * an unchanged background-color, so it is asserted as geometry, not colour: that
+ * catches a missing scrim, a transparent --btn-hover and a dropped class alike.
+ */
+
+/** the sweep's gradient layer, how far it has run, and the fill under it */
+export const sweepState = (target: Locator) =>
+  target.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { image: style.backgroundImage, size: style.backgroundSize, color: style.backgroundColor };
+  });
+
+/** polled: the computed size runs through the 200ms transition */
+export const expectSweepSize = (target: Locator, size: '0% 100%' | '100% 100%', message?: string) =>
+  expect.poll(async () => (await sweepState(target)).size, { message }).toBe(size);
+
+/** at rest: the layer is there, not transparent, and collapsed to zero width */
+export async function expectSweepAtRest(target: Locator, what: string) {
+  const rest = await sweepState(target);
+  expect(rest.image, `${what} should carry the sweep layer`).toContain('gradient');
+  expect(rest.image, `${what}: the sweep colour must not be transparent`).not.toContain('rgba(0, 0, 0, 0)');
+  expect(rest.size, `${what} should be collapsed at rest`).toBe('0% 100%');
+  return rest;
+}
+
+/**
+ * wcag contrast of an element's text over its sweep, from computed colours.
+ *
+ * the browser does the colour work: each computed colour (lab, oklch, rgba) is
  * painted onto a 1px canvas in page order, from the first opaque ancestor
- * background, through the element's own fill, to the --btn-hover gradient the
- * sweep draws, and the text colour on top. The pixels give the luminances, so no
- * colour-space maths lives here. Read it once the sweep has settled at 100%.
+ * background, through the element's own fill, to the gradient the sweep draws,
+ * and the text colour on top. the pixels give the luminances, so no colour-space
+ * maths lives here. read it once the sweep has settled at 100%.
  */
 export function sweptContrast(target: Locator): Promise<number> {
   return target.evaluate((el) => {

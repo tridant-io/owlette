@@ -253,7 +253,7 @@ export default function AddMachinePage() {
             </SelectTrigger>
             <SelectContent className="bg-muted border-border">
               {sites.map((site) => (
-                <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted">
+                <SelectItem key={site.id} value={site.id} className="text-foreground">
                   {site.name}
                 </SelectItem>
               ))}

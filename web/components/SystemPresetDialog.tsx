@@ -295,7 +295,7 @@ export default function SystemPresetDialog({
                   <SelectItem
                     key={cat}
                     value={cat}
-                    className="text-foreground focus:bg-accent focus:text-foreground"
+                    className="text-foreground focus:text-foreground"
                   >
                     {cat}
                   </SelectItem>

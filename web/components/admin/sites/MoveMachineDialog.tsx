@@ -104,7 +104,7 @@ export function MoveMachineDialog({
               </SelectTrigger>
               <SelectContent className="border-border bg-card">
                 {targetSites.map((site) => (
-                  <SelectItem key={site.id} value={site.id} className="text-foreground focus:bg-accent focus:text-foreground">
+                  <SelectItem key={site.id} value={site.id} className="text-foreground focus:text-foreground">
                     {site.name}
                   </SelectItem>
                 ))}

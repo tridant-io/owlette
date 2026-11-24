@@ -336,12 +336,14 @@ export function PageHeader({
                     <DropdownMenuItem
                       key={item.href}
                       onClick={() => router.push(item.href)}
-                      className="text-foreground focus:text-foreground cursor-pointer py-3 px-3 flex items-start gap-3"
+                      className="group text-foreground focus:text-foreground cursor-pointer py-3 px-3 flex items-start gap-3"
                     >
                       <ItemIcon className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
                       <div className="flex flex-col gap-0.5">
                         <span className="font-medium">{item.name}</span>
-                        <span className="text-xs text-muted-foreground font-normal">
+                        {/* muted misses aa on the swept row in dark, so the marked row's
+                            line takes the stronger tone, as the site switcher's id does */}
+                        <span className="text-xs text-muted-foreground font-normal group-data-[highlighted]:text-accent-foreground/80">
                           {item.description}
                         </span>
                       </div>

@@ -1,15 +1,15 @@
 /**
  * menu rows take the buttons' hover sweep (.menu-sweep in globals.css): the
- * header's page switcher, site switcher, user menu and download menu, and a
- * machine's menu for a tinted row.
+ * header's page switcher, site switcher, user menu and download menu, a
+ * machine's menu for a tinted row, and a select's options.
  *
- * the sweep is a --btn-hover gradient whose background-size runs 0% -> 100%,
- * so it is asserted as geometry, as in button-hover.spec.ts, plus an unchanged
+ * the sweep is asserted as geometry (helpers/sweep.ts), plus an unchanged
  * background-color: a flat focus:bg-accent left on a row would pass the size
  * check and still hide the sweep. the sweep keys on radix's highlight, so with
- * the pointer parked on one row an arrow key moves the sweep off it: a :hover
- * sweep would leave both rows lit. the report keeps pictures of every menu,
- * dark and light, with a row hovered and a row reached by the keyboard.
+ * the pointer parked on one row an arrow key moves the sweep off it and exactly
+ * one row stays lit: a :hover sweep would leave two. the report keeps pictures
+ * of every menu, dark and light, with a row hovered and a row reached by the
+ * keyboard.
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
@@ -18,7 +18,7 @@ import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { seedMachine } from '../../helpers/seed';
 import { seedInstallerLatest } from '../../helpers/coverageSeed';
-import { sweptContrast } from '../../helpers/sweptContrast';
+import { expectSweepAtRest, expectSweepSize, sweepState, sweptContrast } from '../../helpers/sweep';
 
 test.use(roleState('admin'));
 // each test walks five menus by pointer and by keys, with pictures: past the 30s default on a busy box
@@ -51,27 +51,15 @@ test.afterAll(async () => {
   await db.collection('sites').doc(SITE_ID).collection('machines').doc(MACHINE_ID).delete();
 });
 
-const sweep = (loc: Locator) =>
-  loc.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    return { image: cs.backgroundImage, size: cs.backgroundSize, color: cs.backgroundColor };
-  });
+/** how many of a surface's rows are swept in, once the transitions settle */
+const lit = (surface: Locator, role: 'menuitem' | 'option') =>
+  surface
+    .getByRole(role)
+    .evaluateAll((rows) => rows.filter((row) => getComputedStyle(row).backgroundSize === '100% 100%').length);
 
-// polled: the computed size runs through the 200ms transition
-const expectSize = (loc: Locator, size: string, message: string) =>
-  expect.poll(async () => (await sweep(loc)).size, { message }).toBe(size);
-
-async function expectAtRest(loc: Locator, what: string) {
-  const rest = await sweep(loc);
-  expect(rest.image, `${what} should carry the sweep layer`).toContain('gradient');
-  expect(rest.image, `${what}: the sweep colour must not be transparent`).not.toContain('rgba(0, 0, 0, 0)');
-  expect(rest.size, `${what} should be collapsed at rest`).toBe('0% 100%');
-  return rest;
-}
-
-// the open menu and 16 px around it, so its edges and shadow are in the picture
-async function picture(page: Page, name: string) {
-  const box = (await page.getByRole('menu').boundingBox())!;
+// the open surface and 16 px around it, so its edges and shadow are in the picture
+async function picture(page: Page, surface: Locator, name: string) {
+  const box = (await surface.boundingBox())!;
   const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
   const path = test.info().outputPath(`${name.replace(/[^a-z0-9]+/gi, '-')}.png`);
   await page.screenshot({ clip, path });
@@ -98,20 +86,21 @@ async function closeMenu(page: Page) {
 async function expectRowsSweep(page: Page, trigger: Locator, name: string, scheme: string) {
   const menu = await openMenu(page, trigger);
   const [first, second] = [menu.getByRole('menuitem').nth(0), menu.getByRole('menuitem').nth(1)];
-  const rest = await expectAtRest(first, `${name}'s first row`);
-  await expectAtRest(second, `${name}'s second row`);
+  const rest = await expectSweepAtRest(first, `${name}'s first row`);
+  await expectSweepAtRest(second, `${name}'s second row`);
 
   await first.hover();
-  await expectSize(first, '100% 100%', `${name}: the hovered row should sweep in`);
-  expect((await sweep(first)).color, `${name}: no flat fill under the sweep`).toBe(rest.color);
-  await picture(page, `${name}, row hovered, ${scheme}`);
+  await expectSweepSize(first, '100% 100%', `${name}: the hovered row should sweep in`);
+  expect((await sweepState(first)).color, `${name}: no flat fill under the sweep`).toBe(rest.color);
+  await picture(page, menu, `${name}, row hovered, ${scheme}`);
 
   await page.keyboard.press('ArrowDown');
   await expect(second).toBeFocused();
-  await expectSize(second, '100% 100%', `${name}: the arrowed-to row should sweep in`);
-  await expectSize(first, '0% 100%', `${name}: the row under the parked pointer should sweep out`);
-  expect((await sweep(second)).color, `${name}: no flat fill under the keyboard sweep`).toBe(rest.color);
-  await picture(page, `${name}, row keyboard-focused, ${scheme}`);
+  await expectSweepSize(second, '100% 100%', `${name}: the arrowed-to row should sweep in`);
+  await expectSweepSize(first, '0% 100%', `${name}: the row under the parked pointer should sweep out`);
+  await expect.poll(() => lit(menu, 'menuitem'), { message: `${name}: one row lit` }).toBe(1);
+  expect((await sweepState(second)).color, `${name}: no flat fill under the keyboard sweep`).toBe(rest.color);
+  await picture(page, menu, `${name}, row keyboard-focused, ${scheme}`);
 
   await closeMenu(page);
 }
@@ -128,55 +117,82 @@ for (const scheme of ['dark', 'light'] as const) {
     await expectRowsSweep(page, page.getByTestId('site-switcher-trigger'), 'site switcher', scheme);
     await expectRowsSweep(page, page.getByTestId('user-menu-trigger'), 'user menu', scheme);
 
-    // the download menu's platform rows are split: the label and the copy icon
-    // each sweep on their own, and the row sweeps only for the keyboard
+    // the download menu's split rows: download and copy are each a menu item, as the
+    // machine menu's restart and its schedule are, so each lights on its own
     const menu = await openMenu(page, header.getByRole('button', { name: 'choose installer platform' }));
-    const windows = menu.getByRole('menuitem', { name: /^windows/ });
-    const label = windows.locator('span').first();
-    const copy = windows.getByRole('button', { name: 'copy windows download link' });
+    const windows = menu.getByRole('menuitem', { name: 'windows', exact: true });
+    const copy = menu.getByRole('menuitem', { name: 'copy windows download link' });
     const notes = menu.getByRole('menuitem', { name: 'release notes' });
-    await expectAtRest(label, 'the windows label');
-    await expectAtRest(copy, 'the windows copy icon');
-    await expectAtRest(notes, 'release notes');
+    const rest = await expectSweepAtRest(windows, 'the windows row');
+    await expectSweepAtRest(copy, 'the windows copy item');
 
-    await label.hover();
-    await expectSize(label, '100% 100%', 'the hovered label should sweep in');
-    expect((await sweep(windows)).image, 'the platform row stays flat for the pointer').toBe('none');
-    await picture(page, `download menu, row hovered, ${scheme}`);
+    await windows.hover();
+    await expectSweepSize(windows, '100% 100%', 'the hovered platform label should sweep in');
+    expect((await sweepState(windows)).color, 'no flat fill under the sweep').toBe(rest.color);
+    await picture(page, menu, `download menu, row hovered, ${scheme}`);
 
-    await copy.hover();
-    await expectSize(copy, '100% 100%', 'the hovered copy icon should sweep in');
-    await expectSize(label, '0% 100%', 'the label should sweep out when the pointer moves to the copy icon');
+    // the pointer parked on the platform label: the arrow key moves the one lit item on
+    await page.keyboard.press('ArrowDown');
+    await expect(copy).toBeFocused();
+    await expectSweepSize(copy, '100% 100%', 'the arrowed-to copy item should sweep in');
+    await expectSweepSize(windows, '0% 100%', 'the label under the parked pointer should sweep out');
+    await expect.poll(() => lit(menu, 'menuitem'), { message: 'download menu: one item lit' }).toBe(1);
+    await picture(page, menu, `download menu, row keyboard-focused, ${scheme}`);
 
     await notes.hover();
-    await expectSize(notes, '100% 100%', 'release notes should sweep in');
-
-    await page.keyboard.press('ArrowUp');
-    const linux = menu.getByRole('menuitem', { name: /^linux/ });
-    await expect(linux).toBeFocused();
-    expect((await sweep(linux)).image, 'a keyboard-focused platform row carries the sweep').toContain('gradient');
-    await expectSize(linux, '100% 100%', 'the keyboard-focused platform row should sweep in');
-    await expectSize(notes, '0% 100%', 'release notes should sweep out under the parked pointer');
-    await picture(page, `download menu, row keyboard-focused, ${scheme}`);
+    await expectSweepSize(notes, '100% 100%', 'release notes should sweep in');
+    await expect.poll(() => lit(menu, 'menuitem'), { message: 'download menu: one item lit under the pointer' }).toBe(1);
     await closeMenu(page);
 
     // a tinted row keeps only its text colour and sweeps like the rest, as ghost-destructive
     // does on a button. its text takes the bright step, which clears aa on the sweep
     const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
-    await openMenu(page, card.getByTestId('machine-context-menu-trigger'));
+    const machineMenu = await openMenu(page, card.getByTestId('machine-context-menu-trigger'));
     const remove = page.getByTestId('machine-context-menu-remove');
     const revoke = page.getByTestId('machine-context-menu-revoke-token');
-    const tintedRest = await expectAtRest(remove, 'remove machine');
+    const tintedRest = await expectSweepAtRest(remove, 'remove machine');
     await remove.hover();
-    await expectSize(remove, '100% 100%', 'the tinted row should sweep in');
-    expect((await sweep(remove)).color, 'no tinted fill under the sweep').toBe(tintedRest.color);
+    await expectSweepSize(remove, '100% 100%', 'the tinted row should sweep in');
+    expect((await sweepState(remove)).color, 'no tinted fill under the sweep').toBe(tintedRest.color);
     await expect.poll(() => sweptContrast(remove), { message: 'swept danger text clears aa' }).toBeGreaterThanOrEqual(4.5);
-    await picture(page, `machine menu, tinted row hovered, ${scheme}`);
+    await picture(page, machineMenu, `machine menu, tinted row hovered, ${scheme}`);
     await page.keyboard.press('ArrowUp');
-    await expectSize(revoke, '100% 100%', 'the arrowed-to tinted row should sweep in');
-    expect((await sweep(revoke)).color, 'no tinted fill under the keyboard sweep').toBe(tintedRest.color);
+    await expectSweepSize(revoke, '100% 100%', 'the arrowed-to tinted row should sweep in');
+    expect((await sweepState(revoke)).color, 'no tinted fill under the keyboard sweep').toBe(tintedRest.color);
     await expect.poll(() => sweptContrast(revoke), { message: 'keyboard-swept danger text clears aa' }).toBeGreaterThanOrEqual(4.5);
-    await picture(page, `machine menu, tinted row keyboard-focused, ${scheme}`);
+    await picture(page, machineMenu, `machine menu, tinted row keyboard-focused, ${scheme}`);
     await closeMenu(page);
+  });
+
+  test(`a select's options sweep like menu rows, ${scheme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/dashboard');
+    await page.getByTestId('user-menu-trigger').click();
+    await page.getByRole('menuitem', { name: /account settings/i }).click();
+    await page.getByRole('button', { name: /^preferences$/i }).first().click();
+    await page.locator('#temperatureUnit').click();
+
+    // the select opens on its chosen option, lit; hover the other one, then arrow back
+    const list = page.getByRole('listbox');
+    const [first, second] = [list.getByRole('option').nth(0), list.getByRole('option').nth(1)];
+    const firstChosen = (await first.getAttribute('aria-selected')) === 'true';
+    const [chosen, other] = firstChosen ? [first, second] : [second, first];
+    const rest = await expectSweepAtRest(other, 'the unchosen option');
+
+    await other.hover();
+    await expectSweepSize(other, '100% 100%', 'the hovered option should sweep in');
+    expect((await sweepState(other)).color, 'no flat fill under the sweep').toBe(rest.color);
+    await picture(page, list, `select, option hovered, ${scheme}`);
+
+    await page.keyboard.press(firstChosen ? 'ArrowUp' : 'ArrowDown');
+    await expect(chosen).toBeFocused();
+    await expectSweepSize(chosen, '100% 100%', 'the arrowed-to option should sweep in');
+    await expectSweepSize(other, '0% 100%', 'the option under the parked pointer should sweep out');
+    await expect.poll(() => lit(list, 'option'), { message: 'select: one option lit' }).toBe(1);
+    await picture(page, list, `select, option keyboard-focused, ${scheme}`);
+
+    // nothing is chosen or saved: escape closes the list, then the dialog
+    await page.keyboard.press('Escape');
+    await expect(list).toHaveCount(0);
   });
 }
