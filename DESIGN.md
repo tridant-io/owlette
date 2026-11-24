@@ -222,6 +222,8 @@ the same room by day: cool paper with a faint hue-250 cast, white panels, and na
 
 status colours come from token families rather than raw palette classes: `danger`, `warning`, `success` and `info`, each with `-surface`, `-border`, `-solid` and `-solid-foreground`. charts and load bars use `--band-*` and `--series-*`. every family is defined for both themes in `web/app/globals.css`, and `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA.
 
+`danger-bright`, `info-bright` and `series-display-bright` are hover steps, like `sodium-amber-bright`: the text colour of a highlighted menu row or hovered `ghost-destructive` button. at night the hover sweep lifts the surface enough that the base tones fall under AA (danger to 3.6:1 on a menu), so each step keeps its hue and is lighter. by day each one equals its base.
+
 ### Status and load
 - **Online Green** (`online-green`): the online dot.
 - **Offline Red** (`offline-red`): the offline pill and the restarting / shutting-down countdown pill (which pulses).

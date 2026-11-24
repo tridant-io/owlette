@@ -326,7 +326,7 @@ export function MachineContextMenu({
       }}
       disabled={isSendingCommand}
       data-testid="machine-context-menu-cancel-reboot"
-      className="text-danger focus:text-danger cursor-pointer"
+      className="text-danger focus:text-danger-bright cursor-pointer"
     >
       <XCircle className="mr-2 h-4 w-4" />
       cancel restart
@@ -383,7 +383,7 @@ export function MachineContextMenu({
                   }}
                   disabled={isSendingCommand}
                   data-testid="machine-context-menu-cancel-shutdown"
-                  className="text-danger focus:text-danger cursor-pointer"
+                  className="text-danger focus:text-danger-bright cursor-pointer"
                 >
                   <XCircle className="mr-2 h-4 w-4" />
                   cancel shutdown
@@ -560,7 +560,7 @@ export function MachineContextMenu({
                     onLiveView?.();
                   }}
                   data-testid="machine-context-menu-live-view"
-                  className="text-info focus:text-info cursor-pointer"
+                  className="text-info focus:text-info-bright cursor-pointer"
                 >
                   <Eye className="mr-2 h-4 w-4" />
                   live view
@@ -573,7 +573,7 @@ export function MachineContextMenu({
                     onScreenshot?.();
                   }}
                   data-testid="machine-context-menu-screenshot"
-                  className="text-info focus:text-info cursor-pointer"
+                  className="text-info focus:text-info-bright cursor-pointer"
                 >
                   <Camera className="mr-2 h-4 w-4" />
                   screenshot
@@ -588,7 +588,7 @@ export function MachineContextMenu({
                 onViewDisplays?.();
               }}
               data-testid="machine-context-menu-view-displays"
-              className="text-[var(--series-display)] focus:text-[var(--series-display)] cursor-pointer"
+              className="text-[var(--series-display)] focus:text-series-display-bright cursor-pointer"
             >
               <Monitor className="mr-2 h-4 w-4" />
               view displays
@@ -641,7 +641,7 @@ export function MachineContextMenu({
                   setShowRevokeDialog(true);
                 }}
                 data-testid="machine-context-menu-revoke-token"
-                className="text-danger focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger-bright cursor-pointer"
               >
                 <KeyRound className="mr-2 h-4 w-4" />
                 revoke token
@@ -655,7 +655,7 @@ export function MachineContextMenu({
                   onRemoveMachine();
                 }}
                 data-testid="machine-context-menu-remove"
-                className="text-danger focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger-bright cursor-pointer"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 remove machine

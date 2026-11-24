@@ -13,6 +13,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { sweptContrast } from '../../helpers/sweptContrast';
 
 test.use(roleState('superadmin'));
 
@@ -167,7 +168,12 @@ test('deleting a rule removes it from the Firestore rules array', async ({ page 
   await gotoAlertsForSeededSite(page);
 
   const row = page.locator('div.rounded-lg.border').filter({ hasText: SEEDED_RULE.name });
-  await row.locator('button:has(svg.lucide-trash-2)').click();
+  const trash = row.locator('button:has(svg.lucide-trash-2)');
+  // a ghost-destructive button: swept, its glyph takes danger-bright, which clears aa at night
+  await trash.hover();
+  await expect.poll(() => trash.evaluate((el) => getComputedStyle(el).backgroundSize)).toBe('100% 100%');
+  await expect.poll(() => sweptContrast(trash), { message: 'the swept delete glyph clears aa' }).toBeGreaterThanOrEqual(4.5);
+  await trash.click();
 
   const confirm = page.getByRole('dialog', { name: /^delete alert rule$/i });
   await expect(confirm).toBeVisible();

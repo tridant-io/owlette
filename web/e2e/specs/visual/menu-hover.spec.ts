@@ -18,8 +18,11 @@ import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { seedMachine } from '../../helpers/seed';
 import { seedInstallerLatest } from '../../helpers/coverageSeed';
+import { sweptContrast } from '../../helpers/sweptContrast';
 
 test.use(roleState('admin'));
+// each test walks five menus by pointer and by keys, with pictures: past the 30s default on a busy box
+test.setTimeout(90_000);
 
 const SITE_ID = 'site-A';
 const MACHINE_ID = 'e2e-menu-sweep';
@@ -157,7 +160,8 @@ for (const scheme of ['dark', 'light'] as const) {
     await picture(page, `download menu, row keyboard-focused, ${scheme}`);
     await closeMenu(page);
 
-    // a tinted row keeps only its text colour and sweeps like the rest, as ghost-destructive does on a button
+    // a tinted row keeps only its text colour and sweeps like the rest, as ghost-destructive
+    // does on a button. its text takes the bright step, which clears aa on the sweep
     const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
     await openMenu(page, card.getByTestId('machine-context-menu-trigger'));
     const remove = page.getByTestId('machine-context-menu-remove');
@@ -166,10 +170,12 @@ for (const scheme of ['dark', 'light'] as const) {
     await remove.hover();
     await expectSize(remove, '100% 100%', 'the tinted row should sweep in');
     expect((await sweep(remove)).color, 'no tinted fill under the sweep').toBe(tintedRest.color);
+    await expect.poll(() => sweptContrast(remove), { message: 'swept danger text clears aa' }).toBeGreaterThanOrEqual(4.5);
     await picture(page, `machine menu, tinted row hovered, ${scheme}`);
     await page.keyboard.press('ArrowUp');
     await expectSize(revoke, '100% 100%', 'the arrowed-to tinted row should sweep in');
     expect((await sweep(revoke)).color, 'no tinted fill under the keyboard sweep').toBe(tintedRest.color);
+    await expect.poll(() => sweptContrast(revoke), { message: 'keyboard-swept danger text clears aa' }).toBeGreaterThanOrEqual(4.5);
     await picture(page, `machine menu, tinted row keyboard-focused, ${scheme}`);
     await closeMenu(page);
   });

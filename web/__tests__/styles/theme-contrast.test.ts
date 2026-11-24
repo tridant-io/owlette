@@ -115,23 +115,60 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ]),
 ];
 
+/**
+ * text set on the hover sweep (.btn-sweep, .menu-sweep): the --btn-hover scrim
+ * over a menu, popover or card. a highlighted menu row or hovered ghost button
+ * reads in these, the tinted ones through their -bright steps.
+ */
+const SWEPT_TEXT = [
+  'foreground',
+  'accent-foreground',
+  'danger-bright',
+  'info-bright',
+  'series-display-bright',
+  'warning',
+  'primary',
+  'accent-warm-hover',
+] as const;
+const SWEPT_PAIRS: Array<[string, string]> = SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
+  (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
+);
+
+/** a `color-mix(in oklab, <colour> N%, transparent)` scrim, as the hover tints are written */
+function scrim(value: string): Paint {
+  const mix = value.match(/^color-mix\(in oklab,\s*(.+?)\s+([\d.]+)%,\s*transparent\)$/);
+  if (!mix) throw new Error(`not a scrim: ${value}`);
+  const colour = parse(mix[1]);
+  return { rgb: colour.rgb, alpha: colour.alpha * (Number(mix[2]) / 100) };
+}
+
 describe.each([
   ['light', ':root'],
   ['dark', '.dark'],
 ])('%s theme contrast', (_name, selector) => {
   const tokens = { ...block(':root'), ...block(selector) };
   const card = parse(tokens.card).rgb;
+  /** a token's value, following `var(--other)` (the day -bright steps equal their base) */
+  const resolve = (name: string): string => {
+    const value = tokens[name];
+    if (!value) throw new Error(`--${name} is not defined for ${selector}`);
+    const ref = value.match(/^var\(--([a-z0-9-]+)\)$/);
+    return ref ? resolve(ref[1]) : value;
+  };
   /** `name` or `name@alpha`, composited over `base` the way the browser paints it */
   const paint = (spec: string, base: Rgb = card): Rgb => {
     const [name, alpha] = spec.split('@');
-    const value = tokens[name];
-    if (!value) throw new Error(`--${name} is not defined for ${selector}`);
-    const colour = parse(value);
+    const colour = parse(resolve(name));
     return over({ rgb: colour.rgb, alpha: colour.alpha * (alpha ? Number(alpha) : 1) }, base);
   };
 
   it.each(TEXT_PAIRS)('--%s on --%s clears 4.5:1', (text, surface) => {
     const behind = paint(surface);
+    expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
+  });
+
+  it.each(SWEPT_PAIRS)('--%s on the hover sweep over --%s clears 4.5:1', (text, surface) => {
+    const behind = over(scrim(resolve('btn-hover')), paint(surface));
     expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
   });
 });

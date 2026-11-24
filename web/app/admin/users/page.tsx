@@ -637,7 +637,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenMfaResetDialog(user.uid, user.email)}
                               disabled={resettingMfaUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-danger cursor-pointer focus:text-danger"
+                              className="text-danger cursor-pointer focus:text-danger-bright"
                             >
                               {resettingMfaUser === user.uid ? (
                                 <>
@@ -654,7 +654,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenDeleteDialog(user.uid, user.email)}
                               disabled={deletingUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-danger cursor-pointer focus:text-danger"
+                              className="text-danger cursor-pointer focus:text-danger-bright"
                             >
                               {deletingUser === user.uid ? (
                                 <>

@@ -54,6 +54,7 @@
   --color-card-recessed: var(--card-recessed);
   --color-card-header: var(--card-header);
   --color-danger: var(--danger);
+  --color-danger-bright: var(--danger-bright);
   --color-danger-surface: var(--danger-surface);
   --color-danger-border: var(--danger-border);
   --color-danger-solid: var(--danger-solid);
@@ -69,10 +70,13 @@
   --color-success-solid: var(--success-solid);
   --color-success-solid-foreground: var(--success-solid-foreground);
   --color-info: var(--info);
+  --color-info-bright: var(--info-bright);
   --color-info-surface: var(--info-surface);
   --color-info-border: var(--info-border);
   --color-info-solid: var(--info-solid);
   --color-info-solid-foreground: var(--info-solid-foreground);
+  /* the other series stay var() at their call sites; this one is a swept row's text */
+  --color-series-display-bright: var(--series-display-bright);
   --color-band-calm: var(--band-calm);
   --color-band-steady: var(--band-steady);
   --color-band-working: var(--band-working);
@@ -202,6 +206,9 @@
   --surface-hover: color-mix(in oklab, oklch(0.55 0.12 250) 8%, transparent);
 
   --danger: oklch(0.505 0.213 27.518);
+  /* the -bright steps are the text on a swept row (see the .dark block); by day
+     the base already clears aa there */
+  --danger-bright: var(--danger);
   --danger-surface: oklch(0.971 0.013 17.38);
   --danger-border: oklch(0.885 0.062 18.334);
   --danger-solid: oklch(0.577 0.245 27.325);
@@ -217,6 +224,7 @@
   --success-solid: oklch(0.527 0.154 150.069);
   --success-solid-foreground: oklch(1 0 0);
   --info: oklch(0.488 0.243 264.376);
+  --info-bright: var(--info);
   --info-surface: oklch(0.97 0.014 254.604);
   --info-border: oklch(0.882 0.059 254.128);
   --info-solid: oklch(0.546 0.245 262.881);
@@ -235,6 +243,7 @@
   --series-cpu-temp: oklch(0.577 0.245 27.325);
   --series-gpu-temp: oklch(0.592 0.249 0.584);
   --series-display: oklch(0.52 0.18 285);
+  --series-display-bright: var(--series-display);
   /* the first net and disk-io pair doubles as readout text, also on stale rows dimmed
      to 80%, so by day it is ink-dark (theme-contrast.test.ts) */
   --series-nic-tx-1: oklch(0.46 0.16 40);
@@ -421,6 +430,11 @@
   /* the families below equal the tailwind palette classes and literals they
      replace (red-400, red-950/30, amber-500/40, ...), so dark renders as before */
   --danger: oklch(0.704 0.191 22.216);
+  /* the hover sweep lifts a 0.269L menu to about 0.36L, and danger, info and
+     display text fall under aa on it (danger 3.6:1). their -bright steps keep the
+     hue, are lighter, and give up only the chroma srgb can't hold at that
+     lightness: at least 4.8:1 on a swept menu, popover or card */
+  --danger-bright: oklch(0.77 0.13 22.216);
   --danger-surface: oklch(0.258 0.092 26.042 / 0.3);
   --danger-border: oklch(0.444 0.177 26.899);
   --danger-solid: oklch(0.577 0.245 27.325);
@@ -438,6 +452,7 @@
   --success-solid: oklch(0.527 0.154 150.069);
   --success-solid-foreground: oklch(1 0 0);
   --info: oklch(0.707 0.165 254.624);
+  --info-bright: oklch(0.76 0.12 254.624);
   --info-surface: oklch(0.282 0.091 267.935 / 0.3);
   --info-border: oklch(0.546 0.245 262.881 / 0.35);
   --info-solid: oklch(0.546 0.245 262.881);
@@ -456,6 +471,7 @@
   --series-cpu-temp: rgb(239, 68, 68);
   --series-gpu-temp: rgb(236, 72, 153);
   --series-display: oklch(0.70 0.15 280);
+  --series-display-bright: oklch(0.76 0.12 280);
   --series-nic-tx-1: rgb(251, 146, 60);
   --series-nic-rx-1: rgb(74, 222, 128);
   --series-nic-tx-2: rgb(245, 158, 11);

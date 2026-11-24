@@ -145,7 +145,7 @@ export function RoostDetailPanel({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={onDelete}
-              className="cursor-pointer text-danger focus:text-danger"
+              className="cursor-pointer text-danger focus:text-danger-bright"
             >
               <Trash2 className="h-3.5 w-3.5 mr-2" />
               delete roost
