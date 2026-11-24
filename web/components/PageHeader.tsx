@@ -302,7 +302,7 @@ export function PageHeader({
                       <DropdownMenuItem
                         key={label}
                         onClick={onSelect}
-                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                        className="text-muted-foreground focus:text-foreground cursor-pointer"
                       >
                         <EntryIcon className="mr-2 h-4 w-4" />
                         {label}
@@ -336,7 +336,7 @@ export function PageHeader({
                     <DropdownMenuItem
                       key={item.href}
                       onClick={() => router.push(item.href)}
-                      className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer py-3 px-3 flex items-start gap-3"
+                      className="text-foreground focus:text-foreground cursor-pointer py-3 px-3 flex items-start gap-3"
                     >
                       <ItemIcon className="h-4 w-4 mt-0.5 flex-shrink-0 text-muted-foreground" />
                       <div className="flex flex-col gap-0.5">
@@ -368,7 +368,7 @@ export function PageHeader({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className={`w-56 ${MENU_SURFACE}`}>
-                <DropdownMenuItem asChild className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer">
+                <DropdownMenuItem asChild className="text-foreground focus:text-foreground cursor-pointer">
                   <Link href="/docs">
                     <BookOpen className="mr-2 h-4 w-4" />
                     docs
@@ -376,7 +376,7 @@ export function PageHeader({
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => setReportBugOpen(true)}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Bug className="mr-2 h-4 w-4 flex-shrink-0" />
                   <span className="transition-opacity duration-300" style={{ opacity: feedbackFading ? 0 : 1 }}>
@@ -444,7 +444,7 @@ export function PageHeader({
               {(isSuperadmin || administersAnySite) && (
                 <DropdownMenuItem
                   onClick={() => router.push(isSuperadmin ? '/admin/installers' : '/admin/sites')}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Shield className="mr-2 h-4 w-4" />
                   admin panel
@@ -453,7 +453,7 @@ export function PageHeader({
               {onAccountSettings && (
                 <DropdownMenuItem
                   onClick={onAccountSettings}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Settings className="mr-2 h-4 w-4" />
                   account settings
@@ -462,7 +462,7 @@ export function PageHeader({
               {plan?.enforced && (
                 <DropdownMenuItem
                   onClick={() => router.push('/settings/plan')}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <CreditCard className="mr-2 h-4 w-4" />
                   plan
@@ -473,7 +473,7 @@ export function PageHeader({
                   await signOut();
                   router.push('/');
                 }}
-                className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                className="text-foreground focus:text-foreground cursor-pointer"
               >
                 <LogOut className="mr-2 h-4 w-4" />
                 sign out

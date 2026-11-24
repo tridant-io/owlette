@@ -314,7 +314,7 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
                                     <DropdownMenuItem
                                       onClick={() => setAccessTarget(member)}
                                       disabled={busy}
-                                      className="text-foreground hover:bg-accent cursor-pointer focus:bg-accent focus:text-foreground"
+                                      className="text-foreground cursor-pointer focus:text-foreground"
                                     >
                                       <UserCog className="h-4 w-4 mr-2" />
                                       change access...

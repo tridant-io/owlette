@@ -1200,7 +1200,15 @@ input[type="week"] {
    with blue instead, so hover stays in the palette. Any hoverable surface that
    is not a <Button> (metric strips, collapsible rows) uses --surface-hover, the
    same tint at lower strength, so a page hovers as one system. */
-.btn-sweep {
+/* .menu-sweep is the same sweep, at full --btn-hover strength, for a radix
+   menu row (dropdown-menu.tsx): a row is a target, like a button, not a
+   surface. it keys on radix's highlight, not :hover: radix lights the one row
+   the pointer or the arrow keys are on by focusing it, so :hover would leave a
+   second row lit while arrowing with the pointer parked in the menu, and
+   :focus-visible misses a row the pointer focused. data-state=open holds a
+   sub-menu's trigger lit while its sub-menu is open. */
+.btn-sweep,
+.menu-sweep {
   background-image: linear-gradient(var(--btn-hover), var(--btn-hover));
   background-repeat: no-repeat;
   background-size: 0% 100%;
@@ -1212,12 +1220,15 @@ input[type="week"] {
     box-shadow 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .btn-sweep:hover:not(:disabled),
-.btn-sweep:focus-visible:not(:disabled) {
+.btn-sweep:focus-visible:not(:disabled),
+.menu-sweep[data-highlighted],
+.menu-sweep[data-state="open"] {
   background-position: 0 0; /* anchored left: the enter sweep runs L→R */
   background-size: 100% 100%;
 }
 @media (prefers-reduced-motion: reduce) {
-  .btn-sweep {
+  .btn-sweep,
+  .menu-sweep {
     transition: none;
   }
 }

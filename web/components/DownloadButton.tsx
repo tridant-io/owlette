@@ -214,17 +214,20 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
                 key={platform}
                 disabled={!!reason}
                 onSelect={() => download(platform)}
-                // the row itself stays flat: the label (download) and the copy icon each
-                // light up on their own; keyboard focus still highlights the row
-                className="cursor-pointer gap-1 p-1 focus:bg-transparent focus:text-inherit focus-visible:bg-accent"
+                // the row itself stays flat under the pointer: the label (download) and the
+                // copy icon each sweep on their own, and a row the arrow keys reach sweeps
+                // whole. the row's sweep is unlayered, so only an important utility holds it
+                // back. :hover, not :focus-visible: chrome keeps keyboard modality into a menu
+                // opened by mouse after a key press, which lit the row under the pointer
+                className="cursor-pointer gap-1 p-1 focus:text-inherit hover:bg-none!"
               >
-                <span className="flex-1 rounded-sm px-2 py-1 hover:bg-accent hover:text-accent-foreground">
+                <span className="btn-sweep flex-1 rounded-sm px-2 py-1 hover:text-accent-foreground">
                   {PLATFORM_LABEL[platform]}
                 </span>
                 {/* a plain button: radix selects the row on a click that reaches it, so the copy stops there */}
                 <button
                   type="button"
-                  className="rounded-sm p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground cursor-pointer disabled:cursor-default"
+                  className="btn-sweep rounded-sm p-1.5 text-muted-foreground hover:text-accent-foreground cursor-pointer disabled:cursor-default"
                   disabled={!!reason}
                   aria-label={`copy ${osWord(platform)} download link`}
                   onPointerDown={(event) => event.stopPropagation()}

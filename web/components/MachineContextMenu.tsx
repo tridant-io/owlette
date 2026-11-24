@@ -611,7 +611,7 @@ export function MachineContextMenu({
                   asChild
                   onClick={(e) => e.stopPropagation()}
                   data-testid="machine-context-menu-hoot"
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Link href={hootMachineHref(siteId, machineId)}>
                     <HootIcon className="mr-2 h-4 w-4" />
@@ -627,7 +627,7 @@ export function MachineContextMenu({
               e.stopPropagation();
               handleToggleMute();
             }}
-            className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+            className="text-muted-foreground focus:text-foreground cursor-pointer"
           >
             {isMuted ? <Bell className="mr-2 h-4 w-4" /> : <BellOff className="mr-2 h-4 w-4" />}
             {isMuted ? 'unmute alerts' : 'mute alerts'}
