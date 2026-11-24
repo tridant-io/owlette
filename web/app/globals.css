@@ -1222,7 +1222,11 @@ input[type="week"] {
    the pointer or the arrow keys are on by focusing it, so :hover would leave a
    second row lit while arrowing with the pointer parked in the menu, and
    :focus-visible misses a row the pointer focused. data-state=open holds a
-   sub-menu's trigger lit while its sub-menu is open. */
+   sub-menu's trigger lit while its sub-menu is open.
+   a button that opens a menu, popover or dialog (aria-haspopup) stays lit the
+   same way while it is open. aria-expanded, not data-state: a tooltip around a
+   trigger writes its own data-state over the menu's, and a collapsible's
+   trigger, which has no aria-haspopup, is a toggle rather than a popup. */
 .btn-sweep,
 .menu-sweep {
   background-image: linear-gradient(var(--btn-hover), var(--btn-hover));
@@ -1237,6 +1241,7 @@ input[type="week"] {
 }
 .btn-sweep:hover:not(:disabled),
 .btn-sweep:focus-visible:not(:disabled),
+.btn-sweep[aria-haspopup][aria-expanded="true"]:not(:disabled),
 .menu-sweep[data-highlighted],
 .menu-sweep[data-state="open"] {
   background-position: 0 0; /* anchored left: the enter sweep runs L→R */

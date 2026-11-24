@@ -22,7 +22,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 - an account gets one pro trial, even if its first tridant account was closed.
 - deleting a site removes it from your tridant account after its final invoice.
 - **admin** → **activity** filters take up to 10 users and 10 sites; an x clears one.
-- menu rows sweep like buttons on hover and arrow keys.
+- menu rows and the header's site, page and user controls sweep like buttons, and a menu's button stays lit while it is open.
 - the privacy policy covers sign-in records, deleted after 400 days, and owlette staff reading activity across sites. [more](https://owlette.app/privacy)
 - if you self-host, deploy the functions before the web app.
 - if you self-host with plans on, register `GET /api/cron/plan-settle` on cron-job.org daily at 06:00 UTC. [more](https://owlette.app/docs/setup/web-deployment)

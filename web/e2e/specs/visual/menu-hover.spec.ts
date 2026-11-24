@@ -187,4 +187,77 @@ for (const scheme of ['dark', 'light'] as const) {
     await page.keyboard.press('Escape');
     await expect(list).toHaveCount(0);
   });
+
+  test(`the header's triggers sweep like buttons and stay lit while open, ${scheme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto('/dashboard');
+    const header = page.locator('header');
+    // an open menu aria-hides the page behind it, trigger included, so roles must look through that
+    const headerButton = (name: string) => header.getByRole('button', { name, exact: true, includeHidden: true });
+    // [name, trigger, whether it carries text: an icon-only trigger's glyph is measured by the theme test]
+    const triggers: Array<[string, Locator, boolean]> = [
+      ['site switcher', page.getByTestId('site-switcher-trigger'), true],
+      ['page switcher', headerButton('dashboard'), true],
+      // ghost already; its tooltip writes data-state over the menu's, so it proves the aria-expanded hold
+      ['download menu', headerButton('choose installer platform'), false],
+      ['help', headerButton('help'), false],
+      ['user menu', page.getByTestId('user-menu-trigger'), true],
+    ];
+
+    for (const [name, trigger, text] of triggers) {
+      await expectSweepAtRest(trigger, `the ${name} trigger`);
+      await trigger.hover();
+      await expectSweepSize(trigger, '100% 100%', `the ${name} trigger should sweep in on hover`);
+      if (name === 'site switcher' || name === 'help') await attachPicture(page, header, `header, ${name} trigger hovered, ${scheme}`);
+      await page.mouse.move(0, 0);
+      await expectSweepSize(trigger, '0% 100%', `the ${name} trigger should sweep out`);
+
+      // keyboard modality first, so the focus that follows is :focus-visible
+      await page.keyboard.press('Tab');
+      await trigger.focus();
+      await expectSweepSize(trigger, '100% 100%', `the ${name} trigger should sweep in on keyboard focus`);
+      if (name === 'page switcher') await attachPicture(page, header, `header, page trigger keyboard-focused, ${scheme}`);
+
+      // open from the keyboard: focus goes into the menu, and the trigger holds the sweep
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('menu')).toBeVisible();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+      await expect(trigger).not.toBeFocused();
+      await expectSweepSize(trigger, '100% 100%', `the ${name} trigger should stay lit while its menu is open`);
+      if (text) {
+        await expect
+          .poll(() => sweptContrast(trigger), { message: `the open ${name} trigger reads on the sweep` })
+          .toBeGreaterThanOrEqual(4.5);
+      }
+      if (name === 'user menu' || name === 'download menu') await attachPicture(page, header, `header, ${name} open, ${scheme}`);
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('menu')).toHaveCount(0);
+    }
+  });
 }
+
+// below md the breadcrumb triggers fold into a drawer, opened by the header's menu button. the
+// drawer covers the button while open, so it has no held state to check, only the sweep
+test.describe('at phone width', () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  for (const scheme of ['dark', 'light'] as const) {
+    test(`the header's menu button sweeps like a button, ${scheme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto('/dashboard');
+      const header = page.locator('header');
+      const menuButton = header.getByRole('button', { name: 'menu', exact: true });
+
+      await expectSweepAtRest(menuButton, 'the menu button');
+      await menuButton.hover();
+      await expectSweepSize(menuButton, '100% 100%', 'the menu button should sweep in on hover');
+      await attachPicture(page, header, `header at phone width, menu button hovered, ${scheme}`);
+      await page.mouse.move(200, 600);
+      await expectSweepSize(menuButton, '0% 100%', 'the menu button should sweep out');
+
+      await page.keyboard.press('Tab');
+      await menuButton.focus();
+      await expectSweepSize(menuButton, '100% 100%', 'the menu button should sweep in on keyboard focus');
+    });
+  }
+});

@@ -133,9 +133,16 @@ const SWEPT_TEXT = [
   'accent-warm-hover',
   'accent-cyan',
 ] as const;
-const SWEPT_PAIRS: Array<[string, string]> = SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
-  (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
-);
+const SWEPT_PAIRS: Array<[string, string]> = [
+  ...SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
+    (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
+  ),
+  // ghost triggers on the page while swept: a lit one takes the full tone (foreground, or
+  // ghost's secondary-foreground), and a quiet one that keeps muted text still reads
+  ['muted-foreground', 'background'],
+  ['foreground', 'background'],
+  ['secondary-foreground', 'background'],
+];
 /**
  * glyphs on the sweep, held to the 3:1 of a graphic: muted-foreground stays on a
  * highlighted row only as an icon (quiet text takes accent-foreground@0.8, above),
