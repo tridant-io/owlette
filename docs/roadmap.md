@@ -29,6 +29,12 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ## infrastructure / ops
 
+- **Firestore backups (prod)** — prod has no backup schedule, no point-in-time recovery and no delete protection (checked 2026-11-23). The only copies are the manual pre-migration exports in `gs://owlette-prod-backup`, newest 2026-10-21, so a bad migration or delete cascade is unrecoverable past the default one-hour window. High urgency, about $5 a month at 8.5 GiB. Turn on a daily backup kept 14 days, then point-in-time recovery and delete protection:
+  - `firebase firestore:backups:schedules:create --project prod --recurrence DAILY --retention 14d`
+  - `firebase firestore:databases:update "(default)" --project prod --point-in-time-recovery ENABLED --delete-protection ENABLED`
+
+  Then list both in `docs/runbooks/manual-infrastructure.md`, since nothing in the repo deploys them, and rehearse one restore into a scratch database. Dev is in the same state. Optional add-on: a weekly export copied off Google (about $1 a month), the only cover against losing the Google project itself; it puts customer data outside the hosting the privacy policy names, so settle that first.
+
 - **Log TTL** — site event logs (`sites/{id}/logs`) are pruned after 400 days by `/api/cron/retention`; machine logs (`sites/{id}/machines/{id}/logs`) still have no expiry. Add them to that sweep. Low urgency (negligible cost), good hygiene.
 
 - **Reduce single-points-of-failure across the stack.** 2026-05-19 Railway platform outage took both `owlette.app` and `dev.owlette.app` offline simultaneously — *every* API route returned 404, agents went into deep token-refresh backoff, and customers had no operational dashboard. Audit each vendor relationship for what happens when they go down, then prioritize the cheapest reductions in blast radius. Specific lines to think through:
