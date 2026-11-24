@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
 import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
@@ -257,19 +258,21 @@ export function PageHeader({
           {/* Below `md` the breadcrumb switchers can't fit beside the avatar and
               action buttons, so they collapse into the drawer this opens. */}
           {!disableNav && (
-            <button
+            <IconButton
               ref={drawerTriggerRef}
-              type="button"
-              aria-label="menu"
+              variant="ghost"
+              size="icon-sm"
+              label="menu"
+              tooltip={false}
               aria-expanded={navDrawerOpen}
               onClick={() => {
                 setDrawerSitesOpen(false);
                 setNavDrawerOpen(true);
               }}
-              className="md:hidden inline-flex items-center justify-center h-8 w-8 flex-shrink-0 rounded-md hover:bg-secondary transition-colors cursor-pointer"
+              className="md:hidden"
             >
-              <Menu className="h-5 w-5 text-muted-foreground" />
-            </button>
+              <Menu className="size-5 text-muted-foreground" />
+            </IconButton>
           )}
 
           {/* the site stays in view below `md`, where its switcher lives in the
@@ -287,13 +290,16 @@ export function PageHeader({
                 {CRUMB_DIVIDER}
                 <DropdownMenu onOpenChange={(open) => { setSiteMenuOpen(open); handleMenuOpenChange(open); }}>
                   <DropdownMenuTrigger asChild>
-                    <button
+                    {/* shrink, not the button's shrink-0: a long site name truncates on a narrow header.
+                        lit (hovered, focused or open), the quiet name takes the full tone */}
+                    <Button
+                      variant="ghost"
                       data-testid="site-switcher-trigger"
-                      className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded-md hover:bg-secondary cursor-pointer truncate max-w-[200px] md:max-w-[320px]"
+                      className="h-auto max-w-[200px] shrink gap-1 truncate px-1.5 py-1 font-normal text-muted-foreground hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground has-[>svg]:px-1.5 md:max-w-[320px]"
                     >
                       <span className="truncate">{currentSiteName}</span>
-                      <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
-                    </button>
+                      <ChevronDown className="size-3.5 flex-shrink-0 opacity-60" />
+                    </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`} {...siteFilterHostProps}>
                     <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} counts={machineCounts} />
@@ -323,11 +329,14 @@ export function PageHeader({
             ) : (
             <DropdownMenu onOpenChange={handleMenuOpenChange}>
               <DropdownMenuTrigger asChild>
-                <button className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded-md hover:bg-secondary cursor-pointer">
-                  {PageIcon ? <PageIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground translate-y-[0.5px]" /> : null}
+                <Button
+                  variant="ghost"
+                  className="h-auto gap-1.5 px-1.5 py-1 text-foreground hover:text-foreground has-[>svg]:px-1.5"
+                >
+                  {PageIcon ? <PageIcon className="size-3.5 flex-shrink-0 text-muted-foreground translate-y-[0.5px]" /> : null}
                   <span className="lowercase">{currentPage}</span>
-                  <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
-                </button>
+                  <ChevronDown className="size-3.5 flex-shrink-0 opacity-60" />
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-72`}>
                 {navItems.map((item) => {
@@ -362,12 +371,9 @@ export function PageHeader({
           {!disableNav && (
             <DropdownMenu onOpenChange={(open) => { setHelpMenuOpen(open); handleMenuOpenChange(open); }}>
               <DropdownMenuTrigger asChild>
-                <button
-                  aria-label="help"
-                  className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors cursor-pointer"
-                >
-                  <CircleHelp className="h-4 w-4 text-muted-foreground" />
-                </button>
+                <Button variant="ghost" size="icon-sm" aria-label="help">
+                  <CircleHelp className="size-4 text-muted-foreground" />
+                </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className={`w-56 ${MENU_SURFACE}`}>
                 <DropdownMenuItem asChild className="text-foreground focus:text-foreground cursor-pointer">
@@ -406,9 +412,10 @@ export function PageHeader({
           ) : (
           <DropdownMenu onOpenChange={handleMenuOpenChange}>
             <DropdownMenuTrigger asChild>
-              <button
+              <Button
+                variant="ghost"
                 data-testid="user-menu-trigger"
-                className="inline-flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-secondary transition-colors cursor-pointer"
+                className="h-auto gap-2 px-2 py-1.5 font-normal has-[>svg]:px-2"
               >
                 <UserAvatar user={user} size="sm" />
                 {user?.displayName && (
@@ -421,14 +428,14 @@ export function PageHeader({
                     className="hidden sm:inline-flex items-center rounded-full bg-danger-solid/15 border border-danger-solid/40 text-danger text-[10px] font-medium tracking-wide px-1.5 py-0.5 leading-none overflow-hidden group/superadmin"
                     aria-label="signed in as superadmin"
                   >
-                    <Crown className="h-2.5 w-2.5 shrink-0" />
+                    <Crown className="size-2.5 shrink-0" />
                     <span className="max-w-0 group-hover/superadmin:max-w-20 group-hover/superadmin:ml-1 overflow-hidden whitespace-nowrap transition-all duration-200 ease-out">
                       superadmin
                     </span>
                   </span>
                 )}
-                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground hidden sm:block" />
-              </button>
+                <ChevronDown className="size-3.5 text-muted-foreground hidden sm:block" />
+              </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className={`w-56 ${MENU_SURFACE}`}>
               <div className="px-3 py-2.5">

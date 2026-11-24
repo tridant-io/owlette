@@ -91,7 +91,8 @@ export function LandingHeader({ downloadPlatforms }: { downloadPlatforms: readon
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const ghostClass = 'text-muted-foreground hover:text-foreground px-2';
+  // lit while its menu is open, a trigger takes the hover tone as well as the sweep
+  const ghostClass = 'text-muted-foreground hover:text-foreground aria-expanded:text-foreground px-2';
 
   return (
     <header className="fixed top-0 inset-x-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md hero-enter-nav">
