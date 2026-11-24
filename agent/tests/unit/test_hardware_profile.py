@@ -222,27 +222,29 @@ class TestMacNicThroughput:
         self.counters = {'lo0': _io(0, 0), 'en0': _io(1_000, 2_000),
                          'anpi0': _io(0, 0), 'en3': _io(0, 0)}
         monkeypatch.setattr(shared_utils.psutil, 'net_io_counters', lambda pernic=False: self.counters)
+        self.now = 100.0
+        monkeypatch.setattr(shared_utils.time, 'time', lambda: self.now)
 
-    def _two_seconds_of_traffic(self, monkeypatch):
+    def _two_seconds_of_traffic(self):
         baseline = shared_utils.get_network_metrics()['interfaces']
-        monkeypatch.setattr(shared_utils, '_prev_net_time', shared_utils._prev_net_time - 2.0)
+        self.now = 102.0
         self.counters = {'lo0': _io(50_000, 50_000), 'en0': _io(201_000, 32_002_000),
                          'anpi0': _io(0, 0), 'en3': _io(0, 0)}
         return baseline
 
-    def test_the_wifi_link_is_measured_without_a_link_speed(self, monkeypatch):
-        baseline = self._two_seconds_of_traffic(monkeypatch)
+    def test_the_wifi_link_is_measured_without_a_link_speed(self):
+        baseline = self._two_seconds_of_traffic()
         out = shared_utils.get_network_metrics()['interfaces']
 
         assert 'en0' in baseline
-        assert out['en0']['rx_bps'] == pytest.approx(16_000_000, rel=0.01)
-        assert out['en0']['tx_bps'] == pytest.approx(100_000, rel=0.01)
+        assert out['en0']['rx_bps'] == 16_000_000
+        assert out['en0']['tx_bps'] == 100_000
         # utilisation needs a link speed; an unknown one reads 0, not a guess
         assert out['en0']['tx_util'] == 0.0 and out['en0']['rx_util'] == 0.0
         assert 'lo0' not in baseline and 'lo0' not in out
 
-    def test_the_heartbeat_carries_the_wifi_traffic(self, monkeypatch):
-        self._two_seconds_of_traffic(monkeypatch)
+    def test_the_heartbeat_carries_the_wifi_traffic(self):
+        self._two_seconds_of_traffic()
         with (
             patch.object(shared_utils, 'get_gpus', return_value=[]),
             patch.object(hardware_profile, '_gpu_temps_cached', return_value=[]),
@@ -252,4 +254,4 @@ class TestMacNicThroughput:
             nics = hardware_profile.collect_dynamic_metrics(
                 {'cpus': [], 'disks': [], 'gpus': [], 'nics': [{'id': 'en0'}]})['nics']
 
-        assert nics['en0']['rxBps'] > 0
+        assert nics['en0']['rxBps'] == 16_000_000
