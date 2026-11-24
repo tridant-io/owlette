@@ -347,10 +347,11 @@ def collect_dynamic_metrics(profile: dict) -> dict:
             'temperature': temp_by_index.get(idx),
         }
 
-    # NICs — reshape shared_utils.get_network_metrics() into the new schema.
+    # NICs — the heartbeat's own network sample, the only one that moves the
+    # baseline, reshaped into the new schema.
     nics_out = {}
     try:
-        net = shared_utils.get_network_metrics() or {}
+        net = shared_utils.get_network_metrics(advance=True) or {}
     except Exception as e:
         logger.warning('get_network_metrics failed: %s', e)
         net = {}

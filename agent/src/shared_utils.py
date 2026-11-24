@@ -818,20 +818,22 @@ def get_gpu_temperatures():
     return []
 
 
-# Network monitoring state for delta calculation
-_prev_net_counters: dict = {}
-_prev_net_time: float = 0.0
+# the heartbeat's last network sample, (time, {nic: {'sent', 'recv'}}), as one
+# tuple so two uploads on different threads never leave half an update; and
+# the rates it reported, which every other caller reuses
+_net_baseline: tuple = (0.0, {})
+_net_last: dict = {'interfaces': {}}
 
 
-def get_network_metrics():
-    """Per-NIC throughput, as deltas between consecutive calls. First call
-    returns zeros — no baseline yet.
+def _measure_network():
+    """Per-NIC throughput since the previous call, which becomes the next
+    baseline. The first call returns zeros — no baseline yet.
 
     Returns {'interfaces': {name: {tx_bps, rx_bps (bytes/sec), tx_util, rx_util
     (% of link speed, 0-100), link_speed (Mbps)}}}. A link psutil has no speed
     for is still measured, with link_speed and utilisation 0.
     """
-    global _prev_net_counters, _prev_net_time
+    global _net_baseline
 
     result = {'interfaces': {}}
     now = time.time()
@@ -847,14 +849,15 @@ def get_network_metrics():
             if s.isup and 'loopback' not in name.lower()
             and 'loopback' not in s.flags.split(',')
         }
+        sample = (now, {
+            name: {'sent': c.bytes_sent, 'recv': c.bytes_recv}
+            for name, c in counters.items()
+        })
+        prev_time, prev_counters = _net_baseline
 
-        if not _prev_net_counters or _prev_net_time == 0.0:
+        if not prev_counters or prev_time == 0.0:
             # First call — baseline only
-            _prev_net_counters = {
-                name: {'sent': c.bytes_sent, 'recv': c.bytes_recv}
-                for name, c in counters.items()
-            }
-            _prev_net_time = now
+            _net_baseline = sample
             # Zeros rather than {} so the web never sees an empty result
             for name in counters:
                 if name in measured:
@@ -865,7 +868,7 @@ def get_network_metrics():
                     }
             return result
 
-        elapsed = now - _prev_net_time
+        elapsed = now - prev_time
         if elapsed <= 0:
             return result
 
@@ -873,7 +876,7 @@ def get_network_metrics():
             if name not in measured:
                 continue
 
-            prev = _prev_net_counters.get(name)
+            prev = prev_counters.get(name)
             if not prev:
                 continue
 
@@ -902,16 +905,27 @@ def get_network_metrics():
                 'link_speed': link_speed_mbps,
             }
 
-        _prev_net_counters = {
-            name: {'sent': c.bytes_sent, 'recv': c.bytes_recv}
-            for name, c in counters.items()
-        }
-        _prev_net_time = now
+        _net_baseline = sample
 
     except Exception as e:
         logging.error(f"Error collecting network metrics: {e}")
 
     return result
+
+
+def get_network_metrics(advance=False):
+    """The network rates the heartbeat last reported (see _measure_network).
+
+    advance: this is the heartbeat's own sample (collect_dynamic_metrics), so
+    measure since the previous heartbeat first. Every other caller (the legacy
+    metrics each upload reads, hoot's tools in the service) gets a copy of that
+    result and reads no counters, so nothing can shrink the heartbeat's window.
+    A process with no heartbeat (local hoot, a filed issue) gets no interfaces.
+    """
+    global _net_last
+    if advance:
+        _net_last = _measure_network()
+    return _copy.deepcopy(_net_last)
 
 
 def _wmi_logical_disk_with_timeout(timeout: float = 10.0):

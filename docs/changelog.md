@@ -30,7 +30,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ### fixed
 
 - expandable panels, such as **log tail** and **version history**, slide open and closed instead of jumping.
-- a Mac on wi-fi shows its network traffic instead of 0 B/s.
+- network rates average over each heartbeat; a Mac on wi-fi no longer reads 0 B/s.
 - and 6 smaller fixes.
 
 ## [4.2.4] - 2026-11-20
