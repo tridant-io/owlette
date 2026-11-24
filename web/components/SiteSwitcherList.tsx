@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as React
 import { Check } from 'lucide-react';
 import { highlightMatch } from '@/components/admin/sites/highlightMatch';
 import { SearchRow } from '@/components/SearchRow';
+import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { CHECKBOX_ROW } from '@/components/ui/multi-select';
@@ -81,6 +82,7 @@ export const siteFilterHostProps = {
  * query is typed, so enter always picks a match. those filters take several at
  * once: given `checkedIds`, each row is the multi-select's checkbox row with those
  * ids checked, and `full` stops an unchecked row other than `leading` being picked.
+ * `counts` puts a machine count at the end of each site row that has one.
  */
 export function SiteSwitcherList({
   sites,
@@ -91,6 +93,7 @@ export function SiteSwitcherList({
   leading,
   checkedIds,
   full = false,
+  counts,
 }: {
   sites: readonly { id: string; name: string }[];
   currentSiteId?: string;
@@ -100,6 +103,7 @@ export function SiteSwitcherList({
   leading?: { id: string; name: string };
   checkedIds?: readonly string[];
   full?: boolean;
+  counts?: Readonly<Record<string, number>>;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -227,10 +231,20 @@ export function SiteSwitcherList({
               );
             }
             const current = site.id === currentSiteId;
+            const count = counts?.[site.id];
             const content = (
               <>
                 {name}
-                {current && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
+                {/* the count is last, so the counts make one column whatever row holds the check */}
+                <span className="flex flex-shrink-0 items-center gap-2">
+                  {current && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
+                  {count !== undefined && (
+                    <Badge className="border border-border bg-secondary text-muted-foreground tabular-nums">
+                      {count}
+                      <span className="sr-only">{count === 1 ? ' machine' : ' machines'}</span>
+                    </Badge>
+                  )}
+                </span>
               </>
             );
             return surface === 'menu' ? (

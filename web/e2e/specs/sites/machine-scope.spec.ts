@@ -253,6 +253,8 @@ test("a scoped admin's menus act on their machines, and on nothing site-wide", a
   await page.getByTestId('site-switcher-trigger').click();
   // the site's own item renders with the entries below it, so it is the sign they are in
   await expect(page.getByRole('menuitem', { name: SITE_NAME })).toBeVisible();
+  // its count is the two machines they reach, not the site's three
+  await expect(page.getByRole('menuitem', { name: `${SITE_NAME} 2 machines`, exact: true })).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'site settings', exact: true })).toHaveCount(0);
   await expect(page.getByRole('menuitem', { name: 'manage sites', exact: true })).toHaveCount(0);
   await page.keyboard.press('Escape');

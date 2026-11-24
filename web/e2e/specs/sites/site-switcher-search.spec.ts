@@ -16,9 +16,10 @@
  */
 
 import crypto from 'crypto';
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
+import { attachPicture } from '../../helpers/picture';
 import { roleState } from '../../helpers/roles';
 import { releaseFixtureSite, seedSite, TEST_USERS } from '../../helpers/seed';
 
@@ -58,13 +59,6 @@ async function openSwitcher(page: Page) {
   return filter;
 }
 
-// the open surface and 16 px around it, so its edges and shadow are in the picture
-async function attachPicture(page: Page, surface: Locator, name: string) {
-  const box = (await surface.boundingBox())!;
-  const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
-  await test.info().attach(name, { body: await page.screenshot({ clip }), contentType: 'image/png' });
-}
-
 test("the header's switcher opens on a filter, and picking a match switches to that site", async ({ page }) => {
   const filter = await openSwitcher(page);
 
@@ -73,7 +67,8 @@ test("the header's switcher opens on a filter, and picking a match switches to t
   await expect(filter).toHaveValue(`kestrel ${SUFFIX}`);
   await expect(runSites(page)).toHaveCount(1);
   await expect(page.getByRole('menuitem', { name: 'Site A (Assigned)' })).toHaveCount(0);
-  const match = page.getByRole('menuitem', { name: KESTREL.name, exact: true });
+  // anchored, not exact: the row's name runs on into its machine count
+  const match = page.getByRole('menuitem', { name: new RegExp(`^${KESTREL.name}`) });
   await expect(match.locator('mark')).toHaveText(`kestrel ${SUFFIX}`);
 
   const menu = page.getByRole('menu');
@@ -125,7 +120,7 @@ test("owlette swoop's picker has the same filter in its site list, and enter pic
   await filter.pressSequentially(`lagoon ${SUFFIX}`);
   // this run's sites: the filter's x is a button in the list too
   await expect(list.getByRole('button', { name: new RegExp(SUFFIX) })).toHaveCount(1);
-  await expect(list.getByRole('button', { name: LAGOON.name, exact: true })).toBeVisible();
+  await expect(list.getByRole('button', { name: new RegExp(`^${LAGOON.name}`) })).toBeVisible();
   await attachPicture(page, list, 'picker site list, dark');
 
   await filter.press('Enter');

@@ -21,6 +21,7 @@ import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
+import { useSiteMachineCounts } from '@/hooks/useSiteMachineCounts';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { LoadingWord } from '@/components/LoadingWord';
 import { Button } from '@/components/ui/button';
@@ -58,6 +59,7 @@ export function SwoopPicker() {
   const siteId = chosenSiteId && sites.some((s) => s.id === chosenSiteId) ? chosenSiteId : savedSiteId;
   const siteName = sites.find((s) => s.id === siteId)?.name;
   const [sitePickerOpen, setSitePickerOpen] = useState(false);
+  const machineCounts = useSiteMachineCounts(sites.map((s) => s.id), machineScope, sitePickerOpen);
   const sitePickerId = useId();
   const [filter, setFilter] = useState('');
   const { machines, loading: machinesLoading } = useMachines(siteId, machineScope(siteId));
@@ -175,6 +177,7 @@ export function SwoopPicker() {
               setSitePickerOpen(false);
               if (next !== siteId) handleSiteChange(next);
             }}
+            counts={machineCounts}
           />
         </PopoverContent>
       </Popover>

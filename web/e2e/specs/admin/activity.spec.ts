@@ -37,6 +37,7 @@ import { getAdminDb } from '../../helpers/emulator';
 import { clippedFocusRings } from '../../helpers/focusRing';
 import { E2E_CRON_SECRET } from '../../helpers/cron';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
+import { attachPicture } from '../../helpers/picture';
 import { roleState } from '../../helpers/roles';
 import { recordSlides, slideSettled } from '../../helpers/slide';
 import { releaseFixtureSite, seedSite } from '../../helpers/seed';
@@ -546,13 +547,6 @@ test.describe('the site picker, past ten sites', () => {
   test.afterAll(async () => {
     await Promise.all(PICK_SITES.map((site) => releaseFixtureSite(site.id, OWNER)));
   });
-
-  // the open list and 16 px around it, so its edges and shadow are in the picture
-  async function attachPicture(page: Page, surface: Locator, name: string) {
-    const box = (await surface.boundingBox())!;
-    const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
-    await test.info().attach(name, { body: await page.screenshot({ clip }), contentType: 'image/png' });
-  }
 
   test('opens on a filter that finds a site by part of its name, and enter picks it', async ({ page }) => {
     await page.goto('/admin/activity');

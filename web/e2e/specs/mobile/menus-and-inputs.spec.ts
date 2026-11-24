@@ -5,7 +5,7 @@
  * The app's nav drawer behaves as the modal it looks like: focus moves in, tab
  * stays in, escape hands focus back to the menu button. The current site stays
  * named in the bar, where the breadcrumb that names it on desktop is hidden, and
- * the drawer's site list opens on request. Help sits in the bar, where desktop
+ * the drawer's site list opens on request, each site with its machine count. Help sits in the bar, where desktop
  * has the agent download a phone has no use for. The
  * landing menu's links take no tab stop while it is closed. And the hoot
  * composer types at 16px, below which iOS zooms the page into the field.
@@ -44,18 +44,22 @@ test.describe('app nav drawer', () => {
     await page.goto('/dashboard');
     const current = (await page.getByTestId('mobile-current-site').textContent())?.trim() ?? '';
     expect(current).not.toBe('');
+    const name = current.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     const trigger = page.getByRole('button', { name: 'menu', exact: true });
     await trigger.click();
     const drawer = page.getByRole('navigation', { name: /site and page navigation/i });
     const sites = drawer.getByTestId('drawer-site-toggle');
+    // anchored, not exact: the row's name runs on into its machine count once that is read
+    const row = drawer.getByRole('button', { name: new RegExp(`^${name}`) });
     await expect(sites).toHaveAttribute('aria-expanded', 'false');
-    await expect(drawer.getByRole('button', { name: current, exact: true })).toHaveCount(0);
+    await expect(row).toHaveCount(0);
     await expect(drawer.getByRole('button', { name: /^logs/ })).toBeInViewport();
 
     await sites.click();
     await expect(sites).toHaveAttribute('aria-expanded', 'true');
-    await expect(drawer.getByRole('button', { name: current, exact: true })).toBeVisible();
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAccessibleName(new RegExp(`^${name} \\d+ machines?$`));
 
     await page.keyboard.press('Escape');
     await trigger.click();

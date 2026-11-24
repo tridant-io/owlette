@@ -228,6 +228,33 @@ describe('SiteSwitcherList', () => {
   });
 });
 
+// the header passes each site's machine count once it has read them
+describe('SiteSwitcherList with counts', () => {
+  const row = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
+
+  it('ends each counted row with its count, after the current site check, and names it for a screen reader', () => {
+    renderList({ sites: NAMED, counts: { lobby: 3, 'gallery-n': 1, 'gallery-s': 0 } });
+
+    const lobby = row('Lobby Wall');
+    expect(lobby).toHaveAccessibleName('Lobby Wall 3 machines');
+    const badge = lobby.querySelector('[data-slot="badge"]')!;
+    expect(badge).toHaveTextContent('3');
+    // the check, then the count: the counts stay in one column at the end
+    expect(badge.previousElementSibling).toHaveClass('lucide-check');
+    expect(badge.nextElementSibling).toBeNull();
+
+    expect(row('Gallery North')).toHaveAccessibleName('Gallery North 1 machine');
+    expect(row('Gallery South')).toHaveAccessibleName('Gallery South 0 machines');
+  });
+
+  it('shows no badge for a site without a count', () => {
+    renderList({ sites: NAMED, counts: { lobby: 3 } });
+
+    expect(row('LIVE NATION')).toHaveAccessibleName('LIVE NATION');
+    expect(row('LIVE NATION').querySelector('[data-slot="badge"]')).toBeNull();
+  });
+});
+
 // the activity page's pickers take several: given checkedIds, every row is the multi-select's
 // checkbox row, and the square takes the focus, the arrow keys and enter's click
 describe('SiteSwitcherList with checkedIds', () => {
