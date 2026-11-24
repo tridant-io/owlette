@@ -825,6 +825,28 @@ _net_baseline: tuple = (0.0, {})
 _net_last: dict = {'interfaces': {}}
 
 
+def _measured_links(nic_stats):
+    # speed 0 is unknown, not idle: psutil has none for wi-fi on macos and
+    # linux, which is the link carrying the traffic. loopback is a flag off
+    # windows (lo0, lo) and only a name on it
+    return {
+        name for name, s in nic_stats.items()
+        if s.isup and 'loopback' not in name.lower()
+        and 'loopback' not in s.flags.split(',')
+    }
+
+
+def _zero_rates(nic_stats, names):
+    return {
+        name: {
+            'tx_bps': 0, 'rx_bps': 0,
+            'tx_util': 0.0, 'rx_util': 0.0,
+            'link_speed': nic_stats[name].speed,
+        }
+        for name in names
+    }
+
+
 def _measure_network():
     """Per-NIC throughput since the previous call, which becomes the next
     baseline. The first call returns zeros — no baseline yet.
@@ -841,14 +863,7 @@ def _measure_network():
     try:
         counters = psutil.net_io_counters(pernic=True)
         nic_stats = psutil.net_if_stats()
-        # speed 0 is unknown, not idle: psutil has none for wi-fi on macos and
-        # linux, which is the link carrying the traffic. loopback is a flag off
-        # windows (lo0, lo) and only a name on it
-        measured = {
-            name for name, s in nic_stats.items()
-            if s.isup and 'loopback' not in name.lower()
-            and 'loopback' not in s.flags.split(',')
-        }
+        measured = _measured_links(nic_stats)
         sample = (now, {
             name: {'sent': c.bytes_sent, 'recv': c.bytes_recv}
             for name, c in counters.items()
@@ -859,13 +874,7 @@ def _measure_network():
             # First call — baseline only
             _net_baseline = sample
             # Zeros rather than {} so the web never sees an empty result
-            for name in counters:
-                if name in measured:
-                    result['interfaces'][name] = {
-                        'tx_bps': 0, 'rx_bps': 0,
-                        'tx_util': 0.0, 'rx_util': 0.0,
-                        'link_speed': nic_stats[name].speed,
-                    }
+            result['interfaces'] = _zero_rates(nic_stats, [n for n in counters if n in measured])
             return result
 
         elapsed = now - prev_time
@@ -920,11 +929,15 @@ def get_network_metrics(advance=False):
     measure since the previous heartbeat first. Every other caller (the legacy
     metrics each upload reads, hoot's tools in the service) gets a copy of that
     result and reads no counters, so nothing can shrink the heartbeat's window.
-    A process with no heartbeat (local hoot, a filed issue) gets no interfaces.
+    Before any heartbeat sample (always, in a process with none: local hoot, a
+    filed issue) it lists each link with its speed and zero rates.
     """
     global _net_last
     if advance:
         _net_last = _measure_network()
+    elif not _net_baseline[1]:
+        nic_stats = psutil.net_if_stats()
+        return {'interfaces': _zero_rates(nic_stats, _measured_links(nic_stats))}
     return _copy.deepcopy(_net_last)
 
 

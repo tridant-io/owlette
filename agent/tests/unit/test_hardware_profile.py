@@ -303,3 +303,19 @@ class TestHeartbeatNetworkWindow:
         # the next upload's legacy read, and hoot, reuse that sample
         mac_net.now = 131.0
         assert self._legacy_read()['en0']['rx_bps'] == 100_000
+
+    def test_a_read_with_no_heartbeat_lists_the_links_and_leaves_the_counters(self, mac_net, monkeypatch):
+        """A filed issue and local hoot run in processes that send no
+        heartbeat; their report still names each link and its speed."""
+        reads = []
+        monkeypatch.setattr(shared_utils.psutil, 'net_io_counters',
+                            lambda pernic=False: reads.append(pernic) or mac_net.counters)
+
+        zero = {'tx_bps': 0, 'rx_bps': 0, 'tx_util': 0.0, 'rx_util': 0.0}
+        assert self._legacy_read() == {
+            'en0': {**zero, 'link_speed': 0},
+            'anpi0': {**zero, 'link_speed': 100},
+            'en3': {**zero, 'link_speed': 100},
+        }
+        assert reads == []
+        assert shared_utils._net_baseline == (0.0, {})
