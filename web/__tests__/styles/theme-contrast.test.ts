@@ -115,24 +115,83 @@ const TEXT_PAIRS: Array<[string, string]> = [
   ]),
 ];
 
+/**
+ * text set on the hover sweep (.btn-sweep, .menu-sweep): the --btn-hover scrim
+ * over a menu, popover or card. a highlighted menu row or hovered ghost button
+ * reads in these, the tinted ones through their -bright steps, and a row's quiet
+ * line through accent-foreground at 80%.
+ */
+const SWEPT_TEXT = [
+  'foreground',
+  'accent-foreground',
+  'accent-foreground@0.8',
+  'danger-bright',
+  'info-bright',
+  'series-display-bright',
+  'warning',
+  'primary',
+  'accent-warm-hover',
+  'accent-cyan',
+] as const;
+const SWEPT_PAIRS: Array<[string, string]> = SWEPT_TEXT.flatMap((text): Array<[string, string]> =>
+  (['raised', 'popover', 'card'] as const).map((surface): [string, string] => [text, surface]),
+);
+/**
+ * glyphs on the sweep, held to the 3:1 of a graphic: muted-foreground stays on a
+ * highlighted row only as an icon (quiet text takes accent-foreground@0.8, above),
+ * and row / row-destructive are icon-only buttons that hover with a muted fill
+ * under the sweep.
+ */
+const SWEPT_ICONS: Array<[string, string]> = [
+  ...(['raised', 'popover', 'card'] as const).map((surface): [string, string] => ['muted-foreground', surface]),
+  ['accent-cyan', 'muted'],
+  ['danger-bright', 'muted'],
+];
+const GRAPHIC = 3;
+
+/** a `color-mix(in oklab, <colour> N%, transparent)` scrim, as the hover tints are written */
+function scrim(value: string): Paint {
+  const mix = value.match(/^color-mix\(in oklab,\s*(.+?)\s+([\d.]+)%,\s*transparent\)$/);
+  if (!mix) throw new Error(`not a scrim: ${value}`);
+  const colour = parse(mix[1]);
+  return { rgb: colour.rgb, alpha: colour.alpha * (Number(mix[2]) / 100) };
+}
+
 describe.each([
   ['light', ':root'],
   ['dark', '.dark'],
 ])('%s theme contrast', (_name, selector) => {
   const tokens = { ...block(':root'), ...block(selector) };
   const card = parse(tokens.card).rgb;
+  /** a token's value, following `var(--other)` (the day -bright steps equal their base) */
+  const resolve = (name: string): string => {
+    const value = tokens[name];
+    if (!value) throw new Error(`--${name} is not defined for ${selector}`);
+    const ref = value.match(/^var\(--([a-z0-9-]+)\)$/);
+    return ref ? resolve(ref[1]) : value;
+  };
   /** `name` or `name@alpha`, composited over `base` the way the browser paints it */
   const paint = (spec: string, base: Rgb = card): Rgb => {
     const [name, alpha] = spec.split('@');
-    const value = tokens[name];
-    if (!value) throw new Error(`--${name} is not defined for ${selector}`);
-    const colour = parse(value);
+    const colour = parse(resolve(name));
     return over({ rgb: colour.rgb, alpha: colour.alpha * (alpha ? Number(alpha) : 1) }, base);
   };
 
   it.each(TEXT_PAIRS)('--%s on --%s clears 4.5:1', (text, surface) => {
     const behind = paint(surface);
     expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
+  });
+
+  const swept = (surface: string): Rgb => over(scrim(resolve('btn-hover')), paint(surface));
+
+  it.each(SWEPT_PAIRS)('--%s on the hover sweep over --%s clears 4.5:1', (text, surface) => {
+    const behind = swept(surface);
+    expect(contrast(paint(text, behind), behind)).toBeGreaterThanOrEqual(TEXT);
+  });
+
+  it.each(SWEPT_ICONS)('--%s icons on the hover sweep over --%s clear 3:1', (icon, surface) => {
+    const behind = swept(surface);
+    expect(contrast(paint(icon, behind), behind)).toBeGreaterThanOrEqual(GRAPHIC);
   });
 });
 

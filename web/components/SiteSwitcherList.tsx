@@ -26,7 +26,7 @@ type Surface = 'menu' | 'drawer' | 'popover';
 const SURFACE: Record<Surface, { filter: string; list?: string; item: string; id: string; empty: string }> = {
   menu: {
     filter: '-mx-1 -mt-1 mb-1',
-    item: 'group flex cursor-pointer items-center justify-between text-foreground focus:bg-accent focus:text-foreground dark:focus:[&_mark]:text-accent-foreground',
+    item: 'group flex cursor-pointer items-center justify-between text-foreground focus:text-foreground dark:focus:[&_mark]:text-accent-foreground',
     id: 'group-focus:text-accent-foreground/80',
     empty: 'px-2 py-1.5',
   },

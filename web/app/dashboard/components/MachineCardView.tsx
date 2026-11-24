@@ -1113,7 +1113,7 @@ const MachineCard = memo(function MachineCard({
                                     </DropdownMenuRadioGroup>
                                     <DropdownMenuItem
                                       onClick={() => onConfigureSchedule?.(machineId, process)}
-                                      className="text-info focus:bg-info-surface focus:text-info cursor-pointer pl-8"
+                                      className="text-info focus:text-info-bright cursor-pointer pl-8"
                                     >
                                       <Settings2 className="mr-2 h-3.5 w-3.5" />
                                       configure schedule

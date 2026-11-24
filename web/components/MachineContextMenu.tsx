@@ -225,7 +225,7 @@ export function MachineContextMenu({
         setShowRestartScheduleDialog(true);
       }}
       data-testid="machine-context-menu-schedule-restarts"
-      className="text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
+      className="text-warning focus:text-warning cursor-pointer"
     >
       <Settings2 className="mr-2 h-4 w-4" />
       schedule restarts
@@ -326,7 +326,7 @@ export function MachineContextMenu({
       }}
       disabled={isSendingCommand}
       data-testid="machine-context-menu-cancel-reboot"
-      className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+      className="text-danger focus:text-danger-bright cursor-pointer"
     >
       <XCircle className="mr-2 h-4 w-4" />
       cancel restart
@@ -383,7 +383,7 @@ export function MachineContextMenu({
                   }}
                   disabled={isSendingCommand}
                   data-testid="machine-context-menu-cancel-shutdown"
-                  className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+                  className="text-danger focus:text-danger-bright cursor-pointer"
                 >
                   <XCircle className="mr-2 h-4 w-4" />
                   cancel shutdown
@@ -412,7 +412,7 @@ export function MachineContextMenu({
                         setShowRestartDialog(true);
                       }}
                       data-testid="machine-context-menu-reboot"
-                      className="flex-1 whitespace-nowrap text-warning focus:bg-warning-surface focus:text-warning cursor-pointer"
+                      className="flex-1 whitespace-nowrap text-warning focus:text-warning cursor-pointer"
                     >
                       <RotateCcw className="mr-2 h-4 w-4" />
                       restart machine
@@ -430,7 +430,7 @@ export function MachineContextMenu({
                           }}
                           aria-label="schedule restarts"
                           data-testid="machine-context-menu-schedule-restarts-gear"
-                          className="w-8 justify-center px-0 text-muted-foreground focus:bg-warning-surface focus:text-warning cursor-pointer"
+                          className="w-8 justify-center px-0 text-muted-foreground focus:text-warning cursor-pointer"
                         >
                           <Settings2 className="h-3.5 w-3.5 text-current" />
                         </DropdownMenuItem>
@@ -446,7 +446,7 @@ export function MachineContextMenu({
                       setShowShutdownDialog(true);
                     }}
                     data-testid="machine-context-menu-shutdown"
-                    className="text-accent-warm-hover focus:bg-accent-warm/10 focus:text-accent-warm-hover cursor-pointer"
+                    className="text-accent-warm-hover focus:text-accent-warm-hover cursor-pointer"
                   >
                     <Power className="mr-2 h-4 w-4" />
                     shutdown machine
@@ -483,7 +483,7 @@ export function MachineContextMenu({
                     onSiteSettings?.();
                   }}
                   data-testid="machine-context-menu-swoop-off"
-                  className="text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                  className="text-primary font-medium focus:text-primary cursor-pointer"
                 >
                   <MonitorPlay className="mr-2 h-4 w-4" />
                   turn on swoop…
@@ -515,7 +515,7 @@ export function MachineContextMenu({
                     }}
                     disabled={onThisMachine}
                     data-testid="machine-context-menu-swoop"
-                    className="flex-1 text-primary font-medium focus:bg-primary/15 focus:text-primary cursor-pointer"
+                    className="flex-1 text-primary font-medium focus:text-primary cursor-pointer"
                   >
                     <MonitorPlay className="mr-2 h-4 w-4" />
                     swoop
@@ -541,7 +541,7 @@ export function MachineContextMenu({
                             }}
                             aria-label="open in the owlette swoop desktop app"
                             data-testid="machine-context-menu-swoop-app"
-                            className="w-8 justify-center px-0 text-muted-foreground focus:bg-primary/15 focus:text-primary cursor-pointer"
+                            className="w-8 justify-center px-0 text-muted-foreground focus:text-primary cursor-pointer"
                           >
                             <Monitor className="h-3.5 w-3.5 text-current" />
                           </DropdownMenuItem>
@@ -560,7 +560,7 @@ export function MachineContextMenu({
                     onLiveView?.();
                   }}
                   data-testid="machine-context-menu-live-view"
-                  className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
+                  className="text-info focus:text-info-bright cursor-pointer"
                 >
                   <Eye className="mr-2 h-4 w-4" />
                   live view
@@ -573,7 +573,7 @@ export function MachineContextMenu({
                     onScreenshot?.();
                   }}
                   data-testid="machine-context-menu-screenshot"
-                  className="text-info focus:bg-info-surface focus:text-info cursor-pointer"
+                  className="text-info focus:text-info-bright cursor-pointer"
                 >
                   <Camera className="mr-2 h-4 w-4" />
                   screenshot
@@ -588,7 +588,7 @@ export function MachineContextMenu({
                 onViewDisplays?.();
               }}
               data-testid="machine-context-menu-view-displays"
-              className="text-[var(--series-display)] focus:bg-info-surface focus:text-[var(--series-display)] cursor-pointer"
+              className="text-[var(--series-display)] focus:text-series-display-bright cursor-pointer"
             >
               <Monitor className="mr-2 h-4 w-4" />
               view displays
@@ -611,7 +611,7 @@ export function MachineContextMenu({
                   asChild
                   onClick={(e) => e.stopPropagation()}
                   data-testid="machine-context-menu-hoot"
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Link href={hootMachineHref(siteId, machineId)}>
                     <HootIcon className="mr-2 h-4 w-4" />
@@ -627,7 +627,7 @@ export function MachineContextMenu({
               e.stopPropagation();
               handleToggleMute();
             }}
-            className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+            className="text-muted-foreground focus:text-foreground cursor-pointer"
           >
             {isMuted ? <Bell className="mr-2 h-4 w-4" /> : <BellOff className="mr-2 h-4 w-4" />}
             {isMuted ? 'unmute alerts' : 'mute alerts'}
@@ -641,7 +641,7 @@ export function MachineContextMenu({
                   setShowRevokeDialog(true);
                 }}
                 data-testid="machine-context-menu-revoke-token"
-                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger-bright cursor-pointer"
               >
                 <KeyRound className="mr-2 h-4 w-4" />
                 revoke token
@@ -655,7 +655,7 @@ export function MachineContextMenu({
                   onRemoveMachine();
                 }}
                 data-testid="machine-context-menu-remove"
-                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger-bright cursor-pointer"
               >
                 <Trash2 className="mr-2 h-4 w-4" />
                 remove machine

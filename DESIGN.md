@@ -222,6 +222,8 @@ the same room by day: cool paper with a faint hue-250 cast, white panels, and na
 
 status colours come from token families rather than raw palette classes: `danger`, `warning`, `success` and `info`, each with `-surface`, `-border`, `-solid` and `-solid-foreground`. charts and load bars use `--band-*` and `--series-*`. every family is defined for both themes in `web/app/globals.css`, and `web/__tests__/styles/theme-contrast.test.ts` holds both themes to WCAG AA.
 
+`danger-bright`, `info-bright` and `series-display-bright` are hover steps, like `sodium-amber-bright`: the text colour of a highlighted menu row or select option, and of a hovered `ghost-destructive` or `row-destructive` button. at night the hover sweep lifts the surface enough that the base tones fall under AA (danger to 3.6:1 on a menu), so each step keeps its hue and is lighter. by day each one equals its base.
+
 ### Status and load
 - **Online Green** (`online-green`): the online dot.
 - **Offline Red** (`offline-red`): the offline pill and the restarting / shutting-down countdown pill (which pulses).
@@ -348,6 +350,7 @@ the signature loaders: charts plot a miniature line graph on a loop (2.4s), and 
 - **Do** separate surfaces by lightness steps within hue 250 and hairline-blue borders.
 - **Do** colour a readout only when it crosses a threshold, using the usage bands or the warning/critical temperature colours.
 - **Do** standardize button styling in `web/components/ui/button.tsx` variants. hover feedback comes from `.btn-sweep`, not per-instance `hover:bg-*`.
+- **Do** let a menu row or select option highlight through `.menu-sweep` alone: no flat `focus:bg-*` fill, and a tinted row's highlighted text takes its `-bright` step.
 - **Do** use `MENU_SURFACE` for any floating menu, on web and desktop alike.
 - **Do** define every new colour token in both the `:root` (light) and `.dark` blocks of `globals.css`. the contrast test fails if a dark token has no light value.
 - **Do** use `IconButton` for every icon-only control, with a lowercase label that names the action.

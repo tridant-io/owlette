@@ -243,7 +243,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                     e.stopPropagation();
                     onRetry(deployment);
                   }}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <RefreshCw className={`h-4 w-4 mr-2 ${bulkRetrying ? 'animate-spin' : ''}`} />
                   retry failed
@@ -255,7 +255,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                     e.stopPropagation();
                     onUninstall(deployment);
                   }}
-                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                  className="text-foreground focus:text-foreground cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4 mr-2" />
                   uninstall software
@@ -266,7 +266,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                   e.stopPropagation();
                   onDelete(deployment.id);
                 }}
-                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+                className="text-danger focus:text-danger-bright cursor-pointer"
               >
                 <X className="h-4 w-4 mr-2" />
                 delete record

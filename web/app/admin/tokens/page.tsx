@@ -321,7 +321,7 @@ export default function TokensPage() {
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
               {sites.map((site) => (
-                <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted!">
+                <SelectItem key={site.id} value={site.id} className="text-foreground">
                   {site.name}
                 </SelectItem>
               ))}
@@ -372,9 +372,9 @@ export default function TokensPage() {
               <SelectValue placeholder="all versions" />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
-              <SelectItem value={ALL} className="text-foreground hover:bg-muted!">all versions</SelectItem>
+              <SelectItem value={ALL} className="text-foreground">all versions</SelectItem>
               {versions.map((v) => (
-                <SelectItem key={v} value={v} className="text-foreground hover:bg-muted!">{v}</SelectItem>
+                <SelectItem key={v} value={v} className="text-foreground">{v}</SelectItem>
               ))}
             </SelectContent>
           </Select>

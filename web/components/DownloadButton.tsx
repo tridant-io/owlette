@@ -209,42 +209,37 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
         <DropdownMenuContent align="end">
           {INSTALLER_PLATFORMS.map((platform) => {
             const reason = unavailable(platform);
-            const item = (
-              <DropdownMenuItem
-                key={platform}
-                disabled={!!reason}
-                onSelect={() => download(platform)}
-                // the row itself stays flat: the label (download) and the copy icon each
-                // light up on their own; keyboard focus still highlights the row
-                className="cursor-pointer gap-1 p-1 focus:bg-transparent focus:text-inherit focus-visible:bg-accent"
-              >
-                <span className="flex-1 rounded-sm px-2 py-1 hover:bg-accent hover:text-accent-foreground">
+            // a split row, as the machine menu's restart: download, or copy its link. each
+            // half is a menu item, so each lights on its own and the arrow keys reach both
+            const row = (
+              <div key={platform} className="flex items-stretch gap-1">
+                <DropdownMenuItem
+                  disabled={!!reason}
+                  onSelect={() => download(platform)}
+                  className="flex-1 cursor-pointer"
+                >
                   {PLATFORM_LABEL[platform]}
-                </span>
-                {/* a plain button: radix selects the row on a click that reaches it, so the copy stops there */}
-                <button
-                  type="button"
-                  className="rounded-sm p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground cursor-pointer disabled:cursor-default"
+                </DropdownMenuItem>
+                <div aria-hidden className="my-1.5 w-px bg-border" />
+                <DropdownMenuItem
                   disabled={!!reason}
                   aria-label={`copy ${osWord(platform)} download link`}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onPointerUp={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
+                  // the menu stays open, so a link can be copied for each platform in turn
+                  onSelect={(event) => {
+                    event.preventDefault();
                     void copyLink(platform);
                   }}
+                  className="w-8 justify-center px-0 text-muted-foreground cursor-pointer"
                 >
-                  <Copy className="h-4 w-4" />
-                </button>
-              </DropdownMenuItem>
+                  <Copy className="h-4 w-4 text-current" />
+                </DropdownMenuItem>
+              </div>
             );
-            if (!reason) return item;
+            if (!reason) return row;
             return (
               <Tooltip key={platform}>
-                {/* a disabled item takes no pointer events; the wrapper hovers for it */}
-                <TooltipTrigger asChild>
-                  <div>{item}</div>
-                </TooltipTrigger>
+                {/* a disabled item takes no pointer events; the row hovers for it */}
+                <TooltipTrigger asChild>{row}</TooltipTrigger>
                 <TooltipContent side="right">
                   <p>{reason}</p>
                 </TooltipContent>
@@ -252,9 +247,8 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
             );
           })}
           <DropdownMenuSeparator />
-          {/* px-3 lines its label up with the platforms'; a new tab keeps a dialog
-              this menu sits in (add machine) open */}
-          <DropdownMenuItem asChild className="cursor-pointer px-3">
+          {/* a new tab keeps a dialog this menu sits in (add machine) open */}
+          <DropdownMenuItem asChild className="cursor-pointer">
             <Link href={RELEASE_NOTES_HREF} target="_blank" rel="noopener noreferrer">
               release notes
             </Link>

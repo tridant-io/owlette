@@ -33,13 +33,16 @@ const buttonVariants = cva(
         // click reads as turning it off.
         ghost: "btn-sweep hover:text-secondary-foreground aria-pressed:bg-accent aria-pressed:text-accent-foreground",
         // a quiet destructive action, for icon-only controls: red glyph, no fill.
-        "ghost-destructive": "btn-sweep text-destructive hover:text-destructive",
+        // swept, it takes danger-bright, which clears aa on the sweep in dark.
+        "ghost-destructive": "btn-sweep text-destructive hover:text-danger-bright focus-visible:text-danger-bright",
         // an icon action on a dense list row: a muted glyph that takes the accent
         // on hover. unlike ghost it keeps a hover:bg-muted under the sweep, the
         // look these row buttons had before they had a variant.
-        row: "btn-sweep text-muted-foreground hover:bg-muted hover:text-accent-cyan",
-        // the row's destructive action: the same, with a red glyph on hover.
-        "row-destructive": "btn-sweep text-muted-foreground hover:bg-muted hover:text-danger",
+        row: "btn-sweep text-muted-foreground hover:bg-muted hover:text-accent-cyan focus-visible:text-accent-cyan",
+        // the row's destructive action: the same, with a red glyph. red takes
+        // danger-bright, which clears aa over the muted fill and sweep in dark.
+        "row-destructive":
+          "btn-sweep text-muted-foreground hover:bg-muted hover:text-danger-bright focus-visible:text-danger-bright",
         // link opts out of the button sweep — .hl-link gives it the
         // glyph-accurate text highlight instead.
         link: "hl-link text-primary",

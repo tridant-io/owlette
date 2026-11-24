@@ -55,7 +55,7 @@ export default function WebhooksPage() {
                     </SelectTrigger>
                     <SelectContent className="bg-card border-border">
                       {sites.map((site) => (
-                        <SelectItem key={site.id} value={site.id} className="text-foreground hover:bg-muted">
+                        <SelectItem key={site.id} value={site.id} className="text-foreground">
                           {site.name}
                         </SelectItem>
                       ))}

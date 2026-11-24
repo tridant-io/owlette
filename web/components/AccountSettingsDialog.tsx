@@ -593,8 +593,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="border-border dark:bg-secondary text-foreground">
-                        <SelectItem value="C" className="cursor-pointer hover:bg-muted">Celsius (°C)</SelectItem>
-                        <SelectItem value="F" className="cursor-pointer hover:bg-muted">Fahrenheit (°F)</SelectItem>
+                        <SelectItem value="C" className="cursor-pointer">Celsius (°C)</SelectItem>
+                        <SelectItem value="F" className="cursor-pointer">Fahrenheit (°F)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -610,8 +610,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="border-border dark:bg-secondary text-foreground">
-                        <SelectItem value="12h" className="cursor-pointer hover:bg-muted">12-hour (AM/PM)</SelectItem>
-                        <SelectItem value="24h" className="cursor-pointer hover:bg-muted">24-hour</SelectItem>
+                        <SelectItem value="12h" className="cursor-pointer">12-hour (AM/PM)</SelectItem>
+                        <SelectItem value="24h" className="cursor-pointer">24-hour</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -853,8 +853,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent className="border-border dark:bg-secondary text-foreground">
-                            <SelectItem value="anthropic" className="cursor-pointer hover:bg-muted">Anthropic (Claude)</SelectItem>
-                            <SelectItem value="openai" className="cursor-pointer hover:bg-muted">OpenAI</SelectItem>
+                            <SelectItem value="anthropic" className="cursor-pointer">Anthropic (Claude)</SelectItem>
+                            <SelectItem value="openai" className="cursor-pointer">OpenAI</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -877,7 +877,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                           </SelectTrigger>
                           <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
                             {llmModelList.map((m) => (
-                              <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
+                              <SelectItem key={m.id} value={m.id} className="cursor-pointer">
                                 {m.name}
                               </SelectItem>
                             ))}

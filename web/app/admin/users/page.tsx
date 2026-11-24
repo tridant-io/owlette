@@ -611,7 +611,7 @@ export default function UserManagementPage() {
                           <DropdownMenuContent align="end" className="bg-card border-border">
                             <DropdownMenuItem
                               onClick={() => handleOpenManageSiteAccess(user.uid, user.email, user.role, user.sites || [])}
-                              className="text-foreground hover:bg-accent cursor-pointer focus:bg-accent focus:text-foreground"
+                              className="text-foreground cursor-pointer focus:text-foreground"
                             >
                               <Settings className="h-4 w-4 mr-2" />
                               manage site access
@@ -619,7 +619,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenRoleChangeDialog(user.uid, user.email, user.role)}
                               disabled={updatingUser === user.uid || (user.uid === currentUser?.uid && user.role === 'superadmin')}
-                              className="text-foreground hover:bg-accent cursor-pointer focus:bg-accent focus:text-foreground"
+                              className="text-foreground cursor-pointer focus:text-foreground"
                             >
                               {updatingUser === user.uid ? (
                                 <>
@@ -637,7 +637,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenMfaResetDialog(user.uid, user.email)}
                               disabled={resettingMfaUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
+                              className="text-danger cursor-pointer focus:text-danger-bright"
                             >
                               {resettingMfaUser === user.uid ? (
                                 <>
@@ -654,7 +654,7 @@ export default function UserManagementPage() {
                             <DropdownMenuItem
                               onClick={() => handleOpenDeleteDialog(user.uid, user.email)}
                               disabled={deletingUser === user.uid || user.uid === currentUser?.uid}
-                              className="text-danger cursor-pointer focus:bg-danger-surface focus:text-danger"
+                              className="text-danger cursor-pointer focus:text-danger-bright"
                             >
                               {deletingUser === user.uid ? (
                                 <>
@@ -830,19 +830,19 @@ export default function UserManagementPage() {
                 <SelectValue placeholder="select a role" />
               </SelectTrigger>
               <SelectContent className="bg-card border-border">
-                <SelectItem value="member" className="text-foreground focus:bg-accent focus:text-foreground">
+                <SelectItem value="member" className="text-foreground focus:text-foreground">
                   <div className="flex items-center gap-2">
                     <Users className="h-4 w-4 text-muted-foreground" />
                     member
                   </div>
                 </SelectItem>
-                <SelectItem value="admin" className="text-foreground focus:bg-accent focus:text-foreground">
+                <SelectItem value="admin" className="text-foreground focus:text-foreground">
                   <div className="flex items-center gap-2">
                     <ShieldAlert className="h-4 w-4 text-success" />
                     admin
                   </div>
                 </SelectItem>
-                <SelectItem value="superadmin" className="text-foreground focus:bg-accent focus:text-foreground">
+                <SelectItem value="superadmin" className="text-foreground focus:text-foreground">
                   <div className="flex items-center gap-2">
                     <Crown className="h-4 w-4 text-danger" />
                     superadmin

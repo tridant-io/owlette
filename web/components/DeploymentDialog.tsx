@@ -467,7 +467,7 @@ export default function DeploymentDialog({
                     )}
                   </SelectTrigger>
                   <SelectContent className="border-border dark:bg-secondary">
-                    <SelectItem value="none" className="text-foreground focus:bg-accent focus:text-foreground">
+                    <SelectItem value="none" className="text-foreground focus:text-foreground">
                       none
                     </SelectItem>
                     {/* Library presets by category */}
@@ -482,7 +482,7 @@ export default function DeploymentDialog({
                             <SelectItem
                               key={preset.id}
                               value={`${PRESET_PREFIX}${preset.id}`}
-                              className="text-foreground focus:bg-accent focus:text-foreground"
+                              className="text-foreground focus:text-foreground"
                             >
                               <span className="flex items-center gap-2">
                                 {preset.icon && <span>{preset.icon}</span>}
@@ -501,7 +501,7 @@ export default function DeploymentDialog({
                           <SelectItem
                             key={template.id}
                             value={`${TEMPLATE_PREFIX}${template.id}`}
-                            className="text-foreground focus:bg-accent focus:text-foreground"
+                            className="text-foreground focus:text-foreground"
                           >
                             {template.name}
                           </SelectItem>
