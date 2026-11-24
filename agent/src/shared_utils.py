@@ -828,7 +828,8 @@ def get_network_metrics():
     returns zeros — no baseline yet.
 
     Returns {'interfaces': {name: {tx_bps, rx_bps (bytes/sec), tx_util, rx_util
-    (% of link speed, 0-100), link_speed (Mbps)}}}.
+    (% of link speed, 0-100), link_speed (Mbps)}}}. A link psutil has no speed
+    for is still measured, with link_speed and utilisation 0.
     """
     global _prev_net_counters, _prev_net_time
 
@@ -838,6 +839,14 @@ def get_network_metrics():
     try:
         counters = psutil.net_io_counters(pernic=True)
         nic_stats = psutil.net_if_stats()
+        # speed 0 is unknown, not idle: psutil has none for wi-fi on macos and
+        # linux, which is the link carrying the traffic. loopback is a flag off
+        # windows (lo0, lo) and only a name on it
+        measured = {
+            name for name, s in nic_stats.items()
+            if s.isup and 'loopback' not in name.lower()
+            and 'loopback' not in s.flags.split(',')
+        }
 
         if not _prev_net_counters or _prev_net_time == 0.0:
             # First call — baseline only
@@ -848,12 +857,11 @@ def get_network_metrics():
             _prev_net_time = now
             # Zeros rather than {} so the web never sees an empty result
             for name in counters:
-                stats = nic_stats.get(name)
-                if stats and stats.isup and stats.speed > 0 and 'loopback' not in name.lower():
+                if name in measured:
                     result['interfaces'][name] = {
                         'tx_bps': 0, 'rx_bps': 0,
                         'tx_util': 0.0, 'rx_util': 0.0,
-                        'link_speed': stats.speed,
+                        'link_speed': nic_stats[name].speed,
                     }
             return result
 
@@ -862,11 +870,7 @@ def get_network_metrics():
             return result
 
         for name, c in counters.items():
-            stats = nic_stats.get(name)
-            if not stats or not stats.isup:
-                continue
-
-            if stats.speed == 0 or 'loopback' in name.lower():
+            if name not in measured:
                 continue
 
             prev = _prev_net_counters.get(name)
@@ -880,7 +884,7 @@ def get_network_metrics():
             tx_bps = int(tx_delta / elapsed)
             rx_bps = int(rx_delta / elapsed)
 
-            link_speed_mbps = stats.speed  # Mbps
+            link_speed_mbps = nic_stats[name].speed  # Mbps
             link_speed_bps = link_speed_mbps * 1_000_000 / 8  # Convert to bytes/sec
 
             if link_speed_bps > 0:
