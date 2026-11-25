@@ -75,7 +75,7 @@ service host — Windows: tools\owlette-host.exe · macOS: launchd (app.owlette.
               ├── swoop_manager.py (swoop streamer lifecycle)
               │     └── swoop_doorbell.py (the signalling room's idle socket)
               ├── fleet_session.py (hoot mcp's fleet session — Windows and macOS)
-              ├── keep_awake.py (keep screens awake — the service's sleep hold)
+              ├── keep_awake.py (keep screens awake, and a Mac staying reachable for swoop — the service's sleep holds)
               ├── sync_scrub.py (roost integrity scrub + orphan-chunk reap — hourly check)
               ├── config_sync.py (config reconciliation — local, cloud, cached remote)
               ├── shared_utils.py (config, logging, metrics)

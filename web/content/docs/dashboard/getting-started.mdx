@@ -85,7 +85,7 @@ see [sites](/docs/dashboard/admin/sites) for every section of the page.
 
 ### keep screens awake
 
-keep screens awake is **on** for every site until a site admin turns it off. an online machine follows a change within seconds; an offline one picks it up when it reconnects. turning it off releases every hold, and the machine goes back to its own power and lock settings.
+keep screens awake is **on** for every site until a site admin turns it off. an online machine follows a change within seconds; an offline one picks it up when it reconnects. turning it off releases every hold it takes, and the machine goes back to its own power and lock settings.
 
 each machine holds it in two parts. the service holds sleep, which works with nobody signed in. the desktop app holds the signed-in session's blanking and lock, and on Windows the display as well. each part lets go when the switch goes off or its process ends, so a crash never leaves a machine held.
 
@@ -94,6 +94,8 @@ each machine holds it in two parts. the service holds sleep, which works with no
 | Windows | a system-sleep power request | the display, kept on, and the session's screensaver, switched off — the user's own setting is put back on release |
 | macOS | display and system idle-sleep assertions | a display assertion, and the user kept active every 30 seconds so the screensaver and lock stay away |
 | Linux | a `systemd-inhibit` lock on sleep, idle and the lid switch | the GNOME session's idle inhibit, or the freedesktop screensaver's where there is no GNOME session |
+
+with the switch off, a Mac with [swoop](/docs/dashboard/swoop#on-macos) on still stays out of sleep while it runs on mains power, holding the system alone: its display turns off and its screen locks as usual. `pmset -g assertions` shows that hold as `owlette stay reachable for swoop`.
 
 a machine with nobody signed in keeps only the service's part: there is no session to keep from blanking or locking. on Linux that also covers a server with no desktop at all. the service's hold shows in each OS's own inspector: as `owlette keep screens awake` in `powercfg /requests` on Windows and `pmset -g assertions` on macOS, and as who `owlette`, why `keep screens awake` in `systemd-inhibit --list` on Linux.
 

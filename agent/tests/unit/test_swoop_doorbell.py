@@ -989,3 +989,30 @@ def test_a_raising_enable_callback_costs_the_mint_nothing():
     harness = build(on_enabled=explode)
     assert harness.doorbell._mint() == sd._OK
     assert harness.doorbell._token == TOKEN
+
+
+def test_enabled_reads_the_last_mint_with_or_without_a_callback():
+    responses = [
+        FakeResponse(200, {'token': TOKEN, 'kid': 'k1', 'expiresIn': EXPIRES_IN,
+                           'signalUrl': SIGNAL_URL}),
+        FakeResponse(403, {'error': 'swoop_disabled'}),
+    ]
+    harness = build(mint_behaviour=lambda n: responses[min(n, len(responses)) - 1])
+    # nothing minted yet: nothing says swoop is on here.
+    assert harness.doorbell.enabled is False
+    assert harness.doorbell._mint() == sd._OK
+    assert harness.doorbell.enabled is True
+    assert harness.doorbell._mint() == sd._DISABLED
+    assert harness.doorbell.enabled is False
+
+
+def test_a_stopped_doorbell_reads_off_even_if_a_mint_lands_after():
+    harness = build()
+    assert harness.doorbell._mint() == sd._OK
+    assert harness.doorbell.enabled is True
+
+    harness.doorbell._shutdown.set()
+    # a mint already in flight at the stop
+    assert harness.doorbell._mint() == sd._OK
+
+    assert harness.doorbell.enabled is False

@@ -294,6 +294,13 @@ class SwoopDoorbell:
         """Current state, for SwoopManager.status() and the tray indicator."""
         return self._state
 
+    @property
+    def enabled(self):
+        """Whether swoop is on for this machine, as the last mint said. False
+        once this doorbell is stopped, so a mint that lands after the stop
+        says nothing about a machine swoop has left."""
+        return self._reported_enabled is True and not self._shutdown.is_set()
+
     # supervision loop
 
     def _run(self):
@@ -508,9 +515,11 @@ class SwoopDoorbell:
         nothing: the token is already stored (or forgotten) by the time this
         runs, and the side effects are the manager's problem, not the socket's.
         """
-        if self._on_enabled is None or enabled == self._reported_enabled:
+        if enabled == self._reported_enabled:
             return
         self._reported_enabled = enabled
+        if self._on_enabled is None:
+            return
         try:
             self._on_enabled(enabled)
         except Exception as error:

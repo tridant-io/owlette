@@ -546,3 +546,64 @@ def test_inhibit_release_kills_a_child_that_will_not_stop():
     inhibit(FakePopen(child)).release(child)
 
     assert child.ops == ['terminate', 'wait', 'kill', 'wait']
+
+
+# ------------------------------------------------------------ stay reachable
+
+def test_iopm_holds_only_the_kinds_it_was_given():
+    cf = FakeCoreFoundation()
+    iokit = FakeIOKit(cf, codes=(0,))
+    holder = IOPMAssertion(frameworks=(iokit, cf), kinds=(b'PreventUserIdleSystemSleep',),
+                           name='owlette stay reachable for swoop')
+
+    assert holder.hold() == [101]
+
+    # the system alone: the display still sleeps, and the screen locks with it.
+    assert iokit.created == [
+        (b'PreventUserIdleSystemSleep', 255, b'owlette stay reachable for swoop'),
+    ]
+    assert sorted(cf.released) == sorted(cf.strings)
+
+
+def test_the_reachable_backend_holds_the_macs_system_sleep_alone():
+    backend = keep_awake.reachable_backend()
+
+    assert backend.how == 'iopm_assertion'
+    assert backend._kinds == (b'PreventUserIdleSystemSleep',)
+    assert backend._name == 'owlette stay reachable for swoop'
+
+
+class FakeBattery:
+    def __init__(self, power_plugged):
+        self.power_plugged = power_plugged
+
+
+@pytest.mark.parametrize('battery, on_mains', [
+    (None, True),
+    (FakeBattery(True), True),
+    (FakeBattery(None), True),
+    (FakeBattery(False), False),
+], ids=['no-battery', 'plugged-in', 'unknown', 'on-battery'])
+def test_on_mains_power_is_false_only_on_battery(monkeypatch, battery, on_mains):
+    monkeypatch.setattr(keep_awake.psutil, 'sensors_battery', lambda: battery)
+
+    assert keep_awake.on_mains_power() is on_mains
+
+
+def test_an_unreadable_power_source_counts_as_mains(monkeypatch):
+    def unreadable():
+        raise OSError('no power source')
+
+    monkeypatch.setattr(keep_awake.psutil, 'sensors_battery', unreadable)
+
+    assert keep_awake.on_mains_power() is True
+
+
+def test_the_log_names_which_hold(caplog):
+    caplog.set_level('INFO', logger='keep_awake')
+    keeper = KeepAwake(FakeBackend(), label='stay reachable')
+
+    keeper.set_wanted(True)
+    assert settled(keeper)
+
+    assert 'stay reachable: held (fake)' in caplog.text

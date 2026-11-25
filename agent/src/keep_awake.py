@@ -7,6 +7,12 @@ logged in: a power request on Windows, two IOKit assertions on macOS, and a
 crash never leaves a machine held. The session half (the idle lock, the
 screensaver, and on Windows the display) is the desktop app's.
 
+A Mac with swoop on is also kept from sleeping while it runs on mains power, so
+a session can reach it when nobody is there: the system alone is held
+(`reachable_backend`), and the display still sleeps and the screen still locks
+with it, which a session wakes. Not on Windows, where a PC that locks only on
+sleep would stop locking.
+
 `KeepAwake.set_wanted` returns at once; the OS calls run on one daemon thread
 of its own, so the service's 5 s loop never waits on them.
 """
@@ -21,6 +27,8 @@ import subprocess
 import sys
 import threading
 
+import psutil
+
 logger = logging.getLogger(__name__)
 
 # what each OS's own inspector shows beside the hold: `powercfg /requests`,
@@ -28,16 +36,29 @@ logger = logging.getLogger(__name__)
 _WHO = 'owlette'
 _WHY = 'keep screens awake'
 _NAME = f'{_WHO} {_WHY}'
+_REACHABLE_NAME = f'{_WHO} stay reachable for swoop'
 
 # how long release() waits for the let-go on the shutdown path, which has ~5 s in all.
 RELEASE_WAIT_SECONDS = 2.0
 
 
+def on_mains_power():
+    """False only while psutil reads the machine as on its battery. One with no
+    battery, or where psutil fails, counts as on mains."""
+    try:
+        battery = psutil.sensors_battery()
+    except Exception:
+        return True
+    return battery is None or battery.power_plugged is not False
+
+
 class KeepAwake:
     """Holds the machine awake while wanted. Every method returns at once but release()."""
 
-    def __init__(self, backend=None):
+    def __init__(self, backend=None, label='keep awake'):
         self._backend = backend or _platform_backend()
+        # names the hold in the log: the service holds two.
+        self._label = label
         self._lock = threading.Lock()
         self._wanted = False
         # set by set_wanted, taken by the worker: a change it has not acted on yet.
@@ -96,10 +117,10 @@ class KeepAwake:
     def _hold(self):
         try:
             handle, reason = self._backend.hold(), None
-            logger.info('keep awake: held (%s)', self._backend.how)
+            logger.info('%s: held (%s)', self._label, self._backend.how)
         except Exception as e:
             handle, reason = None, str(e) or type(e).__name__
-            logger.warning('keep awake: could not hold (%s): %s', self._backend.how, reason)
+            logger.warning('%s: could not hold (%s): %s', self._label, self._backend.how, reason)
         with self._lock:
             self._handle, self._reason = handle, reason
 
@@ -107,10 +128,10 @@ class KeepAwake:
         if handle is not None:
             try:
                 self._backend.release(handle)
-                logger.info('keep awake: released (%s)', self._backend.how)
+                logger.info('%s: released (%s)', self._label, self._backend.how)
             except Exception as e:
                 # the handle is spent either way; a retry has nothing left to release.
-                logger.warning('keep awake: release failed (%s): %s', self._backend.how, e)
+                logger.warning('%s: release failed (%s): %s', self._label, self._backend.how, e)
         with self._lock:
             # a hold nobody wants needs no reason, a failed one included.
             self._handle, self._reason = None, None
@@ -122,6 +143,12 @@ def _platform_backend():
     if sys.platform == 'darwin':
         return IOPMAssertion()
     return SystemdInhibit()
+
+
+def reachable_backend():
+    """macOS's system idle sleep alone, for staying reachable: the display may
+    sleep and the screen lock, and a closed lid still sleeps the Mac."""
+    return IOPMAssertion(kinds=(b'PreventUserIdleSystemSleep',), name=_REACHABLE_NAME)
 
 
 # ------------------------------------------------------------------- windows
@@ -221,20 +248,22 @@ _CF_STRING_ENCODING_UTF8 = 0x08000100
 
 
 class IOPMAssertion:
-    """macOS: two IOKit assertions, the display's idle sleep and the system's."""
+    """macOS: IOKit assertions, by default the display's idle sleep and the system's."""
 
     how = 'iopm_assertion'
 
-    def __init__(self, frameworks=None):
+    def __init__(self, frameworks=None, kinds=_ASSERTION_TYPES, name=_NAME):
         # (iokit, corefoundation); injected by the tests, loaded on first use otherwise.
         self._frameworks = frameworks
+        self._kinds = kinds
+        self._name = name
 
     def hold(self):
         iokit, cf = self._api()
         held = []
-        name = _cf_string(cf, _NAME.encode())
+        name = _cf_string(cf, self._name.encode())
         try:
-            for kind in _ASSERTION_TYPES:
+            for kind in self._kinds:
                 cf_kind = _cf_string(cf, kind)
                 assertion = ctypes.c_uint32(0)
                 try:
