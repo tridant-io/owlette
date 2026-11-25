@@ -17,7 +17,9 @@ import {
 } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useScrollFade } from '@/hooks/useScrollFade'
-import { pickDirectory, pickExecutable, pickFile } from '@/lib/pickers'
+import { launchCopy } from '@/lib/launchCopy'
+import { PATH_FIELDS, type PathField } from '@/lib/missingPath'
+import { pickPath } from '@/lib/pickers'
 import {
   coerceForm,
   formFromProcess,
@@ -43,7 +45,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * Enter and blur both fire for one "done typing"; drop the second within 100ms
- * rather than writing the file twice (`owlette_gui.py:867-871`).
+ * rather than writing the file twice.
  */
 const SAVE_DEBOUNCE_MS = 100
 
@@ -54,19 +56,19 @@ const LAUNCH_MODES: { value: LaunchMode; label: string }[] = [
 ]
 
 /**
- * The dashboard's launch-mode colours (`web/.../ProcessDialog.tsx:85-105`), split
- * in two because the fill slides and the text does not. Keep in sync with web.
+ * The dashboard's launch-mode colours (`activeColors` in `web/.../MachineCardView.tsx`),
+ * split in two because the fill slides and the text does not. Keep in sync with web.
  */
 const LAUNCH_MODE_FILL: Record<LaunchMode, string> = {
   off: 'bg-muted',
-  always: 'bg-emerald-600',
-  scheduled: 'bg-blue-600',
+  always: 'bg-success-solid',
+  scheduled: 'bg-info-solid',
 }
 
 const LAUNCH_MODE_TEXT: Record<LaunchMode, string> = {
   off: 'text-foreground',
-  always: 'text-white',
-  scheduled: 'text-white',
+  always: 'text-success-solid-foreground',
+  scheduled: 'text-info-solid-foreground',
 }
 
 /**
@@ -102,7 +104,7 @@ function SectionToggle({
         className="size-3.5 self-center transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
       />
       <span>{children}</span>
-      {note && <span className="min-w-0 truncate font-normal text-muted-foreground/70">{note}</span>}
+      {note && <span className="min-w-0 truncate font-normal text-muted-foreground/80">{note}</span>}
     </CollapsibleTrigger>
   )
 }
@@ -115,6 +117,9 @@ interface ProcessDetailProps {
   startedAt?: number | null
   /** Persist the seven text fields. Already coerced; the caller only writes. */
   onSave: (form: ProcessForm) => void
+  /** the path fields a save just changed. owned above: this pane remounts per
+   *  process, and the check they start can outlast it. */
+  onPathsEntered?: (processId: string, entries: [PathField, string][]) => void
   onLaunchMode: (mode: LaunchMode) => void
   /** Persist the schedule windows authored in the editor. */
   onSchedules: (schedules: ScheduleBlock[]) => void
@@ -143,13 +148,14 @@ interface ProcessDetailProps {
  *
  * Deferred external refresh: the web app and the service write the same file.
  * External changes apply immediately except to the field under the cursor, which
- * keeps its text until focus leaves (`owlette_gui.py:1434-1448`).
+ * keeps its text until focus leaves.
  */
 export function ProcessDetail({
   process,
   status,
   startedAt = null,
   onSave,
+  onPathsEntered,
   onLaunchMode,
   onSchedules,
   scheduleTimezone = '',
@@ -185,6 +191,7 @@ export function ProcessDetail({
   // editable — configuring them before switching the mode on is the normal flow.
   const unmanaged = mode === 'off'
   const live = isLive(status)
+  const copy = launchCopy()
 
   useEffect(() => {
     latest.current = process
@@ -245,9 +252,13 @@ export function ProcessDetail({
       seeded.current = coerced
       setDraft(coerced)
       onSave(coerced)
+      const entries = PATH_FIELDS.filter((name) => coerced[name] !== onDisk[name]).map(
+        (name): [PathField, string] => [name, coerced[name]],
+      )
+      if (entries.length > 0) onPathsEntered?.(latest.current.id, entries)
       return true
     },
-    [onSave],
+    [onSave, onPathsEntered],
   )
 
   const handleBlur = useCallback(() => {
@@ -270,15 +281,9 @@ export function ProcessDetail({
   }, [draft, pendingRefresh, save])
 
   const browse = useCallback(
-    async (field: 'exe_path' | 'file_path' | 'cwd') => {
+    async (field: PathField) => {
       try {
-        const picked =
-          field === 'exe_path'
-            ? await pickExecutable(draft.exe_path)
-            : field === 'file_path'
-              ? await pickFile(draft.file_path)
-              : await pickDirectory(draft.cwd)
-
+        const picked = await pickPath(field, draft[field])
         if (picked === null) return
         const next = { ...draft, [field]: picked }
         setDraft(next)
@@ -445,12 +450,10 @@ export function ProcessDetail({
           <Tooltip>
             <TooltipTrigger asChild>
               <Label htmlFor="exe_path" className="justify-end text-muted-foreground">
-                exe
+                {copy.label}
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              the full path to the executable or script to run (.exe, .bat, .cmd)
-            </TooltipContent>
+            <TooltipContent>{copy.tooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -458,13 +461,13 @@ export function ProcessDetail({
               className="size-8"
               variant="outline"
               onClick={() => void browse('exe_path')}
-              aria-label="browse for an executable"
+              aria-label={copy.browseAria}
             >
               <FileSearch />
             </Button>
             <PathInput
               id="exe_path"
-              placeholder="the full path to your executable"
+              placeholder={copy.placeholder}
               className="h-8 font-mono text-xs"
               {...field('exe_path')}
             />
@@ -476,9 +479,7 @@ export function ProcessDetail({
                 path / args
               </Label>
             </TooltipTrigger>
-            <TooltipContent>
-              a file for the exe to open (e.g. a .toe project), or extra command-line arguments
-            </TooltipContent>
+            <TooltipContent>{copy.fileTooltip}</TooltipContent>
           </Tooltip>
           <div className="flex min-w-0 items-center gap-2">
             <Button
@@ -688,6 +689,8 @@ export function ProcessDetail({
           {/*
             Tune-once fields — recovery attempts, priority, visibility — behind
             their own disclosure so the everyday view stays name / what / when.
+            Priority and visibility exist on windows only: the service applies
+            neither on macos or linux, so they are not offered there.
             Two or three columns when the pane is wide enough; the label gutter
             repeats per column.
           */}
@@ -704,7 +707,7 @@ export function ProcessDetail({
               how to run
             </SectionToggle>
             <CollapsibleContent className="col-span-2">
-              {/* Dimmed, not disabled — see the isOff note above. */}
+              {/* Dimmed, not disabled — see the unmanaged note above. */}
               <div
                 className={cn(
                   'grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-x-3 gap-y-3 pt-3 @2xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] @4xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] [&>*]:transition-opacity',
@@ -733,59 +736,63 @@ export function ProcessDetail({
                   {...field('relaunch_attempts')}
                 />
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="priority" className="justify-end text-muted-foreground">
-                      priority
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    windows cpu priority for this process — leave normal unless it must outrank
-                    everything else
-                  </TooltipContent>
-                </Tooltip>
-                <Select
-                  value={priorityOf(process)}
-                  onValueChange={(value) => onPriority(value as Priority)}
-                >
-                  <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PRIORITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {copy.launchOptions && (
+                  <>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="priority" className="justify-end text-muted-foreground">
+                          priority
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        windows cpu priority for this process — leave normal unless it must outrank
+                        everything else
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={priorityOf(process)}
+                      onValueChange={(value) => onPriority(value as Priority)}
+                    >
+                      <SelectTrigger id="priority" className="h-8 w-32" data-testid="priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PRIORITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Label htmlFor="visibility" className="justify-end text-muted-foreground">
-                      visibility
-                    </Label>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    window visibility on launch — hidden suppresses the console window (ideal for
-                    background scripts); apps that create their own windows stay visible
-                  </TooltipContent>
-                </Tooltip>
-                <Select
-                  value={visibilityOf(process)}
-                  onValueChange={(value) => onVisibility(value as Visibility)}
-                >
-                  <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {VISIBILITIES.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {option.toLowerCase()}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label htmlFor="visibility" className="justify-end text-muted-foreground">
+                          visibility
+                        </Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        window visibility on launch — hidden suppresses the console window (ideal for
+                        background scripts); apps that create their own windows stay visible
+                      </TooltipContent>
+                    </Tooltip>
+                    <Select
+                      value={visibilityOf(process)}
+                      onValueChange={(value) => onVisibility(value as Visibility)}
+                    >
+                      <SelectTrigger id="visibility" className="h-8 w-32" data-testid="visibility">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {VISIBILITIES.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option.toLowerCase()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                )}
               </div>
             </CollapsibleContent>
           </Collapsible>

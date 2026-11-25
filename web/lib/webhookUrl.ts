@@ -7,7 +7,8 @@
  *
  * DNS is re-checked because a public record can point at an internal IP and
  * bypass the literal check. TOCTOU remains — THE DISPATCHER MUST RE-VALIDATE
- * AT SEND TIME.
+ * AT SEND TIME, and must send with `redirect: 'manual'`: a redirect's target is
+ * never validated. `functions/src/lib/webhookUrl.ts` mirrors this file.
  */
 
 import { promises as dns } from 'node:dns';

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { VersionRow, type VersionSummary } from './VersionRow';
 import { firestoreTsToMs, type FirestoreTs } from '@/hooks/useFirestore';
 
@@ -17,8 +18,8 @@ interface VersionHistoryProps {
   roostId: string;
   siteId: string;
   currentVersionId: string | null;
-  /** Opens the parent's "+ new version" push modal pre-populated for this roost. */
-  onNewVersion: () => void;
+  /** Opens the parent's "+ new version" push modal pre-populated for this roost; absent, no button. */
+  onNewVersion?: () => void;
   /** Monotonic refresh token — bump to force a re-fetch (upload, edit). */
   refreshKey?: number;
   /**
@@ -137,60 +138,67 @@ export function VersionHistory({
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="space-y-3">
+    <Collapsible open={open} onOpenChange={setOpen}>
       <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          className="flex items-center gap-1.5 text-left text-sm font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-        >
-          {open ? (
-            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-          )}
-          <span>version history</span>
-        </button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onNewVersion}
-          className="h-7 px-2 text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
-        >
-          <Plus className="h-3 w-3 mr-1" />
-          new version
-        </Button>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-1.5 text-left text-sm font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            {open ? (
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            <span>version history</span>
+          </button>
+        </CollapsibleTrigger>
+        {onNewVersion && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onNewVersion}
+            className="h-7 px-2 text-xs border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            new version
+          </Button>
+        )}
       </div>
 
-      {!open ? null : loading && displayVersions.length === 0 ? (
-        <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          loading versions…
+      <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+        {/* the gap under the row is in here, so it slides in with the list */}
+        <div className="pt-3">
+          {loading && displayVersions.length === 0 ? (
+            <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              loading versions…
+            </div>
+          ) : error ? (
+            <p className="px-3 py-2 text-xs text-danger/80">
+              couldn&apos;t load versions — {error}
+            </p>
+          ) : displayVersions.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground italic">
+              no versions yet
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {displayVersions.map((v) => (
+                <VersionRow
+                  key={v.versionId}
+                  version={v}
+                  roostId={roostId}
+                  siteId={siteId}
+                  isCurrent={v.versionId === currentVersionId}
+                  onChanged={onChanged}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      ) : error ? (
-        <p className="px-3 py-2 text-xs text-red-400/80">
-          couldn&apos;t load versions — {error}
-        </p>
-      ) : displayVersions.length === 0 ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground italic">
-          no versions yet
-        </p>
-      ) : (
-        <div className="space-y-1.5">
-          {displayVersions.map((v) => (
-            <VersionRow
-              key={v.versionId}
-              version={v}
-              roostId={roostId}
-              siteId={siteId}
-              isCurrent={v.versionId === currentVersionId}
-              onChanged={onChanged}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

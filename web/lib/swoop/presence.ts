@@ -25,6 +25,7 @@
  * malformed message is dropped, never thrown, and never partially applied.
  */
 
+import { swoopActivity } from '@/lib/swoop/activity';
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
 
 /** one line of the host's roster. */
@@ -137,6 +138,8 @@ export function attach(session: SwoopSession): SwoopDetach {
     cursors.push(cursor);
     cursors.sort((a, b) => (a.viewer < b.viewer ? -1 : a.viewer > b.viewer ? 1 : 0));
     set({ viewers: state.viewers, cursors });
+    // each one is a move the host took from that viewer, which lights their pill
+    swoopActivity(session)?.moved(cursor.viewer);
   };
 
   const offControl = session.onChannelMessage('swoop-control', (data) => {

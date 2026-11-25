@@ -108,6 +108,14 @@ jest.mock('@/lib/actions/transferSiteOwnership.server', () => ({
   transferSiteOwnership: (...args: unknown[]) => mockTransfer(...args),
 }));
 
+const mockTridantConfigured = jest.fn();
+jest.mock('@/lib/plan.server', () => ({ tridantConfigured: () => mockTridantConfigured() }));
+
+const mockUnlinkAccount = jest.fn();
+jest.mock('@/lib/tridantBilling.server', () => ({
+  unlinkAccount: (uid: string) => mockUnlinkAccount(uid),
+}));
+
 import { performUserDeleteCascade } from '@/lib/userDeleteCascade.server';
 
 beforeEach(() => {
@@ -117,6 +125,8 @@ beforeEach(() => {
   deletePaths = [];
   ownedSiteIds = [];
   mockTransfer.mockResolvedValue({ ok: true, previousOwnerUid: 'alice', newOwnerUid: 'bob' });
+  mockTridantConfigured.mockReturnValue(false);
+  mockUnlinkAccount.mockResolvedValue({ ok: true });
   mockRevokeRefreshTokens.mockResolvedValue(undefined);
   mockUpdateUser.mockResolvedValue(undefined);
   adminAuthFactory.mockReturnValue({
@@ -362,5 +372,72 @@ describe('performUserDeleteCascade — transfer failure aborts the delete', () =
     expect(mockTransfer).toHaveBeenCalledWith(
       expect.objectContaining({ siteId: 'site-a', successorUid: 'bob' }),
     );
+  });
+
+  it("hands sites over past the successor's plan, so a deletion is never blocked by it", async () => {
+    seedOwnerAndSuccessor();
+    await performUserDeleteCascade('alice', { successorUid: 'bob' });
+
+    expect(mockTransfer).toHaveBeenCalledWith(expect.objectContaining({ skipPlanCheck: true }));
+  });
+});
+
+describe('performUserDeleteCascade — the tridant link', () => {
+  function seedOwnerAndSuccessor() {
+    docs.set('users/alice', { exists: true, data: { uid: 'alice', role: 'admin', sites: ['site-a'] } });
+    docs.set('users/bob', { exists: true, data: { uid: 'bob', role: 'admin', sites: [] } });
+    ownedSiteIds = ['site-a'];
+  }
+
+  beforeEach(() => {
+    mockTridantConfigured.mockReturnValue(true);
+  });
+
+  it('unlinks the account once its sites are handed over and it is stamped deleted', async () => {
+    seedOwnerAndSuccessor();
+    let deletedAtUnlink: unknown;
+    mockUnlinkAccount.mockImplementation(async () => {
+      deletedAtUnlink = docs.get('users/alice')?.data?.deletedAt;
+      return { ok: true };
+    });
+
+    const outcome = await performUserDeleteCascade('alice', { successorUid: 'bob' });
+
+    expect(outcome.kind).toBe('deleted');
+    expect(mockUnlinkAccount).toHaveBeenCalledTimes(1);
+    expect(mockUnlinkAccount).toHaveBeenCalledWith('alice');
+    expect(mockTransfer.mock.invocationCallOrder[0]).toBeLessThan(mockUnlinkAccount.mock.invocationCallOrder[0]);
+    expect(deletedAtUnlink).toEqual(expect.any(Number));
+  });
+
+  it('finishes the delete when tridant does not take the unlink', async () => {
+    docs.set('users/uid-victim', { exists: true, data: { uid: 'uid-victim', role: 'member', sites: [] } });
+    mockUnlinkAccount.mockResolvedValue({ ok: false, reason: 'unreachable' });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const outcome = await performUserDeleteCascade('uid-victim');
+
+    expect(outcome).toMatchObject({ kind: 'deleted', authDisabled: true });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('tridant unlink failed for uid-victim: unreachable'));
+    warn.mockRestore();
+  });
+
+  it('keeps the link when a transfer fails and the delete is aborted', async () => {
+    seedOwnerAndSuccessor();
+    mockTransfer.mockResolvedValue({ ok: false, failure: { kind: 'successor_inactive' } });
+
+    await performUserDeleteCascade('alice', { successorUid: 'bob' });
+
+    expect(mockUnlinkAccount).not.toHaveBeenCalled();
+  });
+
+  it('asks tridant nothing while tridant id is not configured', async () => {
+    docs.set('users/uid-victim', { exists: true, data: { uid: 'uid-victim', role: 'member', sites: [] } });
+    mockTridantConfigured.mockReturnValue(false);
+
+    const outcome = await performUserDeleteCascade('uid-victim');
+
+    expect(outcome.kind).toBe('deleted');
+    expect(mockUnlinkAccount).not.toHaveBeenCalled();
   });
 });

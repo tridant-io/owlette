@@ -20,6 +20,7 @@ Resource = Literal[
     "process",
     "user",
     "installer",
+    "issue",
 ]
 Environment = Literal["live", "test"]
 VALID_RESOURCES: tuple[str, ...] = (
@@ -31,6 +32,7 @@ VALID_RESOURCES: tuple[str, ...] = (
     "process",
     "user",
     "installer",
+    "issue",
 )
 VALID_PERMISSIONS: tuple[str, ...] = ("read", "write", "deploy", "rollback", "admin")
 

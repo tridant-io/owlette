@@ -1,14 +1,14 @@
-//! owlette-swoop — the swoop streamer.
-//!
-//! Scaffold only (Task 1.2): this crate holds the module tree, the traits every
-//! later wave signs against, and nothing that streams. Each module's head
-//! comment names the task that fills it.
+//! owlette-swoop — the swoop streamer. It captures one machine's screen and
+//! audio, encodes them, serves them to every viewer in the session over WebRTC
+//! and takes their input and clipboard back. The agent spawns it and talks to
+//! it over stdin and stdout (PROTOCOL.md §6).
 //!
 //! Layout rule, applied from the start so the crate stays checkable on a macOS
-//! or Linux host and so Wave 9's platform seams are cheap: **traits and wire
-//! types are portable, Win32 backends are `#[cfg(windows)]`**. A module that is
+//! or Linux host and so the platform seams are cheap: **traits and wire types
+//! are portable, Win32 backends are `#[cfg(windows)]`**. A module that is
 //! nothing but Win32 is gated here; a module that defines a trait keeps its
-//! backend gated inside.
+//! backend gated inside. The session loop reaches a backend only through
+//! [`platform`]'s names, so it compiles on every OS.
 
 pub mod audio;
 pub mod bundle;
@@ -30,7 +30,7 @@ pub mod signal;
 pub mod transport;
 pub mod viewers;
 
-// Win32 window stations and desktops have no portable analogue at all — the
-// macOS and Linux siblings land beside this in Wave 9, not inside it.
+// Win32 window stations and desktops have no portable analogue at all, so this
+// module is Windows only rather than a trait with a Windows backend.
 #[cfg(windows)]
 pub mod securedesk;

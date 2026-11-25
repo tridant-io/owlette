@@ -50,7 +50,7 @@ function authed() {
     userId: 'user-1',
     keyContext: null,
   });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 beforeEach(() => {
@@ -236,6 +236,22 @@ describe('GET /api/roosts/{id}/deployments', () => {
     expect(body.rollouts[0].versionId).toBe(VERSION);
     expect(body.rollouts[0].stage).toBe('canary');
     expect(body.next_page_token).toBe('');
+  });
+
+  it('filters on stage=fleet, the stage a rollout is in after its canary', async () => {
+    mocks.collectionGet.mockResolvedValueOnce(
+      querySnapshot([
+        { id: 'v-fleet', data: { versionId: 'v-fleet', stage: 'fleet' } },
+        { id: 'v-done', data: { versionId: 'v-done', stage: 'complete' } },
+      ]),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/roosts/${ROOST}/deployments?siteId=${SITE}&stage=fleet`,
+    );
+    const res = await deploymentsGET(req, { params: Promise.resolve({ roostId: ROOST }) });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.rollouts.map((r: { rolloutId: string }) => r.rolloutId)).toEqual(['v-fleet']);
   });
 });
 

@@ -93,7 +93,7 @@ export default function ForgotPasswordPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               disabled={loading}
-              className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+              className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
           {/* Turnstile's `flexible` size has a 300px floor, which the column's

@@ -3,11 +3,11 @@
  * `app/api/roosts/[roostId]/versions/route.ts:POST` validates:
  *
  *   { schemaVersion: 2, mediaType: 'application/vnd.owlette.version.v1+json',
- *     config: {...}, files: [{ path, size, chunks: [{hash, size}] }] }
+ *     config: {}, files: [{ path, size, chunks: [{hash, size}] }] }
  *
- * `config` is free-form push metadata (cli version, source host). The server
- * ignores unknown keys but persists the whole object into the R2 version body,
- * so it's the audit record of how a version was produced.
+ * `config` stays empty, as the dashboard uploader sends it. The server's version
+ * id is the hash of the whole body, so a host name, platform or cli release in it
+ * would turn the same files into a new version and roll it out again.
  */
 
 import { createHash } from 'crypto';
@@ -19,38 +19,22 @@ export const VERSION_SCHEMA_VERSION = 2;
 export interface BuiltVersion {
   schemaVersion: 2;
   mediaType: typeof VERSION_MEDIA_TYPE;
-  config: Record<string, unknown>;
+  config: Record<string, never>;
   files: ChunkedFileEntry[];
 }
 
-export interface BuildVersionInput {
-  files: readonly ChunkedFileEntry[];
-  cliVersion: string;
-  hostname?: string;
-  platform?: string;
-  extra?: Record<string, unknown>;
-}
-
-export function buildVersion(input: BuildVersionInput): BuiltVersion {
-  const config: Record<string, unknown> = {
-    producer: 'owlette-cli',
-    cliVersion: input.cliVersion,
-  };
-  if (input.hostname) config.hostname = input.hostname;
-  if (input.platform) config.platform = input.platform;
-  if (input.extra) Object.assign(config, input.extra);
-
+export function buildVersion(files: readonly ChunkedFileEntry[]): BuiltVersion {
   // Not required by the server, but deterministic ordering keeps the version
   // digest stable across machines and retries.
-  const files = [...input.files].sort((a, b) =>
+  const sorted = [...files].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
 
   return {
     schemaVersion: VERSION_SCHEMA_VERSION,
     mediaType: VERSION_MEDIA_TYPE,
-    config,
-    files,
+    config: {},
+    files: sorted,
   };
 }
 

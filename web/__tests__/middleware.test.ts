@@ -312,6 +312,18 @@ describe('proxy — mandatory 2FA setup gate', () => {
     );
   });
 
+  it('sends a pending session on /cli/authorize to the challenge, phrase intact', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({
+      outcome: 'challenge',
+      userId: 'user-1',
+      requiresSetup: false,
+    });
+    const response = await proxy(makeRequest('/cli/authorize?code=a-b-c'));
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/verify-2fa');
+    expect(location.searchParams.get('redirect')).toBe('/cli/authorize?code=a-b-c');
+  });
+
   it('leaves an enrolled, verified session untouched', async () => {
     mockEvaluateSessionMfa.mockResolvedValue({
       outcome: 'pass',
@@ -517,5 +529,43 @@ describe('proxy — swoop page gate + signaling connect-src', () => {
     const directive = connectSrc(await proxy(makeRequest('/swoop/site-1/machine-1')));
     expect(directive).toContain("connect-src 'self'");
     expect(directive).not.toContain('not a url');
+  });
+});
+
+describe('proxy — app-link pages', () => {
+  beforeEach(() => {
+    mockValidateSession.mockResolvedValue(null);
+    mockEvaluateSessionMfa.mockReset();
+  });
+
+  it('leaves /app-link public: the app exchanges its code there signed out', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'unauthenticated', userId: null });
+    const response = await proxy(makeRequest('/app-link?code=abc&next=%2Fswoop'));
+    expect(response.headers.get('location')).toBeNull();
+  });
+
+  it('sends a signed-out /app-link/approve to /login with its code intact', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'unauthenticated', userId: null });
+    const response = await proxy(makeRequest('/app-link/approve?code=abc'));
+    expect(response.status).toBe(307);
+    const loc = new URL(response.headers.get('location') ?? '');
+    expect(loc.pathname).toBe('/login');
+    expect(loc.searchParams.get('redirect')).toBe('/app-link/approve?code=abc');
+  });
+
+  it('challenges an MFA-pending /app-link/approve and keeps the code for the bounce-back', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'challenge', userId: 'user-1' });
+    const response = await proxy(makeRequest('/app-link/approve?code=abc'));
+    const loc = new URL(response.headers.get('location') ?? '');
+    expect(loc.pathname).toBe('/verify-2fa');
+    expect(loc.searchParams.get('redirect')).toBe('/app-link/approve?code=abc');
+  });
+
+  it('accepts /app-link/approve as a login redirect for a signed-in user', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({ outcome: 'pass', userId: 'user-1' });
+    const response = await proxy(
+      makeRequest(`/login?redirect=${encodeURIComponent('/app-link/approve?code=abc')}`),
+    );
+    expect(response.headers.get('location')).toBe('http://localhost/app-link/approve?code=abc');
   });
 });

@@ -1,5 +1,8 @@
 //! The clipboard listener: one thread, one message-only window, and every
-//! win32 call this feature makes.
+//! clipboard call this feature makes. The image conversions are
+//! `super::wic`'s, run on this thread: a copied bitmap is encoded after the
+//! clipboard is closed, and a pasted png is decoded only when an application
+//! asks for the bitmap promised beside it.
 //!
 //! The thread exists because the clipboard is blocking IO — `OpenClipboard`
 //! fails while another process holds it, `SetClipboardData` needs a window in
@@ -12,6 +15,9 @@
 //! created, so this thread deliberately does *not* follow the input desktop the
 //! way capture and input do: following it would take the clipboard listener to
 //! `Winlogon`, which is the one place §5 refuses to sync at all.
+//!
+//! On macOS the thread is `super::mac`'s, which polls the pasteboard instead
+//! of listening to it; the window, the desktop and WIC below are Windows'.
 //!
 //! Hardware tests are `#[ignore]`d — they read and write **this machine's real
 //! clipboard**, so whatever you had copied is gone afterwards. With the working
@@ -30,6 +36,11 @@ use std::sync::{Arc, Mutex};
 use crossbeam_channel::{bounded, Sender};
 
 use super::formats::Payload;
+// the platform's listener thread; elsewhere there is none.
+#[cfg(target_os = "macos")]
+use super::mac::Thread;
+#[cfg(windows)]
+use win::Thread;
 
 /// The most payloads waiting to be applied to this machine's clipboard. Past
 /// this the viewer is pasting faster than the machine can take it, which is
@@ -43,7 +54,7 @@ const WRITE_QUEUE: usize = 4;
 /// before it: the session polls a feature only while a viewer's peer is
 /// connected, so a queue would hand a viewer that has just joined whatever was
 /// copied several clipboards ago instead of what is on the machine now.
-type Mailbox = Arc<Mutex<Option<Payload>>>;
+pub(super) type Mailbox = Arc<Mutex<Option<Payload>>>;
 
 /// Both halves of the echo guard, neither of which is sufficient alone.
 ///
@@ -62,7 +73,8 @@ impl Echo {
     /// Record what this process just put on the clipboard. `seq` is
     /// `GetClipboardSequenceNumber()` read **after** the clipboard was closed:
     /// `EmptyClipboard` and each `SetClipboardData` move the counter, and it is
-    /// the number in force when the update fires that has to match.
+    /// the number in force when the update fires that has to match. On macOS
+    /// it is the change count the write produced (`super::mac`).
     pub fn wrote(&mut self, seq: u32, payload: &Payload) {
         self.seq = Some(seq);
         self.digest = Some(payload.digest());
@@ -83,13 +95,21 @@ impl Echo {
 /// out, payloads to apply go in, and nothing blocks.
 pub struct Listener {
     latest: Mailbox,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     writes: Sender<Payload>,
-    #[cfg(windows)]
-    inner: win::Thread,
+    /// Whether this machine's own clipboard is read at all.
+    reads: bool,
+    #[cfg(any(windows, target_os = "macos"))]
+    inner: Thread,
 }
 
 impl Listener {
+    /// Whether this machine's own clipboard is read, so what is copied here
+    /// reaches a viewer: the feature's status, and the viewer's notice.
+    pub fn reads(&self) -> bool {
+        self.reads
+    }
+
     /// The machine's clipboard if it has changed since the last call, already
     /// filtered: file lists, echoes of our own writes and anything over §5's
     /// caps never get this far.
@@ -103,7 +123,7 @@ impl Listener {
     /// Put a payload on this machine's clipboard. Best effort and never
     /// blocking: the write happens on the listener thread, and a full queue is
     /// a viewer pasting faster than the machine applies it.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub fn write(&self, payload: Payload) {
         if self.writes.try_send(payload).is_err() {
             ::log::debug!("swoop: a clipboard write was dropped, the queue is full");
@@ -112,43 +132,58 @@ impl Listener {
         self.inner.wake_for_write();
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn write(&self, _payload: Payload) {}
 
     /// Stop the thread and wait for it. Idempotent.
     pub fn stop(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         self.inner.stop();
     }
 }
 
-/// Start the listener. The win32 work happens on the thread, so this returns as
-/// soon as the thread is spawned and a failure to create the window is reported
-/// from there — a feature whose listener could not start runs inert rather than
-/// taking the session down with it.
-#[cfg(windows)]
+/// Start the listener. The platform's work happens on the thread, so this
+/// returns as soon as the thread is spawned and a failure there (no window on
+/// Windows) is reported from there — a feature whose listener could not start
+/// runs inert rather than taking the session down with it.
+#[cfg(any(windows, target_os = "macos"))]
 pub fn start() -> anyhow::Result<Listener> {
     let latest: Mailbox = Arc::new(Mutex::new(None));
     let (writes, write_rx) = bounded(WRITE_QUEUE);
-    let inner = win::Thread::spawn(Arc::clone(&latest), write_rx)?;
+    let inner = Thread::spawn(Arc::clone(&latest), write_rx)?;
     Ok(Listener {
         latest,
         writes,
+        reads: reads_own_clipboard(),
         inner,
     })
 }
 
-#[cfg(not(windows))]
+/// Always on Windows; on macOS only under the pasteboard access `mac` reads
+/// without raising the paste alert.
+#[cfg(windows)]
+fn reads_own_clipboard() -> bool {
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn reads_own_clipboard() -> bool {
+    super::mac::reads_general_pasteboard()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn start() -> anyhow::Result<Listener> {
     let (writes, _) = bounded(WRITE_QUEUE);
     Ok(Listener {
         latest: Arc::new(Mutex::new(None)),
         writes,
+        reads: false,
     })
 }
 
 #[cfg(windows)]
 mod win {
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
@@ -159,46 +194,54 @@ mod win {
     use windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::DataExchange::{
         AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardData,
-        GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+        GetClipboardOwner, GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
         RegisterClipboardFormatW, RemoveClipboardFormatListener, SetClipboardData,
     };
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
     use windows::Win32::System::StationsAndDesktops::{
-        CloseDesktop, GetUserObjectInformationW, OpenDesktopW, OpenInputDesktop, SetThreadDesktop,
-        DESKTOP_CONTROL_FLAGS, DESKTOP_CREATEWINDOW, DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
-        UOI_NAME,
+        CloseDesktop, OpenDesktopW, SetThreadDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_CREATEWINDOW,
+        DESKTOP_READOBJECTS, DESKTOP_WRITEOBJECTS,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         PostMessageW, RegisterClassW, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
-        WM_CLIPBOARDUPDATE, WNDCLASSW,
+        WM_CLIPBOARDUPDATE, WM_DESTROYCLIPBOARD, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WNDCLASSW,
     };
 
+    // read at every clip, not taken from another feature's state: sync is
+    // refused on `Winlogon` whether or not anything else is watching for it
+    use crate::securedesk::input_desktop;
+
     use super::super::formats::{
-        self, dib_to_png, text_from_utf16, text_to_utf16, Payload, CF_DIB, CF_DIBV5, CF_HDROP,
-        CF_UNICODETEXT,
+        self, dib_len, dib_to_png, text_from_utf16, text_to_utf16, Payload, CF_DIB, CF_DIBV5,
+        CF_HDROP, CF_UNICODETEXT,
     };
+    use super::super::wic;
     use super::{Echo, Mailbox};
-    use crate::ipc::Desktop;
-    use crate::signal::messages::channel::ClipFormat;
+    use crate::signal::messages::channel::{ClipFormat, CLIPBOARD_IMAGE_MAX_BYTES};
 
     /// There is a payload waiting on the write channel.
     const WM_APP_WRITE: u32 = WM_APP + 1;
     /// Leave the message loop.
     const WM_APP_QUIT: u32 = WM_APP + 2;
 
+    thread_local! {
+        /// The png whose `CF_DIBV5` this thread's window has promised the
+        /// clipboard and not yet rendered.
+        static PROMISED_BITMAP: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
+    }
+
     /// Another process holds the clipboard for a few milliseconds at a time.
     const OPEN_ATTEMPTS: u32 = 5;
     const OPEN_RETRY: Duration = Duration::from_millis(10);
 
-    /// The most this thread copies out of one clipboard handle.
-    ///
-    /// Above it the transfer cannot fit §5's caps anyway — the crate's png
-    /// encoder writes stored deflate blocks, so a DIB is roughly its own size
-    /// once encoded — and a clipboard holding a 4K screenshot is exactly where
-    /// copying first and refusing second would cost the most.
-    const MAX_READ_BYTES: usize = 8 * 1024 * 1024;
+    /// The most this thread copies out of a text handle: far above what §5's
+    /// text cap lets through, since utf-16 is at most twice the utf-8 it
+    /// becomes, and small enough that copying first and refusing second is
+    /// cheap. A png is held to the image cap instead, and a bitmap is sized
+    /// from its own header.
+    const MAX_TEXT_READ_BYTES: usize = 8 * 1024 * 1024;
 
     /// The thread handle, its window, and the flag that ends it.
     pub struct Thread {
@@ -268,7 +311,32 @@ mod win {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> LRESULT {
-        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        match message {
+            // An application asked for the promised bitmap. It holds the
+            // clipboard open while it waits, so the data goes on without
+            // opening it again.
+            WM_RENDERFORMAT if wparam.0 as u32 == CF_DIBV5 => {
+                render_promised_bitmap();
+                LRESULT(0)
+            }
+            // The window is going with the promise outstanding: keep it for
+            // whoever pastes later, if the clipboard is still the one it filled.
+            WM_RENDERALLFORMATS => {
+                if unsafe { OpenClipboard(Some(hwnd)) }.is_ok() {
+                    if unsafe { GetClipboardOwner() }.ok() == Some(hwnd) {
+                        render_promised_bitmap();
+                    }
+                    let _ = unsafe { CloseClipboard() };
+                }
+                LRESULT(0)
+            }
+            // Emptied, by anyone: nothing is promised any more.
+            WM_DESTROYCLIPBOARD => {
+                PROMISED_BITMAP.with_borrow_mut(|promised| *promised = None);
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
     }
 
     fn run(
@@ -278,6 +346,12 @@ mod win {
         writes: &Receiver<Payload>,
     ) {
         attach_to_default_desktop();
+        // wic is com, and com is per thread: apartment-threaded, like the
+        // window this thread pumps messages for. without it an image still
+        // goes out stored and comes in as png alone.
+        let _com = wic::Com::enter()
+            .inspect_err(|e| ::log::warn!("swoop: no COM on the clipboard thread: {e}"))
+            .ok();
         let hwnd = match create_window() {
             Ok(hwnd) => hwnd,
             Err(e) => {
@@ -387,35 +461,6 @@ mod win {
         }
     }
 
-    /// The input desktop, read here rather than taken from another feature:
-    /// clipboard sync is refused on `Winlogon` whether or not anything else in
-    /// the process is watching for the switch.
-    fn input_desktop() -> Desktop {
-        let opened =
-            unsafe { OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS) };
-        let Ok(desktop) = opened else {
-            // Equally what a thread without rights to the current desktop gets,
-            // which is why `sync_allowed` treats `Unknown` as a refusal.
-            return Desktop::Unknown;
-        };
-        let mut buffer = [0u16; 128];
-        let mut needed = 0u32;
-        let named = unsafe {
-            GetUserObjectInformationW(
-                HANDLE(desktop.0),
-                UOI_NAME,
-                Some(buffer.as_mut_ptr().cast()),
-                std::mem::size_of_val(&buffer) as u32,
-                Some(&mut needed),
-            )
-        };
-        let _ = unsafe { CloseDesktop(desktop) };
-        if named.is_err() {
-            return Desktop::Unknown;
-        }
-        formats::desktop_from_name(&text_from_utf16(&buffer))
-    }
-
     /// One `WM_CLIPBOARDUPDATE`, filtered: our own echo, a file list, an
     /// unreadable format or a payload over §5's cap all come back `None`.
     fn read_update(hwnd: HWND, png_format: u32, echo: &mut Echo) -> Option<Payload> {
@@ -428,7 +473,12 @@ mod win {
         if echo.is_own_write(seq) {
             return None;
         }
-        let payload = with_clipboard(Some(hwnd), || read_payload(png_format))?;
+        let payload = match with_clipboard(Some(hwnd), || read_payload(png_format))? {
+            Copied::Payload(payload) => payload,
+            // encoded with the clipboard closed: compressing a 4K bitmap takes
+            // long enough that holding it open would stall every other paste.
+            Copied::Bitmap(dib) => Payload::png(bitmap_to_png(&dib)?),
+        };
         if echo.is_own_content(&payload) {
             return None;
         }
@@ -443,30 +493,39 @@ mod win {
         Some(payload)
     }
 
-    /// Inside an open clipboard: what §5 carries, in preference order.
-    fn read_payload(png_format: u32) -> Option<Payload> {
+    /// What [`read_payload`] copied out of the open clipboard.
+    enum Copied {
+        Payload(Payload),
+        /// A DIB, still to be encoded.
+        Bitmap(Vec<u8>),
+    }
+
+    /// Inside an open clipboard: what §5 carries, in preference order, copied
+    /// out and no more — anything slow waits until the clipboard is closed.
+    fn read_payload(png_format: u32) -> Option<Copied> {
         // A file list is refused whole — not partially synced as the text of
         // the paths.
         if unsafe { IsClipboardFormatAvailable(CF_HDROP) }.is_ok() {
             ::log::debug!("swoop: a file list is on the clipboard, nothing is synced");
             return None;
         }
-        // The registered format first: it is already a compressed png, where a
-        // DIB has to be encoded without a compressor.
+        // The registered format first: it is already a compressed png. One over
+        // the cap would go out as it is or not at all, so it is refused before
+        // it is copied, and the bitmap below is tried instead.
         if png_format != 0 && unsafe { IsClipboardFormatAvailable(png_format) }.is_ok() {
-            if let Some(bytes) = clipboard_bytes(png_format) {
-                return Some(Payload::png(bytes));
+            if let Some(bytes) = clipboard_bytes(png_format, CLIPBOARD_IMAGE_MAX_BYTES as usize) {
+                return Some(Copied::Payload(Payload::png(bytes)));
             }
         }
         for dib in [CF_DIBV5, CF_DIB] {
             if unsafe { IsClipboardFormatAvailable(dib) }.is_ok() {
-                if let Some(png) = clipboard_bytes(dib).and_then(|bytes| dib_to_png(&bytes)) {
-                    return Some(Payload::png(png));
+                if let Some(bytes) = clipboard_dib(dib) {
+                    return Some(Copied::Bitmap(bytes));
                 }
             }
         }
         if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT) }.is_ok() {
-            let bytes = clipboard_bytes(CF_UNICODETEXT)?;
+            let bytes = clipboard_bytes(CF_UNICODETEXT, MAX_TEXT_READ_BYTES)?;
             let units: Vec<u16> = bytes
                 .as_chunks::<2>()
                 .0
@@ -475,10 +534,48 @@ mod win {
                 .collect();
             let text = text_from_utf16(&units);
             if !text.is_empty() {
-                return Some(Payload::text(&text));
+                return Some(Copied::Payload(Payload::text(&text)));
             }
         }
         None
+    }
+
+    /// A copied bitmap as a png: compressed by WIC, or stored when WIC fails.
+    fn bitmap_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+        dib_to_png(dib, |dib| {
+            wic::encode_png(dib)
+                .inspect_err(|e| ::log::debug!("swoop: WIC did not compress a bitmap: {e}"))
+                .ok()
+        })
+    }
+
+    /// A pasted png as a `CF_DIBV5`, or `None` when WIC cannot read it — and
+    /// then the paste finds the png alone, as it always did.
+    fn png_to_bitmap(png: &[u8]) -> Option<Vec<u8>> {
+        wic::png_to_dibv5(png)
+            .inspect_err(|e| ::log::debug!("swoop: WIC did not decode a pasted png: {e}"))
+            .ok()
+    }
+
+    /// Inside an open, just-emptied clipboard: promise a `CF_DIBV5` made from
+    /// `png` when an application asks for it. A null handle is the promise, and
+    /// `SetClipboardData` returns null for that on success too, so whether it
+    /// took is read back from the clipboard instead.
+    fn promise_bitmap(png: &[u8]) -> Option<()> {
+        let _ = unsafe { SetClipboardData(CF_DIBV5, None) };
+        unsafe { IsClipboardFormatAvailable(CF_DIBV5) }.ok()?;
+        PROMISED_BITMAP.with_borrow_mut(|promised| *promised = Some(png.to_vec()));
+        Some(())
+    }
+
+    /// The promised bitmap, decoded now that it is wanted.
+    fn render_promised_bitmap() {
+        let Some(png) = PROMISED_BITMAP.with_borrow_mut(Option::take) else {
+            return;
+        };
+        if let Some(dib) = png_to_bitmap(&png) {
+            let _ = set_format(CF_DIBV5, &dib);
+        }
     }
 
     /// Put a payload on the clipboard and record the echo it will cause.
@@ -498,11 +595,21 @@ mod win {
                     let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
                     set_format(CF_UNICODETEXT, &bytes)
                 }
-                // The registered "PNG" format only: turning a png back into a
-                // DIB needs a decompressor this crate does not have, and the
-                // browsers and image editors this is for all read it.
-                ClipFormat::Png if png_format != 0 => set_format(png_format, &payload.bytes),
-                ClipFormat::Png => None,
+                // The png as the viewer sent it, for the browsers and image
+                // editors that read the registered format, and a bitmap
+                // promised beside it for the applications that read nothing
+                // else. Promised rather than made: decoding a 4K png takes
+                // longer than the ctrl+v behind the clip takes to arrive, and
+                // an application that wants the bitmap waits for it.
+                ClipFormat::Png => {
+                    let png = if png_format != 0 {
+                        set_format(png_format, &payload.bytes)
+                    } else {
+                        None
+                    };
+                    let bitmap = promise_bitmap(&payload.bytes);
+                    png.or(bitmap)
+                }
             }
         });
         if written.is_none() {
@@ -538,23 +645,37 @@ mod win {
         out
     }
 
-    /// One format's bytes, copied out from under `GlobalLock`.
-    fn clipboard_bytes(format: u32) -> Option<Vec<u8>> {
+    /// One format's memory, under `GlobalLock` for as long as `body` looks at
+    /// it. Nothing is copied here; `body` copies what it keeps.
+    fn with_global<T>(format: u32, body: impl FnOnce(&[u8]) -> Option<T>) -> Option<T> {
         let handle = unsafe { GetClipboardData(format) }.ok()?;
         let global = HGLOBAL(handle.0);
         let size = unsafe { GlobalSize(global) };
-        if size == 0 || size > MAX_READ_BYTES {
+        if size == 0 {
             return None;
         }
         let pointer = unsafe { GlobalLock(global) };
         if pointer.is_null() {
             return None;
         }
-        let bytes = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), size) }.to_vec();
+        let out = body(unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), size) });
         // Fails with ERROR_SUCCESS once the lock count reaches zero, which is
         // the ordinary outcome here.
         let _ = unsafe { GlobalUnlock(global) };
-        Some(bytes)
+        out
+    }
+
+    /// One format's bytes, copied out when there are no more than `max`.
+    fn clipboard_bytes(format: u32, max: usize) -> Option<Vec<u8>> {
+        with_global(format, |bytes| (bytes.len() <= max).then(|| bytes.to_vec()))
+    }
+
+    /// A DIB, copied out exactly as long as its header says: one over the pixel
+    /// bound is refused before a byte of it is copied.
+    fn clipboard_dib(format: u32) -> Option<Vec<u8>> {
+        with_global(format, |bytes| {
+            dib_len(bytes).map(|len| bytes[..len].to_vec())
+        })
     }
 
     /// Hand one format to the clipboard. On success the system owns the memory;
@@ -595,9 +716,41 @@ mod win {
             let pasted = "owlette swoop clipboard round trip";
             listener.write(Payload::text(pasted));
             std::thread::sleep(Duration::from_millis(500));
-            let back = with_clipboard(None, || read_payload(png_format))
-                .expect("something is on the clipboard");
+            let Some(Copied::Payload(back)) = with_clipboard(None, || read_payload(png_format))
+            else {
+                panic!("the text is not on the clipboard");
+            };
             assert_eq!(back, Payload::text(pasted));
+            assert!(
+                listener.take_update().is_none(),
+                "our own write came back as an update"
+            );
+
+            // viewer → host, an image: the png goes on as sent, and asking for
+            // the CF_DIB Windows makes from the promised CF_DIBV5 renders it on
+            // the listener thread and reads back its size.
+            let png = crate::cursor::encode_png(&crate::cursor::CursorImage {
+                width: 3,
+                height: 2,
+                hot_x: 0,
+                hot_y: 0,
+                scale: 1,
+                rgba: vec![0x80; 3 * 2 * 4],
+            });
+            listener.write(Payload::png(png.clone()));
+            std::thread::sleep(Duration::from_millis(500));
+            let Some(Copied::Payload(back)) = with_clipboard(None, || read_payload(png_format))
+            else {
+                panic!("the png is not on the clipboard");
+            };
+            assert!(
+                back.bytes.starts_with(&png),
+                "the registered format is the png as sent"
+            );
+            let synthesised = with_clipboard(None, || clipboard_dib(CF_DIB))
+                .expect("a CF_DIB made from our CF_DIBV5");
+            let dib = formats::Dib::parse(&synthesised).expect("a dib the reader takes");
+            assert_eq!((dib.width, dib.height), (3, 2));
             assert!(
                 listener.take_update().is_none(),
                 "our own write came back as an update"

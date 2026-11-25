@@ -23,9 +23,9 @@ jest.mock('@/components/RoostTargetRow', () => ({
   ),
 }));
 jest.mock('@/components/roost/VersionHistory', () => ({
-  VersionHistory: ({ roostId, onNewVersion }: { roostId: string; onNewVersion: () => void }) => (
+  VersionHistory: ({ roostId, onNewVersion }: { roostId: string; onNewVersion?: () => void }) => (
     <div data-testid="version-history" data-roost-id={roostId}>
-      <button type="button" onClick={onNewVersion}>mock new version</button>
+      {onNewVersion && <button type="button" onClick={onNewVersion}>mock new version</button>}
     </div>
   ),
 }));
@@ -114,6 +114,12 @@ describe('RoostDetailPanel', () => {
         currentVersionNumber: 3,
       }),
     );
+  });
+
+  it('offers no new version when the plan leaves roost out', () => {
+    renderPanel({ onNewVersion: undefined });
+    expect(screen.getByTestId('version-history')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /mock new version/i })).toBeNull();
   });
 
   it('hides the version badge when currentVersionNumber is null', () => {

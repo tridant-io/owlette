@@ -113,4 +113,10 @@ describe('the reason copy itself', () => {
       });
     },
   );
+
+  it('creator_access_revoked stays true for a creator limited to some machines, who still has access', () => {
+    expect(TALON_DISABLED_REASON_COPY.creator_access_revoked).toBe(
+      'the person who created this talon no longer has whole-site access to this site',
+    );
+  });
 });

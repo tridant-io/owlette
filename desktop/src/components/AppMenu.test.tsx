@@ -4,10 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const openOwlettePath = vi.fn()
 const openExternalUrl = vi.fn()
 const toastError = vi.fn()
+const swoopViewerInstalled = vi.fn()
+const openSwoopViewer = vi.fn()
 
 vi.mock('@/lib/agentCli', () => ({
   openOwlettePath: (...args: unknown[]) => openOwlettePath(...args),
   openExternalUrl: (...args: unknown[]) => openExternalUrl(...args),
+}))
+vi.mock('@/lib/ipc', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ipc')>()),
+  swoopViewerInstalled: () => swoopViewerInstalled(),
+  openSwoopViewer: () => openSwoopViewer(),
 }))
 vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
 
@@ -19,9 +26,8 @@ function setup(paired: boolean) {
     onJoinSite: vi.fn(),
     onLeaveSite: vi.fn(),
     onReportIssue: vi.fn(),
+    onOpenSettings: vi.fn(),
     onRestartService: vi.fn(),
-    startOnLogin: true,
-    onStartOnLoginChange: vi.fn(),
   }
   render(<AppMenu {...props} />)
   // jsdom has no PointerEvent constructor, so the trigger is opened from the
@@ -34,24 +40,32 @@ beforeEach(() => {
   openOwlettePath.mockReset().mockResolvedValue(undefined)
   openExternalUrl.mockReset().mockResolvedValue(undefined)
   toastError.mockReset()
+  swoopViewerInstalled.mockReset().mockResolvedValue(false)
+  openSwoopViewer.mockReset().mockResolvedValue(undefined)
 })
 
 describe('AppMenu', () => {
-  it('carries the four legacy overflow items, in order, in lowercase', async () => {
+  it('lists its items in the owner\'s order, in lowercase, the site action last', async () => {
     setup(true)
 
     const items = await screen.findAllByRole('menuitem')
-    // owlette_gui._toggle_overflow_menu listed config / logs / docs / feedback;
-    // the site action is the row the legacy footer owned.
     expect(items.map((item) => item.textContent)).toEqual([
-      'leave site',
+      'docs',
+      'submit issue',
       'config',
       'logs',
-      'docs',
-      'submit bug report',
+      'settings',
       'restart service',
       'reload window',
+      'leave site',
     ])
+  })
+
+  it('opens the settings window', async () => {
+    const props = setup(true)
+
+    fireEvent.click(await screen.findByTestId('menu-settings'))
+    expect(props.onOpenSettings).toHaveBeenCalledOnce()
   })
 
   it('offers joining when the machine has no site, and leaving when it has one', async () => {
@@ -98,5 +112,48 @@ describe('AppMenu', () => {
     fireEvent.click(await screen.findByTestId('menu-logs'))
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled())
     expect(toastError.mock.calls[0][0]).toBe('could not open the logs folder')
+  })
+})
+
+describe('AppMenu swoop', () => {
+  it('leads the menu with swoop when owlette swoop is installed, and opens it', async () => {
+    swoopViewerInstalled.mockResolvedValue(true)
+    setup(true)
+
+    const swoop = await screen.findByTestId('menu-swoop')
+    expect(screen.getAllByRole('menuitem')[0]).toBe(swoop)
+    expect(swoop.textContent).toBe('swoop')
+
+    fireEvent.click(swoop)
+    expect(openSwoopViewer).toHaveBeenCalledOnce()
+  })
+
+  it('has no swoop row when owlette swoop is not installed', async () => {
+    setup(true)
+
+    await vi.waitFor(() => expect(swoopViewerInstalled).toHaveBeenCalledOnce())
+    await screen.findByTestId('menu-leave-site')
+    expect(screen.queryByTestId('menu-swoop')).toBeNull()
+  })
+
+  it('has no swoop row when the host cannot say', async () => {
+    swoopViewerInstalled.mockRejectedValue(new Error('no bridge'))
+    setup(true)
+
+    await vi.waitFor(() => expect(swoopViewerInstalled).toHaveBeenCalledOnce())
+    await screen.findByTestId('menu-leave-site')
+    expect(screen.queryByTestId('menu-swoop')).toBeNull()
+  })
+
+  it('tells the operator when owlette swoop will not open', async () => {
+    swoopViewerInstalled.mockResolvedValue(true)
+    openSwoopViewer.mockRejectedValue('owlette swoop is not installed')
+    setup(true)
+
+    fireEvent.click(await screen.findByTestId('menu-swoop'))
+    await vi.waitFor(() => expect(toastError).toHaveBeenCalled())
+    expect(toastError).toHaveBeenCalledWith('could not open the owlette swoop desktop app', {
+      description: 'owlette swoop is not installed',
+    })
   })
 })

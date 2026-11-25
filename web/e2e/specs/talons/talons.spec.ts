@@ -18,8 +18,10 @@
 import { test, expect, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
 import { seedMachine, TEST_USERS } from '../../helpers/seed';
+import { recordSlides, slideSettled } from '../../helpers/slide';
 import type { TalonDoc, TalonRunDoc } from '@/lib/talons/types';
 
 // admin-uid is a site admin on site-A, which is what TALON_MANAGE needs; it is
@@ -340,6 +342,33 @@ test('expanding a row loads that talon run history, newest first', async ({ page
   await expect(wall.getByTestId('talon-run-row')).toHaveCount(0);
 });
 
+test('the run history slides open and closed, as the other expandable panels do', async ({ page }) => {
+  await seedTalons();
+  await gotoTalons(page);
+
+  const wall = rowByName(page, WALL_CHECK_NAME);
+  await expect(wall).toBeVisible();
+  const slides = await recordSlides(wall);
+  // named for what a click does next: expand, then collapse
+  const toggle = wall.getByRole('button', { name: /^(expand|collapse) run history$/ });
+  const runs = wall.getByTestId('talon-run-row');
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(runs).toHaveCount(3);
+
+  await toggle.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(runs).toHaveCount(0);
+
+  // the slide clips the history, so the outlines of what it holds must stay inside it.
+  // last, because the check turns animation off for the rest of the page
+  await toggle.click();
+  await expect(runs).toHaveCount(3);
+  await slideSettled(wall);
+  expect(await clippedFocusRings(page, wall.locator('[data-slot="collapsible-content"]'))).toEqual([]);
+});
+
 test('the editor creates a schedule + email talon and the list picks it up', async ({ page }) => {
   await gotoTalons(page);
   await expect(page.getByText('no talons yet', { exact: true })).toBeVisible();
@@ -406,6 +435,27 @@ test('the row toggle disables and re-enables the talon', async ({ page }) => {
   await crash.getByTestId('talon-toggle').click();
   await expect(crash.getByRole('img', { name: 'enabled' })).toBeVisible();
   expect((await readTalon(CRASH_PAGE_ID))?.enabled).toBe(true);
+});
+
+test('switching a talon back on after repeated failures gives it its tries back', async ({ page }) => {
+  await seedTalons();
+  await getAdminDb()
+    .collection('sites').doc(SITE_ID)
+    .collection('talons').doc(CRASH_PAGE_ID)
+    .update({ enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+  await gotoTalons(page);
+
+  const crash = rowByName(page, CRASH_PAGE_NAME);
+  await expect(crash.getByTitle('10 consecutive failures')).toBeVisible();
+  await expect(crash.getByTestId('talon-disabled-reason')).toBeVisible();
+
+  await crash.getByTestId('talon-toggle').click();
+  // the dot flips off the live snapshot, so seeing it proves the write landed
+  await expect(crash.getByRole('img', { name: 'enabled' })).toBeVisible();
+  await expect(crash.getByTitle('10 consecutive failures')).toHaveCount(0);
+  const talon = await readTalon(CRASH_PAGE_ID);
+  expect(talon?.consecutiveFailures).toBe(0);
+  expect(talon?.disabledReason).toBeUndefined();
 });
 
 test('the empty state sits where the list did, without pushing the page down', async ({ page }) => {

@@ -7,8 +7,8 @@
  * doesn't expose those fields to the browser, so the client could only see
  * passkeys (`/api/passkeys/list`).
  *
- * `mfaVerified` mirrors what `checkMfaEnrollmentGate` will decide for this
- * session. Reported up front because "add authenticator app" is a NAVIGATION to
+ * `mfaVerified` is what `checkMfaEnrollmentGate` will decide for this session.
+ * Reported up front because "add authenticator app" is a NAVIGATION to
  * /setup-2fa — discovering the gate via a 403 there happens on a page the user
  * already left the dialog for. It is the caller's own session state.
  *
@@ -23,9 +23,10 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSession } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { normalizeMfaFactors } from '@/lib/mfaFactors.server';
+import { sessionClearedMfaChallenge } from '@/lib/mfaEnrollmentGate.server';
 import { getSessionData } from '@/lib/sessionManager.server';
 import { getPasskeyListInfo } from '@/lib/webauthn.server';
 
@@ -49,7 +50,7 @@ function toIsoOrNull(value: unknown): string | null {
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   try {
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
     const userData = await assertActiveUser(userId);
 
     const passkeys = await getPasskeyListInfo(userId);
@@ -60,8 +61,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
     // its legacy fallback (`mfaEnrolled === true` on pre-`mfaFactors` documents).
     const factors = normalizeMfaFactors(userData, passkeys.length);
 
-    // Read the flag off the session rather than re-deriving the gate — anything
-    // cleverer is a second implementation that can disagree with it.
+    // the gate's own predicate, so the panel and the gate can't disagree.
     const session = await getSessionData();
 
     return NextResponse.json({
@@ -71,7 +71,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       },
       passkeys,
       totalFactors: (factors.totp ? 1 : 0) + passkeys.length,
-      mfaVerified: session?.mfaVerified === true,
+      mfaVerified: sessionClearedMfaChallenge(session),
     });
   } catch (error) {
     if (error instanceof ApiAuthError) {

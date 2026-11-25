@@ -1,7 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { roleState } from '../../helpers/roles';
-import { TEST_USERS } from '../../helpers/seed';
+import {
+  TEST_SITES,
+  TEST_USERS,
+  grantMembership,
+  releaseFixtureSite,
+  seedMachine,
+  seedSite,
+} from '../../helpers/seed';
 import {
   clearHootFixture,
   seedHootFixture,
@@ -69,84 +76,173 @@ async function expectNoSeriousA11yViolations(page: Page, within?: string) {
   ).toEqual([]);
 }
 
-test.describe('public a11y smoke', () => {
-  test.use({ storageState: { cookies: [], origins: [] } });
+// both themes: with no stored choice the app follows the os colour scheme
+for (const theme of ['dark', 'light'] as const) {
+  test.describe(`${theme} theme`, () => {
+    test.use({ colorScheme: theme });
 
-  for (const route of ['/', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?success=true', '/demo']) {
-    test(`${route} has no serious/critical axe violations`, async ({ page }) => {
-      await page.goto(route);
-      await expect(page.locator('body')).toBeVisible();
-      await expectNoSeriousA11yViolations(page);
+    test.describe('public a11y smoke', () => {
+      test.use({ storageState: { cookies: [], origins: [] } });
+
+      for (const route of ['/', '/docs/agent/installation', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?token=a11y-smoke', '/demo', '/login', '/register']) {
+        test(`${route} has no serious/critical axe violations`, async ({ page }) => {
+          await page.goto(route);
+          await expect(page.locator('body')).toBeVisible();
+          await expectNoSeriousA11yViolations(page);
+        });
+      }
     });
-  }
-});
 
-test.describe('authenticated a11y smoke', () => {
-  test.use(roleState('admin'));
+    test.describe('authenticated a11y smoke', () => {
+      test.use(roleState('admin'));
 
-  test('logs has no serious/critical axe violations', async ({ page }) => {
-    await seedLogEvents('site-A');
-    await page.goto('/logs');
-    await expect(page.getByRole('heading', { name: /^logs$/i })).toBeVisible();
-    await expectNoSeriousA11yViolations(page);
+      test('logs has no serious/critical axe violations', async ({ page }) => {
+        await seedLogEvents('site-A');
+        await page.goto('/logs');
+        await expect(page.getByRole('heading', { name: /^logs$/i })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      // /demo carries labels the real dashboard lacked, so the real one is scanned too:
+      // card view (the default) and list view
+      test('dashboard has no serious/critical axe violations', async ({ page }) => {
+        await seedMachine(TEST_SITES[0].id, 'e2e-a11y-dashboard-machine');
+        await page.goto('/dashboard');
+        await expect(page.getByTestId('machine-card').first()).toBeVisible({ timeout: 15_000 });
+        await expectNoSeriousA11yViolations(page);
+        await page.getByTestId('view-toggle-list').click();
+        await expect(page.getByTestId('machine-row').first()).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      for (const [route, heading] of [
+        ['/deployments', 'deployments'],
+        ['/roosts', 'roosts'],
+        ['/settings/api-keys', 'api keys'],
+        ['/admin/sites/site-A', 'Site A (Assigned)'],
+      ] as const) {
+        test(`${route} has no serious/critical axe violations`, async ({ page }) => {
+          await page.goto(route);
+          await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible({ timeout: 10_000 });
+          await expectNoSeriousA11yViolations(page);
+        });
+      }
+
+      // the heading renders before the site list resolves, so the scan waits for the switch
+      test('/admin/swoop has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/swoop');
+        await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeEnabled({
+          timeout: 10_000,
+        });
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      // the heading renders before the list does, so the scan waits for a row
+      test('/admin/sites has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/sites');
+        await expect(page.getByRole('heading', { name: 'sites', exact: true })).toBeVisible({ timeout: 10_000 });
+        await expect(page.getByRole('link', { name: 'settings for Site A (Assigned)' })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      test('hoot keyed state has no serious/critical axe violations', async ({ page }) => {
+        await seedHootFixture({ userId: TEST_USERS.admin.uid });
+        await page.goto('/hoot');
+        await expect(page.getByLabel('chat message')).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      test('hoot target picker and mention list have no serious/critical axe violations', async ({
+        page,
+      }) => {
+        await seedHootFixture({ userId: TEST_USERS.admin.uid });
+        await page.goto('/hoot');
+        const composer = page.getByLabel('chat message');
+        await expect(composer).toBeVisible();
+
+        // The checkbox picker, open: a tri-state master row and one row per machine,
+        // each carrying its status as text. Scoped — see the helper.
+        await page.getByLabel(/hoot target/i).click();
+        await expect(page.getByRole('menuitemcheckbox', { name: /^all machines/i })).toBeVisible();
+        await expectNoSeriousA11yViolations(page, '[data-slot="dropdown-menu-content"]');
+        await page.keyboard.press('Escape');
+
+        // The `@` completion list, open. A Radix popover is NOT modal, so nothing is
+        // aria-hidden and the whole page is scanned with the list up — which is the
+        // state that matters: the listbox is named in its own right, and the
+        // composer stays a textbox driving it through aria-activedescendant.
+        //
+        // The query matches both seeded machines, so the scan covers a highlighted
+        // row and a plain one. Which is which is deterministic: `useMachines` sorts
+        // by id and `filterMentionOptions` keeps that order, so the online
+        // `e2e-cortex-machine` leads and carries the highlight.
+        await composer.click();
+        await composer.pressSequentially('@e2e-cortex');
+        await expect(page.getByRole('listbox', { name: /machines to mention/i })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      // a site of its own: the search offers people from the admin's other sites,
+      // so on site-A itself the list would be empty. without the site doc the page
+      // says "site not found" and the dialog never renders
+      test.describe('add-member search', () => {
+        const SITE_ID = 'site-a11y-members';
+
+        test.beforeAll(async () => {
+          await seedSite({ id: SITE_ID, name: 'Site A11y (members)', owner: 'someone-else', timezone: 'UTC' });
+          await grantMembership(SITE_ID, TEST_USERS.admin.uid, 'admin');
+        });
+
+        test.afterAll(async () => {
+          await releaseFixtureSite(SITE_ID, TEST_USERS.admin.uid);
+        });
+
+        test('add-member dialog and its list have no serious/critical axe violations', async ({ page }) => {
+          await page.goto(`/admin/sites/${SITE_ID}?section=members`);
+          // the members table behind the dialog has loaded, so the scan never sees it mid-load
+          await expect(page.getByRole('button', { name: `options for ${TEST_USERS.admin.email}` })).toBeVisible({
+            timeout: 10_000,
+          });
+          await page.getByRole('button', { name: 'add member', exact: true }).click();
+          const dialog = page.getByRole('dialog', { name: 'add member' });
+          await expect(dialog).toBeVisible();
+
+          // `member@e2e`, not a bare `e2e`: the dedicated users earlier specs leave on
+          // site-A sort ahead and can push member@e2e.test past the list's six rows
+          await dialog.getByLabel('name or email').pressSequentially('member@e2e');
+          await expect(
+            page
+              .getByRole('listbox', { name: 'people you can add' })
+              .getByRole('option', { name: /member@e2e\.test/, selected: true }),
+          ).toBeVisible();
+          // unscoped, unlike the picker's pass: axe takes an open role=dialog for a
+          // modal and does not fault the page it hides, and the popover is not modal,
+          // so the list is scanned beside the input that drives it, as with the mention list
+          await expectNoSeriousA11yViolations(page);
+        });
+      });
+    });
+
+    test.describe('superadmin a11y smoke', () => {
+      test.use(roleState('superadmin'));
+
+      test('admin presets has no serious/critical axe violations', async ({ page }) => {
+        await seedSystemPreset('e2e-a11y-system-preset', { name: 'E2E A11Y Template' });
+        await page.goto('/admin/presets');
+        await expect(page.getByRole('heading', { name: /template library/i })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+    });
+
+    test.describe('member no-key hoot a11y smoke', () => {
+      test.use(roleState('member'));
+
+      test('hoot no-key overlay has no serious/critical axe violations', async ({ page }) => {
+        await clearHootFixture(TEST_USERS.member.uid);
+        await page.goto('/hoot');
+        await expect(page.getByText(/hoot requires an LLM API key/i)).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
+    });
   });
-
-  test('hoot keyed state has no serious/critical axe violations', async ({ page }) => {
-    await seedHootFixture({ userId: TEST_USERS.admin.uid });
-    await page.goto('/hoot');
-    await expect(page.getByLabel('chat message')).toBeVisible();
-    await expectNoSeriousA11yViolations(page);
-  });
-
-  test('hoot target picker and mention list have no serious/critical axe violations', async ({
-    page,
-  }) => {
-    await seedHootFixture({ userId: TEST_USERS.admin.uid });
-    await page.goto('/hoot');
-    const composer = page.getByLabel('chat message');
-    await expect(composer).toBeVisible();
-
-    // The checkbox picker, open: a tri-state master row and one row per machine,
-    // each carrying its status as text. Scoped — see the helper.
-    await page.getByLabel(/hoot target/i).click();
-    await expect(page.getByRole('menuitemcheckbox', { name: /^all machines/i })).toBeVisible();
-    await expectNoSeriousA11yViolations(page, '[data-slot="dropdown-menu-content"]');
-    await page.keyboard.press('Escape');
-
-    // The `@` completion list, open. A Radix popover is NOT modal, so nothing is
-    // aria-hidden and the whole page is scanned with the list up — which is the
-    // state that matters: the listbox is named in its own right, and the
-    // composer stays a textbox driving it through aria-activedescendant.
-    //
-    // The query matches both seeded machines, so the scan covers a highlighted
-    // row and a plain one. Which is which is deterministic: `useMachines` sorts
-    // by id and `filterMentionOptions` keeps that order, so the online
-    // `e2e-cortex-machine` leads and carries the highlight.
-    await composer.click();
-    await composer.pressSequentially('@e2e-cortex');
-    await expect(page.getByRole('listbox', { name: /machines to mention/i })).toBeVisible();
-    await expectNoSeriousA11yViolations(page);
-  });
-});
-
-test.describe('superadmin a11y smoke', () => {
-  test.use(roleState('superadmin'));
-
-  test('admin presets has no serious/critical axe violations', async ({ page }) => {
-    await seedSystemPreset('e2e-a11y-system-preset', { name: 'E2E A11Y Template' });
-    await page.goto('/admin/presets');
-    await expect(page.getByRole('heading', { name: /template library/i })).toBeVisible();
-    await expectNoSeriousA11yViolations(page);
-  });
-});
-
-test.describe('member no-key hoot a11y smoke', () => {
-  test.use(roleState('member'));
-
-  test('hoot no-key overlay has no serious/critical axe violations', async ({ page }) => {
-    await clearHootFixture(TEST_USERS.member.uid);
-    await page.goto('/hoot');
-    await expect(page.getByText(/hoot requires an LLM API key/i)).toBeVisible();
-    await expectNoSeriousA11yViolations(page);
-  });
-});
+}

@@ -16,17 +16,7 @@ import { collection, query, where, documentId, onSnapshot, type Firestore } from
 import { db } from '@/lib/firebase';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { formatHourBucketId, formatDayBucketId } from '@/lib/metricsHistoryBuckets';
-import type { SparklineDataPoint, MetricColor } from '@/components/charts';
-
-type SparklineMetricType = 'cpu' | 'memory' | 'disk' | 'gpu';
-
-// Firestore stores metrics under abbreviated keys.
-const metricKeyMap: Record<SparklineMetricType, 'c' | 'm' | 'd' | 'g'> = {
-  cpu: 'c',
-  memory: 'm',
-  disk: 'd',
-  gpu: 'g',
-};
+import type { SparklineDataPoint } from '@/components/charts';
 
 const HOUR_MS = 60 * 60 * 1000;
 const MAX_SAMPLES = 60;
@@ -113,51 +103,6 @@ function subscribeLastHourSamples(
   );
 }
 
-interface UseSparklineDataResult {
-  data: SparklineDataPoint[];
-  loading: boolean;
-}
-
-/** Sparkline data for one metric of one machine. */
-export function useSparklineData(
-  siteId: string | null,
-  machineId: string | null,
-  metricType: SparklineMetricType
-): UseSparklineDataResult {
-  // loadedKey pins data to the (siteId, machineId, metricType) it was loaded for,
-  // so `loading` derives at render without a sync setState on key change. Null
-  // until the first snapshot, so unresolved ids stay in loading.
-  const [state, setState] = useState<{
-    data: SparklineDataPoint[];
-    loadedKey: string | null;
-  }>({ data: [], loadedKey: null });
-
-  const currentKey = db && siteId && machineId ? `${siteId}/${machineId}/${metricType}` : null;
-  const hourEpoch = useHourEpoch(currentKey !== null);
-
-  useEffect(() => {
-    if (!currentKey || !db || !siteId || !machineId) return;
-
-    const valueKey = metricKeyMap[metricType];
-    const unsubscribe = subscribeLastHourSamples(db, siteId, machineId, (samples) => {
-      const data = samples
-        .map((s) => ({ t: s.t, v: s[valueKey] ?? 0 }))
-        .filter((s) => s.v !== undefined && s.v !== null);
-      setState({ data, loadedKey: currentKey });
-    });
-
-    return () => unsubscribe();
-    // hourEpoch re-subscribes the listeners at each hour boundary.
-  }, [currentKey, siteId, machineId, metricType, hourEpoch]);
-
-  const matched = currentKey !== null && state.loadedKey === currentKey;
-  const data = matched ? state.data : EMPTY_SPARKLINE;
-  // Loading while db is configured but the current key hasn't loaded — includes
-  // the "ids not resolved yet" state so the sparkline doesn't flash.
-  const loading = !!db && !matched;
-  return { data, loading };
-}
-
 /** Stable empty array so consumers' memo/effect deps don't churn. */
 const EMPTY_SPARKLINE: SparklineDataPoint[] = [];
 
@@ -175,7 +120,8 @@ export function useAllSparklineData(
   machineId: string | null
 ): AllSparklineState {
   const demo = useDemoContext();
-  // loadedKey as above: derive loading at render, no sync setState on key change.
+  // loadedKey pins the data to the (siteId, machineId) it was loaded for, so
+  // loading is derived at render with no sync setState on a key change.
   const [state, setState] = useState<{
     cpu: SparklineDataPoint[];
     memory: SparklineDataPoint[];
@@ -226,9 +172,4 @@ export function useAllSparklineData(
     gpu: matched ? state.gpu : EMPTY_SPARKLINE,
     loading: !demo && !!db && !matched,
   };
-}
-
-/** Map metric type to chart color. */
-export function getSparklineColor(metricType: SparklineMetricType): MetricColor {
-  return metricType as MetricColor;
 }

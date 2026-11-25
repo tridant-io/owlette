@@ -10,6 +10,30 @@ import { Machine } from './useFirestore';
 import { useInstallerVersion } from './useInstallerVersion';
 import { isOutdated } from '@/lib/versionUtils';
 import { getLatestOwletteVersion, sendOwletteUpdateCommand } from '@/lib/firebase';
+import {
+  INSTALLER_PLATFORMS,
+  PLATFORM_LABEL,
+  type InstallerFile,
+  type InstallerPlatform,
+} from '@/lib/installerPlatform';
+
+/** A machine the update left out because the version has no file for its platform. */
+export interface SkippedMachine {
+  machineId: string;
+  reason: string;
+}
+
+/** an update with no report back after this reads as "may have failed". */
+const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
+
+function isInstallerPlatform(key: string): key is InstallerPlatform {
+  return (INSTALLER_PLATFORMS as readonly string[]).includes(key);
+}
+
+// a key outside the shipped platforms (`linux_arm64`) is still named in the reason
+function platformLabel(key: string): string {
+  return isInstallerPlatform(key) ? PLATFORM_LABEL[key] : key.replace('_', ' ');
+}
 
 export interface MachineUpdateStatus {
   machine: Machine;
@@ -27,7 +51,8 @@ export interface UseOwletteUpdatesReturn {
   isLoading: boolean;
   error: string | null;
   getMachineUpdateStatus: (machine: Machine) => MachineUpdateStatus;
-  updateMachines: (siteId: string, machineIds: string[]) => Promise<void>;
+  /** Resolves with the machines skipped for want of a build; throws when nothing could be sent. */
+  updateMachines: (siteId: string, machineIds: string[]) => Promise<SkippedMachine[]>;
   updatingMachines: Set<string>;
   updateError: string | null;
   cancelUpdate: (machineId: string) => void;
@@ -46,7 +71,8 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
   const [updateError, setUpdateError] = useState<string | null>(null);
   // Start times drive the stale-update timeout below.
   const [updateStartTimes, setUpdateStartTimes] = useState<Map<string, number>>(new Map());
-  const [staleMachines, setStaleMachines] = useState<Set<string>>(new Set());
+  // the clock the stale check reads; it ticks only while something is updating
+  const [now, setNow] = useState(0);
 
   const cancelUpdate = useCallback((machineId: string) => {
     setUpdatingMachines(prev => {
@@ -59,37 +85,26 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
       newMap.delete(machineId);
       return newMap;
     });
-    setStaleMachines(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(machineId);
-      return newSet;
-    });
   }, []);
 
   // Without this the UI shows "Updating..." forever if the agent crashes mid-update.
+  const anyUpdating = updatingMachines.size > 0;
   useEffect(() => {
-    if (updatingMachines.size === 0) return;
-
-    const UPDATE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-
-    const checkInterval = setInterval(() => {
-      const now = Date.now();
-      const newStaleMachines = new Set<string>();
-
-      updatingMachines.forEach(machineId => {
-        const startTime = updateStartTimes.get(machineId);
-        if (startTime && (now - startTime) > UPDATE_TIMEOUT_MS) {
-          newStaleMachines.add(machineId);
-        }
-      });
-
-      if (newStaleMachines.size > 0) {
-        setStaleMachines(newStaleMachines);
-      }
-    }, 30_000);
-
+    if (!anyUpdating) return;
+    const checkInterval = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(checkInterval);
-  }, [updatingMachines, updateStartTimes]);
+  }, [anyUpdating]);
+
+  // derived, never stored: a resend restarts a machine's clock, and a cleared,
+  // failed or finished update stops being stale with it
+  const staleMachines = useMemo(() => {
+    const stale = new Set<string>();
+    updatingMachines.forEach(machineId => {
+      const startTime = updateStartTimes.get(machineId);
+      if (startTime !== undefined && now - startTime > UPDATE_TIMEOUT_MS) stale.add(machineId);
+    });
+    return stale;
+  }, [updatingMachines, updateStartTimes, now]);
 
   useEffect(() => {
     if (updatingMachines.size === 0) return;
@@ -121,11 +136,6 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
         const newMap = new Map(prev);
         clearedIds.forEach(id => newMap.delete(id));
         return newMap;
-      });
-      setStaleMachines(prev => {
-        const newSet = new Set(prev);
-        clearedIds.forEach(id => newSet.delete(id));
-        return newSet;
       });
     }
   }, [machines, latestVersion, updatingMachines]);
@@ -182,8 +192,10 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
   };
 
   /**
-   * Send the update command to each machine. `Promise.allSettled` so one
-   * machine's failure doesn't cancel the commands already sent to the others.
+   * Send each machine the installer for its own platform (`osFamily_arch`; an
+   * agent that reports neither is windows x64). A machine whose platform the
+   * version has no file for is skipped and returned. `Promise.allSettled` so
+   * one machine's failure doesn't cancel the commands already sent to the others.
    */
   const updateMachines = useCallback(async (siteId: string, machineIds: string[]) => {
     setUpdateError(null);
@@ -191,36 +203,50 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
     try {
       const versionData = await getLatestOwletteVersion();
 
-      if (!versionData || !versionData.downloadUrl) {
+      if (!versionData || Object.keys(versionData.files).length === 0) {
         throw new Error('No Owlette installer uploaded yet. Please upload an installer via Admin → Installers first.');
       }
 
+      const skipped: SkippedMachine[] = [];
+      const targets: { machineId: string; file: InstallerFile }[] = [];
+      machineIds.forEach(machineId => {
+        const machine = machines.find(m => m.machineId === machineId);
+        const key = `${machine?.osFamily ?? 'windows'}_${machine?.arch ?? 'x64'}`;
+        const file = isInstallerPlatform(key) ? versionData.files[key] : undefined;
+        if (file) {
+          targets.push({ machineId, file });
+        } else {
+          skipped.push({ machineId, reason: `no ${platformLabel(key)} build in v${versionData.version}` });
+        }
+      });
+
       // The agent rejects updates without a checksum — fail fast here instead.
-      if (!versionData.sha256Checksum) {
+      if (targets.some(target => !target.file.checksum_sha256)) {
         throw new Error('Installer checksum not available. Please re-upload the installer via Admin → Installers.');
       }
 
+      const targetIds = targets.map(target => target.machineId);
       const now = Date.now();
       setUpdatingMachines(prev => {
         const newSet = new Set(prev);
-        machineIds.forEach(id => newSet.add(id));
+        targetIds.forEach(id => newSet.add(id));
         return newSet;
       });
       setUpdateStartTimes(prev => {
         const newMap = new Map(prev);
-        machineIds.forEach(id => newMap.set(id, now));
+        targetIds.forEach(id => newMap.set(id, now));
         return newMap;
       });
 
       const results = await Promise.allSettled(
-        machineIds.map(machineId =>
+        targets.map(({ machineId, file }) =>
           sendOwletteUpdateCommand(
             siteId,
             machineId,
-            versionData.downloadUrl,
+            file.download_url,
             undefined,
             versionData.version,
-            versionData.sha256Checksum
+            file.checksum_sha256 ?? undefined
           )
         )
       );
@@ -230,7 +256,7 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
 
       results.forEach((result, index) => {
         if (result.status === 'rejected') {
-          const machineId = machineIds[index];
+          const machineId = targetIds[index];
           failedMachineIds.push(machineId);
           const errMsg = result.reason instanceof Error ? result.reason.message : String(result.reason);
           errors.push(`${machineId}: ${errMsg}`);
@@ -238,7 +264,7 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
         }
       });
 
-      const successCount = machineIds.length - failedMachineIds.length;
+      const successCount = targetIds.length - failedMachineIds.length;
 
       if (failedMachineIds.length > 0) {
         setUpdatingMachines(prev => {
@@ -252,7 +278,7 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
           return newMap;
         });
 
-        const errorMessage = `${successCount}/${machineIds.length} updates sent. Failed: ${errors.join('; ')}`;
+        const errorMessage = `${successCount}/${targetIds.length} updates sent. Failed: ${errors.join('; ')}`;
         if (successCount === 0) {
           setUpdateError(errorMessage);
           throw new Error(errorMessage);
@@ -262,7 +288,8 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
         }
       }
 
-      console.log(`Successfully sent update commands to ${successCount}/${machineIds.length} machine(s)`);
+      console.log(`Successfully sent update commands to ${successCount}/${targetIds.length} machine(s)`);
+      return skipped;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to update machines';
       if (!errorMessage.includes('updates sent')) {
@@ -283,7 +310,7 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
 
       throw error;
     }
-  }, []);
+  }, [machines]);
 
   return {
     outdatedMachines,

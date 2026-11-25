@@ -127,6 +127,13 @@ interface UseChatOptions {
   selection: HootTarget;
   /** Every machine id in `siteId` — the vocabulary `@mentions` resolve against. */
   siteMachineIds: string[];
+  /**
+   * list the site's autonomous chats beside the person's own. they are
+   * whole-site (rules 2.12.0), so pass false for a scoped member: the read
+   * would be refused. required, so a new caller can't open that listener by
+   * leaving it out.
+   */
+  includeAutonomous: boolean;
   onChatPersisted?: (chatId: string) => void;
   onChatLoaded?: (result: ChatLoadedTarget) => void;
 }
@@ -137,6 +144,7 @@ export function useOwletteChat({
   siteId,
   selection,
   siteMachineIds,
+  includeAutonomous,
   onChatPersisted,
   onChatLoaded,
 }: UseChatOptions) {
@@ -176,6 +184,9 @@ export function useOwletteChat({
   // approve/deny then, so a reload during an approval-resume can't re-arm the
   // buttons for a tool that is already executing (OWL-47 companion guard).
   const [turnRunning, setTurnRunning] = useState(false);
+  // the person pressed stop and the turn has not ended yet: the stream doc can
+  // still say running for a moment, so this is the first word that it is over.
+  const [stopRequested, setStopRequested] = useState(false);
   // Bumped to resubscribe after a listener error (Firestore kills it on error).
   const [streamSubAttempt, setStreamSubAttempt] = useState(0);
   // Scheduled follow-ups on the open chat — the chips above the composer.
@@ -264,6 +275,14 @@ export function useOwletteChat({
   const chatRef = useRef(chat);
   chatRef.current = chat;
 
+  // every request (a send, a retry, an approval's resume) starts a turn of its
+  // own, so a stop pressed on the one before no longer applies.
+  const [requestStatus, setRequestStatus] = useState(chat.status);
+  if (chat.status !== requestStatus) {
+    setRequestStatus(chat.status);
+    if (chat.status === 'submitted') setStopRequested(false);
+  }
+
   // Keep the open chat's mention vocabulary current, and ONLY that. The machines
   // listing usually lands after the pin (a deep link loads the chat before the
   // header's site resolves) and arrives as a fresh array on every heartbeat, so
@@ -291,9 +310,9 @@ export function useOwletteChat({
     chatContextRef.current.set(activeChatId, { ...pinned, target });
   }, []);
 
-  // Re-read the runner-persisted history for the open chat. Used when the server
-  // refuses a resume: the local transcript still offers approve/deny buttons for
-  // a turn that is no longer the chat's latest.
+  // Re-read the runner-persisted history for the open chat. Used when an
+  // approval's answer fails: the local transcript says the approval was answered,
+  // and the saved one says what became of it — still waiting, or taken by a turn.
   const reloadPersistedMessages = useCallback(async () => {
     if (!db) return;
     const forChatId = chatIdRef.current;
@@ -323,7 +342,13 @@ export function useOwletteChat({
       return;
     }
 
-    if (code !== 'turn_active') return;
+    if (code !== 'turn_active') {
+      // Any other failure of an approval's answer (hoot switched off, a 5xx, no
+      // network): the click already marked the card answered, and with no turn to
+      // run the call it would read "executing..." until a page reload.
+      if (holdsAnsweredApproval(chatRef.current.messages)) void reloadPersistedMessages();
+      return;
+    }
     if (turnActiveRetriedRef.current) return;
     turnActiveRetriedRef.current = true;
     forceSupersedeRef.current = true;
@@ -344,6 +369,7 @@ export function useOwletteChat({
     setToolCommands({});
     setTurnStale(false);
     setTurnRunning(false);
+    setStopRequested(false);
 
     if (!user || !db) return;
 
@@ -405,7 +431,10 @@ export function useOwletteChat({
         // Track the running turn id for stop(); clear the user-stop guard once terminal.
         currentTurnIdRef.current =
           running && typeof data?.turnId === 'string' ? data.turnId : null;
-        if (!running) userStoppedRef.current = false;
+        if (!running) {
+          userStoppedRef.current = false;
+          setStopRequested(false);
+        }
         runningUpdatedAtMs =
           running && typeof data?.updatedAt?.toMillis === 'function'
             ? (data.updatedAt.toMillis() as number)
@@ -467,6 +496,7 @@ export function useOwletteChat({
         setTurnRunning(false);
         currentTurnIdRef.current = null;
         userStoppedRef.current = false;
+        setStopRequested(false);
         runningUpdatedAtMs = null;
         toolCommandsRef.current = {};
         setToolCommands({});
@@ -588,6 +618,7 @@ export function useOwletteChat({
     const running = streamRunningRef.current;
     // Set before any await so a snapshot arriving during the POST is suppressed.
     userStoppedRef.current = true;
+    setStopRequested(true);
     if (running && turnId) {
       try {
         const response = await fetch('/api/hoot/stop', {
@@ -624,7 +655,7 @@ export function useOwletteChat({
     );
 
     // Autonomous chats for this site (no userId, source === 'autonomous')
-    const autoQuery = siteId ? query(
+    const autoQuery = siteId && includeAutonomous ? query(
       chatsRef,
       where('source', '==', 'autonomous'),
       where('siteId', '==', siteId),
@@ -713,7 +744,7 @@ export function useOwletteChat({
       unsubUser();
       unsubAuto?.();
     };
-  }, [user, siteId]);
+  }, [user, siteId, includeAutonomous]);
 
   const startNewChat = useCallback((overrides?: { siteId?: string; selection?: HootTarget }) => {
     loadChatRequestRef.current += 1;
@@ -756,9 +787,12 @@ export function useOwletteChat({
     ]);
   }, [chat]);
 
+  // a page left over from a site that listed autonomous chats must not keep "load more" alive
+  const moreAuto = includeAutonomous && hasMoreAuto;
+
   const loadMoreConversations = useCallback(async () => {
     if (loadingMore || !user || !db) return;
-    if (!hasMoreUser && !hasMoreAuto) return;
+    if (!hasMoreUser && !moreAuto) return;
 
     setLoadingMore(true);
     try {
@@ -786,7 +820,7 @@ export function useOwletteChat({
         setHasMoreUser(snapshot.docs.length === PAGE_SIZE);
       }
 
-      if (hasMoreAuto && lastAutoDocRef.current && siteId) {
+      if (moreAuto && lastAutoDocRef.current && siteId) {
         const moreAutoQuery = query(
           chatsRef,
           where('source', '==', 'autonomous'),
@@ -822,9 +856,9 @@ export function useOwletteChat({
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, user, siteId, hasMoreUser, hasMoreAuto]);
+  }, [loadingMore, user, siteId, hasMoreUser, moreAuto]);
 
-  const hasMoreConversations = hasMoreUser || hasMoreAuto;
+  const hasMoreConversations = hasMoreUser || moreAuto;
 
   // NOTE: every setMessages below goes through `chatRef.current`, never the
   // captured `chat`. @ai-sdk/react keys its Chat instance on `id`
@@ -1098,6 +1132,8 @@ export function useOwletteChat({
     turnStale,
     // A turn is live per the stream doc — the UI suppresses approve/deny while set.
     turnRunning,
+    // Stop was pressed and the turn has not reported its end yet.
+    stopRequested,
 
     // Scheduled follow-ups on this chat (`cortex-followups`, owner-read), soonest first.
     followups,
@@ -1132,6 +1168,15 @@ export function useOwletteChat({
     searchQuery,
     setSearchQuery,
   };
+}
+
+/** The last reply holds an approval that was answered and has not run: what a failed answer leaves behind. */
+function holdsAnsweredApproval(messages: UIMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  return (
+    last?.role === 'assistant' &&
+    last.parts.some((part) => 'state' in part && part.state === 'approval-responded')
+  );
 }
 
 function generateChatId(): string {

@@ -116,6 +116,17 @@ describe('createSchedulePreset', () => {
     expect(call.payload.createdAt).toBe('__SERVER_TS__');
   });
 
+  it('mints an id its own delete accepts, however long the name', async () => {
+    const { presetId } = await createSchedulePreset(ctx, {
+      name: 'late shift '.repeat(20),
+      blocks: [],
+      isBuiltIn: false,
+      order: 0,
+      createdBy: 'uid_alice',
+    });
+    await expect(deleteSchedulePreset(ctx, presetId)).resolves.toMatchObject({ presetId });
+  });
+
   it('rejects empty name', async () => {
     await expect(
       createSchedulePreset(ctx, {

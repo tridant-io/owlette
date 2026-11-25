@@ -7,21 +7,24 @@ import assert from 'node:assert/strict';
 import {
   AUDIT_EVENT_KINDS,
   AUDIT_RETENTION_DAYS,
+  BATCH_EVENT_BYTES,
   buildAuditRecord,
   canonicaliseEvent,
   canonicalJson,
+  chainQueued,
   computeChainHash,
   GENESIS_HASH,
   PLATFORM_AUDIT_SITE_ID,
   verifyChain,
   type AuditEvent,
   type AuditRecord,
+  type QueuedEvent,
 } from '../src/lib/auditLogLogic';
+import type { ScheduledEvent } from 'firebase-functions/v2/scheduler';
 import {
-  appendAudit,
   exportAllSites,
+  exportAuditDaily,
   verifySiteChain,
-  type AppendDeps,
   type AuditExporter,
   type AuditStore,
   type ExportDeps,
@@ -268,98 +271,107 @@ describe('chain', () => {
   });
 });
 
-// appendAudit (orchestrator)
+// chainQueued (one drain batch)
 
-function makeStore(initial: AuditRecord[] = []): AuditStore & {
-  all: AuditRecord[];
-} {
-  const all = [...initial];
+const GENESIS_HEAD = { hash: GENESIS_HASH, recordedAt: 0 };
+
+const queued = (events: Partial<AuditEvent>[]): QueuedEvent[] =>
+  events.map((event, i) => ({ id: `q${i}`, event }));
+
+function makeStore(all: AuditRecord[] = []): AuditStore & { all: AuditRecord[] } {
   return {
     all,
-    async getLatestHash() {
-      return all.length === 0 ? GENESIS_HASH : all[all.length - 1].hash;
+    // same order as the firestore store: recordedAt, ties by doc id (the hash)
+    async readChain() {
+      return [...all].sort((a, b) =>
+        a.recordedAt - b.recordedAt || (a.hash < b.hash ? -1 : 1));
     },
-    async append(record) {
-      if (
-        record.previousHash !==
-        (all.length === 0 ? GENESIS_HASH : all[all.length - 1].hash)
-      ) {
-        throw new Error('head_changed_during_append');
-      }
-      all.push(record);
-    },
-    async readChain() { return all; },
   };
 }
 
-function depsWith(store: AuditStore, now = NOW): AppendDeps {
-  return { store, now: () => now };
+/** a store holding `count` events drained `per` at a time, all at one frozen clock reading. */
+function drained(count: number, per = count): AuditStore & { all: AuditRecord[] } {
+  const store = makeStore();
+  let head = GENESIS_HEAD;
+  for (let i = 0; i < count; i += per) {
+    const events = Array.from(
+      { length: Math.min(per, count - i) },
+      (_, j) => sampleEvent({ target: `t${i + j}` }),
+    );
+    const batch = chainQueued('site-a', head, queued(events), NOW.getTime());
+    store.all.push(...batch.records);
+    head = batch.head;
+  }
+  return store;
 }
 
-describe('appendAudit', () => {
-  it('appends a valid event + returns the persisted record', async () => {
-    const store = makeStore();
-    const r = await appendAudit(sampleEvent(), depsWith(store));
-    assert.equal(r.ok, true);
-    assert.equal(store.all.length, 1);
-    assert.equal(store.all[0].previousHash, GENESIS_HASH);
+describe('chainQueued', () => {
+  it('links the first record to the head and each next one to the record before it', () => {
+    const b = chainQueued('site-a', GENESIS_HEAD, queued([sampleEvent(), sampleEvent()]), NOW.getTime());
+    assert.equal(b.taken, 2);
+    assert.equal(b.records[0].previousHash, GENESIS_HASH);
+    assert.equal(b.records[1].previousHash, b.records[0].hash);
+    assert.deepEqual(b.head, { hash: b.records[1].hash, recordedAt: b.records[1].recordedAt });
   });
 
-  it('chains the second append to the first', async () => {
-    const store = makeStore();
-    const a = await appendAudit(sampleEvent(), depsWith(store));
-    const b = await appendAudit(
-      sampleEvent({ occurredAt: NOW.getTime() - 500 }),
-      depsWith(store),
+  it('stamps recordedAt after the head even when the clock reads behind it', () => {
+    const head = { hash: 'f'.repeat(64), recordedAt: NOW.getTime() + 5000 };
+    const b = chainQueued('site-a', head, queued([sampleEvent(), sampleEvent()]), NOW.getTime());
+    assert.deepEqual(
+      b.records.map((r) => r.recordedAt),
+      [head.recordedAt + 1, head.recordedAt + 2],
     );
-    assert.ok(a.ok && b.ok);
-    if (a.ok && b.ok) {
-      assert.equal(b.record.previousHash, a.record.hash);
-    }
   });
 
-  it('rejects malformed events without calling the store', async () => {
-    const store = makeStore();
-    const r = await appendAudit(
-      { kind: 'bogus' } as unknown as AuditEvent,
-      depsWith(store),
-    );
-    assert.equal(r.ok, false);
-    assert.equal(store.all.length, 0);
-  });
-
-  it('surfaces store append failure as 409-style reason', async () => {
-    const store = makeStore();
-    // monkey-patch append to throw the head-changed error
-    store.append = async () => {
-      throw new Error('head_changed_during_append');
-    };
-    const r = await appendAudit(sampleEvent(), depsWith(store));
-    assert.equal(r.ok, false);
-    assert.match(r.ok ? '' : r.reason, /append_failed/);
-  });
-
-  it('chain of 5 verifies end-to-end', async () => {
-    const store = makeStore();
-    for (let i = 0; i < 5; i++) {
-      await appendAudit(
-        sampleEvent({ occurredAt: NOW.getTime() + i }),
-        depsWith(store),
-      );
-    }
+  it('drains 250 events in batches of 100 into one chain that verifies', async () => {
+    const store = drained(250, 100);
     const v = await verifySiteChain('site-a', store);
-    assert.equal(v.ok, true);
-    assert.equal(v.records, 5);
+    assert.equal(v.ok, true, `chain broke at ${v.brokenAt}: ${v.reason}`);
+    assert.equal(v.records, 250);
+    assert.equal(new Set(store.all.map((r) => r.event.target)).size, 250);
+  });
+
+  it('moves an invalid event to rejected and chains the valid ones around it', () => {
+    const b = chainQueued(
+      'site-a',
+      GENESIS_HEAD,
+      queued([sampleEvent({ target: 'a' }), { kind: 'bogus' } as never, sampleEvent({ target: 'b' })]),
+      NOW.getTime(),
+    );
+    assert.equal(b.taken, 3);
+    assert.deepEqual(b.rejected, [{ id: 'q1', reason: 'invalid_kind' }]);
+    assert.deepEqual(b.records.map((r) => r.event.target), ['a', 'b']);
+    assert.equal(b.records[1].previousHash, b.records[0].hash);
+  });
+
+  it('rejects an event queued under another site', () => {
+    const b = chainQueued('site-a', GENESIS_HEAD, queued([sampleEvent({ siteId: 'site-b' })]), NOW.getTime());
+    assert.deepEqual(b.rejected, [{ id: 'q0', reason: 'siteId_mismatch' }]);
+    assert.equal(b.records.length, 0);
+    assert.deepEqual(b.head, GENESIS_HEAD);
+  });
+
+  it('chains an empty siteId under the platform audit site id', () => {
+    const b = chainQueued(PLATFORM_AUDIT_SITE_ID, GENESIS_HEAD, queued([sampleEvent({ siteId: '' })]), NOW.getTime());
+    assert.equal(b.records.length, 1);
+    assert.equal(b.records[0].event.siteId, PLATFORM_AUDIT_SITE_ID);
+  });
+
+  it('takes nothing from an empty queue', () => {
+    const b = chainQueued('site-a', GENESIS_HEAD, [], NOW.getTime());
+    assert.equal(b.taken, 0);
+    assert.deepEqual(b.head, GENESIS_HEAD);
+  });
+
+  it('ends a batch before its events pass the byte budget, but always takes one', () => {
+    const big = (n: number) => sampleEvent({ attributes: { pad: 'x'.repeat(n) } });
+    const third = Math.floor(BATCH_EVENT_BYTES / 3);
+    assert.equal(chainQueued('site-a', GENESIS_HEAD, queued([big(third), big(third), big(third)]), 1).taken, 2);
+    assert.equal(chainQueued('site-a', GENESIS_HEAD, queued([big(BATCH_EVENT_BYTES)]), 1).taken, 1);
   });
 
   it('tampering with a middle record is caught by verifySiteChain', async () => {
-    const store = makeStore();
-    for (let i = 0; i < 3; i++) {
-      await appendAudit(
-        sampleEvent({ occurredAt: NOW.getTime() + i }),
-        depsWith(store),
-      );
-    }
+    const store = drained(3);
     // rewrite the middle record's attributes post-facto
     store.all[1] = {
       ...store.all[1],
@@ -375,13 +387,7 @@ describe('appendAudit', () => {
 
 describe('exportAllSites', () => {
   it('exports every record via batched calls', async () => {
-    const store = makeStore();
-    for (let i = 0; i < 7; i++) {
-      await appendAudit(
-        sampleEvent({ occurredAt: NOW.getTime() + i }),
-        depsWith(store),
-      );
-    }
+    const store = drained(7);
     const batches: number[] = [];
     const exporter: AuditExporter = {
       async exportBatch(batch) { batches.push(batch.length); },
@@ -399,8 +405,6 @@ describe('exportAllSites', () => {
 
   it('logs + continues when one site fails', async () => {
     const store: AuditStore = {
-      async getLatestHash() { return GENESIS_HASH; },
-      async append() {},
       async readChain(siteId) {
         if (siteId === 'bad') throw new Error('boom');
         return [];
@@ -417,6 +421,16 @@ describe('exportAllSites', () => {
     // only 'ok' makes it into the results; 'bad' logs + is skipped
     assert.equal(res.length, 1);
     assert.equal(res[0].siteId, 'ok');
+  });
+});
+
+describe('exportAuditDaily', () => {
+  it('reads no audit record while no sink is wired', async () => {
+    // no firebase app is initialised in this process, so any firestore read throws
+    await assert.doesNotReject(
+      async () => exportAuditDaily.run({ scheduleTime: NOW.toISOString() } as ScheduledEvent),
+      'the nightly export read firestore with nowhere to export to',
+    );
   });
 });
 

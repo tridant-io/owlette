@@ -70,6 +70,14 @@ test('unsubscribe API validates missing and invalid tokens', async ({ request })
   const invalid = await request.get('/api/unsubscribe?token=not-valid');
   expect(invalid.status()).toBe(400);
   expect(await invalid.json()).toMatchObject({ error: 'Invalid or expired token' });
+
+  const missingPost = await request.post('/api/unsubscribe', { data: {} });
+  expect(missingPost.status()).toBe(400);
+  expect(await missingPost.json()).toMatchObject({ error: 'Missing token' });
+
+  const invalidPost = await request.post('/api/unsubscribe', { data: { token: 'not-valid' } });
+  expect(invalidPost.status()).toBe(400);
+  expect(await invalidPost.json()).toMatchObject({ error: 'Invalid or expired token' });
 });
 
 test('CLI device-code API creates, validates, and reports pending polling state', async ({ request }) => {

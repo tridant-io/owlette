@@ -179,6 +179,54 @@ class TestShutdown:
         assert cm.state == ConnectionState.DISCONNECTED
 
 
+class TestInternetCheck:
+    """The reconnect gate and the watchdog's precondition accept a network that
+    lets only https out: no direct dns to public resolvers, the API host on 443."""
+
+    @pytest.fixture
+    def reachable(self, monkeypatch):
+        """Let TCP connects succeed to the given (host, port) pairs only; returns
+        the list of attempted addresses."""
+        monkeypatch.setattr(connection_manager.shared_utils, 'get_configured_api_base',
+                            MagicMock(return_value='https://owlette.app/api'))
+
+        def install(*open_addresses):
+            attempts = []
+
+            def create_connection(address, timeout=None):
+                attempts.append(address)
+                if address in open_addresses:
+                    return MagicMock()
+                raise TimeoutError('timed out')
+
+            monkeypatch.setattr(connection_manager.socket, 'create_connection', create_connection)
+            return attempts
+        return install
+
+    def test_https_only_network_is_online(self, cm, reachable):
+        reachable(('owlette.app', 443))
+        assert cm._check_internet() is True
+
+    def test_reconnect_proceeds_on_https_only_network(self, cm, reachable):
+        reachable(('owlette.app', 443))
+        connect_cb = MagicMock(return_value=True)
+        cm.set_callbacks(connect=connect_cb, disconnect=MagicMock())
+        cm._reconnect_sequence('test drop')
+        connect_cb.assert_called_once()
+        assert cm.state == ConnectionState.CONNECTED
+
+    def test_nothing_answering_is_offline(self, cm, reachable):
+        attempts = reachable()
+        assert cm._check_internet() is False
+        assert attempts == [('8.8.8.8', 53), ('1.1.1.1', 53), ('owlette.app', 443)]
+
+    def test_a_resolver_answering_skips_the_api_host(self, cm, reachable):
+        attempts = reachable(('8.8.8.8', 53))
+        assert cm._check_internet() is True
+        assert attempts == [('8.8.8.8', 53)]
+        connection_manager.shared_utils.get_configured_api_base.assert_not_called()
+
+
 class TestWatchdogOffSwitch:
     """The WatchdogDisabled registry value (1) stops the self-restart watchdog;
     the old tmp/watchdog_disabled file does nothing."""

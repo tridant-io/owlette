@@ -5,7 +5,7 @@ k6 scripts for the latency-critical public API launch paths. The scripts are pla
 ## Requirements
 
 - [k6](https://k6.io/docs/getting-started/installation/) installed locally or in CI.
-- A scoped Owlette API key for the target environment. Prefer `K6_API_KEY` over `K6_FIREBASE_ID_TOKEN` so the run mirrors SDK/CLI traffic.
+- A scoped Owlette API key for the target environment. Prefer `K6_API_KEY` over `K6_FIREBASE_ID_TOKEN` so the run mirrors SDK/CLI traffic; the API refuses an ID token for an account that has a second factor (`403 mfa_challenge_required`) or still has to set one up (`403 mfa_setup_required`).
 - A dedicated load-test site, machine, and Roost on the target environment:
   - `K6_SITE_ID`
   - `K6_MACHINE_ID`
@@ -17,7 +17,7 @@ Do not run mutation scripts against a customer site. Use fixture data that can b
 
 ```bash
 export K6_BASE_URL=https://dev.owlette.app
-export K6_API_KEY=owk_test_...
+export K6_API_KEY=owk_live_...
 export K6_SITE_ID=owlette-load-site
 export K6_MACHINE_ID=owlette-load-machine
 export K6_ROOST_ID=roost-load-folder
@@ -37,7 +37,7 @@ PowerShell:
 
 ```powershell
 $env:K6_BASE_URL = 'https://dev.owlette.app'
-$env:K6_API_KEY = 'owk_test_...'
+$env:K6_API_KEY = 'owk_live_...'
 $env:K6_SITE_ID = 'owlette-load-site'
 $env:K6_MACHINE_ID = 'owlette-load-machine'
 $env:K6_ROOST_ID = 'roost-load-folder'

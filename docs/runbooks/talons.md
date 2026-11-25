@@ -4,27 +4,31 @@ Operator reference for the talon scheduler: the once-a-minute sweep that fires s
 talons, the missed-fire grace that keeps a stalled cron from replaying an hour of automations at
 once, and the stale-run janitor. Written for whoever is on the other end of "my talon didn't run".
 
-Design source of truth: `dev/active/talons/plan.md` and its `tasks.md`. Engine internals (cooldown,
-in-flight guard, auto-disable backoff) live in `web/lib/talons/engine.server.ts`.
+Engine internals (cooldown, in-flight guard, auto-disable backoff) live in
+`web/lib/talons/engine.server.ts`.
 
 ---
 
 ## what the sweep owns
 
 `GET /api/cron/talons` (`web/app/api/cron/talons/route.ts`) is the ONLY thing that fires a
-schedule-triggered talon. Threshold and event talons are driven by incoming agent data and never
-appear here — they carry no `nextRunAt` at all.
+schedule-triggered talon. It also fires an event talon whose trigger waits before acting (a
+`pending` run with a `runAfterAt`), and hoot's scheduled follow-ups. Threshold and immediate event
+talons are driven by incoming agent data and never appear here — they carry no `nextRunAt` at all.
 
-One sweep does three things, in this order:
+One sweep does these, in this order, each pass in its own error boundary:
 
 1. **stale-run recovery** — closes out runs abandoned mid-flight
-2. **claim** — takes ownership of every due talon and re-arms it, transactionally
-3. **execute** — runs each claimed talon, or records it as `missed` if it is too late
+2. **delayed event triggers** — claims up to 25 `pending` runs whose `runAfterAt` has come due and
+   fires them; one more than 10 minutes late is written off, like a missed schedule
+3. **hoot follow-ups** — dispatches the follow-ups that have come due, without waiting for their turns
+4. **claim** — takes ownership of every due talon and re-arms it, transactionally
+5. **execute** — runs each claimed talon, or records it as `missed` if it is too late
 
 The response body is the whole story:
 
 ```json
-{"ok":true,"due":4,"executed":3,"missed":0,"deferred":0,"staleRecovered":1}
+{"ok":true,"due":4,"executed":3,"missed":0,"deferred":0,"staleRecovered":1,"deferredDue":0,"deferredFired":0,"deferredMissed":0,"deferredSkipped":0,"followupDue":0,"followupFired":0,"followupFailed":0,"followupSkipped":0,"followupTurnActive":0}
 ```
 
 | field | meaning |
@@ -34,6 +38,8 @@ The response body is the whole story:
 | `missed` | talons written off as too late — see missed-fire semantics below |
 | `deferred` | talons left unclaimed because the sweep ran out of wall clock; picked up next minute |
 | `staleRecovered` | `running` runs closed out as `failed` / `stale` |
+| `deferredDue`, `deferredFired`, `deferredMissed`, `deferredSkipped` | the delayed-event pass; unrelated to `deferred` despite the name |
+| `followupDue`, `followupFired`, `followupFailed`, `followupSkipped`, `followupTurnActive` | the hoot follow-up pass |
 
 `due > executed + missed + deferred` is normal, not a fault: the difference is talons a concurrent
 sweep claimed first, talons disabled between the query and the claim, and talons whose trigger is no
@@ -76,14 +82,15 @@ second or two, occasionally more), not the alert POST's round trip. That is the 
 
 Do these in order. The cron is registered LAST.
 
-1. **deploy the firestore indexes and let them finish building.** Two collection-group indexes back
-   the sweep, and both must be `Enabled` (not `Building`) in the firebase console before the route
+1. **deploy the firestore indexes and let them finish building.** Three collection-group indexes back
+   the sweep, and all must be `Enabled` (not `Building`) in the firebase console before the route
    is scheduled:
 
    | collection group | scope | fields | used by |
    |---|---|---|---|
    | `talons` | `COLLECTION_GROUP` | `enabled` ASC, `nextRunAt` ASC | the due query + the `talon_dispatch` watchdog |
    | `talon_runs` | `COLLECTION_GROUP` | `status` ASC, `startedAt` ASC | the stale-run janitor |
+   | `talon_runs` | `COLLECTION_GROUP` | `status` ASC, `runAfterAt` ASC | the delayed-event pass |
 
    ```bash
    firebase deploy --only firestore:indexes --project <dev-or-prod-project>
@@ -230,4 +237,4 @@ If a customer needs faster machine-down reaction than that, the answer is not a 
 | a talon fires late every time | `deferred` in the response — the 25/minute cap, or a slow talon holding the budget |
 | a burst of `missed` runs | the sweep was down; expected, self-healing |
 | a talon is stuck, no new runs | a run wedged `running` — the janitor clears it within 10 minutes; check the `talon_runs` index if it doesn't |
-| a talon disabled itself | 10 consecutive failed runs (engine auto-disable). the disable is audited with `reason: 'consecutive_failures'` |
+| a talon disabled itself | 10 consecutive failed runs (engine auto-disable). the disable is audited with `reason: 'repeated_failures'` |

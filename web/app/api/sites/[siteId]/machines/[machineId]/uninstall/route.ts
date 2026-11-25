@@ -1,6 +1,8 @@
 /**
- * POST   — queue `uninstall_software` for one package on one machine. Not
- *          deployment-tied; that is the deployments/{id}/uninstall route.
+ * POST   — queue `uninstall_software` for one package on one machine. An optional
+ *          `deployment_id` ties it to that deployment's finished target for this
+ *          machine (untied when the deployment does not target it);
+ *          deployments/{id}/uninstall queues it on every target at once.
  * DELETE — queue `cancel_uninstall` against an in-flight uninstall.
  *
  * Capability: `UNINSTALL_TRIGGER` (site admin grants).
@@ -95,6 +97,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             method: 'POST',
             machineId,
             software_name: result.software_name,
+            ...(result.deployment_id ? { deployment_id: result.deployment_id } : {}),
           },
         });
 

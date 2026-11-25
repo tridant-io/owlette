@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'September 14, 2026';
+  const lastUpdated = 'November 23, 2026';
   const router = useRouter();
 
   return (
@@ -108,6 +108,9 @@ export default function PrivacyPage() {
                 <li>audit and activity records identifying which user performed a privileged action</li>
                 <li>event logs (errors, crashes, status changes)</li>
                 <li>IP addresses and request metadata, used for session management, rate limiting, and abuse prevention</li>
+                <li>the network (internet provider) you pass two-factor authentication from, kept as a verified network by its autonomous system number rather than your IP address</li>
+                <li>each time you sign in, each second-factor check you pass or fail while signing in, and some refused sign-ins (such as a passkey that fails to verify): the time, the method, the network (internet provider) the request came from, recorded by its autonomous system number, and a shortened IP address (the first three parts of an IPv4 address, or the first half of an IPv6 one). a wrong password is checked by Firebase Authentication and is not recorded. these records are kept in owlette&apos;s platform audit records, not in your site&apos;s audit log, so your site&apos;s admins cannot read them</li>
+                <li>for swoop remote control, the network and a shortened IP address (the first three parts of an IPv4 address, or the first half of an IPv6 one) that each step-up and control request came from; control requests are recorded in your site&apos;s audit log, which your site&apos;s admins can read</li>
                 <li>error and performance diagnostics, including stack traces, collected via our monitoring provider</li>
                 <li>timestamps of activities</li>
               </ul>
@@ -122,9 +125,10 @@ export default function PrivacyPage() {
                 <li>execute remote commands and deployments</li>
                 <li>send alerts and notifications</li>
                 <li>authenticate users and secure accounts</li>
-                <li>detect, investigate, and prevent abuse, fraud, and security incidents</li>
+                <li>detect, investigate, and prevent abuse, fraud, and security incidents, including by letting owlette staff view activity (changes, refusals and sign-ins) across all sites, and by flagging risky activity automatically and emailing owlette staff about it</li>
                 <li>maintain audit records of privileged actions</li>
                 <li>improve and optimize our service</li>
+                <li>count visits to the website and see how its pages perform</li>
                 <li>respond to support requests</li>
                 <li>comply with legal obligations</li>
               </ul>
@@ -147,8 +151,9 @@ export default function PrivacyPage() {
                 </li>
                 <li>
                   <strong>legitimate interests</strong> (Art. 6(1)(f)) &mdash; to keep the service secure and
-                  reliable: abuse prevention, rate limiting, audit logging, and error diagnostics. we
-                  balance these interests against your rights and limit the data used accordingly.
+                  reliable: abuse prevention, rate limiting, audit logging, and error diagnostics; and
+                  to count visits to the website. we balance these interests against your rights and
+                  limit the data used accordingly.
                 </li>
                 <li>
                   <strong>consent</strong> (Art. 6(1)(a)) &mdash; for optional features you switch on, such as
@@ -202,13 +207,19 @@ export default function PrivacyPage() {
               <ul className="list-disc pl-6 mt-2 space-y-1">
                 <li><strong>account data:</strong> for as long as your account is active. when an account is deleted we immediately revoke its API keys, transfer any owned sites to a successor, clear its pending machine commands, and mark the account deleted so it can no longer sign in or reach your data. the underlying user record is then retained in a deleted state for audit and security purposes rather than erased outright &mdash; if you want the record itself erased, ask us and we will process it as an erasure request (see section 9).</li>
                 <li><strong>screenshots:</strong> automatically deleted 30 days after capture. the agent additionally keeps only the most recent 20 captures per machine in its history.</li>
+                <li><strong>issue attachments:</strong> the logs, screenshots and videos you choose to attach to an issue, from the owlette desktop app or the dashboard, are automatically deleted 30 days after upload. only owlette support staff can open them, and every download is recorded. support staff may use an AI assistant (Anthropic&apos;s Claude) to help diagnose any issue you submit, which sends the issue and its attachments to Anthropic.</li>
+                <li><strong>issues:</strong> what you write in an issue, with your email address, browser and the page you were on, or from the desktop app the machine&apos;s name, system information and the last lines of its service log, is kept until you ask us to erase it (see section 9). it is not deleted automatically, and deleting your account does not remove it. a copy goes to our support inbox.</li>
+                <li><strong>verified networks:</strong> a network you passed two-factor authentication from counts as verified for 7 days. the record is removed when you delete your own account.</li>
+                <li><strong>swoop step-up records:</strong> the network and shortened IP address of your most recent swoop step-up on each machine are kept with your account and are not deleted automatically, including when you delete your account. ask us to erase them (see section 9).</li>
                 <li><strong>queued machine commands:</strong> pending commands expire after 1 hour; completed command records are removed after 24 hours.</li>
                 <li><strong>machine metrics:</strong> automatically deleted 400 days after collection.</li>
                 <li><strong>event logs:</strong> automatically deleted 400 days after the logged event.</li>
+                <li><strong>sign-in records:</strong> automatically deleted 400 days after the sign-in or second-factor check.</li>
                 <li><strong>process and configuration data:</strong> until the machine is removed from your account.</li>
                 <li><strong>hoot conversations:</strong> until you delete them. deleting a conversation removes it from every listing and hides it from the interface; the underlying record is retained in a deleted state. ask us if you need it erased.</li>
                 <li><strong>deployment content:</strong> until you delete the associated release or roost.</li>
-                <li><strong>audit and security logs:</strong> retained for as long as needed to investigate incidents and meet legal obligations.</li>
+                <li><strong>visit counts:</strong> as Cloudflare&apos;s policies set.</li>
+                <li><strong>audit and security logs:</strong> retained for as long as needed to investigate incidents and meet legal obligations, including the records of risky activity flagged for owlette staff, which can repeat a sign-in&apos;s network and shortened IP address.</li>
               </ul>
               <p className="mt-4">
                 you may request deletion of your data at any time &mdash; see section 9.
@@ -248,7 +259,7 @@ export default function PrivacyPage() {
                     </tr>
                     <tr className="border-b border-border/50">
                       <td className="py-2 pr-4">Cloudflare</td>
-                      <td className="py-2 pr-4">DNS, load balancing, CDN, and object storage for deployment content</td>
+                      <td className="py-2 pr-4">DNS, load balancing, CDN, visit counting (Web Analytics), and object storage for deployment content and for the logs, screenshots and videos you attach to an issue</td>
                       <td className="py-2">global / USA</td>
                     </tr>
                     <tr className="border-b border-border/50">
@@ -271,6 +282,11 @@ export default function PrivacyPage() {
                       <td className="py-2 pr-4">public service status page</td>
                       <td className="py-2">USA / EU</td>
                     </tr>
+                    <tr className="border-b border-border/50">
+                      <td className="py-2 pr-4">Anthropic</td>
+                      <td className="py-2 pr-4">support triage of issues you submit (see section 6)</td>
+                      <td className="py-2">USA</td>
+                    </tr>
                     <tr>
                       <td className="py-2 pr-4">Anthropic, OpenAI</td>
                       <td className="py-2 pr-4">hoot AI assistant &mdash; only if you enable it (see section 8)</td>
@@ -290,8 +306,10 @@ export default function PrivacyPage() {
               <p>
                 hoot is optional and off unless enabled for your site. hoot uses{' '}
                 <strong>your own API key</strong> for an AI provider (currently Anthropic or OpenAI) &mdash;
-                we do not provide a shared key and we do not send your data to any AI provider unless
-                you have supplied a key and enabled the feature.
+                we do not provide a shared key, and hoot sends nothing to any AI provider unless you
+                have supplied a key and enabled the feature. separately, when you submit an issue,
+                owlette support may use an AI assistant (Anthropic&apos;s Claude) to help diagnose it
+                (see section 6).
               </p>
               <p className="mt-4">when hoot is enabled and you send a message:</p>
               <ul className="list-disc pl-6 mt-2 space-y-1">
@@ -387,7 +405,13 @@ export default function PrivacyPage() {
                 we use Firebase Authentication together with an encrypted session cookie to maintain
                 your login. if you choose to remember a device for two-factor authentication, we set an
                 additional cookie for that purpose. we do not use tracking cookies for advertising and
-                we do not run third-party advertising or analytics trackers.
+                we do not run third-party advertising trackers.
+              </p>
+              <p className="mt-4">
+                we count visits with Cloudflare Web Analytics. it sets no cookies, stores nothing in
+                your browser and does not identify or fingerprint you. it records the pages viewed, the
+                referring website, your country, your browser, operating system and type of device, and
+                how quickly pages load, and shows them to us only as totals.
               </p>
             </section>
 

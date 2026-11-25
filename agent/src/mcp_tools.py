@@ -53,7 +53,7 @@ _WINDOWS_ALLOWED_COMMANDS = [
 # the tool is Tier 3 (dashboard-audited) on both.
 _POSIX_ALLOWED_COMMANDS = [
     'hostname', 'whoami', 'id', 'uname', 'uptime', 'date', 'sw_vers',
-    'ls', 'cat', 'echo', 'env', 'df', 'du', 'free', 'ps', 'lsof',
+    'ls', 'cat', 'echo', 'df', 'du', 'free', 'ps', 'lsof',
     'ip', 'ifconfig', 'netstat', 'ss', 'ping', 'traceroute', 'dig', 'nslookup',
     'host', 'systemctl', 'journalctl', 'launchctl', 'system_profiler',
     'lsb_release', 'lspci', 'lscpu', 'lsblk', 'dmesg', 'nvidia-smi',
@@ -280,7 +280,7 @@ def _show_notification(params, config):
 _CANCELLABLE_TOOLS = frozenset({'execute_script', 'run_powershell', 'run_command'})
 
 
-def execute_tool(tool_name, tool_params, config=None, command_id=None):
+def execute_tool(tool_name, tool_params, config=None, command_id=None, active_hours_override=None):
     """
     Dispatch a tool call to the appropriate handler.
 
@@ -291,6 +291,9 @@ def execute_tool(tool_name, tool_params, config=None, command_id=None):
         command_id: Optional originating Firestore command id — lets the
             shell-spawning tools (execute_script, run_powershell, run_command)
             register their subprocess for cancellation
+        active_hours_override: Optional server-set `activeHoursOverride` from
+            the command, a person's approval to act inside active hours; only
+            manage_windows_update takes it
 
     Returns:
         Dict with tool result or error
@@ -327,10 +330,13 @@ def execute_tool(tool_name, tool_params, config=None, command_id=None):
         return {'error': f'Unknown tool: {tool_name}'}
 
     try:
-        # Cancellable handlers take (params, config, command_id); all others
-        # take (params, config).
+        # Cancellable handlers take (params, config, command_id),
+        # manage_windows_update (params, config, active_hours_override), and
+        # all others (params, config).
         if tool_name in _CANCELLABLE_TOOLS:
             return handler(tool_params, config, command_id=command_id)
+        if tool_name == 'manage_windows_update':
+            return handler(tool_params, config, active_hours_override=active_hours_override)
         return handler(tool_params, config)
     except Exception as e:
         logger.error(f"Tool '{tool_name}' failed: {e}")
@@ -367,7 +373,7 @@ def _get_system_info(params, config):
             os_release = '11'
 
     return {
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'os': f"{platform.system()} {os_release}",
         'os_version': platform.version(),
         'architecture': platform.machine(),
@@ -399,7 +405,8 @@ def _get_process_list(params, config):
         config = shared_utils.read_config()
 
     processes = config.get('processes', [])
-    runtime_state = shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH)
+    state_rows = shared_utils.state_rows_by_process(
+        shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH))
 
     result = []
     for proc in processes:
@@ -409,17 +416,7 @@ def _get_process_list(params, config):
         launch_mode = proc.get('launch_mode', 'always' if autolaunch else 'off')
         schedules = proc.get('schedules', None)
 
-        state_info = {}
-        if runtime_state:
-            for key, val in runtime_state.items():
-                if isinstance(val, dict) and val.get('id') == proc_id:
-                    state_info = val
-                    state_info['_pid'] = key
-                    break
-
-        # PID is the dict key in app_states.json, stored as _pid during lookup
-        pid_str = state_info.get('_pid')
-        pid = int(pid_str) if pid_str else None
+        pid, state_info = state_rows.get(proc_id, (None, {}))
         is_running = False
         if pid:
             try:
@@ -504,7 +501,7 @@ def _get_network_info(params, config):
         interfaces.append(iface)
 
     return {
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'interfaces': interfaces,
     }
 
@@ -566,15 +563,13 @@ def _get_agent_logs(params, config):
     if not os.path.isdir(log_dir):
         return {'error': 'Log directory not found', 'log_dir': log_dir}
 
-    log_files = sorted(
-        [f for f in os.listdir(log_dir) if f.endswith('.log')],
-        reverse=True
-    )
-
-    if not log_files:
+    # the agent's own log, by the name initialize_logging("service") gives it.
+    # the folder also holds the issue tool's, owlette-host's and the installer's
+    # logs, and "whichever .log sorts last" picked one of those.
+    log_name = 'service.log'
+    log_path = os.path.join(log_dir, log_name)
+    if not os.path.isfile(log_path):
         return {'error': 'No log files found', 'log_dir': log_dir}
-
-    log_path = os.path.join(log_dir, log_files[0])
 
     try:
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -587,7 +582,7 @@ def _get_agent_logs(params, config):
         recent = lines[-max_lines:]
 
         return {
-            'log_file': log_files[0],
+            'log_file': log_name,
             'lines': [l.rstrip() for l in recent],
             'count': len(recent),
             'total_lines': len(lines),
@@ -614,7 +609,7 @@ def _get_agent_health(params, config):
         'checked_at': state.checked_at,
         'checks': state.probe_results,
         'version': shared_utils.get_app_version(),
-        'hostname': socket.gethostname(),
+        'hostname': shared_utils.get_hostname(),
         'uptime_seconds': int(time.time() - psutil.boot_time()),
     }
 

@@ -14,6 +14,16 @@ jest.mock('../../src/lib/openBrowser', () => ({
   openBrowser: (url: string) => openBrowserMock(url),
 }));
 
+const findViewerAppMock = jest.fn((): string | null => null);
+const launchViewerAppMock = jest.fn(async (_exe: string, _url: string): Promise<boolean> => true);
+jest.mock('../../src/lib/viewerApp', () => ({
+  ...jest.requireActual('../../src/lib/viewerApp'),
+  findViewerApp: () => findViewerAppMock(),
+  launchViewerApp: (exe: string, url: string) => launchViewerAppMock(exe, url),
+}));
+
+const VIEWER_EXE = '/usr/bin/owlette-swoop-viewer';
+
 function buildProgram(): Command {
   const program = new Command();
   program.name('owlette').exitOverride().option('--profile <name>').option('--json');
@@ -43,7 +53,7 @@ function installFetchStub(payload: unknown, status = 200): FetchCall[] {
   return calls;
 }
 
-const API_URL = 'https://dev.test';
+const API_URL = 'https://dev.owlette.app';
 const MACHINE = {
   id: 'm-1',
   siteId: 'site-1',
@@ -66,6 +76,8 @@ afterAll(() => {
 beforeEach(() => {
   _resetConfigCache();
   openBrowserMock.mockClear();
+  findViewerAppMock.mockReset().mockReturnValue(null);
+  launchViewerAppMock.mockReset().mockResolvedValue(true);
   process.env.OWLETTE_TOKEN = 'owk_live_testtoken';
   process.env.OWLETTE_API_URL = API_URL;
   process.env.OWLETTE_PROFILE = 'default';
@@ -117,15 +129,85 @@ describe('owlette swoop', () => {
     expect(stdout.join('') + stderr.join('')).not.toMatch(/viewerJwt|viewerToken/);
   });
 
-  it('--no-open prints the url without opening a browser', async () => {
+  it('opens owlette swoop when it is installed, and not the browser', async () => {
     installFetchStub(MACHINE);
+    findViewerAppMock.mockReturnValue(VIEWER_EXE);
+
+    await buildProgram().parseAsync(['swoop', 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(launchViewerAppMock).toHaveBeenCalledWith(VIEWER_EXE, `${API_URL}/swoop/site-1/m-1`);
+    expect(openBrowserMock).not.toHaveBeenCalled();
+    expect(stdout.join('')).toBe(`${API_URL}/swoop/site-1/m-1\n`);
+    expect(stderr.join('')).toContain('owlette: opened in the owlette swoop desktop app.');
+  });
+
+  it('opens the browser when owlette swoop is not installed', async () => {
+    installFetchStub(MACHINE);
+
+    await buildProgram().parseAsync(['swoop', 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(findViewerAppMock).toHaveBeenCalled();
+    expect(launchViewerAppMock).not.toHaveBeenCalled();
+    expect(openBrowserMock).toHaveBeenCalledWith(`${API_URL}/swoop/site-1/m-1`);
+    expect(stderr.join('')).toContain('owlette: opened in your browser.');
+  });
+
+  it('falls back to the browser when owlette swoop does not start', async () => {
+    installFetchStub(MACHINE);
+    findViewerAppMock.mockReturnValue(VIEWER_EXE);
+    launchViewerAppMock.mockResolvedValue(false);
+
+    await buildProgram().parseAsync(['swoop', 'm-1', '--site', 'site-1'], { from: 'user' });
+
+    expect(launchViewerAppMock).toHaveBeenCalled();
+    expect(openBrowserMock).toHaveBeenCalledWith(`${API_URL}/swoop/site-1/m-1`);
+    expect(stderr.join('')).toContain('owlette: opened in your browser.');
+  });
+
+  it.each(['https://staging.example.com', 'http://localhost:3000'])(
+    'opens the browser, not owlette swoop, for %s, a host the app refuses',
+    async (apiUrl) => {
+      process.env.OWLETTE_API_URL = apiUrl;
+      installFetchStub(MACHINE);
+      findViewerAppMock.mockReturnValue(VIEWER_EXE);
+
+      await buildProgram().parseAsync(['--json', 'swoop', 'm-1', '--site', 'site-1'], {
+        from: 'user',
+      });
+
+      expect(launchViewerAppMock).not.toHaveBeenCalled();
+      expect(openBrowserMock).toHaveBeenCalledWith(`${apiUrl}/swoop/site-1/m-1`);
+      expect(JSON.parse(stdout.join('')).viewer).toBe('browser');
+    },
+  );
+
+  it('--browser opens the browser even when owlette swoop is installed', async () => {
+    installFetchStub(MACHINE);
+    findViewerAppMock.mockReturnValue(VIEWER_EXE);
+
+    await buildProgram().parseAsync(['swoop', 'm-1', '--site', 'site-1', '--browser'], {
+      from: 'user',
+    });
+
+    expect(findViewerAppMock).not.toHaveBeenCalled();
+    expect(launchViewerAppMock).not.toHaveBeenCalled();
+    expect(openBrowserMock).toHaveBeenCalledWith(`${API_URL}/swoop/site-1/m-1`);
+    expect(stderr.join('')).toContain('owlette: opened in your browser.');
+  });
+
+  it('--no-open prints the url and opens neither owlette swoop nor a browser', async () => {
+    installFetchStub(MACHINE);
+    findViewerAppMock.mockReturnValue(VIEWER_EXE);
 
     await buildProgram().parseAsync(['swoop', 'm-1', '--site', 'site-1', '--no-open'], {
       from: 'user',
     });
 
     expect(stdout.join('')).toBe(`${API_URL}/swoop/site-1/m-1\n`);
+    expect(findViewerAppMock).not.toHaveBeenCalled();
+    expect(launchViewerAppMock).not.toHaveBeenCalled();
     expect(openBrowserMock).not.toHaveBeenCalled();
+    expect(stderr.join('')).not.toContain('opened in');
   });
 
   it('--json emits the url envelope on stdout and no notes', async () => {
@@ -140,8 +222,43 @@ describe('owlette swoop', () => {
       machineId: 'm-1',
       url: `${API_URL}/swoop/site-1/m-1`,
       opened: true,
+      viewer: 'browser',
     });
     expect(stderr.join('')).toBe('');
+  });
+
+  it('--json reports viewer app when owlette swoop opened it', async () => {
+    installFetchStub(MACHINE);
+    findViewerAppMock.mockReturnValue(VIEWER_EXE);
+
+    await buildProgram().parseAsync(['--json', 'swoop', 'm-1', '--site', 'site-1'], {
+      from: 'user',
+    });
+
+    expect(JSON.parse(stdout.join(''))).toEqual({
+      siteId: 'site-1',
+      machineId: 'm-1',
+      url: `${API_URL}/swoop/site-1/m-1`,
+      opened: true,
+      viewer: 'app',
+    });
+    expect(stderr.join('')).toBe('');
+  });
+
+  it('--json --no-open reports opened false and viewer null', async () => {
+    installFetchStub(MACHINE);
+
+    await buildProgram().parseAsync(['--json', 'swoop', 'm-1', '--site', 'site-1', '--no-open'], {
+      from: 'user',
+    });
+
+    expect(JSON.parse(stdout.join(''))).toEqual({
+      siteId: 'site-1',
+      machineId: 'm-1',
+      url: `${API_URL}/swoop/site-1/m-1`,
+      opened: false,
+      viewer: null,
+    });
   });
 
   it('refuses a machine whose agent reports no swoop capability', async () => {

@@ -10,8 +10,8 @@ import { formatThroughput } from './networkUtils';
 
 /** Chart line colors for per-volume disk IO activity series. */
 export const DISK_IO_COLORS = {
-  read: 'rgb(74, 222, 128)',   // green - matches NIC RX convention
-  write: 'rgb(251, 146, 60)',  // orange - matches NIC TX convention
+  read: 'var(--series-disk-io-read)',    // same colour as NIC RX in each theme
+  write: 'var(--series-disk-io-write)',  // same colour as NIC TX in each theme
 } as const;
 
 /** Format a byte-rate (bytes/sec) as a human-readable throughput string. */

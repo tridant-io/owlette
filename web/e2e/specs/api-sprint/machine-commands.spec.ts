@@ -3,7 +3,8 @@
  * `machine=*:write|read` key. Reboot + screenshot are exercised; shutdown_machine shares the same
  * handler, so the dispatch test covers all three branches.
  *
- * Negatives: 409 machine_offline (online=false), 403 scope_insufficient (no machine:write).
+ * Negatives: 409 machine_offline (online=false), 409 held_restart_unsupported (a restart held for
+ * active hours to an agent that would run it at once), 403 scope_insufficient (no machine:write).
  */
 import crypto from 'crypto';
 import { test, expect } from '@playwright/test';
@@ -15,6 +16,9 @@ const SUFFIX = crypto.randomBytes(4).toString('hex');
 const SITE_ID = `e2e-cmd-${SUFFIX}`;
 const MACHINE_ID = `mach-${SUFFIX}`;
 const OFFLINE_MACHINE_ID = `mach-offline-${SUFFIX}`;
+const GUARDED_MACHINE_ID = `mach-guarded-${SUFFIX}`;
+const STALE_MACHINE_ID = `mach-stale-${SUFFIX}`;
+const MACHINE_IDS = [MACHINE_ID, OFFLINE_MACHINE_ID, GUARDED_MACHINE_ID, STALE_MACHINE_ID];
 
 let writeKey: MintedApiKey;
 let readOnlyKey: MintedApiKey;
@@ -64,6 +68,10 @@ test.beforeAll(async () => {
     .collection('machines')
     .doc(OFFLINE_MACHINE_ID)
     .update({ online: false });
+  // the active-hours guard holds a restart on 4.1.21; a machine rolled back to
+  // 3.3.7 keeps the capability its old agent never clears, and restarts at once.
+  await seedMachine(SITE_ID, GUARDED_MACHINE_ID, { activeHoursGuard: true });
+  await seedMachine(SITE_ID, STALE_MACHINE_ID, { activeHoursGuard: true, agentVersion: '3.3.7' });
 
   writeKey = await mintApiKey({
     ownerUid: 'admin-uid',
@@ -80,14 +88,25 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   if (writeKey) await revokeApiKey(writeKey);
   if (readOnlyKey) await revokeApiKey(readOnlyKey);
-  await Promise.all([clearPending(MACHINE_ID), clearPending(OFFLINE_MACHINE_ID)]);
+  await Promise.all(MACHINE_IDS.map(clearPending));
   await releaseFixtureSite(SITE_ID);
 });
 
 test.beforeEach(async () => {
-  await clearPending(MACHINE_ID);
-  await clearPending(OFFLINE_MACHINE_ID);
+  await Promise.all(MACHINE_IDS.map(clearPending));
 });
+
+async function pendingCommands(machineId: string): Promise<Record<string, { type?: string; when?: string }>> {
+  const snap = await getAdminDb()
+    .collection('sites')
+    .doc(SITE_ID)
+    .collection('machines')
+    .doc(machineId)
+    .collection('commands')
+    .doc('pending')
+    .get();
+  return (snap.data() ?? {}) as Record<string, { type?: string; when?: string }>;
+}
 
 test('POST /api/sites/{s}/machines/{m}/commands — dispatch reboot returns 202 + commandId', async ({ request }) => {
   const res = await request.post(`/api/sites/${SITE_ID}/machines/${MACHINE_ID}/commands`, {
@@ -153,6 +172,35 @@ test('POST /api/sites/{s}/machines/{m}/commands — 409 machine_offline when mac
   expect(res.status()).toBe(409);
   const body = await res.json();
   expect(body.code).toBe('machine_offline');
+});
+
+for (const [label, machineId] of [
+  ['an agent without the active-hours guard', MACHINE_ID],
+  ['a stale guard capability on a 3.3.7 agent', STALE_MACHINE_ID],
+] as const) {
+  test(`POST /api/sites/{s}/machines/{m}/commands — 409 held_restart_unsupported to ${label}, nothing queued`, async ({ request }) => {
+    const res = await request.post(`/api/sites/${SITE_ID}/machines/${machineId}/commands`, {
+      headers: authHeaders(writeKey),
+      data: { type: 'reboot_machine', params: { when: 'after_active_hours' } },
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('held_restart_unsupported');
+    // the neutral reason, with no advice meant for a model
+    expect(body.detail).toMatch(/so nothing was sent\.$/);
+    expect(await pendingCommands(machineId)).toEqual({});
+  });
+}
+
+test('POST /api/sites/{s}/machines/{m}/commands — a held restart to a guarded 4.1.21 agent is queued', async ({ request }) => {
+  const res = await request.post(`/api/sites/${SITE_ID}/machines/${GUARDED_MACHINE_ID}/commands`, {
+    headers: authHeaders(writeKey),
+    data: { type: 'reboot_machine', params: { when: 'after_active_hours' } },
+  });
+  expect(res.status()).toBe(202);
+  const body = await res.json();
+  const pending = await pendingCommands(GUARDED_MACHINE_ID);
+  expect(pending[body.data.commandId]).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
 });
 
 test('POST /api/sites/{s}/machines/{m}/commands — read-only key gets 403', async ({ request }) => {

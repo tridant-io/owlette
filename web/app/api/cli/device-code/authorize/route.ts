@@ -38,9 +38,11 @@ import {
   MAX_TTL_DAYS,
   MINTED_API_KEY_ENVIRONMENT,
   SUPERADMIN_ONLY_RESOURCES,
+  SUPERADMIN_ONLY_RESOURCES_LABEL,
 } from '@/lib/apiKeyTypes';
 import {
   problem,
+  mfaChallengeProblem,
   problemForbidden,
   problemFromError,
   problemNotFound,
@@ -157,7 +159,7 @@ export const POST = withRateLimit(
         const role = activeUserData.role ?? null;
         if (role !== 'superadmin') {
           return problemForbidden(
-            'superadmin access required to create user or installer scopes',
+            `superadmin access required to create ${SUPERADMIN_ONLY_RESOURCES_LABEL} scopes`,
           );
         }
       }
@@ -367,7 +369,7 @@ export const POST = withRateLimit(
           return problemUnauthorized(error.message);
         }
         if (error.status === 403) {
-          return problemForbidden(error.message);
+          return mfaChallengeProblem(error) ?? problemForbidden(error.message);
         }
         if (error.status === 404) {
           return problemNotFound(error.message);

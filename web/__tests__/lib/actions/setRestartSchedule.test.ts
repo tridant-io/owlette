@@ -101,6 +101,33 @@ describe('setRestartSchedule', () => {
     ).rejects.toThrow(ActionInputError);
   });
 
+  // the agent skips an entry whose time no clock has or whose days it does not
+  // know, so these were stored and the restart silently never fired.
+  it.each([
+    [{ id: 'a', days: ['mon'], time: '99:99' }],
+    [{ id: 'a', days: ['mon'], time: '24:00' }],
+    [{ id: 'a', days: ['Monday'], time: '03:00' }],
+  ])('rejects an entry the agent would skip: %j', async (entry) => {
+    await expect(
+      setRestartSchedule(CTX, { machineId: MACHINE, schedule: { enabled: true, entries: [entry] } }),
+    ).rejects.toThrow(ActionInputError);
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  it('stores only the fields the agent reads', async () => {
+    await setRestartSchedule(CTX, {
+      machineId: MACHINE,
+      schedule: {
+        enabled: true,
+        entries: [{ id: 'a', days: ['mon'], time: '03:00', note: 'x' } as never],
+        extra: true,
+      } as never,
+    });
+    expect(mockSet.mock.calls[0][0]).toEqual({
+      rebootSchedule: { enabled: true, entries: [{ id: 'a', days: ['mon'], time: '03:00' }] },
+    });
+  });
+
   it('rejects entry with empty days array', async () => {
     await expect(
       setRestartSchedule(CTX, {

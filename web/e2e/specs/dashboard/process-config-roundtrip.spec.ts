@@ -22,7 +22,9 @@
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { clippedFocusRings } from '../../helpers/focusRing';
 import { roleState } from '../../helpers/roles';
+import { recordSlides } from '../../helpers/slide';
 import { TEST_USERS } from '../../helpers/seed';
 import {
   configProcessById,
@@ -270,6 +272,86 @@ test('adding a process appends a fully-formed row to the config doc', async ({ p
 
   // The new row is invisible on the dashboard until the agent's next metrics
   // upload adds it to the status doc — the config doc above is the contract.
+});
+
+// The dialog's form scrolls, and a scroller clips both axes: with no inline
+// gutter it cut the left edge off every full-width field's focus ring.
+test('no tab stop in the add process dialog has its focus ring cut off', async ({ page }) => {
+  await page.goto('/dashboard');
+  const card = machineCard(page, MACHINE_ID);
+  await expect(card).toBeVisible();
+
+  await card.getByRole('button', { name: /^add process$/i }).click();
+  const dialog = page.getByRole('dialog', { name: /^add process$/i });
+  await expect(dialog).toBeVisible();
+  // scheduled opens the schedule section, whose blocks scroll in a box of their own
+  await dialog.getByRole('button', { name: 'scheduled', exact: true }).click();
+  await expect(dialog.getByTestId('process-dialog-schedule-section')).toBeVisible();
+
+  expect(await clippedFocusRings(page, dialog)).toEqual([]);
+});
+
+// shut, the section's root stays in the form as its last child, so it takes back the
+// gap the form puts between fields: the form ends where it did before the slide
+test('the schedule section slides open and shut, and leaves no gap while shut', async ({ page }) => {
+  await page.goto('/dashboard');
+  const card = machineCard(page, MACHINE_ID);
+  await expect(card).toBeVisible();
+
+  await card.getByRole('button', { name: /^add process$/i }).click();
+  const dialog = page.getByRole('dialog', { name: /^add process$/i });
+  await expect(dialog).toBeVisible();
+  const gear = dialog.getByTestId('process-dialog-configure-schedule');
+  const section = dialog.getByTestId('process-dialog-schedule-section');
+  // from the bottom of the field above to the top of the root, and of the section
+  const gaps = () =>
+    dialog.evaluate((el) => {
+      const root = el.querySelector('[data-slot="collapsible"]')!;
+      const above = root.previousElementSibling!.getBoundingClientRect().bottom;
+      const box = root.querySelector('[data-testid="process-dialog-schedule-section"]');
+      return {
+        root: root.getBoundingClientRect().top - above,
+        height: root.getBoundingClientRect().height,
+        section: box ? box.getBoundingClientRect().top - above : null,
+      };
+    });
+  expect(await gaps()).toEqual({ root: 0, height: 0, section: null });
+  const slides = await recordSlides(dialog);
+
+  await gear.click();
+  await expect.poll(slides).toBe('collapsible-down');
+  await expect(section).toBeVisible();
+  await expect.poll(async () => (await gaps()).section).toBe(16);
+
+  await gear.click();
+  await expect.poll(slides).toBe('collapsible-down collapsible-up');
+  await expect(section).toHaveCount(0);
+  expect(await gaps()).toEqual({ root: 0, height: 0, section: null });
+});
+
+// outlines are for form fields (owner, 2026-11-20): a launch mode segment
+// takes keyboard focus with none, rather than one its overflow-hidden group cuts
+test('the launch mode toggle on a process row draws no focus outline', async ({ page }) => {
+  await page.goto('/dashboard');
+  const toggle = machineCard(page, MACHINE_ID).getByRole('group', {
+    name: `launch mode for ${ALPHA_NAME}`,
+  });
+  await expect(toggle).toBeVisible();
+
+  await page.keyboard.press('Shift');
+  const outlines = await toggle.evaluate((group) =>
+    Array.from(group.querySelectorAll<HTMLElement>('button')).map((button) => {
+      button.focus();
+      const style = button.matches(':focus-visible') ? getComputedStyle(button).outlineStyle : 'not focus-visible';
+      return `${button.getAttribute('aria-label') ?? button.textContent?.trim()}: ${style}`;
+    }),
+  );
+  expect(outlines).toEqual([
+    'off: none',
+    'always on: none',
+    'scheduled: none',
+    `configure schedule for ${ALPHA_NAME}: none`,
+  ]);
 });
 
 test('deleting a process removes only that row from the config doc', async ({ page }) => {

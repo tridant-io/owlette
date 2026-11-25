@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Download } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -9,12 +9,28 @@ import { cn } from '@/lib/utils';
 interface BackupCodesPanelProps {
   /** The plaintext sheet, in issue order. Shown once and never re-readable. */
   codes: string[];
+  /** The account's email, written into the downloaded file. */
+  account?: string | null;
   /** Heading above the sheet. Defaults to "save backup codes". */
   title?: string;
   /** Extra classes for the outer wrapper. */
   className?: string;
   /** How long (ms) the copy button's check icon sticks. Defaults to 2000. */
   successDuration?: number;
+}
+
+/** The plain-text sheet `download codes` saves. */
+function backupCodesFile(codes: string[], account?: string | null): string {
+  return [
+    'owlette two-factor authentication backup codes',
+    `generated: ${new Date().toLocaleString()}`,
+    ...(account ? [`account: ${account}`] : []),
+    '',
+    ...codes.map((code, i) => `${`${i + 1}.`.padEnd(4)}${code}`),
+    '',
+    'each code can be used only once. keep this file in a secure location.',
+    '',
+  ].join('\n');
 }
 
 /**
@@ -28,6 +44,7 @@ interface BackupCodesPanelProps {
  */
 export function BackupCodesPanel({
   codes,
+  account,
   title = 'save backup codes',
   className,
   successDuration = 2000,
@@ -50,6 +67,15 @@ export function BackupCodesPanel({
       console.error('clipboard write failed:', err);
       toast.error('copy failed — select the codes and copy with Ctrl+C');
     }
+  }
+
+  function handleDownload() {
+    // a data url, not a blob url: there is no object url to revoke, so no
+    // revoke can race the download (safari cancels on an early revoke).
+    const a = document.createElement('a');
+    a.href = `data:text/plain;charset=utf-8,${encodeURIComponent(backupCodesFile(codes, account))}`;
+    a.download = 'owlette-backup-codes.txt';
+    a.click();
   }
 
   return (
@@ -79,16 +105,22 @@ export function BackupCodesPanel({
         </div>
       </div>
 
-      <Button
-        type="button"
-        variant="outline"
-        onClick={handleCopyAll}
-        aria-label={copied ? 'copied' : 'copy all codes'}
-        className="w-full"
-      >
-        {copied ? <Check className="h-4 w-4 text-accent-cyan" /> : <Copy className="h-4 w-4" />}
-        {copied ? 'copied' : 'copy all codes'}
-      </Button>
+      <div className="grid grid-cols-1 @sm/auth-form:grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleCopyAll}
+          aria-label={copied ? 'copied' : 'copy all codes'}
+          className="w-full"
+        >
+          {copied ? <Check className="h-4 w-4 text-accent-cyan" /> : <Copy className="h-4 w-4" />}
+          {copied ? 'copied' : 'copy all codes'}
+        </Button>
+        <Button type="button" variant="outline" onClick={handleDownload} className="w-full">
+          <Download className="h-4 w-4" />
+          download codes
+        </Button>
+      </div>
     </div>
   );
 }

@@ -178,17 +178,10 @@ test('episode 12 — hoot: manage machines by chat', async ({ browser }) => {
         // resolves.
         await narrate(page, 'b05 approve, or deny', 11);
 
-        // [b06] the guardrails (~25.4s) — the shield toggle in the hoot header
-        // and the per-machine hoot switch.
-        // The shield's VISIBLE text is "approval required", but its accessible
-        // name is the tooltip (`aria-label={tooltip}`,
-        // HootApprovalToggle.tsx:65) — matching the on-screen label finds
-        // nothing.
-        const approvalToggle = page.getByRole('button', {
-          name: /require in-chat approval|run without approval/i,
-        });
-        await centerInView(page, approvalToggle);
-        await highlight(page, approvalToggle, 2400);
+        // [b06] the guardrails (~25.4s) — the per-machine hoot switch.
+        // The site-wide approval gate this beat used to highlight left the hoot
+        // header on 2026-11-11: it is a switch on the admin panel's hoot page
+        // now, so the narration plays over the chat until the beat is re-shot.
         await narrate(page, 'b06 role ceiling + the site-wide approval gate', 12);
 
         // The per-machine switch only renders for a SINGLE targeted machine, so

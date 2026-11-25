@@ -2,8 +2,8 @@
 
 **Last updated**: 2026-04-29 | **moved** 2026-09-05 from `docs/api/load-testing.md` | **reviewed** 2026-09-05
 
-**INTERNAL — keep inside `docs/internal/`**, which the fumadocs migration excludes from
-publishing (`excludedPrefixes` in `web/scripts/migrate-docs-to-fumadocs.mjs`). This page was
+**INTERNAL — keep inside `docs/internal/`**, which is never published (only
+`web/content/docs` is). This page was
 written for the MkDocs site that was deleted 2026-05-20 and never reached a published docs
 route. It is a load-test operating note, and it names internal fixture ids — publish SLO
 numbers to customers only through a status page or a purpose-written docs page, never by
@@ -30,7 +30,7 @@ Developer preview can proceed without these runs. External launch should not.
 
 5.2 is externally complete when:
 
-- the launch fixture site, machine, and roost exist in dev or staging
+- the launch fixture site, machine, and roost exist on dev
 - `K6_API_KEY`, `K6_SITE_ID`, `K6_MACHINE_ID`, `K6_ROOST_ID`, and `K6_VERSION_CHUNK_HASHES` are configured for the fixture
 - every read-only script passes `smoke` and `sustained`
 - read-heavy scripts pass `spike`, and signed-URL scripts pass `burst`, or have a recorded launch waiver
@@ -51,7 +51,7 @@ The authoritative p99 thresholds are enforced in `test/load/k6/lib/config.js`.
 | `machines-list.js` | `GET /api/sites/{siteId}/machines` | 500 ms | fleet inventory bootstrap |
 | `sites-deployments-list.js` | `GET /api/sites/{siteId}/deployments` | 250 ms | deployment history polling |
 | `process-list.js` | `GET /api/sites/{siteId}/machines/{machineId}/processes` | 250 ms | process monitoring and CLI reads |
-| `cortex-conversations-list.js` | `GET /api/cortex/conversations` | 300 ms | hoot conversation list (script and route keep the `cortex` wire spelling) |
+| `cortex-conversations-list.js` | `GET /api/cortex/conversations` | 300 ms | hoot conversation list (the script hits the deprecated `cortex` alias of `GET /api/hoot/conversations`, served by the same handler) |
 | `users-list.js` | `GET /api/users` | 300 ms | platform admin list |
 | `dispatch-machine-command.js` | `POST /api/sites/{siteId}/machines/{machineId}/commands` | 400 ms | async machine command queue |
 | `process-create.js` | `POST /api/sites/{siteId}/machines/{machineId}/processes` | 400 ms | process config mutation |
@@ -84,7 +84,7 @@ The `race` scenario deliberately produces 412 responses. Set `K6_EXPECTED_CURREN
 
 ```powershell
 $env:K6_BASE_URL = 'https://dev.owlette.app'
-$env:K6_API_KEY = 'owk_test_...'
+$env:K6_API_KEY = 'owk_live_...'
 $env:K6_SITE_ID = 'owlette-load-site'
 $env:K6_MACHINE_ID = 'owlette-load-machine'
 $env:K6_ROOST_ID = 'roost-load-folder'
@@ -121,4 +121,4 @@ Append one entry per final launch run:
 
 ## current status
 
-Scripts and SLO thresholds are in place. Real p95/p99 numbers are pending a dev or staging fixture key and k6 runner. Until those numbers are recorded, 5.2 remains launch-blocked but not developer-preview-blocked.
+Scripts and SLO thresholds are in place. Real p95/p99 numbers are pending a dev fixture key and k6 runner. Until those numbers are recorded, 5.2 remains launch-blocked but not developer-preview-blocked.

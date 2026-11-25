@@ -1,0 +1,11 @@
+# A machine's disk is asked about only from the process editor, under the right to edit its config
+
+The dashboard warns when a saved path isn't on the machine, which means the agent answering what exists on its disk and listing folders to browse. That is a new way to learn a machine's layout, so `check_path` is queued only by its own session route, gated on `MACHINE_CONFIG_WRITE`, the capability that already edits that machine's process config, and it is deliberately off `ALLOWED_COMMAND_TYPES`, so API keys, talon outputs and hoot can't reach it. It asks no in-chat approval, unlike hoot's tier-3 `list_directory`, because a person is asking in the moment rather than a model acting for them, the same people can already queue `list_directory` through the public command route, and the answer is narrower: names and kinds only, no sizes or dates, capped, and never a network path.
+
+## Consequences
+
+- The answer lands in `commands/completed` like any command's result, and `firestore.rules` lets every site member read that doc. A read-only member can see a path check or folder listing an admin asked for, though they can't ask for one. `list_directory`'s output, with sizes and dates, already sits there the same way; closing it means a rules or storage change for both.
+- Unlike other results, only the newest 8 answers stay in that doc: the agent deletes older ones as it completes new ones, because the doc tops out at 1 MiB and when it fills, every terminal write on the machine fails. An answer is read within seconds by the dashboard listening for it, and a listing is capped at 16 KiB of UTF-8.
+- `check_path` must never join the public allowlist or the hoot tool list without revisiting this: a key or a model would gain a way to look around a disk with no person or approval behind it.
+- The route writes `machine_command_dispatched` with the field and path, so who looked where is on record.
+- For the dashboard, the agent reads a field's value in one place, `agent/src/path_commands.py`. The dashboard only shows what it answers, and treats anything else as silence, which is how every older agent's `Unknown command type` stays quiet. The desktop app probes its own disk and has its own reader for the same rules, `desktop/src/lib/missingPath.ts`; a change to how a value is read belongs in both.

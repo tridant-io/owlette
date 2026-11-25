@@ -135,3 +135,187 @@ class TestCollectCpusOffWindows:
         # Negative control: without the guard the stub is imported, WMI()
         # raises and the fallback logs it at WARNING on every rebuild.
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+# the mounts and interfaces Bryant Place's M5 Max reported on 2026-10-12
+MAC_MOUNTS = [
+    '/', '/System/Volumes/VM', '/System/Volumes/Preboot', '/System/Volumes/Update',
+    '/System/Volumes/xarts', '/System/Volumes/iSCPreboot', '/System/Volumes/Hardware',
+    '/System/Volumes/Data', '/Library/Developer/CoreSimulator/Volumes/iOS_23F77',
+    '/Library/Developer/CoreSimulator/Volumes/xrOS_23O470', '/Volumes/Backup',
+]
+MAC_NICS = ['en0', 'utun0', 'utun1', 'utun12', 'awdl0', 'llw0']
+
+
+def _partitions(mounts):
+    return [SimpleNamespace(device='/dev/disk3s1', mountpoint=m, fstype='apfs', opts='rw') for m in mounts]
+
+
+def _interfaces(monkeypatch, names):
+    import socket
+    monkeypatch.setattr(hardware_profile.psutil, 'net_if_stats', lambda: {
+        n: SimpleNamespace(isup=True, speed=0) for n in names})
+    monkeypatch.setattr(hardware_profile.psutil, 'net_if_addrs', lambda: {
+        n: [SimpleNamespace(family=socket.AF_INET6, address='fe80::1')] for n in names})
+
+
+@pytest.mark.unit
+class TestMacProfileNoise:
+    """A Mac mounts simulator runtimes and system helper volumes, and adds and
+    drops tunnels at will. In the profile they changed its signature seven times
+    a day and became the "primary" disk (a simulator volume, 97% full) and nic
+    (`utun0`)."""
+
+    @pytest.fixture(autouse=True)
+    def _disk_usage(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_disk_usage_with_timeout',
+                            lambda mount: SimpleNamespace(total=500 * 1024 ** 3))
+
+    def test_a_mac_profiles_only_its_own_volumes(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', True)
+        monkeypatch.setattr(hardware_profile.psutil, 'disk_partitions', lambda all=False: _partitions(MAC_MOUNTS))
+
+        assert [d['id'] for d in hardware_profile._collect_disks()] == [
+            '/', '/System/Volumes/Data', '/Volumes/Backup']
+
+    def test_a_mac_profiles_no_tunnels_or_wireless_side_channels(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', True)
+        _interfaces(monkeypatch, MAC_NICS)
+
+        assert [n['id'] for n in hardware_profile._collect_nics()] == ['en0']
+
+    def test_off_macos_nothing_is_filtered(self, monkeypatch):
+        monkeypatch.setattr(hardware_profile, '_IS_MACOS', False)
+        monkeypatch.setattr(hardware_profile.psutil, 'disk_partitions', lambda all=False: _partitions(MAC_MOUNTS))
+        _interfaces(monkeypatch, MAC_NICS)
+
+        assert len(hardware_profile._collect_disks()) == len(MAC_MOUNTS)
+        assert [n['id'] for n in hardware_profile._collect_nics()] == MAC_NICS
+
+
+# the links TEC-MBA reported on 2026-11-23: wi-fi en0 carries the traffic and
+# has no speed in psutil; only the idle anpi0 and en3 have one
+_MAC_FLAGS = 'up,broadcast,notrailers,running,multicast,simplex'
+MAC_LINKS = {
+    'lo0': SimpleNamespace(isup=True, speed=0, flags='up,loopback,running,multicast'),
+    'en0': SimpleNamespace(isup=True, speed=0, flags=_MAC_FLAGS),
+    'anpi0': SimpleNamespace(isup=True, speed=100, flags=_MAC_FLAGS),
+    'en3': SimpleNamespace(isup=True, speed=100, flags=_MAC_FLAGS),
+}
+
+
+def _io(sent, recv):
+    return SimpleNamespace(bytes_sent=sent, bytes_recv=recv)
+
+
+EN0_PROFILE = {'cpus': [], 'disks': [], 'gpus': [], 'nics': [{'id': 'en0'}]}
+
+
+@pytest.fixture
+def mac_net(monkeypatch):
+    """TEC-MBA's links behind psutil, with byte counters and a clock the test
+    moves by hand."""
+    net = SimpleNamespace(now=100.0, counters={
+        'lo0': _io(0, 0), 'en0': _io(1_000, 2_000), 'anpi0': _io(0, 0), 'en3': _io(0, 0)})
+    monkeypatch.setattr(shared_utils, '_net_baseline', (0.0, {}))
+    monkeypatch.setattr(shared_utils, '_net_last', {'interfaces': {}})
+    monkeypatch.setattr(shared_utils.psutil, 'net_if_stats', lambda: MAC_LINKS)
+    monkeypatch.setattr(shared_utils.psutil, 'net_io_counters', lambda pernic=False: net.counters)
+    monkeypatch.setattr(shared_utils.time, 'time', lambda: net.now)
+    return net
+
+
+def _heartbeat_nics():
+    with (
+        patch.object(shared_utils, 'get_gpus', return_value=[]),
+        patch.object(hardware_profile, '_gpu_temps_cached', return_value=[]),
+        patch.object(shared_utils, 'get_network_quality', return_value={}),
+        patch.object(shared_utils, 'get_disk_io_metrics', return_value={}),
+    ):
+        return hardware_profile.collect_dynamic_metrics(EN0_PROFILE)['nics']
+
+
+@pytest.mark.unit
+class TestMacNicThroughput:
+    """psutil has no link speed for a Mac's wi-fi, and get_network_metrics
+    skipped every link without one, so the nic carrying the traffic read
+    0 B/s on every heartbeat while idle links were measured instead."""
+
+    @staticmethod
+    def _two_seconds_of_traffic(net):
+        baseline = shared_utils.get_network_metrics(advance=True)['interfaces']
+        net.now = 102.0
+        net.counters = {'lo0': _io(50_000, 50_000), 'en0': _io(201_000, 32_002_000),
+                        'anpi0': _io(0, 0), 'en3': _io(0, 0)}
+        return baseline
+
+    def test_the_wifi_link_is_measured_without_a_link_speed(self, mac_net):
+        baseline = self._two_seconds_of_traffic(mac_net)
+        out = shared_utils.get_network_metrics(advance=True)['interfaces']
+
+        assert 'en0' in baseline
+        assert out['en0']['rx_bps'] == 16_000_000
+        assert out['en0']['tx_bps'] == 100_000
+        # utilisation needs a link speed; an unknown one reads 0, not a guess
+        assert out['en0']['tx_util'] == 0.0 and out['en0']['rx_util'] == 0.0
+        assert 'lo0' not in baseline and 'lo0' not in out
+
+    def test_the_heartbeat_carries_the_wifi_traffic(self, mac_net):
+        self._two_seconds_of_traffic(mac_net)
+
+        assert _heartbeat_nics()['en0']['rxBps'] == 16_000_000
+
+
+@pytest.mark.unit
+class TestHeartbeatNetworkWindow:
+    """Every upload read the legacy metrics (get_system_metrics) just before
+    the heartbeat's own sample, and hoot's system info read them at any time.
+    Each read moved the shared baseline, so the heartbeat's rate covered the
+    fraction of a second since then instead of the time since the last one."""
+
+    @staticmethod
+    def _legacy_read():
+        with patch.object(shared_utils, 'get_network_quality', return_value={}):
+            return shared_utils.get_system_metrics_with_config({}, skip_gpu=True)['network']['interfaces']
+
+    def test_a_heartbeat_rate_is_its_bytes_over_the_time_since_the_last_one(self, mac_net):
+        # each upload reads the legacy metrics first, as firebase_client does;
+        # before the first heartbeat that read sets no baseline
+        mac_net.now = 100.0
+        self._legacy_read()
+        mac_net.now = 100.5
+        mac_net.counters = {**mac_net.counters, 'en0': _io(1_000, 502_000)}
+        assert _heartbeat_nics()['en0']['rxBps'] == 0
+
+        # hoot asks for system info mid-interval
+        mac_net.now = 115.0
+        mac_net.counters = {**mac_net.counters, 'en0': _io(1_000, 2_002_000)}
+        self._legacy_read()
+
+        mac_net.now = 130.0
+        mac_net.counters = {**mac_net.counters, 'en0': _io(1_000, 3_502_000)}
+        self._legacy_read()
+        mac_net.now = 130.5
+
+        # 3 MB in the 30 s since the last heartbeat
+        assert _heartbeat_nics()['en0']['rxBps'] == 100_000
+
+        # the next upload's legacy read, and hoot, reuse that sample
+        mac_net.now = 131.0
+        assert self._legacy_read()['en0']['rx_bps'] == 100_000
+
+    def test_a_read_with_no_heartbeat_lists_the_links_and_leaves_the_counters(self, mac_net, monkeypatch):
+        """A filed issue and local hoot run in processes that send no
+        heartbeat; their report still names each link and its speed."""
+        reads = []
+        monkeypatch.setattr(shared_utils.psutil, 'net_io_counters',
+                            lambda pernic=False: reads.append(pernic) or mac_net.counters)
+
+        zero = {'tx_bps': 0, 'rx_bps': 0, 'tx_util': 0.0, 'rx_util': 0.0}
+        assert self._legacy_read() == {
+            'en0': {**zero, 'link_speed': 0},
+            'anpi0': {**zero, 'link_speed': 100},
+            'en3': {**zero, 'link_speed': 100},
+        }
+        assert reads == []
+        assert shared_utils._net_baseline == (0.0, {})

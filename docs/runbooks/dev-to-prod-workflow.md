@@ -151,6 +151,66 @@ Recommended checks:
 - version files are coordinated when this is a versioned release
 - installer version has been bumped before building, if an installer is included
 - manual deploy surfaces have an owner
+- a release that changes `firestore.rules` has deployed its rules to prod, and any function that reads the same field, before `main` receives the web
+
+The web follows the rules, never the other way round.
+Railway deploys `main` on push, and the rules and functions are manual (see "manual deploy boundaries"), so this ordering is a step someone takes, not something the merge does.
+
+### machine scope (rules 2.12.0, web 4.1.28)
+
+4.1.28's web reads `machineIds` on member rows and expects prod's rules to enforce it.
+Prod ran rules 2.11.0 before it, and 2.11.0 has no notion of a scope: over those rules a scoped member reads the whole site straight from Firestore (every machine, log and deployment, and for a scoped admin the audit log and webhooks too), while the dashboard and the API show them only their machines.
+So before `dev` is merged into `main` for 4.1.28 or later:
+
+1. Deploy rules 2.12.0 to prod:
+
+   ```bash
+   firebase deploy --only firestore:rules --project prod
+   ```
+
+2. Deploy the usage function, which needs whole-site standing from the same release:
+
+   ```bash
+   firebase deploy --only functions:getUsageSummaryHttp --project prod
+   ```
+
+3. Prove the read path against prod's deployed rules:
+
+   ```bash
+   node scripts/check-membership-read-path.mjs --env=prod
+   ```
+
+4. Before the first scoped row exists on prod, confirm that the Vercel standby serves the same commit as Railway.
+   A failover to an older standby is a rollback, and an older web ignores `machineIds` and widens every scoped member (see [hotfix-rollback.md](hotfix-rollback.md)).
+
+   ```bash
+   curl -s https://owlette.app/api/health
+   curl -s https://vercel-origin.owlette.app/api/health
+   ```
+
+   Both `commit` values must match, and the first must report `"origin":"railway"`.
+   A null `commit` proves nothing: settle it from the Railway and Vercel dashboards instead.
+
+Steps 1 to 3 are safe on their own: no prod row carries `machineIds` yet, and a row without it is whole site under 2.12.0.
+
+### command queue (rules 2.13.0, release 4.2.0)
+
+Rules 2.13.0 let an agent's token only remove entries from its machine's `commands/pending`; only the server adds them.
+The file carries 2.12.0 as well, so a project still on older rules gets both in one deploy: run the machine scope steps above from 4.2.0's file and step 1 deploys 2.13.0.
+Every agent from 3.2.0 on only removes entries there, so no agent has to update first.
+Before `dev` is merged into `main` for 4.2.0:
+
+1. In `web`, run `npm run test:rules` and `npm run e2e:desktop-sync`, whose tier 0 spec (`e2e/desktop-sync/tier0-commands-pending.spec.ts`) runs a real agent's command flow against these rules.
+2. Deploy rules 2.13.0 to dev, if dev is not on it yet:
+
+   ```bash
+   firebase deploy --only firestore:rules --project dev
+   ```
+
+3. On dev, queue a screenshot on an online machine and confirm it completes and its entry leaves `commands/pending`.
+4. Deploy the same file to prod (the same deploy with `--project prod`), and repeat step 3 on one prod machine.
+
+Never deploy rules older than 2.13.0 to a project that has it (see [hotfix-rollback.md](hotfix-rollback.md)).
 
 The repo has no automated post-merge smoke job today.
 Do not assume a green push to `main` means every production surface is healthy.
@@ -216,24 +276,14 @@ Full hotfix decision tree:
 
 ## tags and releases
 
-Current state: tag discipline has lapsed.
+Current state: every release from `v4.1.5` on is tagged (4.1.12 never shipped).
 
-Only three tags exist:
+Earlier releases are mostly untagged.
+The older tags are `v2.0.43`, `v2.0.46`, `v2.0.47`, `v2.12.3`, `v2.12.21`, `v3.0.0`, `v3.3.3` and `v4.1.0` to `v4.1.3`; prod's 3.3.6 has none.
 
-- `v2.0.43`
-- `v2.0.46`
-- `v2.0.47`
+The tag pattern is in [version-management.md](../internal/version-management.md) ("tags"): `vX.Y.Z` on the release's merge commit into `dev`.
 
-Tagging stopped early in project history.
-Releases `2.6.0` through `2.11.0` are not tagged.
-
-The internal version-management doc still documents release tagging:
-
-- `/docs/internal/version-management.md:171` documents `git tag v2.1.0`
-
-Practice has diverged from that written process.
-
-Recommendation: resume tagging on every production release.
+Tag every release.
 
 Tagging matters because the CI installer build workflow is triggered by tag push:
 
@@ -248,18 +298,14 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-If the release includes an agent installer, do not tag until the version and changelog are ready.
+If the release includes an agent installer, do not push or tag until every installer is built, uploaded to dev and its download verified ([agent-installer-release.md](agent-installer-release.md)).
 The installer filename bakes in the version.
 
 ## version coordination
 
 Owlette has multiple versioned surfaces.
 
-The coordinated app version is stored in:
-
-- `/VERSION`
-- `/agent/VERSION`
-- `/web/package.json`
+The coordinated app version is stored in `/VERSION`, `/agent/VERSION`, `/web/package.json` and the other surfaces listed in [version-management.md](../internal/version-management.md).
 
 Use the sync script to bump them together:
 
@@ -267,18 +313,14 @@ Use the sync script to bump them together:
 node scripts/sync-versions.js X.Y.Z
 ```
 
-The script updates:
-
-- root `VERSION`
-- agent `VERSION`
-- web `package.json`
+The script updates every one of them; the list is in [version-management.md](../internal/version-management.md).
 
 The script does not update:
 
 - `firestore.rules`
 
 Firestore rules are independently versioned.
-The Firestore rules schema version is a security-schema version, currently `v2.2.0`.
+The Firestore rules schema version is a security-schema version, currently `2.13.0` (the `// Version:` line at the top of `firestore.rules`).
 Do not assume an app patch release implies a Firestore rules version bump.
 
 Default bump granularity is `PATCH` unless the user explicitly says otherwise.
@@ -287,9 +329,9 @@ Critical release ordering:
 
 1. Pick the release version.
 2. Run `node scripts/sync-versions.js X.Y.Z`.
-3. Update the changelog.
-4. Build the agent installer.
-5. Tag the release when appropriate.
+3. Update both changelogs (`docs/changelog.md` and `web/content/docs/changelog.mdx`).
+4. Build the agent installers, upload them to dev and verify the downloads ([agent-installer-release.md](agent-installer-release.md)).
+5. Only then push, merge, and tag the release.
 
 Do not build the installer before bumping the version.
 The installer bakes the version into the EXE filename.
@@ -387,7 +429,7 @@ For emergency response, use [hotfix-rollback.md](hotfix-rollback.md).
 
 ## known gaps in this workflow
 
-- Tag discipline lapsed. Restart with the next release.
+- Tags are complete only from `v4.1.5`; earlier releases, prod's 3.3.6 among them, are mostly untagged.
 - Branch protection on `main` is GitHub-side, not pinned in repo.
 - Functions/rules/storage deploys are 100% manual. No CI automation pushes them on merge to `main`.
 - `main` has 38 commits not in `dev` (cherry-picked hotfixes or doc-only main edits). No back-merge automation.
@@ -400,4 +442,4 @@ For emergency response, use [hotfix-rollback.md](hotfix-rollback.md).
 - [agent-installer-release.md](agent-installer-release.md)
 - [hotfix-rollback.md](hotfix-rollback.md)
 - `/docs/internal/version-management.md`
-- `/CLAUDE.md` (Git Workflow section)
+- `/.claude/CLAUDE.md` (Git Workflow section)

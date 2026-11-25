@@ -218,8 +218,8 @@ describe('the collapsed rail', () => {
     const dots = screen.getAllByTestId('rail-status-dot')
     expect(dots).toHaveLength(3)
     // Same statuses as the expanded list draws, in the same colours.
-    expect(dots[0].className).toContain('bg-green-500')
-    expect(dots[1].className).toContain('bg-red-500')
+    expect(dots[0].className).toContain('bg-success')
+    expect(dots[1].className).toContain('bg-danger')
     expect(dots[0].className).toContain('absolute')
   })
 
@@ -481,7 +481,6 @@ describe('drag to reorder', () => {
     // The file-drop overlay a later task adds must be able to tell this apart
     // from an OS drag.
     expect(isRowDragging()).toBe(true)
-    expect(document.body.dataset.rowDragging).toBe('true')
 
     pointer(row, 'pointerup', { clientY: 110 })
     expect(screen.queryByTestId('drop-indicator')).toBeNull()

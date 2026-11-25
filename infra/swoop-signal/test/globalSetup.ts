@@ -61,6 +61,8 @@ export default async function setup(project: TestProject) {
     SWOOP_JWT_KID_PREV: previousKey.kid,
     SWOOP_JWT_PUBLIC_KEY_PREV: rawPublicKey(previousKey),
     SWOOP_SIGNAL_RING_SECRET: ringSecret,
+    // a viewer is stale after 1.5 s here rather than 90 s, so the eviction test is short.
+    SWOOP_VIEWER_STALE_MS: '1500',
   };
 
   // the bin script is run through node directly: since the CVE-2024-27980 fix,

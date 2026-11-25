@@ -3,10 +3,8 @@
  * `config/{siteId}/machines/{machineId}`. Admin-SDK transactions here, unlike the
  * client hooks in useFirestore.ts which read-modify-write non-transactionally.
  *
- * - `withProcessConfig`: legacy admin-route helper (`id` field, no duplicate-name
- *   protection). Kept unchanged so the existing dashboard keeps working.
- * - `withProcessLock`: public-API helper (`processId`, lazy id backfill, rejects
- *   duplicate names inside the transaction).
+ * `withProcessLock` is the one writer: `processId`, lazy id backfill, rejects
+ * duplicate names inside the transaction.
  */
 
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -40,52 +38,6 @@ export interface ScheduleBlock {
   colorIndex?: number;
   days: string[];
   ranges: { start: string; stop: string }[];
-}
-
-/**
- * Transactional mutation of a machine's process config array:
- * read → validate → mutate → write → configChangeFlag. Returns the mutator's result.
- */
-export async function withProcessConfig<T>(
-  siteId: string,
-  machineId: string,
-  mutator: (processes: ProcessConfig[]) => { processes: ProcessConfig[]; result: T }
-): Promise<T> {
-  const db = getAdminDb();
-  const configRef = db.collection('config').doc(siteId).collection('machines').doc(machineId);
-
-  const result = await db.runTransaction(async (transaction) => {
-    const configSnap = await transaction.get(configRef);
-
-    if (!configSnap.exists) {
-      throw new ProcessConfigError(404, 'Configuration not found for this machine');
-    }
-
-    const config = configSnap.data()!;
-
-    if (!config.processes || !Array.isArray(config.processes)) {
-      throw new ProcessConfigError(500, 'Invalid configuration structure — no processes array');
-    }
-
-    const mutationResult = mutator(config.processes as ProcessConfig[]);
-
-    // Firestore rejects undefined.
-    const cleanedProcesses = mutationResult.processes.map(cleanProcessForFirestore);
-
-    transaction.update(configRef, { processes: cleanedProcesses });
-
-    return mutationResult.result;
-  });
-
-  // Nudge the agent; non-critical, it polls on its own cycle anyway.
-  try {
-    const statusRef = db.collection('sites').doc(siteId).collection('machines').doc(machineId);
-    await statusRef.update({ configChangeFlag: true });
-  } catch {
-    // Ignore.
-  }
-
-  return result;
 }
 
 /** Strip undefined values and clean schedule blocks for Firestore. */

@@ -122,6 +122,12 @@ STOP_JOIN_TIMEOUT_SECONDS = 5.0  # the design target is a 2 s exit
 TOKEN_REFRESH_MARGIN_MIN_SECONDS = 600.0
 TOKEN_REFRESH_MARGIN_MAX_SECONDS = 900.0
 TOKEN_HARD_DEADLINE_SECONDS = 30.0  # close and back off rather than run past exp
+# The margins above assume a long-lived token; against the 300 s one the
+# protocol actually issues they are capped to a share of the lifetime, so a
+# token refreshes at 65-80 % of its life and is abandoned at 90 %.
+TOKEN_REFRESH_SHARE_MIN = 0.2
+TOKEN_REFRESH_SHARE_MAX = 0.35
+TOKEN_HARD_SHARE = 0.1
 
 # Close code / error codes that mean "this token is no longer acceptable", as
 # distinct from a generic drop. Task 2.8 must close an expired or unknown-kid
@@ -189,10 +195,17 @@ class SwoopDoorbell:
 
     def __init__(self, on_ring, get_agent_token, shutdown_event,
                  is_connected=None, logger=None, socket_factory=None,
-                 http_post=None, monotonic=None, wait=None, rng=None):
+                 http_post=None, monotonic=None, wait=None, rng=None,
+                 on_enabled=None):
         self._on_ring = on_ring
         self._get_agent_token = get_agent_token
         self._shutdown = shutdown_event
+        # The mint is the one place the agent learns whether swoop is on for
+        # this machine (200) or off (403), so it is where the machine-wide side
+        # effects get their switch. Reported on change only: a routine re-mint
+        # must not re-run them.
+        self._on_enabled = on_enabled
+        self._reported_enabled = None
         # Two different questions share a name: the INJECTED is_connected is the
         # machine's Firestore link (the gate on dialling), the METHOD below is
         # this socket. The gate never tears a warm socket down.
@@ -462,6 +475,7 @@ class SwoopDoorbell:
         if status == 403:
             self._forget_token()
             self._log_once('mint-403', "[SWOOP-DOORBELL] swoop disabled here; slow retry")
+            self._report_enabled(False)
             return _DISABLED
         if 400 <= status < 500:
             # A 401 here means the AGENT's own Firebase token is bad, and
@@ -482,7 +496,26 @@ class SwoopDoorbell:
             self.logger.warning(
                 f"[SWOOP-DOORBELL] mint response unreadable ({type(error).__name__})")
             return _FAILED
-        return self._store_token(payload)
+        outcome = self._store_token(payload)
+        if outcome == _OK:
+            self._report_enabled(True)
+        return outcome
+
+    def _report_enabled(self, enabled):
+        """Tell the owner of the side effects that swoop is on or off here.
+
+        Only a change is reported, and a callback that raises costs the mint
+        nothing: the token is already stored (or forgotten) by the time this
+        runs, and the side effects are the manager's problem, not the socket's.
+        """
+        if self._on_enabled is None or enabled == self._reported_enabled:
+            return
+        self._reported_enabled = enabled
+        try:
+            self._on_enabled(enabled)
+        except Exception as error:
+            self.logger.warning(
+                f"[SWOOP-DOORBELL] enabled callback failed ({type(error).__name__})")
 
     def _store_token(self, payload):
         if not isinstance(payload, dict):
@@ -503,10 +536,17 @@ class SwoopDoorbell:
         now = self._monotonic()
         margin = self._rng.uniform(
             TOKEN_REFRESH_MARGIN_MIN_SECONDS, TOKEN_REFRESH_MARGIN_MAX_SECONDS)
+        # a doorbell token lives 300 s (PROTOCOL.md §8), shorter than the
+        # margin written for long-lived ones: capped to a share of the lifetime
+        # or the refresh deadline is already due when the token arrives and the
+        # socket is torn down and re-dialled on every connect.
+        margin = min(margin, expires_in * self._rng.uniform(
+            TOKEN_REFRESH_SHARE_MIN, TOKEN_REFRESH_SHARE_MAX))
+        hard_margin = min(TOKEN_HARD_DEADLINE_SECONDS, expires_in * TOKEN_HARD_SHARE)
         self._token = token
         self._signal_url = signal_url
         self._token_refresh_at = now + max(0.0, expires_in - margin)
-        self._token_hard_at = now + max(0.0, expires_in - TOKEN_HARD_DEADLINE_SECONDS)
+        self._token_hard_at = now + max(0.0, expires_in - hard_margin)
         self._mint_retry_at = None
         self._mint_failures = 0
         # kid and expiresIn are the only mint fields that may be logged.

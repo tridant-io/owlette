@@ -404,6 +404,53 @@ describe('owlette deploy retry', () => {
   });
 });
 
+/* active-hours override on create and retry */
+
+describe.each([
+  [
+    'create',
+    [
+      'deploy', 'create', '--site', 'site-1', '--name', 'r',
+      '--installer-url', 'https://cdn/x.exe', '--installer-name', 'x.exe',
+      '--silent-flags', '/S', '--machines', 'm-1',
+    ],
+  ],
+  ['retry', ['deploy', 'retry', 'deploy-1', '--site', 'site-1']],
+])('owlette deploy %s --override-active-hours', (_verb, args) => {
+  it('sends --reason, trimmed, as active_hours_override', async () => {
+    const calls = installFetchStub({
+      deploymentId: 'deploy-1',
+      siteId: 'site-1',
+      status: 'in_progress',
+      targets: [],
+    });
+    await buildProgram().parseAsync(
+      [...args, '--override-active-hours', '--reason', '  venue closed today  '],
+      { from: 'user' },
+    );
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.active_hours_override).toEqual({ reason: 'venue closed today' });
+    expect(process.exitCode).toBe(0);
+  });
+
+  it.each([
+    [['--override-active-hours']],
+    [['--override-active-hours', '--reason', '   ']],
+    [['--reason', 'venue closed today']],
+  ])('refuses %j before any http', async (flags) => {
+    const calls = installFetchStub({});
+    const stderr: string[] = [];
+    (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stderr.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    await buildProgram().parseAsync([...args, ...flags], { from: 'user' });
+    expect(calls).toHaveLength(0);
+    expect(stderr.join('')).toContain('--override-active-hours');
+    expect(process.exitCode).toBe(2);
+  });
+});
+
 /* cancel */
 
 describe('owlette deploy cancel', () => {
@@ -430,25 +477,100 @@ describe('owlette deploy cancel', () => {
 /* uninstall */
 
 describe('owlette deploy uninstall', () => {
-  it('POSTs /api/sites/:siteId/deployments/:id/uninstall when --yes is supplied', async () => {
+  it('POSTs the program name to /api/sites/:siteId/deployments/:id/uninstall when --yes is supplied', async () => {
     const calls = installFetchStub({
       deploymentId: 'deploy-1',
       siteId: 'site-1',
-      status: 'uninstalling',
-      queued: 3,
-      machine_ids: ['m-1', 'm-2', 'm-3'],
+      status: 'completed',
+      queued: 2,
+      machine_ids: ['m-1', 'm-2'],
+      skipped: [{ machineId: 'm-3', reason: 'software_not_found' }],
     });
     const program = buildProgram();
     await program.parseAsync(
-      ['--json', 'deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--yes'],
+      [
+        '--json',
+        'deploy',
+        'uninstall',
+        'deploy-1',
+        '--site',
+        'site-1',
+        '--software',
+        'VLC media player',
+        '--yes',
+      ],
       { from: 'user' },
     );
     expect(calls[0]!.url).toBe(
       'https://dev.test/api/sites/site-1/deployments/deploy-1/uninstall',
     );
     expect(calls[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ software_name: 'VLC media player' });
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers['Idempotency-Key']).toMatch(/^cli-deploy-uninstall-/);
+  });
+
+  it('names the skipped targets in its plain output', async () => {
+    const stdout: string[] = [];
+    (process.stdout.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stdout.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    installFetchStub({
+      deploymentId: 'deploy-1',
+      siteId: 'site-1',
+      status: 'completed',
+      queued: 1,
+      machine_ids: ['m-1'],
+      skipped: [{ machineId: 'm-2', reason: 'install_in_flight' }],
+    });
+    const program = buildProgram();
+    await program.parseAsync(
+      ['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--software', 'VLC media player', '--yes'],
+      { from: 'user' },
+    );
+    expect(stdout.join('')).toBe(
+      'owlette: queued uninstall of "VLC media player" on 1 target(s) for deploy-1; skipped m-2 (install_in_flight)\n',
+    );
+  });
+
+  it('names the skipped targets when the server refuses with 409 no_uninstallable_targets', async () => {
+    const stderr: string[] = [];
+    (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stderr.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    installFetchStub(
+      {
+        code: 'no_uninstallable_targets',
+        detail: 'no target can take the uninstall of "VLC media player"; skipped says why for each',
+        skipped: [
+          { machineId: 'm-1', reason: 'software_not_found' },
+          { machineId: 'm-2', reason: 'machine_not_found' },
+        ],
+      },
+      409,
+    );
+    const program = buildProgram();
+    await program.parseAsync(
+      ['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--software', 'VLC media player', '--yes'],
+      { from: 'user' },
+    );
+    expect(stderr.join('')).toContain(
+      '; skipped m-1 (software_not_found), m-2 (machine_not_found)',
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('refuses to run without --software, before any request', async () => {
+    const calls = installFetchStub({}, 200);
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--yes'], {
+        from: 'user',
+      }),
+    ).rejects.toThrow(/--software/);
+    expect(calls).toHaveLength(0);
   });
 
   it('surfaces 403 scope_insufficient with an admin-scope hint', async () => {
@@ -463,7 +585,7 @@ describe('owlette deploy uninstall', () => {
     );
     const program = buildProgram();
     await program.parseAsync(
-      ['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--yes'],
+      ['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--software', 'VLC', '--yes'],
       { from: 'user' },
     );
     const out = stderr.join('');
@@ -479,9 +601,10 @@ describe('owlette deploy uninstall', () => {
     Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: false });
     try {
       const program = buildProgram();
-      await program.parseAsync(['deploy', 'uninstall', 'deploy-1', '--site', 'site-1'], {
-        from: 'user',
-      });
+      await program.parseAsync(
+        ['deploy', 'uninstall', 'deploy-1', '--site', 'site-1', '--software', 'VLC'],
+        { from: 'user' },
+      );
       expect(calls).toHaveLength(0);
       expect(process.exitCode).toBe(2);
     } finally {

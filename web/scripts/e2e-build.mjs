@@ -99,7 +99,13 @@ if (distDir === '.next') {
     await fs.rm(path.join(appRoot, distDir, artifact), { recursive: true, force: true });
   }
 } else {
-  await fs.rm(path.resolve(appRoot, distDir), { recursive: true, force: true });
+  // the dist dir comes from the environment, so only a .next* folder directly in web/ may be deleted
+  const distPath = path.resolve(appRoot, distDir);
+  if (path.dirname(distPath) !== appRoot || !path.basename(distPath).startsWith('.next')) {
+    throw new Error(`refusing to delete ${distPath}: OWLETTE_NEXT_DIST_DIR must name a .next* folder in ${appRoot}`);
+  }
+  console.log(`e2e-build: removing ${distPath}`);
+  await fs.rm(distPath, { recursive: true, force: true });
 }
 
 await runNextBuild();

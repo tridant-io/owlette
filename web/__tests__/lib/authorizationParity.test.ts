@@ -44,13 +44,19 @@ const store = {
 };
 
 /** Give `uid` standing on `siteId`, as `membership.server.ts` writes it. */
-function grant(siteId: string, uid: string, role: 'owner' | 'admin' | 'member'): void {
+function grant(
+  siteId: string,
+  uid: string,
+  role: 'owner' | 'admin' | 'member',
+  machineIds?: string[],
+): void {
   store.members.set(`${siteId}/${uid}`, {
     uid,
     role,
     status: 'active',
     addedAt: new Date(0),
     addedBy: 'system:test',
+    ...(machineIds ? { machineIds } : {}),
   });
 }
 
@@ -200,20 +206,25 @@ jest.mock('@/lib/logger', () => ({
 
 import { NextResponse } from 'next/server';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
-import { requireSiteAuthAndScope } from '@/app/api/_shared';
+import { requireMachineAuthAndScope, requireSiteAuthAndScope } from '@/app/api/_shared';
 import { Capability } from '@/lib/capabilities';
 
 const SITE = 'site-a';
 const ALICE = 'uid_alice';
+const MACHINE = 'm1';
 
-/** A NextRequest good enough for both paths: headers + nextUrl.pathname. */
-function makeRequest(): NextRequest {
+/** A NextRequest good enough for every path: headers + nextUrl.pathname. */
+function makeRequest(pathname = `/api/sites/${SITE}/thing`): NextRequest {
   return {
     headers: new Headers(),
-    nextUrl: { pathname: `/api/sites/${SITE}/thing`, searchParams: new URLSearchParams() },
-    url: `https://example.test/api/sites/${SITE}/thing`,
+    nextUrl: { pathname, searchParams: new URLSearchParams() },
+    url: `https://example.test${pathname}`,
     method: 'GET',
   } as unknown as NextRequest;
+}
+
+function machinePath(siteId: string, machineId: string): string {
+  return `/api/sites/${siteId}/machines/${machineId}/thing`;
 }
 
 /** Wildcard-scoped api-key context — scope never answers the request. */
@@ -244,7 +255,7 @@ function readOnlyKey() {
 
 async function runPathA(
   siteId: string,
-  opts: { capability?: Capability; apiKeyPermission?: 'read' | 'write' } = {},
+  opts: { capability?: Capability; apiKeyPermission?: 'read' | 'write'; machineId?: string } = {},
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const route = authorizedSiteHandler({
     // MACHINE_VIEW is the read-class site-scoped capability EVERY role holds
@@ -255,7 +266,13 @@ async function runPathA(
     apiKeyPermission: opts.apiKeyPermission ?? 'read',
   })(async () => NextResponse.json({ ok: true }));
 
-  const res = await route(makeRequest(), { params: Promise.resolve({ siteId }) });
+  // path A′: the same wrapper on a machine route, where params carry the machineId
+  const { machineId } = opts;
+  const res = machineId === undefined
+    ? await route(makeRequest(), { params: Promise.resolve({ siteId }) })
+    : await route(makeRequest(machinePath(siteId, machineId)), {
+        params: Promise.resolve({ siteId, machineId }),
+      });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
@@ -272,6 +289,25 @@ async function runPathB(
   permission: 'read' | 'write' = 'read',
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const result = await requireSiteAuthAndScope(makeRequest(), siteId, permission);
+  if (!result.ok) {
+    return { status: result.response.status, body: await result.response.json().catch(() => ({})) };
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+// --- path C driver ----------------------------------------------------------
+
+async function runPathC(
+  siteId: string,
+  machineId: string,
+  permission: 'read' | 'write' = 'read',
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const result = await requireMachineAuthAndScope(
+    makeRequest(machinePath(siteId, machineId)),
+    siteId,
+    machineId,
+    permission,
+  );
   if (!result.ok) {
     return { status: result.response.status, body: await result.response.json().catch(() => ({})) };
   }
@@ -459,6 +495,54 @@ describe('CONVERGENCE 2 — a malformed siteId is 400 on BOTH paths', () => {
     resolveAuthThrows = { status: 401, message: 'no session' };
     expect((await runPathA(MALFORMED)).status).toBe(401);
     expect((await runPathB(MALFORMED)).status).toBe(401);
+  });
+});
+
+describe('machine scope — every gate holds a scoped member to their machines', () => {
+  // path A′ is the wrapper on a machine route, path C is requireMachineAuthAndScope.
+  // off the scope both answer as for a machine that is not there (ADR 0016), so
+  // the bodies must match too, or one gate tells a scoped member the id exists.
+  beforeEach(() => {
+    store.users.set(ALICE, { role: 'member', sites: [SITE] });
+    store.sites.set(SITE, { owner: 'someone_else' });
+  });
+
+  it('refuses a scoped member on the no-machine path with the same 403 on A and B', async () => {
+    grant(SITE, ALICE, 'member', [MACHINE]);
+
+    const a = await runPathA(SITE);
+    const b = await runPathB(SITE);
+
+    expect(a.status).toBe(403);
+    expect(b.status).toBe(403);
+    expect(String(a.body.detail)).toBe('capability not granted');
+    expect(withoutRequestId(a.body)).toEqual(withoutRequestId(b.body));
+  });
+
+  it('admits a scoped member to a machine in scope on A′ and C', async () => {
+    grant(SITE, ALICE, 'member', [MACHINE]);
+
+    expect((await runPathA(SITE, { machineId: MACHINE })).status).toBe(200);
+    expect((await runPathC(SITE, MACHINE)).status).toBe(200);
+  });
+
+  it('answers a machine out of scope with the same 404 on A′ and C', async () => {
+    grant(SITE, ALICE, 'member', ['m2']);
+
+    const a = await runPathA(SITE, { machineId: MACHINE });
+    const c = await runPathC(SITE, MACHINE);
+
+    expect(a.status).toBe(404);
+    expect(c.status).toBe(404);
+    expect(String(a.body.detail)).toBe('machine not found or no access');
+    expect(withoutRequestId(a.body)).toEqual(withoutRequestId(c.body));
+  });
+
+  it('admits a whole-site member to the machine on A′ and C', async () => {
+    grant(SITE, ALICE, 'member');
+
+    expect((await runPathA(SITE, { machineId: MACHINE })).status).toBe(200);
+    expect((await runPathC(SITE, MACHINE)).status).toBe(200);
   });
 });
 

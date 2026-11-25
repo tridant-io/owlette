@@ -16,17 +16,19 @@ import {
   EmailAuthProvider,
 } from 'firebase/auth';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { THEMES, type ThemeChoice } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import * as Sentry from '@sentry/nextjs';
 // Type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the
 // client bundle; `import type` is erased at compile time.
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
+import { scopeCovers } from '@/lib/machineAccess';
+import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import { emitMembershipFallback, emitMembershipListenerError } from '@/lib/membershipMetrics';
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -243,12 +245,16 @@ export function computeIsSuperadmin(role: UserRole | null): boolean {
  * worth nothing on a site it holds no membership for, which is the whole point of
  * per-site roles. Owners rank above admins and satisfy this too.
  *
+ * whole site only: a row with a machine scope holds nothing site-wide, whatever
+ * its role (ADR 0016), so a scoped admin is not a site admin here.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeIsSiteAdmin(
   role: UserRole | null,
   roleMap: Map<string, SiteRole>,
-  siteId: string
+  siteId: string,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   // A null global role means the user document has not resolved — pre-auth, doc
@@ -257,7 +263,7 @@ export function computeIsSiteAdmin(
   // role map replaced `sites[]`.
   if (role === null) return false;
   const siteRole = roleMap.get(siteId);
-  return siteRole === 'owner' || siteRole === 'admin';
+  return (siteRole === 'owner' || siteRole === 'admin') && !scopeMap.has(siteId);
 }
 
 /**
@@ -268,16 +274,20 @@ export function computeIsSiteAdmin(
  * Reads the role map, never `sites/{siteId}.owner` — the legacy field is
  * stripped in wave 6.1 and a control gated on it would silently stop rendering.
  *
+ * owners are never scoped, so an owner row with a machine scope is malformed and
+ * reads as scoped, the way the server reads it: not the owner here.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeIsSiteOwner(
   role: UserRole | null,
   roleMap: Map<string, SiteRole>,
-  siteId: string
+  siteId: string,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   if (role === null) return false;
-  return roleMap.get(siteId) === 'owner';
+  return roleMap.get(siteId) === 'owner' && !scopeMap.has(siteId);
 }
 
 /**
@@ -291,18 +301,95 @@ export function computeIsSiteOwner(
  *
  * Superadmins pass without a membership, as everywhere else.
  *
+ * only a whole-site owner or admin row counts: those pages are site-wide, and a
+ * scoped admin would find every one refused.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeAdministersAnySite(
   role: UserRole | null,
-  roleMap: Map<string, SiteRole>
+  roleMap: Map<string, SiteRole>,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   if (role === null) return false;
-  for (const siteRole of roleMap.values()) {
-    if (siteRole === 'owner' || siteRole === 'admin') return true;
+  for (const [siteId, siteRole] of roleMap) {
+    if ((siteRole === 'owner' || siteRole === 'admin') && !scopeMap.has(siteId)) return true;
   }
   return false;
+}
+
+/**
+ * the machines the caller reaches on `siteId`, or null for the whole site. a
+ * superadmin holds no member rows and reaches every machine.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeMachineScope(
+  role: UserRole | null,
+  scopeMap: Map<string, readonly string[]>,
+  siteId: string
+): readonly string[] | null {
+  if (role === 'superadmin') return null;
+  return scopeMap.get(siteId) ?? null;
+}
+
+/**
+ * owner or admin of `siteId` whose access covers `machineId`, or a superadmin.
+ * a scoped admin passes on their own machines only.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeIsMachineAdmin(
+  role: UserRole | null,
+  roleMap: Map<string, SiteRole>,
+  scopeMap: Map<string, readonly string[]>,
+  siteId: string,
+  machineId: string
+): boolean {
+  if (role === 'superadmin') return true;
+  // unresolved session: fail closed, as computeIsSiteAdmin does
+  if (role === null) return false;
+  const siteRole = roleMap.get(siteId);
+  return (
+    (siteRole === 'owner' || siteRole === 'admin') &&
+    scopeCovers(scopeMap.get(siteId) ?? null, machineId)
+  );
+}
+
+/**
+ * the caller's role on `siteId` as its row says, scoped or not, or null with no
+ * row. for labels only: it is never a gate, because a scoped admin's row still
+ * says admin.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeSiteRole(
+  roleMap: Map<string, SiteRole>,
+  siteId: string
+): SiteRole | null {
+  return roleMap.get(siteId) ?? null;
+}
+
+/**
+ * the caller's effective swoop mode on `siteId`, given the site's
+ * `membersMayWatch`. a superadmin holds no member rows and always controls; no
+ * row, or an unresolved session, is none.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeSwoopMode(
+  role: UserRole | null,
+  roleMap: Map<string, SiteRole>,
+  swoopMap: Map<string, SwoopMode>,
+  siteId: string,
+  membersMayWatch: boolean
+): SwoopMode {
+  if (role === 'superadmin') return 'control';
+  if (role === null) return 'none';
+  const siteRole = roleMap.get(siteId);
+  if (siteRole === undefined) return 'none';
+  return effectiveSwoopMode(siteRole, swoopMap.get(siteId) ?? null, membersMayWatch);
 }
 
 export interface UserPreferences {
@@ -335,6 +422,9 @@ export interface UserPreferences {
   activeGraphPanel?: { machineId: string; metric: string } | null;
   /** MetricsDetailPanel range, global not per-machine: '1h'|'1d'|'1w'|'1m'|'1y'|'all'. Default '1h'. */
   graphTimeRange?: '1h' | '1d' | '1w' | '1m' | '1y' | 'all';
+  /** appearance, synced across devices. undefined = never chosen, so the
+   * browser's own (localStorage, else the os) stands. applied by ThemePreferenceSync. */
+  theme?: ThemeChoice;
 }
 
 /**
@@ -354,12 +444,32 @@ interface AuthContextType {
   role: UserRole | null;
   /** role === 'superadmin'. Installer uploads, role management, cross-site admining. */
   isSuperadmin: boolean;
-  /** Admin or superadmin of `siteId`. Gates site-level elevated ops (delete machines, stored layouts, site webhooks/settings). */
+  /**
+   * whole-site owner or admin (or superadmin): gates site-wide surfaces such as
+   * site settings, members, the admin panel, remove machine, revoke token and
+   * clear logs; false for a scoped row.
+   */
   isSiteAdmin: (siteId: string) => boolean;
   /** Administers at least one site — the admin panel's site-scoped entry gate. */
   administersAnySite: boolean;
   /** Owner of this site. Gates SITE_DELETE, the one owner-only capability. */
   isSiteOwner: (siteId: string) => boolean;
+  /** the machines the caller reaches on `siteId`. null = whole site. */
+  machineScope: (siteId: string) => readonly string[] | null;
+  /**
+   * owner or admin whose access covers the machine, or a superadmin: gates
+   * commands, process config and displays on that machine. swoop is not here:
+   * the server decides it from the role, the swoop mode and the scope.
+   */
+  isMachineAdmin: (siteId: string, machineId: string) => boolean;
+  /** the role map's value for `siteId`, scoped or not. for labels only, never a gate. */
+  siteRole: (siteId: string) => SiteRole | null;
+  /**
+   * the caller's effective swoop mode on `siteId`; `membersMayWatch` comes from
+   * the site's swoop settings. the dashboard offers no swoop at none, and the
+   * server still decides.
+   */
+  swoopMode: (siteId: string, membersMayWatch: boolean) => SwoopMode;
   /**
    * Sites the user has access to, or `undefined` until access has RESOLVED: the
    * user doc (role, legacy `sites[]`, `lastSiteId`) and the membership listener
@@ -398,6 +508,10 @@ const AuthContext = createContext<AuthContextType>({
   isSiteAdmin: () => false,
   administersAnySite: false,
   isSiteOwner: () => false,
+  machineScope: () => null,
+  isMachineAdmin: () => false,
+  siteRole: () => null,
+  swoopMode: () => 'none',
   userSites: [],
   lastSiteId: null,
   lastMachineIds: {},
@@ -602,6 +716,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   graphTabs: preferences.graphTabs || undefined,
                   activeGraphPanel: preferences.activeGraphPanel || null,
                   graphTimeRange: preferences.graphTimeRange || undefined,
+                  // an unknown value drops to undefined rather than reach setTheme
+                  theme: THEMES.find((t) => t === preferences.theme),
                 };
                 setUserPreferences(prev => {
                   // Keep prev's reference for unchanged fields — identity churn
@@ -633,7 +749,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     prev.processesExpanded === newPrefs.processesExpanded &&
                     prev.displaysExpanded === newPrefs.displaysExpanded &&
                     mutedEqual && ccEqual && graphTabsEqual && activeGraphPanelEqual &&
-                    prev.graphTimeRange === newPrefs.graphTimeRange;
+                    prev.graphTimeRange === newPrefs.graphTimeRange &&
+                    prev.theme === newPrefs.theme;
                   if (allEqual) return prev;
 
                   // Something changed: rebuild, keeping refs for unchanged fields.
@@ -719,34 +836,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // signIn, signUp and signInWithGoogle report a failure and throw it: /login and
+  // /register say it to the user, once. a toast here as well showed every failure twice.
   const signIn = useCallback(async (email: string, password: string) => {
     try {
       if (!auth) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: unknown) {
-      const friendlyMessage = handleError(error);
-      toast.error('Sign In Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 
   const signUp = useCallback(async (email: string, password: string, firstName?: string, lastName?: string, turnstileToken?: string) => {
     try {
       if (!auth || !db) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -781,34 +889,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } finally {
         signUpBootstrapRef.current = null;
       }
-
-      toast.success('Account Created', {
-        description: 'Your account has been created successfully. You can now sign in.',
-      });
     } catch (error: unknown) {
-      // /register renders inline remediation for this, so no toast — but still
-      // report it: OWLETTE-WEB-46 is how we learned real users hit it.
+      // reported under its own context: OWLETTE-WEB-46 is how we learned real users hit it.
       if ((error as { code?: unknown } | null)?.code === 'auth/email-already-in-use') {
         logError(error, 'signup-email-already-in-use');
         throw error;
       }
 
-      const friendlyMessage = handleError(error);
-      toast.error('Sign Up Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
     try {
       if (!auth) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       const provider = new GoogleAuthProvider();
@@ -833,11 +929,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
 
-      const friendlyMessage = handleError(error);
-      toast.error('Google Sign In Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 
@@ -852,8 +945,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       intentionalSignOutRef.current = true;
-      await firebaseSignOut(auth);
+      // the session before the user: once the user clears, pages send them to
+      // /login, and a cookie still valid then bounces them straight back.
       await destroySessionCookie();
+      await firebaseSignOut(auth);
       toast.success('Signed Out', {
         description: 'You have been signed out successfully.',
       });
@@ -919,6 +1014,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Storage is not initialized.');
       }
 
+      // loaded on first use: nothing else in the auth context needs storage.
+      const { ref: storageRef, uploadBytes, getDownloadURL, deleteObject } = await import('firebase/storage');
       const uid = auth.currentUser.uid;
       const avatarRef = storageRef(storage, `users/${uid}/avatar.jpg`);
 
@@ -1182,7 +1279,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Per-site membership — THE source of site access from here on. One
   // collectionGroup listener replaces reading `users/{uid}.sites[]`.
-  const { roleMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
+  const { roleMap, scopeMap, swoopMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
 
   // A listener that is not running degrades every user to the legacy array. The
   // union hides that today, so without this it stays silent right up until wave
@@ -1224,16 +1321,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isSuperadmin = computeIsSuperadmin(role);
   const isSiteAdmin = useCallback(
-    (siteId: string) => computeIsSiteAdmin(role, roleMap, siteId),
-    [role, roleMap]
+    (siteId: string) => computeIsSiteAdmin(role, roleMap, siteId, scopeMap),
+    [role, roleMap, scopeMap]
   );
   const administersAnySite = useMemo(
-    () => computeAdministersAnySite(role, roleMap),
-    [role, roleMap]
+    () => computeAdministersAnySite(role, roleMap, scopeMap),
+    [role, roleMap, scopeMap]
   );
   const isSiteOwner = useCallback(
-    (siteId: string) => computeIsSiteOwner(role, roleMap, siteId),
-    [role, roleMap]
+    (siteId: string) => computeIsSiteOwner(role, roleMap, siteId, scopeMap),
+    [role, roleMap, scopeMap]
+  );
+  const machineScope = useCallback(
+    (siteId: string) => computeMachineScope(role, scopeMap, siteId),
+    [role, scopeMap]
+  );
+  const isMachineAdmin = useCallback(
+    (siteId: string, machineId: string) =>
+      computeIsMachineAdmin(role, roleMap, scopeMap, siteId, machineId),
+    [role, roleMap, scopeMap]
+  );
+  const siteRole = useCallback(
+    (siteId: string) => computeSiteRole(roleMap, siteId),
+    [roleMap]
+  );
+  const swoopMode = useCallback(
+    (siteId: string, membersMayWatch: boolean) =>
+      computeSwoopMode(role, roleMap, swoopMap, siteId, membersMayWatch),
+    [role, roleMap, swoopMap]
   );
 
   const value = useMemo(() => ({
@@ -1244,6 +1359,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isSiteAdmin,
     administersAnySite,
     isSiteOwner,
+    machineScope,
+    isMachineAdmin,
+    siteRole,
+    swoopMode,
     userSites,
     lastSiteId,
     lastMachineIds,
@@ -1262,7 +1381,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

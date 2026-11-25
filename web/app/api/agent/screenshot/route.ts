@@ -3,14 +3,17 @@ import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
+import { screenshotImageUrl, screenshotRecordPath } from '@/lib/screenshotStorage.server';
 
 /**
  * POST /api/agent/screenshot — agent uploads a base64 JPEG (Bearer agent id
- * token; body: siteId, machineId, screenshot, agentVersion).
+ * token; body: siteId, machineId, screenshot, agentVersion). Agents before the
+ * signed-url upload still send their crash, hoot and live-view captures here.
  *
  * Storage:  screenshots/{siteId}/{machineId}/latest.jpg (overwritten)
- *           .../history/{timestamp}.jpg (max 20 kept)
- * Firestore: machines/{machineId}.lastScreenshot and its screenshots/ subcollection.
+ *           .../history/{timestamp}.jpg (max 20 kept), both private
+ * Firestore: machines/{machineId}.lastScreenshot and its screenshots/ subcollection,
+ *           each recording the path and its image-route url.
  */
 export const POST = withRateLimit(
   async (request: NextRequest) => {
@@ -75,7 +78,7 @@ export const POST = withRateLimit(
       await file.save(imageBuffer, {
         metadata: {
           contentType: 'image/jpeg',
-          cacheControl: 'public, max-age=60',
+          cacheControl: 'private, max-age=60',
           metadata: {
             machineId,
             siteId,
@@ -84,11 +87,8 @@ export const POST = withRateLimit(
         },
       });
 
-      await file.makePublic();
-
-      const url = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
       // Cache-buster: the path is fixed, so browsers would serve a stale image.
-      const urlWithCacheBuster = `${url}?t=${Date.now()}`;
+      const urlWithCacheBuster = `${screenshotImageUrl(siteId, machineId, filePath)}&t=${Date.now()}`;
 
       const db = getAdminDb();
       const machineRef = db
@@ -101,6 +101,7 @@ export const POST = withRateLimit(
         {
           lastScreenshot: {
             url: urlWithCacheBuster,
+            path: filePath,
             timestamp: FieldValue.serverTimestamp(),
             sizeKB,
           },
@@ -114,16 +115,15 @@ export const POST = withRateLimit(
       await historyFile.save(imageBuffer, {
         metadata: {
           contentType: 'image/jpeg',
-          cacheControl: 'public, max-age=31536000', // immutable history file
+          cacheControl: 'private, max-age=31536000', // immutable history file
           metadata: { machineId, siteId, capturedAt: String(captureTimestamp) },
         },
       });
-      await historyFile.makePublic();
-      const historyUrl = `https://storage.googleapis.com/${bucket.name}/${historyPath}`;
 
       const screenshotsCol = machineRef.collection('screenshots');
       await screenshotsCol.add({
-        url: historyUrl,
+        url: screenshotImageUrl(siteId, machineId, historyPath),
+        path: historyPath,
         timestamp: FieldValue.serverTimestamp(),
         sizeKB,
       });
@@ -133,9 +133,8 @@ export const POST = withRateLimit(
       if (allDocs.size > MAX_HISTORY) {
         const toDelete = allDocs.docs.slice(0, allDocs.size - MAX_HISTORY);
         for (const docSnap of toDelete) {
-          const data = docSnap.data();
           try {
-            const oldPath = data.url?.split(`${bucket.name}/`)?.[1];
+            const oldPath = screenshotRecordPath(docSnap.data(), bucket.name);
             if (oldPath) await bucket.file(oldPath).delete();
           } catch {
             // Already gone.

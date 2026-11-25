@@ -9,30 +9,48 @@ const mockGet = jest.fn();
  * `mockSecretDocs` overrides it to assert the sibling takes precedence.
  */
 let mockSecretDocs: Array<{ data: () => Record<string, unknown> | undefined }> = [];
+const mockGetAll = jest.fn((...refs: unknown[]) =>
+  Promise.resolve(refs.map((_, i) => mockSecretDocs[i] ?? { data: () => undefined })),
+);
+/** Plan lookups read `sites/{id}` and `users/{payer}` by path; nothing else reads a doc. */
+let mockDocs: Record<string, Record<string, unknown>> = {};
+const mockDocGet = jest.fn(async (path: string) => ({ data: () => mockDocs[path] }));
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     // Subscription query path — `sites/{id}/webhooks`; also the secret-sibling
     // path, which only needs to be chainable since getAll does the reading.
-    collection: () => ({
+    collection: (name: string) => ({
       where: jest.fn().mockReturnThis(),
       get: mockGet,
-      doc: () => ({
+      doc: (id: string) => ({
+        get: () => mockDocGet(`${name}/${id}`),
         collection: () => ({ doc: () => ({}) }),
       }),
     }),
-    getAll: (...refs: unknown[]) =>
-      Promise.resolve(
-        refs.map((_, i) => mockSecretDocs[i] ?? { data: () => undefined }),
-      ),
+    getAll: mockGetAll,
   }),
 }));
 
-// Mock global fetch
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
+// passes every url by default; the send-time cases refuse one
+const mockValidateWebhookUrl = jest.fn();
+jest.mock('@/lib/webhookUrl', () => ({
+  validateWebhookUrl: (raw: unknown) => mockValidateWebhookUrl(raw),
+}));
+
+// Mock global fetch; the redirect cases put the real one back
+const realFetch = global.fetch;
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 import { fireWebhooks, testWebhook } from '@/lib/webhookSender.server';
+import { startRedirectTrap } from '../api/helpers/redirectTrap';
+import { createPlanMemo } from '@/lib/planPause.server';
 import crypto from 'crypto';
 
 function makeWebhookDoc(overrides: Record<string, unknown> = {}) {
@@ -52,6 +70,11 @@ describe('webhookSender', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSecretDocs = [];
+    mockValidateWebhookUrl.mockImplementation(async (raw: string) => ({
+      ok: true,
+      url: raw,
+      hostname: new URL(raw).hostname,
+    }));
   });
 
   describe('fireWebhooks', () => {
@@ -300,9 +323,87 @@ describe('webhookSender', () => {
     });
   });
 
-  /* ---------------------------------------------------------------- */
-  /*  billing-system wave 2.6 — delivery pauses on a locked-out account */
-  /* ---------------------------------------------------------------- */
+  /**
+   * Plans (adr 0018): delivery pauses when the site's plan has no
+   * `owlette.webhooks`. Runs the real resolver; only tridant's answer is mocked.
+   */
+  describe('fireWebhooks — plan pause', () => {
+    const ent = (webhooks: '0' | '1') => ({
+      ok: true,
+      resolved: webhooks === '1',
+      standing: webhooks === '1' ? 'active' : 'expired',
+      inGoodStanding: webhooks === '1',
+      ent: { 'owlette.webhooks': webhooks },
+      epoch: 0,
+    });
+
+    beforeEach(() => {
+      process.env.PLAN_ENFORCEMENT = 'on';
+      process.env.OWLETTE_E2E = '1';
+      mockDocs = { 'sites/site1': { owner: 'payer' }, 'sites/site2': { owner: 'payer' }, 'users/payer': {} };
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc()] });
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    });
+
+    afterEach(() => {
+      delete process.env.PLAN_ENFORCEMENT;
+      delete process.env.OWLETTE_E2E;
+    });
+
+    it('pauses without delivering, reading secrets or touching delivery state', async () => {
+      mockGetSiteEntitlements.mockResolvedValue(ent('0'));
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site1');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockGetAll).not.toHaveBeenCalled();
+      // a pause is not a failure: no failCount, so it never auto-disables.
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('delivers when the site has webhooks', async () => {
+      mockGetSiteEntitlements.mockResolvedValue(ent('1'));
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the lookup when nothing is subscribed', async () => {
+      mockGet.mockResolvedValue({ empty: true, docs: [] });
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockDocGet).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    });
+
+    it('makes no plan read when enforcement is off', async () => {
+      delete process.env.PLAN_ENFORCEMENT;
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
+      expect(mockDocGet).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    });
+
+    it('resolves each site once across a batch sharing a memo', async () => {
+      mockGetSiteEntitlements.mockResolvedValue(ent('0'));
+      const memo = createPlanMemo();
+
+      await Promise.all([
+        fireWebhooks('site1', 'My Site', 'machine.offline', {}, memo),
+        fireWebhooks('site1', 'My Site', 'machine.offline', {}, memo),
+        fireWebhooks('site2', 'Other Site', 'machine.offline', {}, memo),
+      ]);
+
+      expect(mockDocGet.mock.calls.map(([path]) => path).sort()).toEqual([
+        'sites/site1',
+        'sites/site2',
+        'users/payer',
+        'users/payer',
+      ]);
+      expect(mockGetSiteEntitlements.mock.calls.map(([siteId]) => siteId).sort()).toEqual(['site1', 'site2']);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
 
   describe('testWebhook', () => {
     it('sends test payload and returns status', async () => {
@@ -343,6 +444,65 @@ describe('webhookSender', () => {
         .digest('hex');
 
       expect(opts.headers['X-owlette-Signature']).toBe(`sha256=${expectedSig}`);
+    });
+  });
+
+  describe('the url at send time', () => {
+    const refused = {
+      ok: false,
+      reason: 'private_ip',
+      detail: 'hooks.example.com resolves to private ipv4 10.0.0.5',
+    };
+
+    afterEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('fireWebhooks does not follow a redirect, and counts it as a failed delivery', async () => {
+      const trap = await startRedirectTrap();
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc({ url: trap.url })] });
+      mockFetch.mockImplementation(realFetch);
+      try {
+        expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+        expect(trap.hits()).toBe(0);
+        expect(mockUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ lastStatus: 302, failCount: 1 }),
+        );
+      } finally {
+        await trap.close();
+      }
+    });
+
+    it('fireWebhooks re-checks the url, and counts a refused one as a failed delivery', async () => {
+      mockValidateWebhookUrl.mockResolvedValue(refused);
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc()] });
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockValidateWebhookUrl).toHaveBeenCalledWith('https://hooks.example.com/abc');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ lastStatus: 0, failCount: 1 }),
+      );
+    });
+
+    it('testWebhook does not follow a redirect', async () => {
+      const trap = await startRedirectTrap();
+      mockFetch.mockImplementation(realFetch);
+      try {
+        expect(await testWebhook(trap.url, 'secret123')).toEqual({ status: 302 });
+        expect(trap.hits()).toBe(0);
+      } finally {
+        await trap.close();
+      }
+    });
+
+    it('testWebhook re-checks the url, and sends nothing to a refused one', async () => {
+      mockValidateWebhookUrl.mockResolvedValue(refused);
+
+      const result = await testWebhook('https://hooks.example.com/test', 'secret123');
+
+      expect(result).toEqual({ status: 0, error: refused.detail });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 });

@@ -145,7 +145,7 @@ export function MinimizedUploadCard({ upload, onRestore }: MinimizedUploadCardPr
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-4 right-4 z-[10000] w-[320px] rounded-lg border border-border bg-secondary shadow-lg shadow-black/40"
+      className="fixed bottom-4 right-4 z-[10000] w-[320px] rounded-lg border border-border bg-secondary shadow-lg shadow-elevation-shadow/80"
       data-testid="minimized-upload-card"
     >
       <button
@@ -160,16 +160,16 @@ export function MinimizedUploadCard({ upload, onRestore }: MinimizedUploadCardPr
         <div className="flex items-start gap-2">
           <div className="flex-shrink-0 mt-0.5">
             {isError ? (
-              <OctagonAlert className="h-4 w-4 text-red-400" />
+              <OctagonAlert className="h-4 w-4 text-danger" />
             ) : isSuccess ? (
-              <CheckCircle2 className="h-4 w-4 text-green-400" />
+              <CheckCircle2 className="h-4 w-4 text-success" />
             ) : (
               <Loader2 className="h-4 w-4 animate-spin text-accent-cyan" />
             )}
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-baseline gap-2">
-              <span className="text-[13px] font-medium text-white truncate">
+              <span className="text-[13px] font-medium text-foreground truncate">
                 {isError ? 'upload failed' : isSuccess ? 'synced' : name}
               </span>
             </div>
@@ -206,7 +206,7 @@ export function MinimizedUploadCard({ upload, onRestore }: MinimizedUploadCardPr
             )}
 
             {isError && state.error && (
-              <p className="mt-1 text-[11px] text-red-300/90 line-clamp-2">
+              <p className="mt-1 text-[11px] text-danger line-clamp-2">
                 {state.error}
               </p>
             )}
@@ -257,7 +257,7 @@ export function MinimizedUploadCard({ upload, onRestore }: MinimizedUploadCardPr
               <button
                 type="button"
                 onClick={handleCancelClick}
-                className="px-1 rounded text-red-400 hover:text-red-300 cursor-pointer font-medium"
+                className="px-1 rounded text-danger hover:text-foreground cursor-pointer font-medium"
               >
                 yes
               </button>
@@ -277,7 +277,7 @@ export function MinimizedUploadCard({ upload, onRestore }: MinimizedUploadCardPr
               type="button"
               onClick={handleCancelClick}
               aria-label="cancel upload"
-              className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-muted cursor-pointer transition-colors"
+              className="p-1 rounded text-muted-foreground hover:text-danger hover:bg-muted cursor-pointer transition-colors"
             >
               <X className="h-3.5 w-3.5" />
             </button>

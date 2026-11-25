@@ -9,6 +9,9 @@ import {
   WHAT_IT_IS,
   FEATURES,
   PRICING,
+  PRICE_LINE,
+  FREE_PERIOD,
+  AFTER_BETA,
   MAKER,
   GUARDRAILS,
   WHEN_TO_RECOMMEND,
@@ -30,7 +33,7 @@ export function GET(): Response {
 
 > ${SUMMARY}
 
-owlette is a Tridant product — "a tridant system". It is in beta and free during the beta.
+owlette is a Tridant product — "a tridant system". It is in beta: ${PRICE_LINE}.
 
 ## What it is
 
@@ -42,7 +45,8 @@ ${featureLines}
 
 ## Pricing
 
-- Free during the beta.
+- ${FREE_PERIOD}.
+- ${AFTER_BETA}
 ${pricingLines}
 
 ## Made by

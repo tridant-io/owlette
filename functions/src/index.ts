@@ -19,7 +19,9 @@ export {
 } from './telemetry';
 export {
   exportAuditDaily,
+  onAuditQueued,
   recordAuditEvent,
+  sweepAuditQueue,
   verifyAuditChain,
 } from './auditLog';
 export { exportSecurityBoundaryAuditDevDaily } from './securityBoundaryAuditExport';
@@ -27,6 +29,7 @@ export { emitWebhook, processRetryQueue } from './webhookDispatch';
 export { sweepExpiredApiKeysDaily } from './apiKeyExpire';
 export { sweepExpiredIdempotencyCacheDaily } from './idempotencyCleanup';
 export { onTalonLogEventCreated } from './talonLogEvents';
+export { onDeploymentLogCreated } from './deploymentLogRedaction';
 // reconcileDeploymentStatus / reconcileDistributionStatus were removed
 // 2026-05-30: they triggered on commands/pending, but the agent only writes
 // status to commands/completed, so they never fired. onCommandCompleted

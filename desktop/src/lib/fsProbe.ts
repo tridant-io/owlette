@@ -16,6 +16,7 @@ import {
   type ClassifyOptions,
   type FsProbe,
 } from '@/lib/dropClassifier'
+import { desktopOs } from '@/lib/launchCopy'
 
 /**
  * Metadata probes; anything unreadable answers "no" rather than throwing the
@@ -84,15 +85,17 @@ export async function classifyOptionsFor(
 }
 
 /**
- * {@link classifyOptionsFor} against the running machine. A failure to resolve or
- * list `%LOCALAPPDATA%` isn't worth failing a drop over: the classifier falls
- * back to its defaults and the confirm card asks for an interpreter if needed.
+ * {@link classifyOptionsFor} against the running machine, and which desktop it
+ * is. A failure to resolve or list `%LOCALAPPDATA%` isn't worth failing a drop
+ * over: the classifier falls back to its defaults and the confirm card asks for
+ * an interpreter if needed.
  */
 export async function classifyOptions(fs: FsProbe = tauriFsProbe): Promise<ClassifyOptions> {
+  const os = desktopOs()
   try {
-    return await classifyOptionsFor(fs, await localDataDir())
+    return { ...(await classifyOptionsFor(fs, await localDataDir())), os }
   } catch {
-    return {}
+    return { os }
   }
 }
 

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 /**
+ * Status: done with. Step 2.5 of the 2.12.x promotion (docs/runbooks/upgrade-2.12.0.md),
+ * which reached prod in 073e031f; agents 2.9.0+ overwrite what it writes, and the
+ * fleet floor is 3.x.
+ *
  * Hardware profile bootstrap. One-shot: writes a best-effort
  * `hardware/profile` subdoc for machines that lack one, from the legacy
  * singular metrics fields, so the dashboard can render offline/stale machines

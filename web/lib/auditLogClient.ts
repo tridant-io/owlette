@@ -1,18 +1,24 @@
 import crypto from 'crypto';
+import { after } from 'next/server';
+import { FieldValue } from 'firebase-admin/firestore';
+import { PLATFORM_AUDIT_SITE_ID } from '@/lib/activity/types';
 import type { ApiKeyScope } from '@/lib/apiKeyTypes';
-import { HOOT_INTERNAL_SECRET_ENV, hootInternalSecret } from '@/lib/hootInternalSecret';
+import { getAdminDb } from '@/lib/firebase-admin';
 
 /**
- * Fire-and-forget HTTP client for the `recordAuditEvent` cloud function. Never awaits,
- * never throws — audit failures must not add latency or fail the request.
+ * fire-and-forget audit emitter. never awaits, never throws: audit failures must not add
+ * latency or fail the request.
  *
- * Endpoint: env `AUDIT_LOG_URL`, else computed from `FIREBASE_PROJECT_ID` +
- * `AUDIT_LOG_REGION` (default us-central1). Neither set → no-op, so dev environments
- * without deployed functions stay quiet.
+ * an event only joins its site's `audit_queue`. the functions drainer
+ * (`functions/src/auditLog.ts`) is the hash chain's one writer, so a burst of changes to one
+ * site waits in the queue instead of racing for the chain head.
  */
 
-const DEFAULT_REGION = 'us-central1';
-const AUDIT_TIMEOUT_MS = 3000;
+const ENQUEUE_ATTEMPTS = 3;
+const ENQUEUE_BACKOFF_MS = 200;
+const ALREADY_EXISTS = 6;
+// the grpc codes firestore's own transaction runner retries; functions/src/auditLog.ts keeps the same list
+const TRANSIENT_CODES = new Set([1, 2, 4, 8, 10, 13, 14, 16]);
 
 export type ApiKeyAuditContext = {
   keyId: string;
@@ -20,18 +26,6 @@ export type ApiKeyAuditContext = {
   environment: 'live' | 'test' | null;
   isLegacy: boolean;
 };
-
-function getAuditLogUrl(): string | null {
-  const explicit = process.env.AUDIT_LOG_URL;
-  if (explicit && explicit.length > 0) return explicit;
-  const projectId =
-    process.env.FIREBASE_PROJECT_ID ||
-    process.env.GCLOUD_PROJECT ||
-    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-  if (!projectId) return null;
-  const region = process.env.AUDIT_LOG_REGION || DEFAULT_REGION;
-  return `https://${region}-${projectId}.cloudfunctions.net/recordAuditEvent`;
-}
 
 /**
  * Compact stable fingerprint of a key's scope set: first 12 chars of SHA-256 over
@@ -73,11 +67,8 @@ export interface ApiKeyUsedEvent {
  * swallowed + logged so an audit outage never fails the request path.
  */
 export function emitApiKeyUsed(event: ApiKeyUsedEvent): void {
-  const url = getAuditLogUrl();
-  if (!url) return;
-
-  const body = {
-    kind: 'api_key_used' as const,
+  enqueueAudit({
+    kind: 'api_key_used',
     siteId: event.siteId,
     actor: `apiKey:${event.keyId}`,
     occurredAt: Date.now(),
@@ -89,9 +80,7 @@ export function emitApiKeyUsed(event: ApiKeyUsedEvent): void {
       method: event.method,
       isLegacy: event.isLegacy,
     },
-  };
-
-  postAudit(url, body, 'api_key_used');
+  });
 }
 
 /**
@@ -109,7 +98,7 @@ export type MutationKind =
   | 'user_mutated' // users-api: promote / demote / assign-sites / remove-sites / delete / bootstrap
   | 'site_mutated' // sites-api: create / update / delete (security-boundary-migration wave 3.9)
   | 'site_member_mutated' // /api/sites/{siteId}/members
-  | 'installer_mutated' // installer-api: upload / set-latest / delete
+  | 'installer_mutated' // installer-api: upload / set-latest / delete / register / notes
   | 'webhook_mutated' // webhook-api: create / update / delete / rotate-secret / delivery retry
   | 'chat_mutated' // hoot-api: new conversation / rename / soft-delete
   | 'billing_mutated' // admin billing override: extend-trial / set-tier / force-expire
@@ -138,67 +127,64 @@ export interface MutationEvent {
 }
 
 /**
- * Fire-and-forget mutation audit; same delivery/abort semantics as {@link emitApiKeyUsed}.
+ * Fire-and-forget mutation audit; same delivery semantics as {@link emitApiKeyUsed}.
  * One call per mutation — `__tests__/api/auditMutationCoverage.test.ts` asserts every
  * mutating route produces exactly one entry.
  */
 export function emitMutation(event: MutationEvent): void {
-  const url = getAuditLogUrl();
-  if (!url) return;
-
-  const body = {
+  enqueueAudit({
     kind: event.kind,
     siteId: event.siteId,
     actor: event.actor,
     occurredAt: Date.now(),
     target: event.targetId,
     attributes: event.attributes,
-  };
-
-  postAudit(url, body, event.kind);
+  });
 }
 
-/** Internal: shared POST-with-timeout used by every emit helper. */
-function postAudit(url: string, body: unknown, label: string): void {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
-
-  // The `recordAuditEvent` function requires `x-internal-secret` (Wave 1A, see
-  // functions/src/lib/requireInternalSecret.ts). Without it the function 401s, fetch still
-  // resolves, and .catch() never fires — audit events would vanish silently. Hence the
-  // header here AND the response.ok check below.
-  const internalSecret = hootInternalSecret();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (internalSecret) {
-    headers['x-internal-secret'] = internalSecret;
-  }
-
-  fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: controller.signal,
-  })
-    .then((response) => {
-      // Audit failures must NOT propagate, but log loudly: a silent audit gap breaks
-      // compliance + forensics.
-      if (!response.ok) {
-        console.warn(
-          `[auditLogClient] ${label} emit returned ${response.status} — audit event was DROPPED. ` +
-            (internalSecret
-              ? 'Check x-internal-secret matches the cloud function env.'
-              : `${HOOT_INTERNAL_SECRET_ENV} is not set in this web env.`),
-        );
+/** internal: the queue write every emit helper shares. */
+function enqueueAudit(event: {
+  kind: 'api_key_used' | MutationKind;
+  siteId: string;
+  actor: string;
+  occurredAt: number;
+  target?: string;
+  attributes: Record<string, unknown>;
+}): void {
+  const write = (async () => {
+    try {
+      // the id is fixed before the first attempt, so a retry can tell that an earlier write landed
+      const ref = getAdminDb()
+        .collection('sites')
+        .doc(event.siteId || PLATFORM_AUDIT_SITE_ID)
+        .collection('audit_queue')
+        .doc();
+      // a json round trip: firestore rejects undefined fields, which json drops, and the
+      // drainer then hashes the event exactly as json carries it
+      const queued = { event: JSON.parse(JSON.stringify(event)), enqueuedAt: FieldValue.serverTimestamp() };
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await ref.create(queued);
+          return;
+        } catch (err) {
+          const code = (err as { code?: unknown } | null)?.code;
+          // an earlier attempt landed and only its reply was lost
+          if (code === ALREADY_EXISTS) return;
+          if (attempt === ENQUEUE_ATTEMPTS || !TRANSIENT_CODES.has(code as number)) throw err;
+          await new Promise((resolve) => setTimeout(resolve, ENQUEUE_BACKOFF_MS * attempt));
+        }
       }
-    })
-    .catch((err) => {
+    } catch (err) {
+      // never fail the request, but log loudly: a silent audit gap breaks compliance + forensics
       console.warn(
-        `[auditLogClient] ${label} emit failed: ${(err as Error).message}`,
+        `[auditLogClient] ${event.kind} enqueue failed — audit event was DROPPED: ${(err as Error).message}`,
       );
-    })
-    .finally(() => {
-      clearTimeout(timeout);
-    });
+    }
+  })();
+  try {
+    // keeps a serverless instance (vercel's waitUntil) alive until the write settles
+    after(write);
+  } catch {
+    // outside a request scope (a script, a test) nothing ends the process early, and the write is already running
+  }
 }

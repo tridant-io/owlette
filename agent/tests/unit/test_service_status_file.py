@@ -402,6 +402,67 @@ class TestSwoopSection:
         assert not path.exists()
 
 
+def keep_awake_section(path):
+    with open(path) as handle:
+        return json.load(handle)['keep_awake']
+
+
+class TestKeepAwakeSection:
+    """`keep_awake` — the service asking the desktop app to hold the session.
+
+    The app holds the idle lock and the screensaver away on `wanted` alone, and
+    reads a document without it as a service that never asked.
+    """
+
+    def test_a_service_that_was_never_asked_publishes_false(self, tmp_path, monkeypatch):
+        # make_service builds the service without _init_state, as the
+        # connection listener can reach the writer before it.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+
+        service._write_service_status()
+
+        assert keep_awake_section(path) == {'wanted': False}
+
+    def test_the_early_write_carries_the_same_shape(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, None)
+
+        service._write_service_status_early()
+
+        assert keep_awake_section(path) == {'wanted': False}
+
+    def test_publishes_what_the_loop_asked(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service._keep_awake_wanted = True
+
+        service._write_service_status()
+
+        assert keep_awake_section(path) == {'wanted': True}
+
+    def test_the_switch_forces_an_immediate_write_both_ways(self, tmp_path, monkeypatch):
+        # Left out of the signature, a flip would wait out the refresh floor:
+        # half a minute of a screen going dark that the site asked to keep on.
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service._write_service_status()
+
+        service._keep_awake_wanted = True
+        service._write_service_status()
+        assert keep_awake_section(path) == {'wanted': True}
+
+        service._keep_awake_wanted = False
+        service._write_service_status()
+        assert keep_awake_section(path) == {'wanted': False}
+
+    def test_a_steady_switch_does_not_defeat_the_throttle(self, tmp_path, monkeypatch):
+        service, path = make_service(tmp_path, monkeypatch, FakeFirebaseClient())
+        service._keep_awake_wanted = True
+        service._write_service_status()
+
+        path.unlink()
+        service._write_service_status()
+
+        assert not path.exists()
+
+
 def stale_network_error():
     """The verdict TEC-B4A's boot-time probe recorded seconds before DHCP
     finished — the snapshot that used to outlive the condition it described."""

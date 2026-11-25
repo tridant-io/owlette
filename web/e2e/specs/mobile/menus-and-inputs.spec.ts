@@ -1,0 +1,151 @@
+/**
+ * Mobile — menus and inputs at 390px (viewport / isMobile / hasTouch come from
+ * the `mobile-chromium` project in playwright.config.ts).
+ *
+ * The app's nav drawer behaves as the modal it looks like: focus moves in, tab
+ * stays in, escape hands focus back to the menu button. The current site stays
+ * named in the bar, where the breadcrumb that names it on desktop is hidden, and
+ * the drawer's site list opens on request, each site with its machine count. Help sits in the bar, where desktop
+ * has the agent download a phone has no use for. The
+ * landing menu's links take no tab stop while it is closed. And the hoot
+ * composer types at 16px, below which iOS zooms the page into the field.
+ */
+
+import { test, expect } from '@playwright/test';
+import { roleState } from '../../helpers/roles';
+import { clippedFocusRings } from '../../helpers/focusRing';
+import { recordSlides, slideSettled, twoFrames } from '../../helpers/slide';
+import { TEST_USERS } from '../../helpers/seed';
+import { seedHootFixture } from '../../helpers/coverageSeed';
+
+test.describe('app nav drawer', () => {
+  test.use(roleState('admin'));
+
+  test('the bar names the current site beside the menu button', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    const site = page.getByTestId('mobile-current-site');
+    await expect(site).toBeVisible();
+    await expect(site).not.toBeEmpty();
+  });
+
+  test('the bar offers help, and leaves the agent download to a computer', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    await expect(page.getByRole('button', { name: 'download owlette agent' })).toBeHidden();
+    // the only way to the docs and to submit an issue on a phone
+    await page.getByRole('button', { name: 'help', exact: true }).tap();
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('menuitem', { name: 'docs' })).toBeVisible();
+    await expect(menu.getByRole('menuitem')).toHaveCount(2);
+  });
+
+  test('the site list starts closed every time, so the pages stay in view', async ({ page }) => {
+    await page.goto('/dashboard');
+    const current = (await page.getByTestId('mobile-current-site').textContent())?.trim() ?? '';
+    expect(current).not.toBe('');
+    const name = current.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const trigger = page.getByRole('button', { name: 'menu', exact: true });
+    await trigger.click();
+    const drawer = page.getByRole('navigation', { name: /site and page navigation/i });
+    const sites = drawer.getByTestId('drawer-site-toggle');
+    // anchored, not exact: the row's name runs on into its machine count once that is read
+    const row = drawer.getByRole('button', { name: new RegExp(`^${name}`) });
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
+    await expect(row).toHaveCount(0);
+    await expect(drawer.getByRole('button', { name: /^logs/ })).toBeInViewport();
+
+    await sites.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'true');
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAccessibleName(new RegExp(`^${name} \\d+ machines?$`));
+
+    await page.keyboard.press('Escape');
+    await trigger.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  // the drawer clears the list as it opens; that must not play as a slide shut
+  test('the site list slides open and shut, and a reopened drawer starts it shut without a slide', async ({ page }) => {
+    await page.goto('/dashboard');
+    const trigger = page.getByRole('button', { name: 'menu', exact: true });
+    await trigger.click();
+    const drawer = page.getByRole('navigation', { name: /site and page navigation/i });
+    const sites = drawer.getByTestId('drawer-site-toggle');
+    const slides = await recordSlides(drawer);
+
+    await sites.click();
+    await expect.poll(slides).toBe('collapsible-down');
+    await sites.click();
+    await expect.poll(slides).toBe('collapsible-down collapsible-up');
+
+    await sites.click();
+    await slideSettled(drawer);
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+
+    const reopened = await recordSlides(page.locator('body'));
+    await trigger.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
+    await twoFrames(page);
+    expect(await reopened()).toBe('');
+
+    // last, as the check turns animations off. the list keeps room above and below its
+    // rows' outlines; their sides were already cut by the drawer's scroll box before it slid
+    await sites.click();
+    const list = drawer.locator('[data-slot="collapsible-content"]');
+    await expect(list).toBeVisible();
+    await slideSettled(drawer);
+    const cut = await clippedFocusRings(page, list);
+    expect(cut.filter((ring) => ring.edge === 'top' || ring.edge === 'bottom')).toEqual([]);
+  });
+
+  test('focus moves in, tab stays in, and escape hands it back', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    const trigger = page.getByRole('button', { name: 'menu', exact: true });
+    await trigger.click();
+    const drawer = page.getByRole('dialog', { name: 'menu' });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'close menu' })).toBeFocused();
+
+    // backwards off the first control wraps to the last, not out to the page.
+    await page.keyboard.press('Shift+Tab');
+    expect(await drawer.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+});
+
+test.describe('landing menu', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('its links take no tab stop while the menu is closed', async ({ page }) => {
+    await page.goto('/');
+
+    const toggle = page.getByRole('button', { name: 'open menu' });
+    await toggle.focus();
+    await page.keyboard.press('Tab');
+    // the closed panel follows the toggle in the dom; tab must skip past it.
+    expect(await page.evaluate(() => Boolean(document.activeElement?.closest('header')))).toBe(false);
+
+    await toggle.click();
+    await expect(page.getByRole('link', { name: 'pricing', exact: true })).toBeVisible();
+  });
+});
+
+test.describe('hoot composer', () => {
+  test.use(roleState('admin'));
+
+  test('types at 16px so iOS does not zoom into it', async ({ page }) => {
+    await seedHootFixture({ userId: TEST_USERS.admin.uid });
+    await page.goto('/hoot');
+
+    const composer = page.getByLabel('chat message');
+    await expect(composer).toBeVisible();
+    await expect(composer).toHaveCSS('font-size', '16px');
+  });
+});

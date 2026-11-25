@@ -72,8 +72,21 @@ jest.mock('@/lib/hoot/categorizeChat.server', () => ({
   categorizeNewChat: jest.fn(),
 }));
 
+// the plan gate reads the site and its owner through the admin sdk; it lands on the same in-memory store.
+jest.mock('@/lib/firebase-admin', () => ({
+  __esModule: true,
+  getAdminDb: () => fakeDb,
+}));
+
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  __esModule: true,
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
+
 import * as turnStore from '@/lib/hoot/turnStore.server';
 import * as hootUtils from '@/lib/hoot-utils.server';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 import type { SiteMachineSummary } from '@/lib/hoot-utils.server';
 import * as llm from '@/lib/llm';
 import { getToolsByTier } from '@/lib/mcp-tools';
@@ -124,9 +137,9 @@ function siteListing(
   overrides: Array<Partial<SiteMachineSummary> & { id: string }> = [],
 ): SiteMachineSummary[] {
   const base: SiteMachineSummary[] = [
-    { id: 'machine-1', online: true, hootEnabled: true },
-    { id: 'machine-2', online: true, hootEnabled: true },
-    { id: 'machine-3', online: true, hootEnabled: true },
+    { id: 'machine-1', online: true, hootEnabled: true, activeHoursGuard: false },
+    { id: 'machine-2', online: true, hootEnabled: true, activeHoursGuard: false },
+    { id: 'machine-3', online: true, hootEnabled: true, activeHoursGuard: false },
   ];
   return base.map((machine) => {
     const override = overrides.find((entry) => entry.id === machine.id);
@@ -153,7 +166,15 @@ function baseParams(overrides: Partial<StartTurnParams> = {}): StartTurnParams {
     siteId: SITE_ID,
     messages: [userMsg('u1', 'check the cpu')],
     userId: 'user-1',
-    access: { role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true },
+    access: {
+      role: 'admin',
+      siteRole: 'owner',
+      swoopMode: null,
+      standing: { role: 'owner', swoopMode: null, machineIds: null },
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: true,
+    },
     resolved: resolvedOn([MACHINE_ID]),
     turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source: 'chat' },
     chatTarget: { machineIds: [MACHINE_ID] },
@@ -371,6 +392,8 @@ describe('startTurn — happy path', () => {
       skipped: { offline: [], disabled: [] },
       processes: [],
       narrowedByMention: false,
+      localTime: { scope: 'machine', timeZone: undefined },
+      activeHoursGuardIds: [],
     });
   });
 
@@ -474,6 +497,120 @@ describe('startTurn — happy path', () => {
     expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
       maxToolTier: 1,
     });
+  });
+
+  it('hands the tools the machine that started the turn', async () => {
+    const machineActor = {
+      type: 'machine' as const,
+      siteId: SITE_ID,
+      machineId: 'lobby-01',
+      maxTier: 2 as const,
+      machineIds: [MACHINE_ID],
+    };
+    await collectChunks(startTurn(fakeDb, baseParams({ machineActor })));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({ machineActor });
+  });
+
+  it('hands the tools no machine on a turn a person started', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7].machineActor).toBeUndefined();
+  });
+
+  it('hands the tools the swoop mode beside the site role, so an admin held to view stays held', async () => {
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'view',
+            standing: { role: 'admin', swoopMode: 'view', machineIds: null },
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userStanding: { role: 'admin', swoopMode: 'view', machineIds: null },
+      machineScope: null,
+    });
+  });
+
+  it('hands a scoped turn its standing and scope, and lists the site within that scope', async () => {
+    const standing = { role: 'admin' as const, swoopMode: 'control' as const, machineIds: [MACHINE_ID] };
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue([
+      { id: MACHINE_ID, online: true, hootEnabled: true, activeHoursGuard: false },
+    ]);
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'control',
+            standing,
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, [MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual([MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userStanding: standing,
+      machineScope: [MACHINE_ID],
+    });
+  });
+
+  it('drops a resolved machine that has left the scope since the turn was resolved', async () => {
+    // the real listing: both machines are online on the site, one is outside the scope now
+    const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
+    const docs = [
+      { id: 'machine-1', data: () => ({ online: true }) },
+      { id: 'machine-2', data: () => ({ online: true }) },
+    ];
+    const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
+    );
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        siteParams({
+          access: {
+            role: 'member',
+            siteRole: 'member',
+            swoopMode: null,
+            standing: { role: 'member', swoopMode: null, machineIds: ['machine-1'] },
+            isSuperadmin: false,
+            isSiteAdmin: false,
+            isSiteOwner: false,
+          },
+          resolved: resolvedOn(['machine-1', 'machine-2']),
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, ['machine-1']);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual(['machine-1']);
+    expect(turnStore.recordResolvedMachines).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, ['machine-1']);
   });
 });
 
@@ -835,6 +972,75 @@ describe('startTurn — heartbeat abort decision', () => {
   });
 });
 
+describe('startTurn — the ownership check a tool asks before it writes', () => {
+  /**
+   * A tool that asks, as deploy_software does before its first write, whether the turn
+   * still owns the chat. The heartbeat stays at its 20s default, so any abort it sees
+   * came from that question, not from a beat.
+   */
+  function ownershipProbeSetup(observe: { ownership?: unknown; abortedAfter?: boolean }) {
+    (hootUtils.buildExecutableTools as jest.Mock).mockImplementation((...args: unknown[]) => {
+      const { toolCallbacks } = args[7] as {
+        toolCallbacks?: { stillOwnsChat?: () => Promise<unknown>; abortSignal?: AbortSignal };
+      };
+      return {
+        deploy_software: tool({
+          description: 'deploy',
+          inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+          execute: async () => {
+            observe.ownership = await toolCallbacks?.stillOwnsChat?.();
+            observe.abortedAfter = toolCallbacks?.abortSignal?.aborted;
+            return { ok: true };
+          },
+        }),
+      };
+    });
+
+    let call = 0;
+    mockModel = new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks:
+              call === 1
+                ? [
+                    { type: 'tool-call' as const, toolCallId: 'call_deploy', toolName: 'deploy_software', input: '{}' },
+                    { ...finishChunk, finishReason: { unified: 'tool-calls' as const, raw: undefined } },
+                  ]
+                : textChunks('done'),
+          }),
+        };
+      },
+    });
+  }
+
+  it("reads the turn's ownership the way the heartbeat does, and a loss stops the turn at once", async () => {
+    (turnStore.touch as jest.Mock).mockResolvedValue('lost');
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe('lost');
+    expect(observe.abortedAfter).toBe(true);
+    expect(turnStore.touch).toHaveBeenLastCalledWith(fakeDb, CHAT_ID, TURN_ID);
+  });
+
+  it.each(['owned', 'error'] as const)("leaves the turn running on '%s', as the heartbeat does", async (ownership) => {
+    (turnStore.touch as jest.Mock).mockResolvedValue(ownership);
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe(ownership);
+    expect(observe.abortedAfter).toBe(false);
+  });
+});
+
 describe('startTurn — error paths', () => {
   it('model failure: error chunk on the stream, finishTurn(error), no persist', async () => {
     mockModel = new MockLanguageModelV3({
@@ -969,6 +1175,71 @@ describe('startTurn — error paths', () => {
       'Hoot is disabled on every machine this turn targets.',
       [],
     );
+  });
+});
+
+describe("startTurn — the site's plan", () => {
+  const PLAN_ENV = {
+    PLAN_ENFORCEMENT: 'on',
+    TRIDANT_API_URL: 'https://tridant.example.invalid',
+    TRIDANT_LICENSE_KEY: 'test-license-key',
+  };
+
+  /** a core site has control but not hoot; pro has both. */
+  function siteHoot(value: '0' | '1') {
+    mockGetSiteEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': '1', 'owlette.hoot': value },
+      epoch: 1,
+    });
+  }
+
+  beforeEach(() => {
+    mockGetSiteEntitlements.mockReset();
+    Object.assign(process.env, PLAN_ENV);
+    store[`sites/${SITE_ID}`] = { owner: 'payer-1' };
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
+  });
+
+  it("ends a core site's turn with the plan refusal before any model or machine work", async () => {
+    siteHoot('0');
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams({ source: 'followup' })));
+    await flushAsync();
+
+    const detail = PLAN_REQUIRED_DETAIL['owlette.hoot'];
+    expect(chunks.some((c) => c.type === 'error' && c.errorText === detail)).toBe(true);
+    expect(turnStore.finishTurn).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, 'error', detail, []);
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE_ID);
+    expect(llm.createModel).not.toHaveBeenCalled();
+    expect(hootUtils.listSiteMachines).not.toHaveBeenCalled();
+    expect(hootUtils.buildExecutableTools).not.toHaveBeenCalled();
+  });
+
+  it('runs the turn for a pro site', async () => {
+    siteHoot('1');
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
+    expect(chunks.some((c) => c.type === 'error')).toBe(false);
+  });
+
+  it('looks nothing up with enforcement off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+
+    const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 
@@ -1135,6 +1406,196 @@ describe('startTurn — narrowing the resolved set at turn start', () => {
     });
     // The stored selection is untouched by the narrowing.
     expect(store[CHAT_PATH]).toMatchObject({ targetType: 'site', targetMachineIds: null });
+  });
+});
+
+describe('startTurn — the local clock in the prompt', () => {
+  it("gives a single-machine turn that machine's zone, off the listing it already read", async () => {
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([{ id: MACHINE_ID, timezone: 'America/New_York' }]),
+    );
+    // the site's zone is not the machine's, and must not stand in for it.
+    store[`sites/${SITE_ID}`] = { timezone: 'Asia/Tokyo' };
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'single',
+        localTime: { scope: 'machine', timeZone: 'America/New_York' },
+      }),
+    );
+  });
+
+  it.each([
+    ['site-wide', () => siteParams()],
+    [
+      'subset',
+      () =>
+        baseParams({
+          resolved: resolvedOn(['machine-1', 'machine-2']),
+          turnTarget: { machineIds: ['machine-1', 'machine-2'], fanOut: true, source: 'chat' },
+          chatTarget: { machineIds: ['machine-1', 'machine-2'] },
+        }),
+    ],
+  ])("gives a %s fan-out the site's zone: it has no one machine's clock", async (_label, params) => {
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([{ id: 'machine-1', timezone: 'America/New_York' }]),
+    );
+    store[`sites/${SITE_ID}`] = { timezone: 'Asia/Tokyo' };
+
+    await collectChunks(startTurn(fakeDb, params()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ localTime: { scope: 'site', timeZone: 'Asia/Tokyo' } }),
+    );
+  });
+
+  it('reads an unset site zone as utc, as talon schedules do', async () => {
+    await collectChunks(startTurn(fakeDb, siteParams()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ localTime: { scope: 'site', timeZone: 'UTC' } }),
+    );
+  });
+});
+
+describe('startTurn — which agents hold a restart for active hours', () => {
+  const toolOptions = () => (hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7];
+
+  it.each([
+    ['a single-machine turn', () => baseParams(), [MACHINE_ID]],
+    ['a fan-out', () => siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) }), ['machine-1']],
+  ])('%s hands the guarded targets to the tools and the prompt, off the listing it read', async (_label, params, expected) => {
+    // machine-3 holds restarts too, but this turn never reaches it.
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([
+        { id: 'machine-1', activeHoursGuard: true },
+        { id: 'machine-3', activeHoursGuard: true },
+      ]),
+    );
+
+    await collectChunks(startTurn(fakeDb, params()));
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledTimes(1);
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: expected });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ activeHoursGuardIds: expected }),
+    );
+  });
+
+  it('hands over none when no target reports it', async () => {
+    await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: [] });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(expect.objectContaining({ activeHoursGuardIds: [] }));
+  });
+
+  it('leaves out a target rolled back below 4.1.21 that still carries the capability', async () => {
+    // the real listing over the machine docs: an older agent never clears the capability
+    const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
+    const docs = [
+      { id: 'machine-1', data: () => ({ online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-2', data: () => ({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-3', data: () => ({ online: true }) },
+    ];
+    const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
+    );
+
+    await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: ['machine-2'] });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ activeHoursGuardIds: ['machine-2'] }),
+    );
+  });
+});
+
+describe('startTurn — who can approve an active-hours override', () => {
+  const toolOptions = () => (hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7];
+
+  it.each([
+    ['a message the person sent', 'chat'],
+    ['a message a mention narrowed', 'mention'],
+    ['the person answering an approval', 'resume'],
+  ] as const)('lets the tools ask for one on %s', async (_label, source) => {
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({ turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source } }),
+      ),
+    );
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ allowActiveHoursOverride: true });
+  });
+
+  it.each(['followup', 'talon'] as const)(
+    'never on a %s turn: nobody is at the dashboard when it fires',
+    async (source) => {
+      await collectChunks(
+        startTurn(
+          fakeDb,
+          baseParams({
+            source,
+            chatTarget: undefined,
+            turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source },
+          }),
+        ),
+      );
+      await flushAsync();
+
+      expect(toolOptions()).toMatchObject({ allowActiveHoursOverride: false });
+    },
+  );
+
+  it('names the calls this turn resumes, so their override is checked against the record', async () => {
+    // A resumed call's input comes back from the browser; the tools may only
+    // honour an override the server recorded when it asked for this approval.
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await collectChunks(
+        startTurn(
+          fakeDb,
+          baseParams({
+            messages: [
+              userMsg('u1', 'restart it now, the show is over'),
+              assistantMsg('a1', [
+                {
+                  type: 'tool-get_metrics',
+                  toolCallId: 'call_resumed',
+                  state: 'approval-responded',
+                  input: {},
+                  approval: { id: 'approval_1', approved: true },
+                },
+              ]),
+            ],
+            chatTarget: undefined,
+            turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source: 'resume' },
+          }),
+        ),
+      );
+      await flushAsync();
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(toolOptions()).toMatchObject({ incomingToolCallIds: ['call_resumed'] });
+  });
+
+  it('a turn with no tool calls in its messages lists none', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ incomingToolCallIds: [] });
   });
 });
 

@@ -23,13 +23,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSession } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { getRpId, getUserPasskeys, storeChallenge } from '@/lib/webauthn.server';
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
     await assertActiveUser(userId);
 
     const passkeys = await getUserPasskeys(userId);
@@ -45,11 +45,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const options = await generateAuthenticationOptions({
       rpID: getRpId(),
       // This account's own credentials only — the discoverable-credential prompt
-      // used at sign-in may return any passkey on the device.
-      allowCredentials: passkeys.map((p) => ({
-        id: p.credentialId,
-        transports: p.transports,
-      })),
+      // used at sign-in may return any passkey on the device. No transports:
+      // chrome on android routes by them, and a passkey saved through a desktop
+      // password manager's extension came back without "this device", so the
+      // phone offered usb, nfc or another device and never asked that manager.
+      allowCredentials: passkeys.map((p) => ({ id: p.credentialId })),
       // A passkey counts as a second factor only when the authenticator actually
       // verified the human; the verify sibling pins requireUserVerification too.
       userVerification: 'required',

@@ -33,6 +33,7 @@ jest.mock('@/lib/authorizedHandler.server', () => ({
             userId: 'user-1',
             role: 'admin',
             siteRoles: { [params.siteId]: 'admin' },
+            machineScopes: { [params.siteId]: null },
           },
           siteId: params.siteId,
           correlationId: 'corr-test',
@@ -75,6 +76,7 @@ jest.mock('firebase-admin/firestore', () => ({
     arrayUnion: (...items: unknown[]) => ({ __op: 'arrayUnion', items }),
     arrayRemove: (...items: unknown[]) => ({ __op: 'arrayRemove', items }),
     serverTimestamp: () => ({ __op: 'serverTimestamp' }),
+    delete: () => ({ __op: 'delete' }),
   },
   Timestamp: { fromDate: (d: Date) => ({ toMillis: () => d.getTime() }) },
 }));
@@ -116,6 +118,8 @@ function applyFieldOps(
         next[key] = current.filter((x) => !items.includes(x));
       } else if (op === 'serverTimestamp') {
         next[key] = Date.now();
+      } else if (op === 'delete') {
+        delete next[key];
       } else {
         next[key] = value;
       }
@@ -281,6 +285,8 @@ function makeBatch() {
  * else rejects with the real `auth/user-not-found` code the route branches on.
  */
 const authEmailToUid: Record<string, string> = {};
+/** sign-in shape by address; an address with none carries no provider data. */
+const authEmailRecord: Record<string, { emailVerified: boolean; providerData: Array<{ providerId: string }> }> = {};
 const mockGetUserByEmail = jest.fn(async (email: string) => {
   const uid = authEmailToUid[email];
   if (!uid) {
@@ -290,7 +296,7 @@ const mockGetUserByEmail = jest.fn(async (email: string) => {
     err.code = 'auth/user-not-found';
     throw err;
   }
-  return { uid, email };
+  return { uid, email, ...authEmailRecord[email] };
 });
 
 jest.mock('@/lib/firebase-admin', () => ({
@@ -349,8 +355,13 @@ function authedAsSuperadminWithKey(perm: 'read' | 'write' | 'admin' = 'admin'): 
  * production, where they reach every site by role instead.
  */
 /** Set one fixture's per-site role explicitly, overriding the global mirror. */
-function seedMemberRow(siteId: string, uid: string, role: 'owner' | 'admin' | 'member'): void {
-  const data = { uid, role, status: 'active', addedAt: new Date(0), addedBy: 'system:test' };
+function seedMemberRow(
+  siteId: string,
+  uid: string,
+  role: 'owner' | 'admin' | 'member',
+  extra: Record<string, unknown> = {},
+): void {
+  const data = { uid, role, status: 'active', addedAt: new Date(0), addedBy: 'system:test', ...extra };
   docStore[`sites/${siteId}/members/${uid}`] = { data };
   // Registered for collection reads too: GET /members lists the subcollection,
   // so a row only in docStore is invisible to the route under test.
@@ -397,8 +408,18 @@ function seedUser(uid: string, data: Record<string, unknown>): void {
 }
 
 /** Register an address in the Admin Auth directory so it resolves to `uid`. */
-function seedAuthEmail(email: string, uid: string): void {
+function seedAuthEmail(
+  email: string,
+  uid: string,
+  signIn?: { provider: 'password' | 'google.com'; emailVerified: boolean },
+): void {
   authEmailToUid[email] = uid;
+  if (signIn) {
+    authEmailRecord[email] = {
+      emailVerified: signIn.emailVerified,
+      providerData: [{ providerId: signIn.provider }],
+    };
+  }
 }
 
 /**
@@ -432,11 +453,17 @@ function seedSite(siteId: string, data: Record<string, unknown> = {}): void {
   else collectionDocs['sites'].push({ id: siteId, data: merged });
 }
 
+/** a machine of the site, for the existence check a machine scope must pass. */
+function seedMachine(siteId: string, machineId: string): void {
+  docStore[`sites/${siteId}/machines/${machineId}`] = { data: { machineId } };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   for (const k of Object.keys(docStore)) delete docStore[k];
   for (const k of Object.keys(collectionDocs)) delete collectionDocs[k];
   for (const k of Object.keys(authEmailToUid)) delete authEmailToUid[k];
+  for (const k of Object.keys(authEmailRecord)) delete authEmailRecord[k];
 });
 
 // GET /api/sites/{siteId}/members
@@ -502,6 +529,70 @@ describe('GET /api/sites/{siteId}/members', () => {
       role: 'admin',
       globalRole: 'admin',
       displayName: null,
+      swoop: null,
+      machineIds: null,
+    });
+  });
+
+  it('carries each member’s swoop mode: null by role, the stored mode, none when malformed, null for the owner', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE, { owner: 'owner-bob' });
+    seedUser('owner-bob', { role: 'member', sites: [] });
+    // a mode hand-written onto the owner's row still reads null: the owner always controls
+    seedMemberRow(SITE, 'owner-bob', 'owner', { swoop: 'none' });
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    seedUser('carol', { role: 'member', sites: [] });
+    seedMemberRow(SITE, 'carol', 'member', { swoop: 'control' });
+    seedUser('dave', { role: 'member', sites: [] });
+    seedMemberRow(SITE, 'dave', 'admin', { swoop: 'everything' });
+
+    const res = await membersGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const swoopByUid = Object.fromEntries(
+      (body.members as Array<{ uid: string; swoop: unknown }>).map((m) => [m.uid, m.swoop]),
+    );
+    expect(swoopByUid).toEqual({
+      'owner-bob': null,
+      alice: null,
+      carol: 'control',
+      dave: 'none',
+    });
+  });
+
+  it('carries each member’s machine scope beside their swoop mode: null for the whole site, else the list', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE, { owner: 'owner-bob' });
+    seedUser('owner-bob', { role: 'member', sites: [] });
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    seedUser('carol', { role: 'member', sites: [] });
+    seedMemberRow(SITE, 'carol', 'admin', { swoop: 'control', machineIds: ['m2', 'm1'] });
+    seedUser('dave', { role: 'member', sites: [] });
+    // a malformed scope reads as no machines, as the rules read it
+    seedMemberRow(SITE, 'dave', 'member', { machineIds: 'm1' });
+
+    const res = await membersGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const accessByUid = Object.fromEntries(
+      (body.members as Array<{ uid: string; swoop: unknown; machineIds: unknown }>).map((m) => [
+        m.uid,
+        { swoop: m.swoop, machineIds: m.machineIds },
+      ]),
+    );
+    expect(accessByUid).toEqual({
+      'owner-bob': { swoop: null, machineIds: null },
+      alice: { swoop: null, machineIds: null },
+      carol: { swoop: 'control', machineIds: ['m1', 'm2'] },
+      dave: { swoop: null, machineIds: [] },
     });
   });
 
@@ -660,6 +751,166 @@ describe('POST /api/sites/{siteId}/members', () => {
     expect(res.status).toBe(400);
   });
 
+  it('writes the swoop mode it is given on the new row, and audits it', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'member', sites: [] });
+
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        body: { uid: 'alice', role: 'member', swoop: 'control' },
+      }),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(docStore[`sites/${SITE}/members/alice`]?.data).toMatchObject({
+      role: 'member',
+      swoop: 'control',
+    });
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributes: expect.objectContaining({ verb: 'member_added', requestedSwoop: 'control' }),
+      }),
+    );
+  });
+
+  it('writes no swoop field without one, so the role decides', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'member', sites: [] });
+
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        body: { uid: 'alice', role: 'admin' },
+      }),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(docStore[`sites/${SITE}/members/alice`]?.data?.role).toBe('admin');
+    expect(docStore[`sites/${SITE}/members/alice`]?.data).not.toHaveProperty('swoop');
+    expect(mockEmitMutation.mock.calls[0][0].attributes).not.toHaveProperty('requestedSwoop');
+  });
+
+  it('rejects a swoop outside none, view and control with 400 body.swoop, null included', async () => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedUser('alice', { role: 'member', sites: [] });
+
+    for (const swoop of ['bogus', 'CONTROL', null, 1]) {
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          body: { uid: 'alice', role: 'member', swoop },
+        }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).errors).toEqual({
+        'body.swoop': ['must be one of: none, view, control'],
+      });
+    }
+    expect(docStore[`sites/${SITE}/members/alice`]).toBeUndefined();
+  });
+
+  describe('machine scope', () => {
+    function postMember(body: Record<string, unknown>) {
+      return membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, { method: 'POST', body }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+    }
+
+    beforeEach(() => {
+      authedAsSuperadminWithKey();
+      seedSite(SITE);
+      seedMachine(SITE, 'm1');
+      seedMachine(SITE, 'm2');
+      seedUser('alice', { role: 'member', sites: [] });
+    });
+
+    it('writes the list sorted on the new row, and audits it', async () => {
+      const res = await postMember({ uid: 'alice', role: 'member', machineIds: ['m2', 'm1'] });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).roleHonored).toBe(true);
+      expect(docStore[`sites/${SITE}/members/alice`]?.data).toMatchObject({
+        role: 'member',
+        machineIds: ['m1', 'm2'],
+      });
+      expect(mockEmitMutation.mock.calls[0][0].attributes).toMatchObject({
+        verb: 'member_added',
+        requestedMachineIds: ['m1', 'm2'],
+      });
+    });
+
+    it('writes no machineIds without one, so the row reaches the whole site', async () => {
+      const res = await postMember({ uid: 'alice', role: 'member' });
+
+      expect(res.status).toBe(200);
+      expect(docStore[`sites/${SITE}/members/alice`]?.data).not.toHaveProperty('machineIds');
+      expect(mockEmitMutation.mock.calls[0][0].attributes).not.toHaveProperty('requestedMachineIds');
+    });
+
+    it('refuses a machine that is not on this site, naming it on body.machineIds', async () => {
+      const res = await postMember({ uid: 'alice', role: 'member', machineIds: ['m1', 'ghost'] });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).errors).toEqual({
+        'body.machineIds': ['unknown machine: ghost'],
+      });
+      expect(docStore[`sites/${SITE}/members/alice`]).toBeUndefined();
+    });
+
+    it('refuses [], 31 ids, null and any other shape with 400 body.machineIds', async () => {
+      const thirtyOne = Array.from({ length: 31 }, (_, i) => `m${i}`);
+      for (const machineIds of [[], thirtyOne, null, 'm1', [3], ['bad id']]) {
+        const res = await postMember({ uid: 'alice', role: 'member', machineIds });
+
+        expect(res.status).toBe(400);
+        expect(Object.keys((await res.json()).errors)).toEqual(['body.machineIds']);
+      }
+      expect(docStore[`sites/${SITE}/members/alice`]).toBeUndefined();
+    });
+
+    it('refuses scoping yourself with 403 cannot_modify_own_membership', async () => {
+      // user-1 is the actor the mocked wrapper hands every handler here
+      seedUser('user-1', { role: 'member', sites: [] });
+
+      const res = await postMember({ uid: 'user-1', role: 'member', machineIds: ['m1'] });
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('cannot_modify_own_membership');
+      expect(docStore[`sites/${SITE}/members/user-1`]).toBeUndefined();
+    });
+
+    it('refuses the owner with 409 target_is_owner', async () => {
+      seedSite(SITE, { owner: 'owner-uid' });
+      seedUser('owner-uid', { role: 'member', sites: [SITE] });
+
+      const res = await postMember({ uid: 'owner-uid', role: 'admin', machineIds: ['m1'] });
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe('target_is_owner');
+      expect(docStore[`sites/${SITE}/members/owner-uid`]?.data).not.toHaveProperty('machineIds');
+    });
+
+    it('re-adding an existing member answers 200 roleHonored false, and writes no scope', async () => {
+      seedMemberRow(SITE, 'alice', 'admin');
+
+      const res = await postMember({ uid: 'alice', role: 'member', machineIds: ['m1'] });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).roleHonored).toBe(false);
+      expect(docStore[`sites/${SITE}/members/alice`]?.data).toMatchObject({ role: 'admin' });
+      expect(docStore[`sites/${SITE}/members/alice`]?.data).not.toHaveProperty('machineIds');
+    });
+  });
+
   // add-by-email — the dashboard affordance; resolves to the same uid path
 
   describe('by email', () => {
@@ -733,6 +984,55 @@ describe('POST /api/sites/{siteId}/members', () => {
 
       expect(res.status).toBe(404);
       expect(body.code).toBe('not_found');
+    });
+
+    // an address is only an alias for whoever registered it, and a password
+    // account has not shown it owns the address until it verifies
+    it('refuses a password account whose email is not verified, and adds nothing', async () => {
+      authedAsSuperadminWithKey();
+      seedSite(SITE);
+      seedUser('alice', { role: 'member', sites: [] });
+      seedAuthEmail('alice@example.com', 'alice', { provider: 'password', emailVerified: false });
+
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          body: { email: 'alice@example.com', role: 'member' },
+        }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.code).toBe('email_unverified');
+      expect(body.detail).toBe(
+        'alice@example.com has not verified their email address yet. ask them to verify it, then add them again',
+      );
+      expect(docStore[`sites/${SITE}/members/alice`]).toBeUndefined();
+      expect(docStore['users/alice']?.data?.sites).toEqual([]);
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a verified password account', { provider: 'password', emailVerified: true }],
+      ['a google account', { provider: 'google.com', emailVerified: true }],
+      ['a google account its provider left unverified', { provider: 'google.com', emailVerified: false }],
+    ] as const)('adds %s by email', async (_who, signIn) => {
+      authedAsSuperadminWithKey();
+      seedSite(SITE);
+      seedUser('alice', { role: 'member', sites: [] });
+      seedAuthEmail('alice@example.com', 'alice', signIn);
+
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          body: { email: 'alice@example.com', role: 'member' },
+        }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+
+      expect(res.status).toBe(200);
+      expect(docStore['users/alice']?.data?.sites).toContain(SITE);
     });
 
     it('returns 400 when the resolved user is soft-deleted', async () => {
@@ -1179,6 +1479,385 @@ describe('PATCH /api/sites/{siteId}/members/{uid} — per-site role change', () 
     );
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('PATCH /api/sites/{siteId}/members/{uid} — swoop mode', () => {
+  const alicePath = `sites/${SITE}/members/alice`;
+
+  function seedAlice(row: Record<string, unknown>): void {
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    docStore[alicePath] = { data: { uid: 'alice', status: 'active', ...row } };
+  }
+
+  function patchAlice(body: Record<string, unknown>) {
+    return memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'PATCH',
+        body,
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+  }
+
+  /** the one revocation's arguments, read whole so an absent key is visible. */
+  function revokeArgs(): Record<string, unknown> {
+    expect(mockRevokeSwoopSessions).toHaveBeenCalledTimes(1);
+    return (mockRevokeSwoopSessions.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+  }
+
+  beforeEach(() => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+  });
+
+  it('sets a member to control, and revokes nothing', async () => {
+    seedAlice({ role: 'member' });
+
+    const res = await patchAlice({ swoop: 'control' });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data?.swoop).toBe('control');
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
+  it('holding an admin to watch ends only the seats they control, as a swoop change', async () => {
+    seedAlice({ role: 'admin' });
+
+    const res = await patchAlice({ swoop: 'view' });
+
+    expect(res.status).toBe(200);
+    expect(revokeArgs()).toMatchObject({
+      siteId: SITE,
+      uid: 'alice',
+      reason: 'swoop_changed',
+      controlOnly: true,
+    });
+  });
+
+  it('no swoop ends every seat they hold, watch included', async () => {
+    seedAlice({ role: 'member' });
+
+    const res = await patchAlice({ swoop: 'none' });
+
+    expect(res.status).toBe(200);
+    const args = revokeArgs();
+    expect(args).toMatchObject({ uid: 'alice', reason: 'swoop_changed' });
+    expect(args).not.toHaveProperty('controlOnly');
+  });
+
+  it('null deletes the field, so their role decides again', async () => {
+    seedAlice({ role: 'member', swoop: 'control' });
+
+    const res = await patchAlice({ swoop: null });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data).not.toHaveProperty('swoop');
+    expect(docStore[alicePath]?.data?.role).toBe('member');
+    // a member's default is watch, so the control they had is what ends
+    expect(revokeArgs()).toMatchObject({ reason: 'swoop_changed', controlOnly: true });
+  });
+
+  it('demoting an admin set to control keeps the mode, and revokes nothing', async () => {
+    seedAlice({ role: 'admin', swoop: 'control' });
+
+    const res = await patchAlice({ role: 'member' });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data).toMatchObject({ role: 'member', swoop: 'control' });
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
+  it('refuses a body with none of role, swoop and machineIds', async () => {
+    seedAlice({ role: 'member' });
+
+    const res = await patchAlice({});
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.detail).toBe('role, swoop or machineIds is required');
+    expect(body.errors).toEqual({
+      'body.role': ['provide at least one of role, swoop, machineIds'],
+      'body.swoop': ['provide at least one of role, swoop, machineIds'],
+      'body.machineIds': ['provide at least one of role, swoop, machineIds'],
+    });
+  });
+
+  it('refuses a swoop outside none, view, control and null on body.swoop', async () => {
+    seedAlice({ role: 'member' });
+
+    const res = await patchAlice({ swoop: 'bogus' });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).errors).toEqual({
+      'body.swoop': ['must be one of: none, view, control, or null for the role default'],
+    });
+    expect(docStore[alicePath]?.data).not.toHaveProperty('swoop');
+  });
+
+  it('refuses the owner’s row with 409, the swoop mode included', async () => {
+    seedSite(SITE, { owner: 'owner-uid' });
+    seedUser('owner-uid', { role: 'member', sites: [SITE] });
+
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/owner-uid`, {
+        method: 'PATCH',
+        body: { swoop: 'none' },
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'owner-uid' }) },
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('cannot_change_owner_role');
+    expect(body.detail).toBe(
+      "the owner's role, swoop and access come with ownership; transfer ownership via POST /api/sites/{siteId}/transfer-ownership instead",
+    );
+    expect(docStore[`sites/${SITE}/members/owner-uid`]?.data).not.toHaveProperty('swoop');
+  });
+
+  it('refuses your own row with 403 before reading the body', async () => {
+    // user-1 is the actor the mocked wrapper hands every handler here
+    seedUser('user-1', { role: 'member', sites: [SITE] });
+    const req = createMockRequest(`http://localhost/api/sites/${SITE}/members/user-1`, {
+      method: 'PATCH',
+      body: { swoop: 'control' },
+    });
+
+    const res = await memberPATCH(req, { params: Promise.resolve({ siteId: SITE, uid: 'user-1' }) });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('cannot_modify_own_membership');
+    expect(req.bodyUsed).toBe(false);
+    expect(docStore[`sites/${SITE}/members/user-1`]?.data).not.toHaveProperty('swoop');
+  });
+
+  it('answers with the access as written, and audits a role, a swoop and an access change apart', async () => {
+    seedAlice({ role: 'member' });
+    seedMachine(SITE, 'm1');
+
+    const roleOnly = await patchAlice({ role: 'admin' });
+    expect(await roleOnly.json()).toEqual({
+      siteId: SITE,
+      uid: 'alice',
+      role: 'admin',
+      swoop: null,
+      machineIds: null,
+    });
+
+    const both = await patchAlice({ role: 'member', swoop: 'control' });
+    expect(await both.json()).toEqual({
+      siteId: SITE,
+      uid: 'alice',
+      role: 'member',
+      swoop: 'control',
+      machineIds: null,
+    });
+
+    const swoopOnly = await patchAlice({ swoop: null });
+    expect(await swoopOnly.json()).toEqual({
+      siteId: SITE,
+      uid: 'alice',
+      role: 'member',
+      swoop: null,
+      machineIds: null,
+    });
+
+    const accessOnly = await patchAlice({ machineIds: ['m1'] });
+    expect(await accessOnly.json()).toEqual({
+      siteId: SITE,
+      uid: 'alice',
+      role: 'member',
+      swoop: null,
+      machineIds: ['m1'],
+    });
+
+    const attributes = mockEmitMutation.mock.calls.map(([event]) => event.attributes);
+    expect(attributes).toEqual([
+      expect.objectContaining({ method: 'PATCH', verb: 'member_role_changed', role: 'admin' }),
+      expect.objectContaining({ verb: 'member_role_changed', role: 'member', swoop: 'control' }),
+      expect.objectContaining({ verb: 'member_swoop_changed', swoop: null }),
+      expect.objectContaining({ verb: 'member_access_changed', machineIds: ['m1'] }),
+    ]);
+    expect(attributes[0]).not.toHaveProperty('swoop');
+    expect(attributes[0]).not.toHaveProperty('machineIds');
+    expect(attributes[2]).not.toHaveProperty('role');
+    expect(attributes[3]).not.toHaveProperty('role');
+    expect(attributes[3]).not.toHaveProperty('swoop');
+  });
+});
+
+describe('PATCH /api/sites/{siteId}/members/{uid} — machine scope', () => {
+  const alicePath = `sites/${SITE}/members/alice`;
+
+  function seedAlice(row: Record<string, unknown>): void {
+    seedUser('alice', { role: 'member', sites: [SITE] });
+    docStore[alicePath] = { data: { uid: 'alice', status: 'active', ...row } };
+  }
+
+  function patchAlice(body: Record<string, unknown>) {
+    return memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/alice`, {
+        method: 'PATCH',
+        body,
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'alice' }) },
+    );
+  }
+
+  /** the one revocation's arguments, read whole so an absent key is visible. */
+  function revokeArgs(): Record<string, unknown> {
+    expect(mockRevokeSwoopSessions).toHaveBeenCalledTimes(1);
+    return (mockRevokeSwoopSessions.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+  }
+
+  beforeEach(() => {
+    authedAsSuperadminWithKey();
+    seedSite(SITE);
+    seedMachine(SITE, 'm1');
+    seedMachine(SITE, 'm2');
+  });
+
+  it('machineIds alone writes the sorted list, keeps role and swoop, and ends the seats outside it', async () => {
+    seedAlice({ role: 'admin', swoop: 'view' });
+
+    const res = await patchAlice({ machineIds: ['m2', 'm1'] });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data).toMatchObject({
+      role: 'admin',
+      swoop: 'view',
+      machineIds: ['m1', 'm2'],
+    });
+    const args = revokeArgs();
+    expect(args).toMatchObject({
+      siteId: SITE,
+      uid: 'alice',
+      reason: 'scope_changed',
+      keepMachineIds: ['m1', 'm2'],
+    });
+    expect(args).not.toHaveProperty('controlOnly');
+  });
+
+  it('null deletes the field, so they reach the whole site again, and revokes nothing', async () => {
+    seedAlice({ role: 'member', swoop: 'control', machineIds: ['m1'] });
+
+    const res = await patchAlice({ machineIds: null });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data).not.toHaveProperty('machineIds');
+    expect(docStore[alicePath]?.data).toMatchObject({ role: 'member', swoop: 'control' });
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
+  it('holding an admin to watch on fewer machines is ONE revocation carrying both filters', async () => {
+    seedAlice({ role: 'admin' });
+
+    const res = await patchAlice({ swoop: 'view', machineIds: ['m1'] });
+
+    expect(res.status).toBe(200);
+    expect(revokeArgs()).toMatchObject({
+      reason: 'swoop_changed',
+      controlOnly: true,
+      keepMachineIds: ['m1'],
+    });
+  });
+
+  it('no swoop on fewer machines is one revocation with neither filter: every seat ends', async () => {
+    seedAlice({ role: 'admin' });
+
+    const res = await patchAlice({ swoop: 'none', machineIds: ['m1'] });
+
+    expect(res.status).toBe(200);
+    const args = revokeArgs();
+    expect(args).toMatchObject({ reason: 'swoop_changed' });
+    expect(args).not.toHaveProperty('controlOnly');
+    expect(args).not.toHaveProperty('keepMachineIds');
+  });
+
+  it('demoting a scoped admin ends their control seats as a role change, and keeps the scope', async () => {
+    seedAlice({ role: 'admin', machineIds: ['m1'] });
+
+    const res = await patchAlice({ role: 'member' });
+
+    expect(res.status).toBe(200);
+    expect(docStore[alicePath]?.data).toMatchObject({ role: 'member', machineIds: ['m1'] });
+    const args = revokeArgs();
+    expect(args).toMatchObject({ reason: 'role_changed', controlOnly: true });
+    // the scope did not narrow, so nothing outside it is singled out
+    expect(args).not.toHaveProperty('keepMachineIds');
+  });
+
+  it('widening from one machine to the whole site revokes nothing', async () => {
+    seedAlice({ role: 'member', machineIds: ['m1'] });
+
+    const res = await patchAlice({ machineIds: null });
+
+    expect(res.status).toBe(200);
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
+  it('narrowing from two machines to one keeps the one; re-sending the same list revokes nothing', async () => {
+    seedAlice({ role: 'member', machineIds: ['m1', 'm2'] });
+
+    const narrowed = await patchAlice({ machineIds: ['m1'] });
+
+    expect(narrowed.status).toBe(200);
+    expect(revokeArgs()).toMatchObject({ reason: 'scope_changed', keepMachineIds: ['m1'] });
+
+    mockRevokeSwoopSessions.mockClear();
+    const same = await patchAlice({ machineIds: ['m1'] });
+
+    expect(same.status).toBe(200);
+    expect(mockRevokeSwoopSessions).not.toHaveBeenCalled();
+  });
+
+  it('refuses a machine that is not on this site, or a list that is not 1-30 ids, before any write', async () => {
+    seedAlice({ role: 'member' });
+
+    const unknown = await patchAlice({ machineIds: ['ghost', 'm1'] });
+    expect(unknown.status).toBe(400);
+    expect((await unknown.json()).errors).toEqual({ 'body.machineIds': ['unknown machine: ghost'] });
+
+    for (const machineIds of [[], 'm1', [3]]) {
+      const res = await patchAlice({ machineIds });
+      expect(res.status).toBe(400);
+      expect(Object.keys((await res.json()).errors)).toEqual(['body.machineIds']);
+    }
+    expect(docStore[alicePath]?.data).not.toHaveProperty('machineIds');
+  });
+
+  it('refuses the owner’s row with 409, the machine scope included', async () => {
+    seedSite(SITE, { owner: 'owner-uid' });
+    seedUser('owner-uid', { role: 'member', sites: [SITE] });
+
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/owner-uid`, {
+        method: 'PATCH',
+        body: { machineIds: ['m1'] },
+      }),
+      { params: Promise.resolve({ siteId: SITE, uid: 'owner-uid' }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('cannot_change_owner_role');
+    expect(docStore[`sites/${SITE}/members/owner-uid`]?.data).not.toHaveProperty('machineIds');
+  });
+
+  it('refuses scoping your own row with 403 before reading the body', async () => {
+    // user-1 is the actor the mocked wrapper hands every handler here
+    seedUser('user-1', { role: 'member', sites: [SITE] });
+    const req = createMockRequest(`http://localhost/api/sites/${SITE}/members/user-1`, {
+      method: 'PATCH',
+      body: { machineIds: ['m1'] },
+    });
+
+    const res = await memberPATCH(req, { params: Promise.resolve({ siteId: SITE, uid: 'user-1' }) });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('cannot_modify_own_membership');
+    expect(req.bodyUsed).toBe(false);
+    expect(docStore[`sites/${SITE}/members/user-1`]?.data).not.toHaveProperty('machineIds');
   });
 });
 

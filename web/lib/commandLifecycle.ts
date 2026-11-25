@@ -26,6 +26,24 @@ import { getAdminDb } from '@/lib/firebase-admin';
 export const COMMAND_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 /**
+ * the `commands/completed` statuses that end a command. the agent also writes
+ * `running` when it picks a command up and, for installs, updates and
+ * uninstalls, progress statuses (`closing_processes`, `downloading`,
+ * `installing`, `uninstalling`): none of those is the answer. no agent writes
+ * `error`; it stays in the set because the readers here always took it as one.
+ */
+const TERMINAL_COMMAND_STATUSES: ReadonlySet<unknown> = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'error',
+]);
+
+export function isTerminalCommandStatus(status: unknown): boolean {
+  return TERMINAL_COMMAND_STATUSES.has(status);
+}
+
+/**
  * One entry in the `pending` map. Untyped on purpose: every command type has
  * its own payload and these helpers are payload-agnostic — strict typing lives
  * in each action core (e.g. `executeMachineCommand`).

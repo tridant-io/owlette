@@ -1,5 +1,5 @@
 ---
-description: Run next wave of planned tasks in parallel with fresh context per task
+description: "Run the next wave of the active plan in dev/active/ in parallel, one fresh task-executor agent per task, then check the build and tick the tasks off. Use when a plan exists and the owner says execute, run the plan or run the next wave."
 ---
 
 Execute the next wave of tasks from the active plan. Each task runs in a **fresh agent context** to prevent context rot.
@@ -18,46 +18,30 @@ If multiple tasks exist, ask the user which one. Read `dev/active/[task-name]/ta
 
 Parse tasks.md and identify the next wave where ALL tasks are still unchecked (`- [ ]`). Skip waves that are fully complete (`- [x]`). If a wave is partially complete, execute only the remaining unchecked tasks in that wave.
 
-If all waves are complete, report "All tasks complete. Run /verify to check the work." and stop.
+If all waves are complete, report "All tasks complete. Next: tridant:verify to check the work." and stop.
 
 ### Step 3: Execute Wave
 
-For each unchecked task in the wave, spawn a **separate Agent** (subagent_type: "general-purpose") with a prompt that includes:
+For each unchecked task in the wave, spawn a **task-executor** agent (it carries the execution rules) with a prompt that includes, copied verbatim from tasks.md:
 
-1. The task's **Do** description (copy verbatim from tasks.md)
-2. The task's **Files** list
-3. The task's **Done when** criteria
-4. A reminder to read CLAUDE.md and follow project conventions
-5. Instruction to read each listed file BEFORE making changes
+```
+## Task: [Task name]
+
+**Files to read/modify**: [Files list]
+
+**What to do**: [Do description]
+
+**Success criteria**: [Done when]
+```
 
 **Spawn all agents for the wave in a single message** so they run in parallel.
-
-Example agent prompt format:
-```
-You are executing a planned task for the Owlette project. Read .claude/CLAUDE.md first for project conventions.
-
-## Task: [Task name from tasks.md]
-
-**Files to read/modify**: [file list]
-
-**What to do**: [Do description from tasks.md]
-
-**Success criteria**: [Done when from tasks.md]
-
-Instructions:
-- Read each file in the Files list BEFORE making any changes
-- Follow all project conventions from CLAUDE.md
-- Make only the changes described — nothing more
-- Do NOT add comments, docstrings, or improvements beyond the task scope
-- If you encounter a blocker, describe it clearly in your response instead of working around it
-```
 
 ### Step 4: Review Results
 
 After all agents complete:
 1. Review each agent's response for success/failure/blockers
 2. If any agent reports a blocker, flag it to the user
-3. Run a quick build check: `cd web && npx tsc --noEmit 2>&1 | head -20` and `cd agent && python -m py_compile src/*.py 2>&1`
+3. Run a quick build check: `cd web && npx tsc --noEmit 2>&1 | head -20` and `agent/.venv/Scripts/python -m pytest agent/tests/ -x -q` when the wave touched agent/
 
 ### Step 5: Update Progress
 
@@ -78,7 +62,7 @@ Mark completed tasks in `dev/active/[task-name]/tasks.md`:
 **Build status**: [pass/fail]
 **Progress**: [completed]/[total] tasks ([%])
 
-Next: [description of next wave, or "All waves complete — run /verify"]
+Next: [description of next wave, or "All waves complete — next: tridant:verify"]
 ```
 
 If there are more waves and no blockers, ask: **"Continue with Wave [N+1]?"**

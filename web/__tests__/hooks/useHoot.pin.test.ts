@@ -95,7 +95,7 @@ function mention(text: string) {
 function mountHook(siteMachineIds: string[] = ['kiosk-01', 'kiosk-02']) {
   return renderHook(
     (props: { selection: HootTarget; siteMachineIds: string[] }) =>
-      useOwletteChat({ siteId: SITE_ID, ...props }),
+      useOwletteChat({ siteId: SITE_ID, includeAutonomous: true, ...props }),
     { initialProps: { selection: ALL_MACHINES, siteMachineIds } },
   );
 }

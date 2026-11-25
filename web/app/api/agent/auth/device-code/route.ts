@@ -7,13 +7,17 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
 import { getSessionFromRequest } from '@/lib/sessionManager.server';
+import { sanitizeMachineId } from '@/lib/pairingPlan.server';
 import logger from '@/lib/logger';
 
 /**
  * POST /api/agent/auth/device-code — mint a pairing phrase + device code for
  * agent registration; the agent shows the phrase and polls for authorization.
  *
- * Body: `{ machineId?, version? }` (both optional for pre-authorized codes).
+ * Body: `{ machineId?, version?, wantsHoot? }` (all optional for pre-authorized codes).
+ * `wantsHoot: true` (interactive flow only) asks the admin at /add to let this
+ * machine act for hoot mcp; absent means false, as an older agent sends.
+ * `machineId` is stored trimmed; one that cannot be a machine doc id is 400.
  * Returns `pairPhrase` (3 words), `deviceCode` (opaque, 64 bytes base64url),
  * `verificationUri`, `pairingUrl` (phrase pre-filled), `expiresIn` (600s) and
  * `interval` (min poll seconds).
@@ -21,7 +25,13 @@ import logger from '@/lib/logger';
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
     const body = await request.json();
-    const { machineId, version } = body;
+    const { version } = body;
+
+    const machine = sanitizeMachineId(body.machineId);
+    if (!machine.ok) {
+      return NextResponse.json({ error: 'Invalid machineId' }, { status: 400 });
+    }
+    const { machineId } = machine;
 
     // Retry on phrase collision.
     const adminDb = getAdminDb();
@@ -98,11 +108,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     } else {
       // Interactive flow only — wiped once authorize encrypts the bundle.
       docPayload.deviceCode = deviceCode;
+      if (body.wantsHoot === true) docPayload.wantsHoot = true;
     }
 
     await adminDb.collection('device_codes').doc(pairPhrase).set(docPayload);
 
-    logger.info(`Device code created: phrase=${pairPhrase}, machine=${machineId || 'pre-auth'}`);
+    // the phrase stays out, as in authorize: until it expires it can still be authorized.
+    logger.info(`Device code created: machine=${machineId || 'pre-auth'}`);
 
     return NextResponse.json({
       pairPhrase,

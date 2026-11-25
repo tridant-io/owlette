@@ -25,7 +25,7 @@ import stat
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Collection, Iterable, List, Optional, Set, Tuple
 
 from destination_allowlist import (
     DestinationAllowlist,
@@ -112,10 +112,15 @@ def assemble_all(
     cancel_event: Optional[threading.Event] = None,
     content_store: Optional[str] = None,
     prune: bool = True,
+    unchanged_paths: Collection[str] = frozenset(),
 ) -> AssembleResult:
     """
     assemble every file from chunks into `extract_root/<file.path>`, then
     reconcile the tree so it matches the version exactly.
+
+    unchanged_paths: the files the version last committed into this root had
+    byte for byte. only these may be skipped, and only on a size match: any
+    other file is written, since a same-size file can still differ.
 
     cancel_event is checked between files only (atomic-rename safety).
     prune deletes files under extract_root the version does not declare — what
@@ -170,6 +175,7 @@ def assemble_all(
                 allowlist=allowlist,
                 state=state,
                 content_store=store,
+                may_skip=f.path in unchanged_paths,
             )
             if did_write:
                 assembled += 1
@@ -246,10 +252,11 @@ def _assemble_one(
     allowlist: DestinationAllowlist,
     state: SyncState,
     content_store: Path,
+    may_skip: bool,
 ) -> bool:
     """
-    assemble ONE file. returns True if a write occurred, False if the file
-    was already present + matching (idempotent skip).
+    assemble ONE file. returns True if a write occurred, False when may_skip
+    and the file is already present at its size (idempotent skip).
     """
     # POSIX version path → local separator; allowlist.validate() covers
     # traversal, ADS and reserved names.
@@ -262,9 +269,10 @@ def _assemble_one(
     # logged in get handed to the interactive user.
     _ensure_parent_dir(resolved_target, extract_root)
 
-    # idempotent skip on a size match; full-content verification is the
+    # idempotent skip on a size match, only for a file the version last
+    # committed here had byte for byte; full-content verification is the
     # periodic scrub's job, not the hot path.
-    if resolved_target.exists():
+    if may_skip and resolved_target.exists():
         try:
             if resolved_target.stat().st_size == version_file.size:
                 # Re-harden even on skip: a re-sync is how a stale DACL, a

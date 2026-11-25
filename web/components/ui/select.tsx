@@ -119,7 +119,9 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "focus:bg-accent focus:text-accent-foreground [&_svg:not([class*='text-'])]:text-muted-foreground relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        // a menu row's highlight (menu-sweep, see dropdown-menu.tsx): radix select
+        // highlights by focus as its menus do, so no focus:bg-* here or in a caller
+        "group menu-sweep focus:text-accent-foreground [&_svg:not([class*='text-'])]:text-muted-foreground relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className
       )}
       {...props}
@@ -131,7 +133,10 @@ function SelectItem({
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
       {hint ? (
-        <span className="text-muted-foreground ml-auto truncate pl-3 text-xs">{hint}</span>
+        // on the swept row the quiet hint takes the stronger tone, as a menu row's does
+        <span className="text-muted-foreground group-data-[highlighted]:text-accent-foreground/80 ml-auto truncate pl-3 text-xs">
+          {hint}
+        </span>
       ) : null}
     </SelectPrimitive.Item>
   )

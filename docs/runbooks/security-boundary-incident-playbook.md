@@ -22,7 +22,7 @@ Triage:
 
 1. Break down denials by `capability`, `role`, `site`, and route.
 2. Query `sites/{siteId}/audit_log` by `outcome=deny` and `capability`.
-3. Confirm the user's role from `users/{uid}` and site assignment.
+3. Confirm the user's site role from `sites/{siteId}/members/{uid}` (`role`, `status`); `users/{uid}.role` only says whether they are a superadmin, who reaches every site without a membership; no other value of it grants anything on a site.
 4. Check the route's configured capability and `web/lib/capabilities.ts`.
 5. If only `role=member` is denied for command paths, that is expected for milestone A and is not an incident.
 
@@ -51,12 +51,12 @@ Expected dashboard values:
 
 Escalate if more than one site has admin/superadmin denials after the switch is enabled again.
 
-## Scenario 2: Cortex 429s From System Bucket
+## Scenario 2: hoot 429s From System Bucket
 
 Symptoms:
 
 - `system-rate-limit-exhaustion` pages.
-- Cortex autonomous processing returns 429 or stalls.
+- Autonomous hoot processing returns 429 or stalls.
 - `rate_limit_hits_total{bucket='system'}` is sustained.
 
 Triage:
@@ -75,7 +75,7 @@ Mitigation:
 {
   "flag": "rate_limit_enforcement",
   "enabled": false,
-  "reason": "incident: legitimate cortex system burst hit system bucket",
+  "reason": "incident: legitimate hoot system burst hit system bucket",
   "expiresInMinutes": 60
 }
 ```
@@ -87,9 +87,9 @@ Mitigation:
 Expected dashboard values:
 
 - During mitigation: system 429s stop; `kill_switch_state{flag='rate_limit_enforcement',enabled='false'}` observed; bypass audit rows appear with `metadata.enforcement_bypassed='rate_limit'`.
-- After fix: `rate_limit_hits_total{bucket='system'}` returns to zero while Cortex processed heartbeat continues.
+- After fix: `rate_limit_hits_total{bucket='system'}` returns to zero while hoot's processed-event heartbeat continues.
 
-Escalate if Cortex continues processing identical events after rate-limit enforcement is disabled; that points to a loop rather than a limit issue.
+Escalate if hoot continues processing identical events after rate-limit enforcement is disabled; that points to a loop rather than a limit issue.
 
 ## Scenario 3: Account-Deletion Cascade Hangs
 
@@ -117,6 +117,8 @@ Invoke-RestMethod `
   -Uri 'https://dev.owlette.app/api/users/me' `
   -Headers @{ Authorization = "Bearer $token"; 'Idempotency-Key' = '<original key>' }
 ```
+
+   The route takes the account's own session or Firebase ID token, never an API key. On an account with a second factor the ID token is refused (`403 mfa_challenge_required`), so the replay has to come from that account's session after it has passed its second factor.
 
 2. If this is a preview, use `?dryRun=1` first and compare `deletedCounts`.
 3. If the original request completed, replay should return `alreadyCompleted: true` and `performed: false`.
@@ -152,7 +154,7 @@ Provisioning outline:
 
 1. Create the export bucket with uniform bucket-level access and lifecycle retention of at least 2555 days.
 2. Grant the scheduler/export service account Firestore import/export and bucket object-write permissions.
-3. Create a Cloud Scheduler HTTP job that calls Firestore Admin `exportDocuments`.
+3. Deploy the functions: `exportSecurityBoundaryAuditDevDaily` (`functions/src/securityBoundaryAuditExport.ts`) calls Firestore Admin `exportDocuments` for `audit_log` and `entries` daily at 06:30 UTC, and its Cloud Scheduler job comes with the deploy. Outside `owlette-dev-3838a` it returns early until its project guard is removed ([manual-infrastructure.md](manual-infrastructure.md)).
 4. Run a one-time export into a dated prefix.
 5. Verify the operation completes and objects land in GCS.
 

@@ -96,4 +96,17 @@ describe('the launch-time auto-start', () => {
 
     expect(serviceStart).not.toHaveBeenCalled()
   })
+
+  it('never undoes a stop made after launch', async () => {
+    // The kiosk VM, 2026-10-04: `systemctl stop owlette-agent` was cancelled a
+    // quarter second in by this start, which linux's polkit rule lets through.
+    serviceStatus.mockResolvedValue({ ...stopped(), running: true, state: 'running' })
+    const { result } = await mounted()
+
+    serviceStatus.mockResolvedValue(stopped())
+    await act(async () => result.current.refresh())
+    await act(async () => {})
+
+    expect(serviceStart).not.toHaveBeenCalled()
+  })
 })

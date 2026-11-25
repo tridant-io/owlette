@@ -51,6 +51,7 @@ const db = {} as Firestore;
 
 const ACCESS = {
   role: 'admin',
+  standing: { role: 'admin', swoopMode: null, machineIds: null },
   isSuperadmin: false,
   isSiteAdmin: true,
   isSiteOwner: false,
@@ -100,6 +101,20 @@ describe('resolveTalonAuthor', () => {
       access: ACCESS,
     });
     expect(mockVerifyUserSiteAccess).toHaveBeenCalledWith(db, 'admin-uid', SITE);
+  });
+
+  it.each([
+    ['limited to some machines', ['m1']],
+    ['limited to no machines', []],
+  ])('revokes an author %s, because a talon spans the site', async (_label, machineIds) => {
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      ...ACCESS,
+      standing: { ...ACCESS.standing, machineIds },
+    });
+
+    await expect(reasonOf(resolveTalonAuthor(db, SITE, talonFixture()))).resolves.toBe(
+      'creator_access_revoked',
+    );
   });
 
   it.each([

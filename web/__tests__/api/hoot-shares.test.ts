@@ -249,7 +249,7 @@ beforeEach(() => {
   chats = new Map([[CHAT, chatDoc()]]);
   shares = new Map();
   mockRequireSession.mockResolvedValue(UID);
-  mockAssertSiteAccess.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSiteAccess.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 });
 
 // authorization

@@ -1,70 +1,114 @@
 'use client';
 
 /**
- * Result of one dispatched machine command, read from the agent's
+ * Outcome of one dispatched machine command, read from the agent's
  * `sites/{siteId}/machines/{machineId}/commands/completed` doc (one field per
  * command id).
  *
  * Scoped to `commandId`: null holds no subscription, a new id swaps it, and the
- * listener closes itself once the entry lands — a completed entry never changes
- * — so a dispatch never leaves a standing per-machine listener behind.
+ * listener closes itself once the entry lands — a completed or failed entry
+ * never changes — so a dispatch never leaves a standing per-machine listener
+ * behind.
  */
 
 import { useEffect, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
+/** A command the agent finished: its result, or the `Error: …` text it failed with. */
+export type CommandOutcome =
+  | { status: 'completed'; result: string }
+  | { status: 'failed'; error: string };
+
 interface InternalState {
-  /** Stamps the result with the command it came from, so a swapped id reads as
-   * pending instead of showing the previous command's result. */
+  /** Stamps the outcome with the command it came from, so a swapped id reads as
+   * pending instead of showing the previous command's outcome. */
   commandId: string | null;
-  result: string | null;
+  outcome: CommandOutcome | null;
 }
 
-const INITIAL_STATE: InternalState = { commandId: null, result: null };
+const INITIAL_STATE: InternalState = { commandId: null, outcome: null };
+
+/**
+ * calls back once with the command's outcome and closes its listener; the returned
+ * function closes it sooner. a completed command that recorded no result reads as
+ * 'no result', and a failed one with no error as 'no error'.
+ */
+export function watchCommandOutcome(
+  siteId: string,
+  machineId: string,
+  commandId: string,
+  onOutcome: (outcome: CommandOutcome) => void,
+): () => void {
+  if (!db) return () => undefined;
+
+  const ref = doc(
+    db, 'sites', siteId, 'machines', machineId, 'commands', 'completed',
+  );
+  const unsubscribe = onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) return;
+      const entry = snap.data()[commandId] as
+        | { status?: string; result?: unknown; error?: unknown }
+        | undefined;
+      if (entry?.status === 'completed') {
+        onOutcome({
+          status: 'completed',
+          result: typeof entry.result === 'string' ? entry.result : 'no result',
+        });
+      } else if (entry?.status === 'failed') {
+        onOutcome({
+          status: 'failed',
+          error: typeof entry.error === 'string' ? entry.error : 'no error',
+        });
+      } else {
+        return;
+      }
+      unsubscribe();
+    },
+    (err) => {
+      console.error('Error subscribing to command result:', err);
+    },
+  );
+  return unsubscribe;
+}
+
+/**
+ * The command's outcome once the agent marks it completed or failed, or null
+ * while it is still pending.
+ */
+export function useCommandOutcome(
+  siteId: string,
+  machineId: string,
+  commandId: string | null,
+): CommandOutcome | null {
+  const [state, setState] = useState<InternalState>(INITIAL_STATE);
+
+  useEffect(() => {
+    if (!siteId || !machineId || !commandId) return;
+    return watchCommandOutcome(siteId, machineId, commandId, (outcome) => {
+      setState({ commandId, outcome });
+    });
+  }, [siteId, machineId, commandId]);
+
+  // Render-time derivation, matching useDisplayModes: a stale stamp reads as
+  // pending rather than leaking the previous command's outcome.
+  return state.commandId !== null && state.commandId === commandId
+    ? state.outcome
+    : null;
+}
 
 /**
  * The command's `result` string once the agent marks it completed, or null while
- * it is still pending. A completed command that recorded no result reads as
- * 'no result' — a resolved command is never null.
+ * it is still pending or when it failed. A completed command that recorded no
+ * result reads as 'no result' — a completed command is never null.
  */
 export function useCommandResult(
   siteId: string,
   machineId: string,
   commandId: string | null,
 ): string | null {
-  const [state, setState] = useState<InternalState>(INITIAL_STATE);
-
-  useEffect(() => {
-    if (!db || !siteId || !machineId || !commandId) return;
-
-    const ref = doc(
-      db, 'sites', siteId, 'machines', machineId, 'commands', 'completed',
-    );
-    const unsubscribe = onSnapshot(
-      ref,
-      (snap) => {
-        if (!snap.exists()) return;
-        const entry = snap.data()[commandId] as
-          | { status?: string; result?: unknown }
-          | undefined;
-        if (!entry || entry.status !== 'completed') return;
-        setState({
-          commandId,
-          result: typeof entry.result === 'string' ? entry.result : 'no result',
-        });
-        unsubscribe();
-      },
-      (err) => {
-        console.error('Error subscribing to command result:', err);
-      },
-    );
-    return () => unsubscribe();
-  }, [siteId, machineId, commandId]);
-
-  // Render-time derivation, matching useDisplayModes: a stale stamp reads as
-  // pending rather than leaking the previous command's result.
-  return state.commandId !== null && state.commandId === commandId
-    ? state.result
-    : null;
+  const outcome = useCommandOutcome(siteId, machineId, commandId);
+  return outcome?.status === 'completed' ? outcome.result : null;
 }

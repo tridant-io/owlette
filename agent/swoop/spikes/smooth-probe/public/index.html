@@ -1,0 +1,57 @@
+<!doctype html>
+<!--
+  swoop-clarity task 2.5: the smooth-probe page. it measures the shipped
+  web/lib/swoop/video/smooth.ts (server.mjs serves it as /smooth.js, types
+  stripped, never a copy). run `node server.mjs` beside this folder and open
+  http://127.0.0.1:17460/?source=1920x1080&box=1000x562&cover=canvas, or let
+  drive.mjs open it; probe.js lists the query parameters.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>smooth probe</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        background: #101214;
+        color: #c8ccd2;
+        font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      /* the picture's box, sized by probe.js from ?box=; the video and the
+         canvas fill it exactly, as swoop's stage lays them out. */
+      #picture { position: relative; margin: 8px; background: #000; }
+      #picture video, #picture canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      #picture video { object-fit: fill; }
+      #picture canvas { pointer-events: none; }
+      #strip { display: flex; margin: 0 8px; }
+      #state { margin: 8px; }
+    </style>
+  </head>
+  <body>
+    <div id="picture">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="cover"></canvas>
+    </div>
+    <div id="strip"></div>
+    <p id="state">loading</p>
+    <!-- installed before the harness, so a module that fails to load says so on
+         the server's stdout: a safari run opened over ssh has no console. -->
+    <script>
+      window.beacon = (m) => {
+        fetch(`/progress?m=${encodeURIComponent(m)}`).catch(() => {});
+      };
+      addEventListener('error', (e) => beacon(`PAGE ERROR: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`));
+      addEventListener('unhandledrejection', (e) => beacon(`PAGE REJECTION: ${e.reason?.stack ?? e.reason}`));
+    </script>
+    <script type="module">
+      // dynamic, so a failure to fetch or evaluate becomes a rejection this page reports.
+      import('/probe.js').catch((e) => {
+        document.getElementById('state').textContent = `error: ${e?.message ?? e}`;
+        beacon(`MODULE FAILED: ${e?.stack ?? e}`);
+      });
+    </script>
+  </body>
+</html>

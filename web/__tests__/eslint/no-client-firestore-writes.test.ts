@@ -46,8 +46,9 @@ describe('eslint config — no client-side firestore writes', () => {
   });
 
   it('applies the rule globally, not only to an opt-in glob', () => {
+    // other global selectors may follow (the raw-palette guardrail does)
     expect(configText).toMatch(
-      /"no-restricted-syntax":\s*\["error",\s*noTokenLogsRule,\s*noClientFirestoreWritesRule\]/,
+      /"no-restricted-syntax":\s*\["error",\s*noTokenLogsRule,\s*noClientFirestoreWritesRule[,\]]/,
     );
   });
 

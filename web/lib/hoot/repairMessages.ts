@@ -156,7 +156,7 @@ function applyRepairs(
       // Terminal states already carry a result/error. Anything else is dangling and
       // must get a synthetic one, or convertToModelMessages emits a `tool_use` with
       // no matching `tool_result` and the provider rejects the whole request.
-      if (part.state === 'output-available' || part.state === 'output-error') {
+      if (part.state === 'output-available' || part.state === 'output-error' || part.state === 'output-denied') {
         return part;
       }
 
@@ -220,6 +220,7 @@ function collectResolverEligibleIds(messages: UIMessage[]): string[] {
         !isProviderExecuted(part) &&
         part.state !== 'output-available' &&
         part.state !== 'output-error' &&
+        part.state !== 'output-denied' &&
         part.state !== 'approval-requested' &&
         !(part.state === 'approval-responded' && !isApprovalApproved(part))
       ) {
@@ -246,6 +247,132 @@ export interface ApprovalConsumptionResult {
   messages: UIMessage[];
   /** Rewritten replacement parts by tool call id — empty when nothing was consumed. */
   consumedParts: Map<string, UIMessagePart>;
+}
+
+export const UNISSUED_APPROVAL_ERROR =
+  'approval not accepted: this tool call was not waiting on an approval, so nothing ran. ' +
+  'Call the tool again if it is still needed, and the operator will be asked.';
+
+/** A tool part as the SDK recognises one: by its type alone, state or no state. */
+function isToolTyped(part: unknown): part is ToolLikePart {
+  const type = (part as { type?: unknown } | null)?.type;
+  return typeof type === 'string' && (type === 'dynamic-tool' || type.startsWith('tool-'));
+}
+
+function isAssistantWithParts(message: UIMessage): boolean {
+  return message.role === 'assistant' && Array.isArray(message.parts);
+}
+
+/** Every tool call id in a message array, as sent: what `needsApproval` must never record. */
+export function incomingToolCallIds(messages: UIMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (!isAssistantWithParts(message)) continue;
+    for (const part of message.parts) {
+      if (isToolTyped(part) && typeof part.toolCallId === 'string') ids.push(part.toolCallId);
+    }
+  }
+  return ids;
+}
+
+function toolPartName(part: ToolLikePart): string {
+  return part.type === 'dynamic-tool'
+    ? String((part as { toolName?: unknown }).toolName)
+    : part.type.slice('tool-'.length);
+}
+
+/**
+ * The first half of who may answer a card, which needs no reads. The SDK treats
+ * `approval` as live on a tool part in ANY state, and pairs answers with calls by
+ * approval id, across parts and messages. So an incoming `approval` survives only as
+ * an answer: `approval-responded`, a boolean, after the last user message, on a call
+ * id and an approval id nothing else shares. A finished part loses it (the result
+ * stands), and anything else is rewritten to a terminal error. Before the last user
+ * message, `repairDanglingToolParts` settles what was answered or left waiting.
+ *
+ * `refuseAnswersWithNoCard` is the second half.
+ */
+export function refuseUnissuedApprovals(messages: UIMessage[]): UIMessage[] {
+  const callIds = new Map<unknown, number>();
+  const approvalIds = new Map<unknown, number>();
+  const count = (counts: Map<unknown, number>, key: unknown) => counts.set(key, (counts.get(key) ?? 0) + 1);
+  for (const message of messages) {
+    if (!isAssistantWithParts(message)) continue;
+    for (const part of message.parts) {
+      if (!isToolTyped(part)) continue;
+      count(callIds, part.toolCallId);
+      const approval = (part as { approval?: { id?: unknown } | null }).approval;
+      if (approval !== undefined && approval !== null) count(approvalIds, approval.id);
+    }
+  }
+
+  const lastUser = findLastUserIndex(messages);
+  return messages.map((message, index) => {
+    if (!isAssistantWithParts(message)) return message;
+    let changed = false;
+    const parts = message.parts.map((part) => {
+      if (!isToolTyped(part)) return part;
+      const { state, toolCallId, approval: rawApproval } = part as ToolLikePart & { approval?: unknown };
+      const shared = (callIds.get(toolCallId) ?? 0) > 1;
+      if ((rawApproval === undefined || rawApproval === null) && !shared) return part;
+
+      const approval = (rawApproval ?? {}) as { id?: unknown; approved?: unknown; reason?: unknown };
+      let result: UIMessagePart = toErrorPart(part as UIMessagePart & ToolLikePart, UNISSUED_APPROVAL_ERROR);
+      if (state === 'output-available' || state === 'output-error' || state === 'output-denied') {
+        // the tool is done and its result stands; only the approval goes.
+        const { approval: _approval, ...finished } = part as ToolLikePart & { approval?: unknown };
+        result = finished as UIMessagePart;
+        if (rawApproval === undefined || rawApproval === null) return part;
+      } else if (shared || (approvalIds.get(approval.id) ?? 0) > 1) {
+        // kept as the error above.
+      } else if (index <= lastUser && (state === 'approval-requested' || state === 'approval-responded')) {
+        return part;
+      } else if (index > lastUser && state === 'approval-responded' && typeof approval.approved === 'boolean') {
+        const reason = typeof approval.reason === 'string' ? { reason: approval.reason } : {};
+        result = { ...part, approval: { id: approval.id, approved: approval.approved, ...reason } } as UIMessagePart;
+      }
+      changed = true;
+      return result;
+    });
+    return changed ? { ...message, parts } : message;
+  });
+}
+
+/**
+ * The second half: an answer counts only for a call this server raised a card for.
+ * Rewritten parts are returned too, because the SDK's final message is seeded from
+ * before this ran and they have to be re-applied to it.
+ */
+export async function refuseAnswersWithNoCard(
+  messages: UIMessage[],
+  hasCard: (toolCallId: string, toolName: string) => Promise<boolean>,
+): Promise<{ messages: UIMessage[]; refused: Map<string, UIMessagePart> }> {
+  const refused = new Map<string, UIMessagePart>();
+  const lastUser = findLastUserIndex(messages);
+  const result: UIMessage[] = [];
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (index <= lastUser || !isAssistantWithParts(message)) {
+      result.push(message);
+      continue;
+    }
+    const parts: UIMessagePart[] = [];
+    for (const part of message.parts) {
+      if (
+        isToolPart(part) &&
+        part.state === 'approval-responded' &&
+        !(await hasCard(part.toolCallId, toolPartName(part)))
+      ) {
+        const replacement = toErrorPart(part, UNISSUED_APPROVAL_ERROR);
+        refused.set(part.toolCallId, replacement);
+        parts.push(replacement);
+      } else {
+        parts.push(part);
+      }
+    }
+    result.push({ ...message, parts });
+  }
+  return { messages: result, refused };
 }
 
 /**

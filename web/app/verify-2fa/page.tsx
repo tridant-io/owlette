@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { toast } from '@/lib/toast';
+import { safeNextPath } from '@/lib/appLink';
 
 /**
  * `browserSupportsWebAuthn()` reads `window.PublicKeyCredential`, so answering it during
@@ -41,13 +42,18 @@ const getWebAuthnSupportOnServer = () => false;
  * the screen never changes and only a manual reload gets through (reported by
  * Davor, 2026-09-04, via the passkey path).
  *
- * A document load re-runs the proxy against the freshly-minted cookie and
- * discards the stale router cache, so it is correct regardless of whether the
- * cache or the cookie is the straggler. `returnUrl` is already constrained to a
+ * Cancel leaves the same way, for the same reason: while the challenge is
+ * pending the proxy also answers /login with a redirect here, so a /login
+ * fetched client-side in that window (a prefetch, or this page's own no-user
+ * push) leaves a bounce in the cache that a client push would replay.
+ *
+ * A document load re-runs the proxy against the current cookie and discards
+ * the stale router cache, so it is correct regardless of whether the cache or
+ * the cookie is the straggler. A pass's `returnUrl` is already constrained to a
  * same-origin relative path by the open-redirect guard in the component.
  */
-function leaveChallenge(returnUrl: string) {
-  window.location.assign(returnUrl);
+function leaveChallenge(destination: string) {
+  window.location.assign(destination);
 }
 
 function Verify2FAContent() {
@@ -56,8 +62,10 @@ function Verify2FAContent() {
   const searchParams = useSearchParams();
   // Accept `redirect` (proxy + login page) and the historical `return`. Must be a
   // same-origin relative path, else /dashboard — open-redirect guard.
-  const rawReturn = searchParams.get('redirect') ?? searchParams.get('return') ?? '/dashboard';
-  const returnUrl = (rawReturn.startsWith('/') && !rawReturn.startsWith('//')) ? rawReturn : '/dashboard';
+  const returnUrl = safeNextPath(
+    searchParams.get('redirect') ?? searchParams.get('return'),
+    '/dashboard',
+  );
 
   const [verificationCode, setVerificationCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -247,7 +255,7 @@ function Verify2FAContent() {
 
   const handleCancel = async () => {
     await signOut();
-    router.push('/login');
+    leaveChallenge('/login');
   };
 
   if (loading) {
@@ -296,7 +304,11 @@ function Verify2FAContent() {
 
       <form onSubmit={handleVerify} className="space-y-6">
         <div className="space-y-2">
+          <Label htmlFor="otp-code" className="sr-only">
+            {useBackupCode ? 'backup code' : '6-digit code'}
+          </Label>
           <Input
+            id="otp-code"
             type="text"
             name="otp"
             autoComplete="one-time-code"
@@ -330,7 +342,9 @@ function Verify2FAContent() {
             id="trustDevice"
             checked={trustThisDevice}
             onCheckedChange={(checked) => setTrustThisDevice(checked === true)}
-            className="border-border"
+            // the hairline is dark-only (it vanishes on the light card) and
+            // unchecked-only, or the dark: variant would outrank the checked cyan.
+            className="dark:data-[state=unchecked]:border-border"
           />
           <Label
             htmlFor="trustDevice"

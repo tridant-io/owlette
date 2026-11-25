@@ -13,7 +13,7 @@ import { isJson } from '../lib/output';
 
 /** Walks up to `cli/package.json` — same ancestor from `src/` and `dist/`. */
 let cachedCliVersion: string | null = null;
-function readCliVersion(): string {
+export function readCliVersion(): string {
   if (cachedCliVersion !== null) return cachedCliVersion;
   let dir = __dirname;
   // Depth cap: `dirname('/')` returns itself, so an odd install could loop.

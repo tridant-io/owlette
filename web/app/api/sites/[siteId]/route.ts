@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import { timestampToIso } from '@/lib/firestoreTime.server';
 import {
   problem,
+  problemForbidden,
   problemFromError,
   problemNotFound,
   problemValidation,
@@ -24,10 +25,11 @@ import {
   requireSiteAuthAndScope,
 } from '../../_shared';
 import { authorizedSiteHandler, type SiteHandlerContext } from '@/lib/authorizedHandler.server';
-import { Capability } from '@/lib/capabilities';
+import { Capability, hasCapability } from '@/lib/capabilities';
 import { updateSite } from '@/lib/actions/updateSite.server';
 import { deleteSite } from '@/lib/actions/deleteSite.server';
 import { withIdempotency } from '@/lib/idempotency';
+import { SITE_DELETE_MOVING } from '@/lib/machineMove';
 
 type RouteParams = { siteId: string };
 
@@ -47,7 +49,8 @@ function auditActor(ctx: SiteHandlerContext): string {
 export async function GET(request: NextRequest, { params }: { params: Promise<RouteParams> }) {
   try {
     const { siteId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    // a scoped member reads it too: the site document says nothing about machines
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();
@@ -176,6 +179,14 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
   apiKeyPermission: 'admin',
 })(async (request: NextRequest, ctx: SiteHandlerContext) => {
   try {
+    // re-checked here for the reason the members POST comment gives
+    // (`members/route.ts`): the break-glass skips SITE_DELETE in the wrapper,
+    // which is not exempt. before the body read and `withIdempotency`, so a 403
+    // is never replayed under a key. it answers what the wrapper would.
+    if (!hasCapability(ctx.actor, Capability.SITE_DELETE, ctx.siteId)) {
+      return problemForbidden('capability not granted');
+    }
+
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
 
@@ -200,6 +211,15 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
 
         if (result.kind === 'not_found') {
           return problemNotFound(`site ${ctx.siteId} not found`);
+        }
+        if (result.kind === 'move_switching') {
+          return problem({
+            type: ProblemType.Conflict,
+            title: 'conflict',
+            status: 409,
+            code: 'move_switching',
+            detail: SITE_DELETE_MOVING(result.direction),
+          });
         }
 
         return applyAuthDeprecations(

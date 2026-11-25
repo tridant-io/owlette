@@ -1,107 +1,103 @@
 ---
 title: "system presets"
-description: "System presets are the platform template library for software deployments. They are global installer presets, not process configuration presets."
+description: "the template library: owlette's shared catalog of Windows software installers that site admins pick from when they create a deployment. it is an internal owlette page; each site keeps its own saved templates beside it."
+keywords: ["template library", "software catalog", "installer templates", "deployment templates", "touchdesigner installer", "silent install", "sha256"]
 ---
 
-**Location**: Admin Panel -> template library (`/admin/presets`)
+**location**: admin panel → template library (`/admin/presets`)
 
-**Storage**: Firestore `system_presets/{presetId}`
+**storage**: Firestore `system_presets/{presetId}`
 
-**API**: `/api/platform/system-presets`
+**API**: `/api/platform/system-presets` and `POST /api/platform/installer-checksum`, both needing `SYSTEM_PRESET_MANAGE`
 
 ---
 
 ## who manages them
 
-The template library is curated by owlette. `/admin/presets` is an internal page — it is not part of the site-scoped admin panel, and the platform API requires the `SYSTEM_PRESET_MANAGE` capability, which no customer role holds.
+the template library is curated by owlette. `/admin/presets` is an internal page, not part of the site-scoped admin panel, and `SYSTEM_PRESET_MANAGE` is held by no site role.
 
-All authenticated users can read `system_presets` from Firestore. Create, update, and delete writes go through trusted server routes and service-account writes, not direct client writes.
+any signed-in account can read `system_presets`; creating, editing and deleting go through the server routes only. site admins meet the presets in the deployment dialog, where they are read-only catalog entries; a site's own templates are saved separately (see [use in deployments](#use-in-deployments)).
 
-Site admins use these presets when creating deployments. The deployment dialog treats system presets as catalog entries; it does not let site admins overwrite the shared library. Site-specific templates live alongside them as saved deployment templates — see [use in deployments](#use-in-deployments).
-
----
-
-## template library
-
-The page shows a categorized software catalog. Each row represents one installer template and includes:
-
-| column | description |
-|--------|-------------|
-| **preset** | Software name plus display name, with an auto-update badge for special Owlette Agent presets |
-| **category** | Category used for filtering |
-| **installer** | Installer filename and installer URL preview |
-| **flags** | Silent install flags |
-| **actions** | Edit or delete the preset |
-
-Category tabs are generated from the stored `category` values. The create/edit dialog offers these standard categories: `System`, `Creative Software`, `Media Server`, `Utilities`, and `Development Tools`.
+every preset is a Windows installer: deployments run only on Windows agents. a Mac or Linux agent downloads and checks the file, then fails the install; see [platform support](/docs/reference/platform-support#software).
 
 ---
 
-## preset fields
+## the template library
 
-System preset documents may contain:
+buttons along the top filter by category: `all (N)` and one per stored category, with its count. on a wide screen each preset is a table row; on a smaller one, a card.
 
-| field | required | description |
-|-------|----------|-------------|
-| `name` | Yes | Display name shown in the template dropdown, such as `TouchDesigner 2025.31550` |
-| `software_name` | Yes | Short software identifier used for grouping and matching, such as `TouchDesigner` |
-| `category` | Yes | Template category used by the admin filters and deployment dialog groups |
-| `description` | No | Optional long description |
-| `icon` | No | Optional one-character icon for display |
-| `installer_name` | Yes | Installer filename, such as `TouchDesigner.2025.31550.exe` |
-| `installer_url` | Usually | Direct installer download URL. The admin dialog requires it for normal templates; special agent presets may resolve the installer elsewhere. |
-| `silent_flags` | Yes | Command-line flags for unattended installation |
-| `verify_path` | No | File path checked after installation to confirm success |
-| `close_processes` | No | Process executable names to close before install |
-| `parallel_install` | No | Whether to keep existing versions by installing alongside them |
-| `is_owlette_agent` | Yes | Marks special Owlette Agent presets; normal admin-created templates set this to `false` |
-| `timeout_seconds` | No | Custom install timeout; the admin dialog defaults to `600` seconds |
-| `order` | Yes | Display order; lower values sort first |
-| `createdBy` | Yes | User ID of the account that created the preset |
-| `createdAt` | Yes | Server timestamp for creation |
-| `updatedAt` | No | Server timestamp for the most recent update |
-
-The API creates IDs with the `preset-{software-slug}-{epochMs}` pattern. Individual preset routes accept IDs made from letters, digits, underscores, and hyphens.
+| column | what it shows |
+|---|---|
+| **preset** | the software name and the preset name, with an `Auto-update` badge on an owlette agent preset |
+| **category** | the preset's category |
+| **installer** | the installer filename and the start of its URL |
+| **flags** | the silent install flags, on the widest screens only |
+| **actions** | edit, and delete after **delete preset** |
 
 ---
 
 ## creating and editing templates
 
-1. Open **template library** in the admin panel.
-2. Click **add template**.
-3. Fill in the required software, category, installer, URL, and silent flag fields.
-4. Optionally add a description, icon, verification path, timeout, and display order.
-5. Click **create template**.
+**add template** opens **create template**; the pencil on a row opens **edit template**.
 
-For TouchDesigner templates, the dialog can fetch the latest build from derivative.ca and prefill the name, installer filename, installer URL, silent flags, verification path, timeout, and sort order.
+| field | label | notes |
+|---|---|---|
+| `name` | **name** * | shown in the deployment dialog's dropdown, such as `TouchDesigner 2025.31550` |
+| `software_name` | **software name** * | a short identifier for grouping, such as `TouchDesigner`. a deployment from the preset is named after it |
+| `category` | **category** * | one of `System`, `Creative Software`, `Media Server`, `Utilities` or `Development Tools` |
+| `icon` | **icon (emoji)** | optional, one emoji |
+| `description` | **description** | optional |
+| `installer_name` | **installer filename** * | such as `TouchDesigner.2025.31550.exe` |
+| `installer_url` | **installer URL** * | a direct download link |
+| `sha256_checksum` | (under the URL) | required; see [the checksum](#the-checksum) |
+| `silent_flags` | **silent install flags** * | default `/VERYSILENT /NORESTART /SUPPRESSMSGBOXES`. line breaks become spaces, since the flags are one command line |
+| `verify_path` | **verification path** | optional. a file checked after the install to confirm it worked |
+| `timeout_seconds` | **timeout (seconds)** | default 600 |
+| `order` | **display order** | default 100. lower sorts first |
 
-Editing writes a partial update and stamps `updatedAt`. Deleting removes the preset document; there is no soft-delete state for system presets.
+**create template** or **update template** saves it. an edit writes only the fields in the dialog and stamps `updatedAt`, so anything else on the preset is kept. an optional field you empty is left out of the write rather than cleared, so a description, icon or verification path cannot be removed from the dialog once set. deleting removes the document; system presets have no soft delete.
+
+two fields the dialog does not show: `close_processes` (executables to close before installing) and `parallel_install` (install beside an existing version). set them through the API; the dialog's edits leave them as they are. the dialog always saves `is_owlette_agent: false`.
+
+### the checksum
+
+the dialog will not save without a SHA-256 checksum: agents refuse to run an installer that has none. once the URL is a settled `https` link, the server downloads the file and hashes it (`POST /api/platform/installer-checksum`, behind the same address checks as deployments) and the dialog shows `sha256:` with the start and end of the digest. **enter manually** takes a 64-character hex value instead, for a file the server cannot reach; on an error you can **retry** or enter it manually.
+
+the checksum pins the exact file. if the URL later serves a different build, installs from the preset fail the checksum check until the preset carries the new value.
+
+### TouchDesigner auto-fill
+
+in create mode, **Auto-fill latest TouchDesigner** asks derivative.ca for the latest build and fills in the name (`TouchDesigner <version> (Full)`), software name, category `Creative Software`, a description, the installer filename and URL, the flags `/VERYSILENT /SP- /NORESTART /SUPPRESSMSGBOXES`, the verification path `C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe`, a timeout of 1200 seconds and display order 10. the checksum then computes for the new URL.
+
+---
+
+## preset fields
+
+a `system_presets` document holds the fields in the dialog table above, plus:
+
+| field | description |
+|---|---|
+| `close_processes` | optional. executable names to close before the install |
+| `parallel_install` | optional. install alongside an existing version |
+| `is_owlette_agent` | marks a special owlette agent preset, which the deployment dialog leaves out |
+| `createdBy` | the user ID of the account that created it, set by the server |
+| `createdAt` / `updatedAt` | server timestamps |
+
+the API makes IDs of the form `preset-{software-slug}-{epochMs}`. the single-preset routes accept IDs of letters, digits, underscores and hyphens.
 
 ---
 
 ## use in deployments
 
-The deployment dialog uses system presets in the **template** dropdown:
+the deployment dialog's **template** dropdown lists:
 
-1. It reads the global `system_presets` catalog.
-2. It filters out entries where `is_owlette_agent` is `true`.
-3. It groups the remaining system presets by `category`.
-4. It lists site-saved deployment templates separately under **Saved**.
+1. the system presets, grouped by `category`, leaving out any with `is_owlette_agent: true`
+2. the site's own saved deployment templates, under **Saved**
 
-Selecting a system preset fills the deployment form with:
-
-- deployment name derived from `software_name`
-- `installer_name`
-- `installer_url`
-- `silent_flags`
-- `verify_path`
-- `parallel_install`
-- `close_processes`
-
-Deployment template edit/save/delete controls are hidden while a system preset is selected. Saved deployment templates are site-scoped records; system presets remain platform-wide catalog entries managed only from the admin template library.
+picking a system preset fills in the deployment name (`Deploy <software name>`), installer filename, URL, silent flags, verification path, parallel install, the processes to close, and the preset's checksum (computed on the spot for an older preset that has none). the save, update and delete template controls are hidden while a system preset is selected, so a site cannot change the shared library from there. see [templates and presets](/docs/dashboard/deployments#templates-and-presets).
 
 ---
 
 ## not process presets
 
-System presets do not store process lists, executable paths, window visibility, launch modes, schedules, or relaunch settings. They are not applied to a machine's process configuration. Use the process management page for process configuration.
+system presets hold no process lists, executable paths, window settings, launch modes, schedules or relaunch settings, and are never applied to a machine's process configuration. for process configuration see [process management](/docs/dashboard/process-management); for reusable launch windows, [schedule presets](/docs/dashboard/admin/schedule-presets).

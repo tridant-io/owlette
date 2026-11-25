@@ -5,25 +5,32 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "btn-sweep inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring/30 focus-visible:ring-ring/20 focus-visible:ring-1 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all cursor-pointer disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring/30 focus-visible:ring-ring/20 focus-visible:ring-1 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
   {
     variants: {
+      // `btn-sweep` sits on each variant rather than in the base string, because
+      // `link` genuinely must NOT have it. Both .btn-sweep and .hl-link are
+      // unlayered single-class rules, and .btn-sweep is defined later in
+      // globals.css — so on a link-variant button it won the `background-image`
+      // cascade and replaced .hl-link's three text-clipped layers with one
+      // 0%-wide scrim, while .hl-link's `color: transparent` still applied.
+      // Result: link buttons painted no text at all until hovered.
       variant: {
         // No `hover:bg-*` here: the .btn-sweep scrim (globals.css) is the hover
         // feedback, and a hover:bg would cross-fade the base colour underneath
         // it and muddy the sweep. Text/border hover states stay as utilities.
-        default: "bg-primary text-primary-foreground",
+        default: "btn-sweep bg-primary text-primary-foreground",
         destructive:
-          "bg-destructive text-white focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "btn-sweep bg-destructive text-danger-solid-foreground focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         // Dark outline must inherit the real --border (L≈0.35) from the base
         // `* { border-border }` — i.e. not override it — plus a full-strength
         // --input fill. `dark:border-input` (L≈0.25) against --card (L≈0.23)
         // is a 0.02 delta: no visible edge, and the control reads as a stray
         // background.
         outline:
-          "border bg-background shadow-xs hover:text-secondary-foreground dark:bg-input dark:hover:text-secondary-foreground",
-        secondary: "bg-secondary text-secondary-foreground",
-        ghost: "hover:text-secondary-foreground",
+          "btn-sweep border bg-background shadow-xs hover:text-secondary-foreground dark:bg-input dark:hover:text-secondary-foreground",
+        secondary: "btn-sweep bg-secondary text-secondary-foreground",
+        ghost: "btn-sweep hover:text-secondary-foreground",
         // link opts out of the button sweep — .hl-link gives it the
         // glyph-accurate text highlight instead.
         link: "hl-link text-primary",

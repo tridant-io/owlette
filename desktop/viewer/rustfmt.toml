@@ -1,0 +1,5 @@
+# The Tauri scaffold this crate grew out of is 2-space indented (build.rs,
+# main.rs, the original lib.rs), and so is the rest of the repo. Without this,
+# rustfmt's 4-space default would rewrite every file the first time anyone runs
+# `cargo fmt`.
+tab_spaces = 2

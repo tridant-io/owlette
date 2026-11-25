@@ -18,28 +18,27 @@
 //! compositor has throttled: all three present as a delay rise, and all three
 //! get the same 20%.
 //!
-//! Task 6.5 added the frame-rate and resolution ladders under that rule. It did
-//! not make any of the paragraph above less true, and the ladder in particular
-//! is not a second controller — see the next section for what it actually
-//! changes, which is less than its name suggests.
+//! Task 6.5 added the quality ladder under that rule. It did not make any of
+//! the paragraph above less true, and it is not a second controller — see the
+//! next section for what it actually changes, which is less than its name
+//! suggests.
 //!
 //! # The ladder does not reduce the rate, and saying so matters
 //!
 //! The encoder is CBR with a one-frame VBV (plan.md D7). Hand a CBR encoder
-//! half the frames and it spends the same budget on bigger ones; hand it a
-//! quarter of the pixels and it spends the same budget on fewer, better ones.
+//! half the frames and it spends the same budget on bigger ones.
 //! **[`Governor::target_bps`] is the only output of this module that changes
 //! how many bits go on the wire.** The rung is a *quality allocation*: once the
 //! rate is pinned at the floor and the path is still degrading, spending that
-//! floor on 15 fps at 720p is watchable where spending it on 60 fps at 4K is
-//! not. That is the whole claim, and it is worth less than a capacity estimate.
+//! floor on 15 frames a second gives each one four times the bits it had at
+//! 60. That is the whole claim, and it is worth less than a capacity estimate.
 //!
-//! So the ladder is deliberately one sequence and not two counters
-//! ([`Ceiling::rungs`]): frame rate first, then resolution, one index walked
-//! down and back up. Two independent axes with two independent triggers is how
-//! a ladder ends up trading fps for pixels and back at 2 Hz forever; a single
-//! monotone index cannot. On top of that a rung moves only after
-//! [`LADDER_DWELL`], and only ever one step per evaluation.
+//! So the ladder is one axis and one index ([`Ceiling::rungs`]): frame rate
+//! only, at the ceiling's own resolution, walked down and back up. Resolution
+//! is never a rung: below native a 4K desktop's small text is unreadable
+//! however clean the motion, and the menu's resolutions are there for a person
+//! who would rather have motion. A rung moves only after [`LADDER_DWELL`], and
+//! only ever one step per evaluation.
 //!
 //! # A rung change is a new encoder, and its first frame is an IDR
 //!
@@ -51,11 +50,15 @@
 //!
 //! What survives from the arm-A design is the only part of it that was ever
 //! about correctness: **never emit a chunk whose references the client cannot
-//! have.** A width or height change is a *new encoder* and not a reconfigure
-//! (`EncoderConfig`, spike 3.7), the capture loop's rebuild path forces an IRAP
-//! out of the new one, and nothing from the old encoder may follow it. The
-//! discipline is the IDR, not a handshake. [`LadderChange::needs_new_encoder`]
-//! is how a caller tells the two cases apart.
+//! have.** Every rung move is a frame-rate move, and that is a *new encoder*
+//! and not a reconfigure: rate control is sized for the rate an encoder was
+//! opened at, so `TierPass::retarget` (`session/mod.rs`) drops the encoder on
+//! any change of width, height or fps and forces an IRAP out of the next one,
+//! and nothing from the old encoder may follow it. The discipline is the IDR,
+//! not a handshake. No congestion move re-plans the encode size, so
+//! [`LadderChange::needs_new_encoder`], which says only whether the size must
+//! be re-planned, is false for every one of them; it is true only when a
+//! preset change ([`Governor::set_ceiling`]) moves the resolution.
 //!
 //! # Why the trigger is timing and never loss
 //!
@@ -83,10 +86,12 @@
 //!    A decision that moves the host's encoder is made from the host's own
 //!    arithmetic over raw samples, not from a scalar a viewer asserts.
 //! 2. **Frame gaps**, from a rise in `stats.framesDropped` — frames the viewer
-//!    never presented.
-//! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`]. A
-//!    frame the admission gate refused is congestion the host caused itself,
-//!    and it counts the same as the viewer reporting one missing.
+//!    never decoded. Three or more in one report window; fewer are counted
+//!    and not cut ([`GAP_CUT_THRESHOLD`] says why).
+//! 3. **The host's own refusals**, from [`PacerStats::dropped_over_budget`],
+//!    and the frames its peer withheld after one until the keyframe
+//!    ([`Governor::on_frame_withheld`]). Each is a gap at the viewer the host
+//!    made itself, matched against the viewer's count and never cut for.
 //!
 //! Two fields `stats` also carries are read by nothing here, on purpose.
 //! `rttMs` is a real measurement (`feedback.ts` refuses to send one before a
@@ -137,22 +142,23 @@
 //! [`Governor::take_ladder`] is read straight after `on_report` and answers at
 //! most one change per evaluation. The caller owes it two different things:
 //!
-//! - **Resolution moved** ([`LadderChange::needs_new_encoder`]): re-plan the
-//!   encode size with `scale::plan(source, rung.resolution.narrow(limits))` and
-//!   open a new encoder at it. Its first frame is an IRAP and no frame from the
-//!   old one may follow it. Narrow by the **rung's** cap, not the ceiling's: the
-//!   ceiling is the top rung, so narrowing by it makes a resolution move a
-//!   re-plan that changes nothing. At the top rung the two are the same cap.
+//! - **Resolution moved** ([`LadderChange::needs_new_encoder`]), which only a
+//!   preset change does: re-plan the encode size with
+//!   `scale::plan(source, rung.resolution.narrow(limits))` and open a new
+//!   encoder at it. Its first frame is an IRAP and no frame from the old one
+//!   may follow it. Every rung carries its ceiling's own cap, so the rung's and
+//!   the ceiling's are the same cap.
 //! - **Frame rate moved**: feed the encoder at most [`QualityRung::fps`] frames
-//!   a second. It is a capture-side decision, not an `EncoderConfig` one —
-//!   `fps` there sizes rate control and drops nothing.
+//!   a second, and open a new encoder at that rate: `EncoderConfig::fps` sizes
+//!   rate control, and a constant-bitrate encoder opened at 60 and fed 30
+//!   spends half its target.
 //!
 //! **Both actuators are wired.** `session/mod.rs`'s `apply_ladder` drains
-//! [`Governor::take_ladder`] after every report and after a `quality` message,
-//! re-plans on a resolution move and sends `ToCapture::Fps` on a frame-rate one.
-//! The frame-rate gate is deliberately skipped at `TARGET_FPS`: duplication is
-//! vsync-locked at 16.67 ms and a 16.666 ms gate drops every other frame on
-//! jitter.
+//! [`Governor::take_ladder`] after every report and after a `quality` message
+//! and re-plans the tiers, which reach capture as one `ToCapture::Tiers`: a new
+//! size or frame rate opens a new encoder there. The frame-rate gate
+//! (`RateGate`) runs at every rung, the top one included, with 2 ms of slack so
+//! a vsync-locked 60 Hz panel loses no frame to jitter.
 //!
 //! # Three caps, one of them the viewer's, and the order they compose in
 //!
@@ -227,6 +233,19 @@ pub const RISE_TRIGGER: Duration = Duration::from_millis(50);
 /// way this finds a ceiling is by walking into it again.
 const CUT_FACTOR: f64 = 0.80;
 const CLIMB_FACTOR: f64 = 1.05;
+
+/// Unexplained dropped frames in one report window below which the window is
+/// counted and not cut. `framesDropped` is the viewer's count of frames it
+/// never decoded; until 2026-10-14 it was frames never painted, which rose
+/// for every frame the compositor skipped (two in one refresh at 60 fps on a
+/// 60 Hz screen) and cut a wired lan every two seconds (TEC-B4A). A late
+/// frame or a slow decode can still raise it as readily as a loss on the
+/// path. Measured at gate M1 on 2026-10-02, a Mac on Wi-Fi at 4K60 reported
+/// one dropped frame every two to four seconds; each was a 20 % cut, a two-second hold and a 2.5 MB
+/// recovery keyframe, 11 cuts in 40 s took a 50 Mbps target to 20, and the
+/// picture stuttered where the path was fine. Real loss is many frames a
+/// window, and real congestion is a delay rise, which rule 1 catches alone.
+const GAP_CUT_THRESHOLD: u64 = 3;
 
 /// A viewer's reported clock offset moving by more than this invalidates the
 /// reference: the subtraction only cancels a *constant* bias, so a step in the
@@ -318,9 +337,9 @@ pub struct LadderChange {
 }
 
 impl LadderChange {
-    /// A resolution move is a new encoder and a fresh IRAP out of it; a frame
-    /// rate move is a capture-side decision the running encoder never hears
-    /// about. The caller owes a different thing for each.
+    /// A resolution move is a new encoder at a new size. A frame-rate move is
+    /// a new encoder too, at the new rate, which the tier set carries; this
+    /// says only whether the size has to be re-planned.
     pub fn needs_new_encoder(&self) -> bool {
         self.rung.resolution != self.previous.resolution
     }
@@ -416,6 +435,12 @@ pub struct Governor {
     last_offset_us: Option<i64>,
     last_frames_dropped: Option<u32>,
     last_dropped_over_budget: u64,
+    /// Viewer-reported gaps since the last report, not yet judged.
+    pending_gap_rise: u64,
+    /// Frames the host refused or withheld that no viewer gap has been matched
+    /// to yet. Each is a gap at the viewer a moment later, and that gap is the
+    /// host's own doing — not the path's.
+    unmatched_refusals: u64,
     /// Set by anything degrading between reports, cleared by each evaluation.
     degraded: bool,
     hold_until: Option<Instant>,
@@ -452,6 +477,8 @@ impl Governor {
             last_offset_us: None,
             last_frames_dropped: None,
             last_dropped_over_budget: 0,
+            pending_gap_rise: 0,
+            unmatched_refusals: 0,
             degraded: false,
             hold_until: None,
             rungs,
@@ -625,6 +652,18 @@ impl Governor {
         self.sent.push_back((frame_id, send_us));
     }
 
+    /// A frame this viewer's peer held back until its next IRAP, after a hole
+    /// in its stream. The viewer counts it missing like any other, so it is
+    /// matched like a refusal: one refused delta withholds every frame up to
+    /// the keyframe, and judging only the refusal itself read that run as the
+    /// path's loss and cut 20% for it (TEC-B4A, 2026-10-13, 1,973 cuts in a
+    /// day). Nothing before the first frame sent is a gap the viewer can count.
+    pub fn on_frame_withheld(&mut self) {
+        if !self.sent.is_empty() {
+            self.unmatched_refusals = self.unmatched_refusals.saturating_add(1);
+        }
+    }
+
     /// One `swoop-feedback` message from the viewer. `ping`/`pong` is the
     /// signaling layer's to answer; nothing here actuates on it, because the
     /// offset it produces already arrives inside every `fb`.
@@ -639,10 +678,12 @@ impl Governor {
             Feedback::Stats { frames_dropped, .. } => {
                 let previous = self.last_frames_dropped.replace(frames_dropped);
                 // Only a rise counts: the counter is cumulative, and a viewer
-                // that reconnected starts a new one.
-                if previous.is_some_and(|prev| frames_dropped > prev) {
-                    self.stats.frame_gaps += 1;
-                    self.degraded = true;
+                // that reconnected starts a new one. Judged at the next
+                // report, against the frames the host itself refused.
+                if let Some(prev) = previous {
+                    if frames_dropped > prev {
+                        self.pending_gap_rise += u64::from(frames_dropped - prev);
+                    }
                 }
             }
             Feedback::Ping { .. } | Feedback::Pong { .. } => {}
@@ -653,11 +694,30 @@ impl Governor {
     /// did not move. `pacer` is the peer's current counters — the delta in
     /// [`PacerStats::dropped_over_budget`] is the host's own congestion signal.
     pub fn on_report(&mut self, now: Instant, pacer: PacerStats) -> Option<u32> {
+        // A refusal is the pacer doing its job on an encoder overshoot, not a
+        // path signal: counted, never a cut. Until 2026-09-23 it was one, and
+        // with the viewer reporting the same refused frame as a gap the target
+        // was cut twice per overshoot — a loop that took a 50 mbps cap on a
+        // wired lan down to a bucket too small for an ordinary delta.
         if pacer.dropped_over_budget > self.last_dropped_over_budget {
-            self.stats.local_refusals += pacer.dropped_over_budget - self.last_dropped_over_budget;
-            self.degraded = true;
+            let refused = pacer.dropped_over_budget - self.last_dropped_over_budget;
+            self.stats.local_refusals += refused;
+            self.unmatched_refusals = self.unmatched_refusals.saturating_add(refused);
         }
         self.last_dropped_over_budget = pacer.dropped_over_budget;
+
+        // A gap the host's own refusals explain is not the path's gap. What is
+        // left over after the match is.
+        let rise = std::mem::take(&mut self.pending_gap_rise);
+        let explained = rise.min(self.unmatched_refusals);
+        self.unmatched_refusals -= explained;
+        let unexplained = rise - explained;
+        if unexplained > 0 {
+            self.stats.frame_gaps += 1;
+        }
+        if unexplained >= GAP_CUT_THRESHOLD {
+            self.degraded = true;
+        }
 
         let degraded = std::mem::take(&mut self.degraded);
         // Counted on every report, the held ones included: the quiet run the
@@ -694,8 +754,8 @@ impl Governor {
     /// At most one rung, in one direction, and never inside [`LADDER_DWELL`].
     ///
     /// Down only once the bitrate is pinned at the floor: until then the rate
-    /// itself is still the answer, and giving up frames or pixels while there
-    /// are bits left to give up costs picture for nothing.
+    /// itself is still the answer, and giving up frames while there are bits
+    /// left to give up costs motion for nothing.
     fn evaluate_ladder(&mut self, now: Instant, degraded: bool) {
         if self
             .rung_moved_at
@@ -1088,16 +1148,101 @@ mod tests {
     }
 
     #[test]
-    fn the_hosts_own_admission_refusal_counts_as_congestion() {
+    fn a_dropped_frame_or_two_in_a_window_is_noise_counted_and_not_cut() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        f.governor.on_feedback(f.now, &stats(1));
+        assert_eq!(f.report(GOOD), None, "one skipped frame is the browser's business");
+        f.governor.on_feedback(f.now, &stats(3));
+        assert_eq!(f.report(GOOD), None, "two are still noise");
+        assert_eq!(f.governor.stats().frame_gaps, 2, "but both windows are counted");
+        assert_eq!(f.governor.stats().cuts, 0);
+
+        f.governor.on_feedback(f.now, &stats(6));
+        assert_eq!(f.report(GOOD), Some(16_000_000), "three in a window is loss");
+        assert_eq!(f.governor.stats().frame_gaps, 3);
+    }
+
+    #[test]
+    fn the_hosts_own_admission_refusal_is_counted_and_is_not_congestion() {
         let mut f = Fixture::new();
         f.report(GOOD);
         f.pacer.dropped_over_budget += 2;
-        assert_eq!(f.report(GOOD), Some(16_000_000));
+        assert_eq!(f.report(GOOD), None, "a refusal is the pacer's doing, not the path's");
         assert_eq!(f.governor.stats().local_refusals, 2);
-        // The counter is cumulative: the same value next window is not a new
-        // refusal, or the governor would cut forever off one drop.
-        f.now += HOLD;
-        assert_eq!(f.report(GOOD), Some(16_800_000));
+        assert_eq!(f.governor.stats().cuts, 0);
+    }
+
+    #[test]
+    fn a_gap_the_hosts_own_refusals_explain_is_not_a_gap_but_the_rest_is() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        // two refusals, then the viewer reports two frames missing: explained.
+        f.pacer.dropped_over_budget += 2;
+        f.governor.on_feedback(f.now, &stats(2));
+        assert_eq!(f.report(GOOD), None);
+        assert_eq!(f.governor.stats().frame_gaps, 0);
+
+        // three more missing with nothing refused: the path lost them.
+        f.governor.on_feedback(f.now, &stats(5));
+        assert_eq!(f.report(GOOD), Some(16_000_000));
+        assert_eq!(f.governor.stats().frame_gaps, 1);
+    }
+
+    #[test]
+    fn the_frames_a_hole_withholds_until_its_keyframe_are_the_hosts_not_the_paths() {
+        let mut f = Fixture::new();
+        f.report(GOOD);
+        let stats = |frames_dropped| Feedback::Stats {
+            decode_queue: 0,
+            frames_dropped,
+            jitter_ms: 0.0,
+            rtt_ms: 7.0,
+            width_css: 1920,
+            height_css: 1080,
+        };
+        f.governor.on_feedback(f.now, &stats(0));
+        f.report(GOOD);
+
+        // one refusal, then nine deltas held back for the keyframe: the viewer
+        // reports all ten missing, and none of them is the path's.
+        f.pacer.dropped_over_budget += 1;
+        for _ in 0..9 {
+            f.governor.on_frame_withheld();
+        }
+        f.governor.on_feedback(f.now, &stats(10));
+        assert_eq!(f.report(GOOD), None);
+        assert_eq!(f.governor.stats().frame_gaps, 0);
+        assert_eq!(f.governor.stats().cuts, 0);
+    }
+
+    #[test]
+    fn frames_withheld_before_the_first_one_sent_are_never_credited() {
+        let mut governor = Governor::new(GovernorConfig::new(CONFIGURED));
+        governor.on_frame_withheld();
+        assert_eq!(governor.unmatched_refusals, 0);
     }
 
     #[test]
@@ -1235,32 +1380,20 @@ mod tests {
                     fps: 15,
                     resolution: ResolutionCap::Native
                 },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P720
-                },
             ],
-            "frame rate first, then pixels, one rung at a time"
+            "frame rate only, one rung at a time"
         );
-        assert_eq!(f.governor.stats().ladder_down, 5);
+        assert_eq!(f.governor.stats().ladder_down, 2);
         assert_eq!(f.governor.stats().ladder_up, 0);
-        assert_eq!(f.governor.stats().rung_index, 5);
+        assert_eq!(f.governor.stats().rung_index, 2);
     }
 
-    /// Which changes are a new encoder, which are not. This is the whole of
-    /// what survived arm A's "reconfigure then IDR": a resolution move is a new
-    /// encoder whose first frame is an IRAP, and a frame-rate move is not a
-    /// move the running encoder ever hears about.
+    /// Every rung move is a frame-rate move: a new encoder at the new rate,
+    /// which the tier set carries, and never a new encode size. A preset
+    /// change is the one move that re-plans it, and
+    /// `a_new_preset_restarts_the_ladder_at_its_own_top` pins that half.
     #[test]
-    fn a_resolution_rung_is_a_new_encoder_and_a_frame_rate_rung_is_not() {
+    fn no_congestion_rung_re_plans_the_encode_size() {
         let mut f = Fixture::new();
         let mut changes = f.drive_to_the_floor();
         for _ in 0..40 {
@@ -1272,7 +1405,7 @@ mod tests {
             .iter()
             .map(LadderChange::needs_new_encoder)
             .collect();
-        assert_eq!(rebuilds, vec![false, false, true, true, true]);
+        assert_eq!(rebuilds, vec![false, false]);
     }
 
     #[test]
@@ -1297,7 +1430,7 @@ mod tests {
             f.degraded_window();
         }
         let down = f.governor.stats().ladder_down;
-        assert_eq!(down, 5);
+        assert_eq!(down, 2);
 
         let mut back = Vec::new();
         for _ in 0..400 {
@@ -1310,18 +1443,6 @@ mod tests {
         assert_eq!(
             rungs,
             vec![
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::Native
-                },
                 QualityRung {
                     fps: 30,
                     resolution: ResolutionCap::Native

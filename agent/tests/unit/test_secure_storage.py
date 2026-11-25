@@ -227,6 +227,100 @@ class TestProtectedWritePath:
         assert storage.get_refresh_token() == _SECRET
 
 
+class TestCredentialsAndMove:
+    _MOVE = {'moveId': 'site-a:dummy-machine', 'phase': 'switched', 'source': 'site-a'}
+    _CREDENTIALS = {
+        'refresh_token': _SECRET,
+        'access_token': 'dummy-access-token',
+        'token_expiry': 1.0,
+        'site_id': 'site-b',
+    }
+
+    def _save(self, storage, move=None):
+        return storage.save_credentials(_SECRET, 'dummy-access-token', 1.0, 'site-b', move=move)
+
+    @staticmethod
+    def _written(storage, call):
+        return json.loads(storage._fernet.decrypt(call.payload))
+
+    def test_one_write_carries_the_credentials_and_the_move(self, storage, caplog):
+        caplog.set_level(logging.DEBUG, logger='secure_storage')
+        with _writer(writer=_sid(_CONSOLE)) as recorder:
+            assert self._save(storage, move=self._MOVE) is True
+
+        assert self._written(storage, recorder.one) == {**self._CREDENTIALS, 'move': self._MOVE}
+        assert storage.get_refresh_token() == _SECRET
+        assert storage.get_access_token() == ('dummy-access-token', 1.0)
+        assert storage.get_site_id() == 'site-b'
+        assert storage.get_move() == self._MOVE
+        assert _SECRET not in caplog.text
+        assert 'dummy-access-token' not in caplog.text
+
+    def test_a_failed_write_leaves_the_previous_store_whole(self, storage):
+        with _writer(writer=_sid(_CONSOLE)):
+            assert storage.save_credentials('first-dummy-token', 'first-access', 1.0, 'site-a') is True
+        kept = storage.token_file.read_bytes()
+
+        denied = acl_hardening.AclApplyError('failed to apply DACL to x: denied')
+        with _writer(writer=_sid(_CONSOLE), dacl_error=denied):
+            assert self._save(storage, move=self._MOVE) is False
+
+        assert storage.token_file.read_bytes() == kept
+        assert storage.get_site_id() == 'site-a'
+        assert storage.get_move() is None
+
+    def test_a_store_written_before_moves_existed_reads_no_move(self, storage):
+        storage.token_file.write_bytes(
+            storage._fernet.encrypt(json.dumps(self._CREDENTIALS).encode('utf-8'))
+        )
+
+        assert storage.get_move() is None
+        assert storage.is_configured() is True
+
+    def test_clearing_the_move_keeps_the_credentials(self, storage):
+        with _writer(writer=_sid(_CONSOLE)) as recorder:
+            assert self._save(storage, move=self._MOVE) is True
+            assert storage.clear_move() is True
+
+        assert storage.get_move() is None
+        assert self._written(storage, recorder.calls[-1]) == self._CREDENTIALS
+
+    def test_clearing_with_no_move_writes_nothing(self, storage):
+        with _writer(writer=_sid(_CONSOLE)) as recorder:
+            assert self._save(storage) is True
+            assert storage.clear_move() is True
+
+        assert len(recorder.calls) == 1
+
+    def test_clearing_never_writes_a_store_it_could_not_read(self, storage):
+        # an unreadable store reads as empty, and saving that would drop the
+        # credentials with the move
+        storage.token_file.write_bytes(b'unreadable')
+
+        with _writer(writer=_sid(_CONSOLE)) as recorder:
+            assert storage.clear_move() is True
+
+        assert recorder.calls == []
+        assert storage.token_file.read_bytes() == b'unreadable'
+
+    def test_credentials_saved_without_a_move_end_the_one_stored(self, storage):
+        # a new pairing supersedes a move in progress
+        with _writer(writer=_sid(_CONSOLE)):
+            assert self._save(storage, move=self._MOVE) is True
+            assert self._save(storage) is True
+
+        assert storage.get_move() is None
+
+    def test_a_refresh_keeps_the_move(self, storage):
+        # the refresh path rotates the tokens between the switch and the confirm
+        with _writer(writer=_sid(_CONSOLE)):
+            assert self._save(storage, move=self._MOVE) is True
+            assert storage.save_refresh_token('rotated-dummy-token') is True
+            assert storage.save_access_token('rotated-access', 2.0) is True
+
+        assert storage.get_move() == self._MOVE
+
+
 class TestTokenFileSpec:
     def test_a_user_writer_grants_itself_modify(self, storage):
         with _writer(writer=_sid(_OTHER_USER), console=None) as recorder:

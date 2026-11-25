@@ -1,15 +1,18 @@
 /**
  * POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall
  *
- * Queues `uninstall_software` for every target and flips the deployment status
- * to `uninstalling`. Non-blocking — poll GET for per-target reconciliation.
+ * Body `{ software_name }`: the program's exact name in each machine's software
+ * list. Queues `buildUniqueUninstallCommand`'s command, carrying `deployment_id`,
+ * on every finished target whose machine still exists and lists that name once;
+ * the rest come back in `skipped`. The reconciler moves each queued target from the agent's result,
+ * so this route writes no deployment status. `409 no_uninstallable_targets`
+ * when no target can take it, and then nothing is queued.
  *
  * Requires `site=<id>:admin` and an `Idempotency-Key` header.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { FieldValue } from 'firebase-admin/firestore';
-import { problem, problemFromError, ProblemType } from '@/lib/apiErrors';
+import { problem, problemFromError, problemValidation, ProblemType } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   applyAuthDeprecations,
@@ -18,9 +21,26 @@ import {
 import { withIdempotency } from '@/lib/idempotency';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { TERMINAL_DEPLOYMENT_STATUSES } from '@/lib/deploymentStatuses';
+import {
+  parseTriggerUninstallInput,
+  TriggerUninstallError,
+} from '@/lib/actions/triggerUninstall.server';
+import {
+  buildUniqueUninstallCommand,
+  type UninstallCommandRefusal,
+} from '@/lib/actions/uninstallCommand.server';
+import type { StampedCommandData } from '@/lib/commandLifecycle';
 import type { DeploymentTarget } from '@/hooks/useDeployments';
 
 type RouteParams = { siteId: string; deploymentId: string };
+
+type Outcome =
+  | { machineId: string; commandId: string; command: StampedCommandData }
+  | {
+      machineId: string;
+      skip: UninstallCommandRefusal | 'software_ambiguous' | 'install_in_flight' | 'machine_not_found';
+    };
 
 export const POST = authorizedSiteHandler<RouteParams>({
   capability: 'DEPLOYMENT_MANAGE',
@@ -41,6 +61,19 @@ export const POST = authorizedSiteHandler<RouteParams>({
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
 
+    // same rules as the machine route's software_name.
+    let softwareName: string;
+    try {
+      softwareName = parseTriggerUninstallInput({
+        software_name: ((parsed.body ?? {}) as { software_name?: unknown }).software_name,
+      }).software_name;
+    } catch (err) {
+      if (err instanceof TriggerUninstallError) {
+        return problemValidation(err.message, err.fieldErrors);
+      }
+      throw err;
+    }
+
     // Privileged: `admin`, not the `write` that create/retry/cancel take.
 
     return withIdempotency(
@@ -52,12 +85,13 @@ export const POST = authorizedSiteHandler<RouteParams>({
       parsed.raw,
       async () => {
         const db = getAdminDb();
-        const deploymentRef = db
+        const instance = `/api/sites/${siteId}/deployments/${deploymentId}/uninstall`;
+        const snap = await db
           .collection('sites')
           .doc(siteId)
           .collection('deployments')
-          .doc(deploymentId);
-        const snap = await deploymentRef.get();
+          .doc(deploymentId)
+          .get();
 
         if (!snap.exists) {
           return problem({
@@ -65,7 +99,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             title: 'not found',
             status: 404,
             detail: `deployment ${deploymentId} not found on site ${siteId}`,
-            instance: `/api/sites/${siteId}/deployments/${deploymentId}/uninstall`,
+            instance,
           });
         }
 
@@ -80,58 +114,65 @@ export const POST = authorizedSiteHandler<RouteParams>({
             title: 'no targets',
             status: 409,
             detail: 'deployment has no target machines to uninstall from',
-            instance: `/api/sites/${siteId}/deployments/${deploymentId}/uninstall`,
+            instance,
             code: 'no_targets',
           });
         }
 
-        const installerName =
-          typeof data.installer_name === 'string' ? data.installer_name : '';
-        if (!installerName) {
+        const now = Date.now();
+        const outcomes = await Promise.all(
+          targets.map(async ({ machineId, status }): Promise<Outcome> => {
+            // an install still queued or running could land after the uninstall and undo it.
+            if (!TERMINAL_DEPLOYMENT_STATUSES.has(status)) {
+              return { machineId, skip: 'install_in_flight' };
+            }
+            // a removed machine keeps its software list, and a command left in its pending
+            // map would run when the same hostname pairs again.
+            const machineRef = db.collection('sites').doc(siteId).collection('machines').doc(machineId);
+            if (!(await machineRef.get()).exists) {
+              return { machineId, skip: 'machine_not_found' };
+            }
+            const built = await buildUniqueUninstallCommand(db, siteId, machineId, softwareName, {
+              deploymentId,
+              auditCorrelationId: ctx.correlationId,
+              now,
+            });
+            return built.ok
+              ? { machineId, commandId: built.commandId, command: built.command }
+              : { machineId, skip: built.reason };
+          }),
+        );
+        const queued = outcomes.flatMap((o) => ('command' in o ? [o] : []));
+        const skipped = outcomes.flatMap((o) =>
+          'skip' in o ? [{ machineId: o.machineId, reason: o.skip }] : [],
+        );
+
+        if (queued.length === 0) {
           return problem({
             type: ProblemType.Conflict,
-            title: 'deployment incomplete',
+            title: 'no uninstallable targets',
             status: 409,
-            detail: 'deployment record is missing installer_name; cannot uninstall',
-            instance: `/api/sites/${siteId}/deployments/${deploymentId}/uninstall`,
+            detail: `no target can take the uninstall of "${softwareName}"; skipped says why for each`,
+            instance,
+            code: 'no_uninstallable_targets',
+            skipped,
           });
         }
 
-        const epoch = Date.now();
         await Promise.all(
-          targets.map(async (target) => {
-            const sanitizedDeploymentId = deploymentId.replace(/-/g, '_');
-            const sanitizedMachineId = target.machineId.replace(/-/g, '_');
-            const commandId = `uninstall_${sanitizedDeploymentId}_${sanitizedMachineId}_${epoch}`;
-
-            const pendingRef = db
+          queued.map(({ machineId, commandId, command }) =>
+            db
               .collection('sites')
               .doc(siteId)
               .collection('machines')
-              .doc(target.machineId)
+              .doc(machineId)
               .collection('commands')
-              .doc('pending');
-
-            await pendingRef.set(
-              {
-                [commandId]: {
-                  type: 'uninstall_software',
-                  installer_name: installerName,
-                  deployment_id: deploymentId,
-                  timestamp: FieldValue.serverTimestamp(),
-                  status: 'pending',
-                },
-              },
-              { merge: true },
-            );
-          }),
+              .doc('pending')
+              .set({ [commandId]: command }, { merge: true }),
+          ),
         );
 
-        await deploymentRef.update({
-          status: 'uninstalling',
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-
+        const machineIds = queued.map((q) => q.machineId);
         emitMutation({
           kind: 'deployment_mutated',
           siteId,
@@ -140,11 +181,13 @@ export const POST = authorizedSiteHandler<RouteParams>({
             : `user:${ctx.actor.userId}`,
           targetId: deploymentId,
           attributes: {
-            endpoint: `/api/sites/${siteId}/deployments/${deploymentId}/uninstall`,
+            endpoint: instance,
             method: 'POST',
             verb: 'uninstall',
-            target_count: targets.length,
-            installer_name: installerName,
+            target_count: queued.length,
+            machine_ids: machineIds,
+            skipped_count: skipped.length,
+            software_name: softwareName,
             correlationId: ctx.correlationId,
           },
         });
@@ -153,9 +196,10 @@ export const POST = authorizedSiteHandler<RouteParams>({
           NextResponse.json({
             deploymentId,
             siteId,
-            status: 'uninstalling',
-            queued: targets.length,
-            machine_ids: targets.map((t) => t.machineId),
+            status: data.status,
+            queued: queued.length,
+            machine_ids: machineIds,
+            skipped,
           }),
           ctx.scopeCheck,
         );

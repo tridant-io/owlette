@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import signal
-import socket
 import sys
 import time
 from logging.handlers import RotatingFileHandler
@@ -29,7 +28,7 @@ import shared_utils
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
-LOG_DIR = shared_utils.get_data_path('logs')
+LOG_DIR = shared_utils.CORTEX_LOG_DIR
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -161,6 +160,19 @@ def _re_encrypt_cortex_api_key(storage, api_key: str) -> None:
         logger.error(f"Failed to re-encrypt the Cortex API key: {e}")
 
 
+def _hoot_credential(config: dict):
+    """What hoot authenticates its Firestore calls with.
+
+    On Windows an AuthManager over the token store, as in firebase_client.py.
+    Off Windows the token store is the daemon's alone, so hoot reads the access
+    token the daemon publishes for it and never holds the agent token.
+    """
+    from auth_manager import AuthManager, PublishedToken
+    if sys.platform == 'win32':
+        return AuthManager(api_base=shared_utils.get_configured_api_base(config))
+    return PublishedToken()
+
+
 # ─── Guardrails ───────────────────────────────────────────────────────────────
 
 class AutoGuardrails:
@@ -239,7 +251,7 @@ async def handle_chat_message(
     chat_id = message.get('chatId', '')
     user_content = message.get('content', '')
     images = message.get('images', [])
-    machine_name = message.get('machineName', socket.gethostname())
+    machine_name = message.get('machineName', shared_utils.get_hostname())
 
     logger.info(f"Processing chat message: chatId={chat_id}, len={len(user_content)}, images={len(images)}")
 
@@ -315,7 +327,7 @@ def build_autonomous_prompt(event: Dict[str, Any], config: dict) -> str:
     process_name = event.get('processName', 'Unknown')
     event_type = event.get('eventType', 'process_crash')
     error_message = event.get('errorMessage', 'No details available')
-    machine_name = event.get('machineName', socket.gethostname())
+    machine_name = event.get('machineName', shared_utils.get_hostname())
 
     action = 'crashed' if event_type == 'process_crash' else 'failed to start'
 
@@ -362,7 +374,8 @@ async def handle_autonomous_event(
 
     process_name = event.get('processName', 'Unknown')
     event_type = event.get('eventType', 'process_crash')
-    event_id = f"auto_{int(time.time()*1000)}_{socket.gethostname()}"
+    hostname = shared_utils.get_hostname()
+    event_id = f"auto_{int(time.time()*1000)}_{hostname}"
 
     logger.info(f"Autonomous investigation started: {process_name} ({event_type})")
 
@@ -370,7 +383,7 @@ async def handle_autonomous_event(
     firestore.write_cortex_status('thinking')
 
     firestore.write_autonomous_event(event_id, {
-        'machineName': event.get('machineName', socket.gethostname()),
+        'machineName': event.get('machineName', hostname),
         'processName': process_name,
         'eventType': event_type,
         'errorMessage': event.get('errorMessage', ''),
@@ -407,7 +420,7 @@ async def handle_autonomous_event(
         status = 'escalated' if needs_escalation else 'resolved'
 
         firestore.write_autonomous_event(event_id, {
-            'machineName': event.get('machineName', socket.gethostname()),
+            'machineName': event.get('machineName', hostname),
             'processName': process_name,
             'eventType': event_type,
             'errorMessage': event.get('errorMessage', ''),
@@ -427,7 +440,7 @@ async def handle_autonomous_event(
     except Exception as e:
         logger.error(f"Autonomous investigation error: {e}")
         firestore.write_autonomous_event(event_id, {
-            'machineName': event.get('machineName', socket.gethostname()),
+            'machineName': event.get('machineName', hostname),
             'processName': process_name,
             'eventType': event_type,
             'errorMessage': event.get('errorMessage', ''),
@@ -535,9 +548,7 @@ async def main():
         return
 
     # Auth manager + Firestore client, as in firebase_client.py.
-    from auth_manager import AuthManager
-    api_base = shared_utils.get_configured_api_base(config)
-    auth_manager = AuthManager(api_base=api_base)
+    auth_manager = _hoot_credential(config)
 
     if not auth_manager.is_authenticated():
         logger.error("Agent not authenticated — exiting")

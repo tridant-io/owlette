@@ -6,8 +6,9 @@
  * Every persisted title/category write audits `chat_mutated` / `rename` against the
  * conversation it changed — one row per chat, in batch mode too, so `targetId` stays
  * the dedup key for "did this conversation change?". Chats the batch skips (missing,
- * wrong site, nothing to categorize on, generation failed) write nothing and audit
- * nothing.
+ * wrong site, not the caller's, nothing to categorize on, generation failed) write
+ * nothing and audit nothing. Only a chat's owner can categorize it, as only they can
+ * stop it; an autonomous chat has no owner.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -77,6 +78,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
               console.warn(`[Categorize] Skipping chat ${sanitizeForLog(chatId)}: not found on site ${sanitizeForLog(siteId)}`);
               return;
             }
+            if (data?.userId !== userId) {
+              console.warn(`[Categorize] Skipping chat ${sanitizeForLog(chatId)}: not the caller's`);
+              return;
+            }
 
             // Needs a real title or a first message; "new conversation" is not
             // enough to categorize on.
@@ -141,6 +146,9 @@ Reply with only the category name, nothing else.`,
     const chatDoc = await db.collection('chats').doc(chatId).get();
     if (!chatDoc.exists || chatDoc.data()?.siteId !== siteId) {
       return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
+    }
+    if (chatDoc.data()?.userId !== userId) {
+      return NextResponse.json({ error: 'you do not own this chat' }, { status: 403 });
     }
 
     const { title, category } = await categorizeNewChat(db, model, chatId, message);

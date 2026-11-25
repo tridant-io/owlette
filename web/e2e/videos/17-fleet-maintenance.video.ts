@@ -178,27 +178,30 @@ test('episode 17 — keeping the fleet current', async ({ browser }) => {
         await slowPush(page, { scale: 1.0, seconds: 3.0 });
         await narrate(page, 'b02 orange button, version + count badge - settle', 1.0);
 
-        // [b03] why three-point-oh is a wall (~22.4s). Manage sites → expand the
-        // site → the per-machine list with its agent version column.
+        // [b03] why three-point-oh is a wall (~22.4s). manage sites → the site's
+        // gear (the fixture names site-A flagship) → its machines section. the
+        // agent version column shows from sm up, so it is on camera at 1080p.
         await openForCapture(page, '/dashboard');
         await clickWithCursor(page, page.getByTestId('site-switcher-trigger'));
         await clickWithCursor(page, page.getByRole('menuitem', { name: /manage sites/i }));
-        const manageDialog = page.getByRole('dialog');
-        await expect(manageDialog).toBeVisible();
+        await expect(page).toHaveURL(/\/admin\/sites$/);
+        const siteGear = page.getByRole('link', { name: 'settings for flagship', exact: true });
+        await expect(siteGear).toBeVisible();
         await narrate(page, 'b03 3.0 replaced the service host', 8);
+        await clickWithCursor(page, siteGear);
         await clickWithCursor(
           page,
-          manageDialog.getByRole('button', { name: /^machines on / }),
+          page
+            .getByRole('group', { name: 'site settings sections' })
+            .getByRole('button', { name: 'machines', exact: true }),
         );
-        await page.waitForTimeout(1000);
-        await expect(manageDialog.getByText('v2.12.21', { exact: false }).first()).toBeVisible();
+        const machinesSection = page.getByRole('region', { name: 'machines', exact: true });
+        await expect(machinesSection.getByText('v2.12.21', { exact: false }).first()).toBeVisible();
         await narrate(page, 'b03 every machine lists the version it is on', 4.5);
         await slowPush(page, { scale: 1.05, originXPct: 50, originYPct: 42, seconds: 4.0 });
         await narrate(page, 'b03 every machine lists the version it is on - close', 2.5);
         await slowPush(page, { scale: 1.0, seconds: 3.0 });
         await narrate(page, 'b03 every machine lists the version it is on - settle', 1.0);
-        await page.keyboard.press('Escape');
-        await page.waitForTimeout(500);
 
         // [b04] roll it to one machine (~25.8s).
         await openForCapture(page, '/deployments');

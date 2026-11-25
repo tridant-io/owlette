@@ -2,9 +2,6 @@
  * `owlette listen --forward-to <url>` — holds an SSE connection to
  * `/api/events/stream` and replays each event as a POST to a local URL.
  *
- * Auth is `?api_key=<token>` as a query param, not a header: middleboxes strip
- * headers off long-lived streams, and the query form is the documented contract.
- *
  * Wire format: `event: <kind>\n data: <json>\n\n`. The server currently emits
  * only `connected` and a ~15s `keepalive`; real event fanout is a later server
  * wave, and this relays whatever arrives.
@@ -22,13 +19,6 @@ const KEEPALIVE_EVENT = 'keepalive';
 const CONNECTED_EVENT = 'connected';
 
 export function registerListenCommand(program: Command): void {
-  const existing = program.commands.find((c) => c.name() === 'listen');
-  if (existing) {
-    const list = program.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
-
   program
     .command('listen')
     .description('forward the scoped SSE liveness stream from the owlette api to a local url')
@@ -76,7 +66,6 @@ export function registerListenCommand(program: Command): void {
         : null;
 
       const streamUrl = new URL(`${apiUrl}/api/events/stream`);
-      streamUrl.searchParams.set('api_key', token);
       streamUrl.searchParams.set('siteId', String(opts.site));
       if (opts.events) streamUrl.searchParams.set('events', String(opts.events));
 

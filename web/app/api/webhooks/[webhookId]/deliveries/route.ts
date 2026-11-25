@@ -1,8 +1,8 @@
 /**
  * GET /api/webhooks/{webhookId}/deliveries?siteId=&limit=&cursor= →
  * `{ deliveries, nextPageToken }`. Cursor-paginated, newest first, scoped to the
- * last 30 days (the dispatcher's retention); requires `site:<id>:read`; 404 when
- * the subscription is missing or soft-deleted.
+ * last 30 days (the dispatcher's retention); requires `site:<id>:read` and
+ * WEBHOOK_MANAGE; 404 when the subscription is missing or soft-deleted.
  *
  * Reads the top-level `webhook_deliveries` collection written by
  * functions/webhookDispatch.ts, querying `subscriptionId == webhookId`. The
@@ -28,6 +28,7 @@ import {
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
+  requireWebhookManageCapability,
   validateSiteIdBody,
 } from '../../../_shared';
 
@@ -63,6 +64,9 @@ export async function GET(
 
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
 
     const db = getAdminDb();
 

@@ -317,6 +317,7 @@ def test_restore_refuses_a_record_it_cannot_trust(effects):
 # off the main loop
 
 
+@pytest.mark.windows(reason='set_enabled applies nothing off Windows')
 def test_set_enabled_returns_without_waiting(effects):
     effects['shell'].delay = 0.5
     caller = threading.current_thread()
@@ -332,6 +333,7 @@ def test_set_enabled_returns_without_waiting(effects):
     assert effects['shell'].threads[0].name == 'swoop-manager'
 
 
+@pytest.mark.windows(reason='set_enabled applies nothing off Windows')
 def test_set_enabled_false_runs_the_disable_path_off_thread(effects):
     manager = effects['manager']
     manager._enable_side_effects()
@@ -394,6 +396,7 @@ def test_neither_path_raises_when_every_effect_fails(effects, monkeypatch):
     ]
 
 
+@pytest.mark.windows(reason='set_enabled applies nothing off Windows')
 def test_the_worker_survives_a_side_effect_failure(effects, monkeypatch):
     def boom(*args, **kwargs):
         raise OSError('registry is on fire')

@@ -1,5 +1,23 @@
 /** @jest-environment node */
 
+const mockCreate = jest.fn();
+const mockAfter = jest.fn();
+let mockPath: string[] = [];
+// a chainable stand-in for getAdminDb() that records the collection/doc path it is walked down
+const mockGetAdminDb = jest.fn(() => {
+  mockPath = [];
+  const ref = {
+    collection: (name: string) => (mockPath.push(name), ref),
+    doc: (id?: string) => (mockPath.push(id ?? '<auto id>'), ref),
+    create: mockCreate,
+  };
+  return ref;
+});
+
+jest.mock('@/lib/firebase-admin', () => ({ getAdminDb: () => mockGetAdminDb() }));
+jest.mock('firebase-admin/firestore', () => ({ FieldValue: { serverTimestamp: () => 'SERVER_TS' } }));
+jest.mock('next/server', () => ({ after: (task: unknown) => mockAfter(task) }));
+
 import {
   scopeFingerprint,
   emitApiKeyUsed,
@@ -46,154 +64,56 @@ describe('scopeFingerprint', () => {
   });
 });
 
-describe('emitApiKeyUsed', () => {
-  const originalFetch = global.fetch;
+describe('audit emitters', () => {
   const originalWarn = console.warn;
-  const envSnapshot = {
-    AUDIT_LOG_URL: process.env.AUDIT_LOG_URL,
-    FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
-    GCLOUD_PROJECT: process.env.GCLOUD_PROJECT,
-    NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  const realAfter = jest.requireActual<typeof import('next/server')>('next/server').after;
+
+  const apiKeyEvent = {
+    siteId: 'site-a',
+    keyId: 'key-1',
+    scopeFingerprint: 'abc123',
+    environment: 'live' as const,
+    endpoint: '/api/chunks/check',
+    method: 'POST',
+    isLegacy: false,
   };
 
+  /** the one queue write the emit made: its path and data. */
+  async function queued() {
+    await new Promise((r) => setImmediate(r));
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    return { path: mockPath, data: mockCreate.mock.calls[0][0] };
+  }
+
   beforeEach(() => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
+    mockCreate.mockResolvedValue({});
+    mockAfter.mockImplementation(realAfter);
     console.warn = jest.fn();
-    delete process.env.AUDIT_LOG_URL;
-    delete process.env.FIREBASE_PROJECT_ID;
-    delete process.env.GCLOUD_PROJECT;
-    delete process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   });
 
   afterEach(() => {
-    global.fetch = originalFetch;
     console.warn = originalWarn;
-    if (envSnapshot.AUDIT_LOG_URL) process.env.AUDIT_LOG_URL = envSnapshot.AUDIT_LOG_URL;
-    if (envSnapshot.FIREBASE_PROJECT_ID) process.env.FIREBASE_PROJECT_ID = envSnapshot.FIREBASE_PROJECT_ID;
-    if (envSnapshot.GCLOUD_PROJECT) process.env.GCLOUD_PROJECT = envSnapshot.GCLOUD_PROJECT;
-    if (envSnapshot.NEXT_PUBLIC_FIREBASE_PROJECT_ID) {
-      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID = envSnapshot.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-    }
   });
 
-  it('no-ops when no audit url can be resolved', () => {
-    emitApiKeyUsed({
-      siteId: 's1',
-      keyId: 'k1',
-      scopeFingerprint: 'legacy',
-      environment: 'live',
-      endpoint: '/api/x',
-      method: 'POST',
-      isLegacy: true,
-    });
-    expect(global.fetch).not.toHaveBeenCalled();
-  });
-
-  it('posts to AUDIT_LOG_URL when configured', (done) => {
-    process.env.AUDIT_LOG_URL = 'https://example.com/recordAuditEvent';
-    emitApiKeyUsed({
+  it('queues api_key_used under the site with a server timestamp', async () => {
+    emitApiKeyUsed(apiKeyEvent);
+    const { path, data } = await queued();
+    expect(path).toEqual(['sites', 'site-a', 'audit_queue', '<auto id>']);
+    expect(data.enqueuedAt).toBe('SERVER_TS');
+    expect(data.event).toEqual({
+      kind: 'api_key_used',
       siteId: 'site-a',
-      keyId: 'key-1',
-      scopeFingerprint: 'abc123',
-      environment: 'live',
-      endpoint: '/api/chunks/check',
-      method: 'POST',
-      isLegacy: false,
-    });
-    setImmediate(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://example.com/recordAuditEvent',
-        expect.objectContaining({ method: 'POST' }),
-      );
-      const call = (global.fetch as jest.Mock).mock.calls[0];
-      const body = JSON.parse(call[1].body);
-      expect(body.kind).toBe('api_key_used');
-      expect(body.siteId).toBe('site-a');
-      expect(body.actor).toBe('apiKey:key-1');
-      expect(body.attributes.keyId).toBe('key-1');
-      expect(body.attributes.scopeFingerprint).toBe('abc123');
-      expect(body.attributes.endpoint).toBe('/api/chunks/check');
-      expect(body.attributes.method).toBe('POST');
-      done();
-    });
-  });
-
-  it('computes url from FIREBASE_PROJECT_ID when AUDIT_LOG_URL unset', (done) => {
-    process.env.FIREBASE_PROJECT_ID = 'my-project';
-    emitApiKeyUsed({
-      siteId: 's1',
-      keyId: 'k1',
-      scopeFingerprint: 'x',
-      environment: 'test',
-      endpoint: '/x',
-      method: 'GET',
-      isLegacy: false,
-    });
-    setImmediate(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://us-central1-my-project.cloudfunctions.net/recordAuditEvent',
-        expect.any(Object),
-      );
-      done();
-    });
-  });
-
-  it('swallows fetch errors without throwing', (done) => {
-    process.env.AUDIT_LOG_URL = 'https://example.com/recordAuditEvent';
-    (global.fetch as jest.Mock).mockRejectedValue(new Error('network down'));
-    expect(() =>
-      emitApiKeyUsed({
-        siteId: 's1',
-        keyId: 'k1',
-        scopeFingerprint: 'x',
+      actor: 'apiKey:key-1',
+      occurredAt: expect.any(Number),
+      attributes: {
+        keyId: 'key-1',
+        scopeFingerprint: 'abc123',
         environment: 'live',
-        endpoint: '/x',
-        method: 'GET',
+        endpoint: '/api/chunks/check',
+        method: 'POST',
         isLegacy: false,
-      }),
-    ).not.toThrow();
-    setImmediate(() => {
-      expect(console.warn).toHaveBeenCalled();
-      done();
+      },
     });
-  });
-
-  it('handles deeply-nested endpoint paths from api-sprint waves', (done) => {
-    process.env.AUDIT_LOG_URL = 'https://example.com/recordAuditEvent';
-    emitApiKeyUsed({
-      siteId: 'site-a',
-      keyId: 'key-1',
-      scopeFingerprint: 'abc',
-      environment: 'live',
-      endpoint: '/api/sites/site-a/machines/mach-1/processes/proc-xyz',
-      method: 'PATCH',
-      isLegacy: false,
-    });
-    setImmediate(() => {
-      const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.attributes.endpoint).toBe(
-        '/api/sites/site-a/machines/mach-1/processes/proc-xyz',
-      );
-      done();
-    });
-  });
-});
-
-describe('emitMutation', () => {
-  const originalFetch = global.fetch;
-  const originalWarn = console.warn;
-
-  beforeEach(() => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: true }) as jest.Mock;
-    console.warn = jest.fn();
-    delete process.env.AUDIT_LOG_URL;
-    process.env.AUDIT_LOG_URL = 'https://example.com/recordAuditEvent';
-  });
-
-  afterEach(() => {
-    global.fetch = originalFetch;
-    console.warn = originalWarn;
-    delete process.env.AUDIT_LOG_URL;
   });
 
   it.each<MutationKind>([
@@ -211,49 +131,27 @@ describe('emitMutation', () => {
     'webhook_mutated',
     'chat_mutated',
     'billing_mutated',
-  ])('posts a %s event with kind, actor, target, and attributes', (kind, done) => {
+    'talon_mutated',
+  ])('queues a %s event with kind, actor, target, and attributes', async (kind) => {
     emitMutation({
       kind,
       siteId: 'site-a',
       actor: 'apiKey:key-1',
       targetId: 'tgt_abc',
-      attributes: {
-        endpoint: '/api/test',
-        method: 'POST',
-        sample: true,
-      },
+      attributes: { endpoint: '/api/test', method: 'POST', sample: true },
     });
-    setImmediate(() => {
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-      const call = (global.fetch as jest.Mock).mock.calls[0];
-      const body = JSON.parse(call[1].body);
-      expect(body.kind).toBe(kind);
-      expect(body.siteId).toBe('site-a');
-      expect(body.actor).toBe('apiKey:key-1');
-      expect(body.target).toBe('tgt_abc');
-      expect(body.attributes.endpoint).toBe('/api/test');
-      expect(body.attributes.sample).toBe(true);
-      expect(typeof body.occurredAt).toBe('number');
-      (done as () => void)();
-    });
-  });
-
-  it('accepts user:<uid> actor for session-mediated mutations', (done) => {
-    emitMutation({
-      kind: 'site_member_mutated',
+    const { data } = await queued();
+    expect(data.event).toEqual({
+      kind,
       siteId: 'site-a',
-      actor: 'user:uid_abc',
-      targetId: 'uid_xyz',
-      attributes: { verb: 'add', endpoint: '/api/sites/site-a/members', method: 'POST' },
-    });
-    setImmediate(() => {
-      const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.actor).toBe('user:uid_abc');
-      done();
+      actor: 'apiKey:key-1',
+      occurredAt: expect.any(Number),
+      target: 'tgt_abc',
+      attributes: { endpoint: '/api/test', method: 'POST', sample: true },
     });
   });
 
-  it('accepts empty siteId for platform-wide mutations (user/installer)', (done) => {
+  it('queues an empty siteId under the platform audit site id, keeping the event as sent', async () => {
     emitMutation({
       kind: 'installer_mutated',
       siteId: '',
@@ -261,43 +159,111 @@ describe('emitMutation', () => {
       targetId: '2.10.0',
       attributes: { verb: 'set-latest' },
     });
-    setImmediate(() => {
-      const body = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.siteId).toBe('');
-      expect(body.kind).toBe('installer_mutated');
-      done();
-    });
+    const { path, data } = await queued();
+    expect(path).toEqual(['sites', '_platform', 'audit_queue', '<auto id>']);
+    expect(data.event.siteId).toBe('');
   });
 
-  it('swallows fetch errors without throwing', (done) => {
-    (global.fetch as jest.Mock).mockRejectedValue(new Error('network down'));
-    expect(() =>
-      emitMutation({
-        kind: 'deployment_mutated',
-        siteId: 'site-a',
-        actor: 'apiKey:key-1',
-        targetId: 'dep_abc',
-        attributes: {},
-      }),
-    ).not.toThrow();
-    setImmediate(() => {
-      expect(console.warn).toHaveBeenCalled();
-      done();
-    });
-  });
-
-  it('no-ops when no audit url can be resolved', () => {
-    delete process.env.AUDIT_LOG_URL;
-    delete process.env.FIREBASE_PROJECT_ID;
-    delete process.env.GCLOUD_PROJECT;
-    delete process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  it('drops undefined attributes, as the json body used to', async () => {
     emitMutation({
       kind: 'process_mutated',
       siteId: 'site-a',
-      actor: 'apiKey:k',
+      actor: 'user:u1',
       targetId: 'p_1',
-      attributes: {},
+      attributes: { reason: undefined, verb: 'stop' },
     });
-    expect(global.fetch).not.toHaveBeenCalled();
+    const { data } = await queued();
+    expect(data.event.attributes).toEqual({ verb: 'stop' });
+  });
+
+  it('returns before the write settles', () => {
+    mockCreate.mockReturnValue(new Promise(() => {}));
+    expect(emitApiKeyUsed(apiKeyEvent)).toBeUndefined();
+  });
+
+  it('hands the write to after() inside a request scope', async () => {
+    let settled = false;
+    mockCreate.mockReturnValue(new Promise((r) => setImmediate(() => { settled = true; r({}); })));
+    mockAfter.mockImplementation(() => undefined);
+    emitApiKeyUsed(apiKeyEvent);
+    expect(mockAfter).toHaveBeenCalledTimes(1);
+    await mockAfter.mock.calls[0][0];
+    expect(settled).toBe(true);
+  });
+
+  it('still writes outside a request scope, where after() throws', async () => {
+    expect(() => realAfter(Promise.resolve())).toThrow(/outside a request scope/);
+    expect(() => emitApiKeyUsed(apiKeyEvent)).not.toThrow();
+    await queued();
+  });
+
+  describe('retrying the queue write', () => {
+    const failure = (code: number) => Object.assign(new Error(`firestore code ${code}`), { code });
+
+    /** the write handed to after(), awaited until its last attempt settles */
+    async function written() {
+      expect(mockAfter).toHaveBeenCalledTimes(1);
+      await mockAfter.mock.calls[0][0];
+    }
+
+    beforeEach(() => {
+      mockAfter.mockImplementation(() => undefined);
+    });
+
+    it('retries a transient failure with the same doc and payload, then lands', async () => {
+      mockCreate.mockRejectedValueOnce(failure(14)).mockResolvedValueOnce({});
+      emitApiKeyUsed(apiKeyEvent);
+      await written();
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(mockCreate.mock.calls[1][0]).toBe(mockCreate.mock.calls[0][0]);
+      expect(mockGetAdminDb).toHaveBeenCalledTimes(1);
+      expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it('takes ALREADY_EXISTS on a retry as the earlier attempt having landed', async () => {
+      mockCreate.mockRejectedValueOnce(failure(4)).mockRejectedValueOnce(failure(6));
+      emitApiKeyUsed(apiKeyEvent);
+      await written();
+      expect(mockCreate).toHaveBeenCalledTimes(2);
+      expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it('logs the event as dropped after the third transient failure', async () => {
+      mockCreate.mockRejectedValue(failure(14));
+      emitApiKeyUsed(apiKeyEvent);
+      await written();
+      expect(mockCreate).toHaveBeenCalledTimes(3);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('DROPPED'));
+    });
+
+    it('does not retry a failure that is not transient', async () => {
+      mockCreate.mockRejectedValue(failure(3));
+      emitApiKeyUsed(apiKeyEvent);
+      await written();
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('DROPPED'));
+    });
+  });
+
+  it('never throws and logs when the write fails', async () => {
+    mockCreate.mockRejectedValue(new Error('unavailable'));
+    expect(() => emitApiKeyUsed(apiKeyEvent)).not.toThrow();
+    await new Promise((r) => setImmediate(r));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('unavailable'));
+  });
+
+  it('never throws and logs when the admin sdk is not initialised', async () => {
+    mockGetAdminDb.mockImplementationOnce(() => {
+      throw new Error('Firebase Admin SDK not initialized');
+    });
+    expect(() => emitMutation({
+      kind: 'deployment_mutated',
+      siteId: 'site-a',
+      actor: 'apiKey:key-1',
+      targetId: 'dep_abc',
+      attributes: {},
+    })).not.toThrow();
+    await new Promise((r) => setImmediate(r));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('not initialized'));
   });
 });

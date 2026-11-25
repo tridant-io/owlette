@@ -2,7 +2,6 @@
 
 import {
   DISPLAY_EVENT_ROUTING,
-  DISPLAY_WEBHOOK_EVENT_NAMES,
   isDisplayEventType,
 } from '@/lib/alerts/displayEventRouting';
 
@@ -48,9 +47,7 @@ describe('DISPLAY_EVENT_ROUTING — completeness', () => {
     expect(typeof route!.email).toBe('boolean');
     expect(typeof route!.webhook).toBe('boolean');
     expect(typeof route!.webhookEventName).toBe('string');
-    expect(typeof route!.emailSubjectKey).toBe('string');
     expect(route!.webhookEventName.length).toBeGreaterThan(0);
-    expect(route!.emailSubjectKey.length).toBeGreaterThan(0);
   });
 });
 
@@ -188,18 +185,10 @@ describe('isDisplayEventType', () => {
   });
 });
 
-describe('DISPLAY_WEBHOOK_EVENT_NAMES', () => {
-  it('contains exactly 10 entries', () => {
-    expect(DISPLAY_WEBHOOK_EVENT_NAMES).toHaveLength(10);
-  });
-
-  it('matches the dotted names from the routing table (membership, any order)', () => {
-    const expected = ALL_EVENTS.map((k) => DISPLAY_EVENT_ROUTING[k]!.webhookEventName);
-    expect([...DISPLAY_WEBHOOK_EVENT_NAMES].sort()).toEqual([...expected].sort());
-  });
-
+describe('DISPLAY_EVENT_ROUTING — webhook event names', () => {
   it('contains every expected dotted name explicitly', () => {
-    expect([...DISPLAY_WEBHOOK_EVENT_NAMES].sort()).toEqual(
+    const names = Object.values(DISPLAY_EVENT_ROUTING).map((route) => route.webhookEventName);
+    expect(names.sort()).toEqual(
       [
         'display.monitor_removed',
         'display.apply_failed',

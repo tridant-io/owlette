@@ -111,13 +111,6 @@ const CANNED_PAYLOADS: Record<string, Record<string, unknown>> = {
 const KNOWN_EVENTS = Object.keys(CANNED_PAYLOADS);
 
 export function registerTriggerCommand(program: Command): void {
-  const existing = program.commands.find((c) => c.name() === 'trigger');
-  if (existing) {
-    const list = program.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
-
   program
     .command('trigger <event>')
     .description(

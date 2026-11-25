@@ -51,8 +51,8 @@ export function getTemperatureColorClass(celsius: number): string {
     case 'normal':
       return '';
     case 'warning':
-      return 'text-yellow-500';
+      return 'text-warning';
     case 'critical':
-      return 'text-red-500';
+      return 'text-danger';
   }
 }

@@ -15,8 +15,10 @@
  * into its own capture scratch tree, and this suite must publish into the one the
  * agent is watching.
  *
- * The single-instance lock means the OPERATOR'S TRAY IS KILLED to run this. The
- * README says so; there is no way around it short of a second machine.
+ * the app is single-instance, so a running copy has to go before a launch. this
+ * only ever stops a copy it started: any other process with the exe's image name
+ * stops the run instead, because that may be the operator's own window. the readme
+ * has the recipe for running beside one.
  */
 
 import { chromium, type Browser, type Page } from '@playwright/test'
@@ -32,7 +34,7 @@ import {
   resolveDesktopExe,
   waitForExit,
 } from '../desktop-screenshots/harness'
-import { OUTPUT_DIR, agentEnv, assertSandboxSafe } from './sandbox'
+import { OUTPUT_DIR, agentEnv, assertSandboxSafe, removeSandbox } from './sandbox'
 
 const DESKTOP_SESSION_FILE = path.join(OUTPUT_DIR, 'desktop-session.json')
 
@@ -42,6 +44,15 @@ interface DesktopProcess {
   pid: number
   port: number
   webviewUserData: string
+}
+
+/** the copy this suite last started, the only one it may stop. */
+function readDesktopSession(): DesktopProcess | null {
+  try {
+    return JSON.parse(fs.readFileSync(DESKTOP_SESSION_FILE, 'utf8')) as DesktopProcess
+  } catch {
+    return null
+  }
 }
 
 /** True when a repo-built (or installed) exe was named for this run. */
@@ -54,11 +65,9 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Start the app on the sandbox and wait for its debug page.
- *
- * Retries the way the screenshots harness does: the service (or a Start-menu
- * launch) can win the single-instance lock in the gap between our kill and our
- * spawn, in which case our process forwards argv and exits immediately.
+ * start the app on the sandbox and wait for its debug page. no retry: a launch
+ * that exits at once has folded into another instance holding the lock, which
+ * another try would only raise again.
  */
 export async function startDesktopOnSandbox(programData: string): Promise<DesktopProcess> {
   assertSandboxSafe(programData)
@@ -70,48 +79,52 @@ export async function startDesktopOnSandbox(programData: string): Promise<Deskto
     )
   }
 
-  const webviewUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'owlette-sync-webview2-'))
-  const attempts = 3
-
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    for (const holder of listDesktopPids()) {
-      killDesktopPid(holder)
-      await waitForExit(holder)
-    }
-
-    const child = spawn(exe, [], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-      env: agentEnv(programData, {
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
-        WEBVIEW2_USER_DATA_FOLDER: webviewUserData,
-      }),
-    })
-    child.unref()
-
-    const pid = child.pid
-    if (pid === undefined) throw new Error(`could not start ${exe}`)
-
-    const deadline = Date.now() + 30_000
-    while (Date.now() < deadline) {
-      if (!isDesktopPid(pid)) break // lost the single-instance race
-      if (await cdpPageReady(CDP_PORT)) {
-        const session = { pid, port: CDP_PORT, webviewUserData }
-        fs.mkdirSync(OUTPUT_DIR, { recursive: true })
-        fs.writeFileSync(DESKTOP_SESSION_FILE, `${JSON.stringify(session, null, 2)}\n`)
-        return session
-      }
-      await delay(250)
-    }
-
-    killDesktopPid(pid)
-    await waitForExit(pid)
+  const previous = readDesktopSession()
+  const foreign = listDesktopPids().filter((pid) => pid !== previous?.pid)
+  if (foreign.length > 0) {
+    throw new Error(
+      `desktop-sync did not start the running ${path.basename(exe)} (pid ${foreign.join(', ')}) ` +
+        'and will not kill it: it may be the operator\'s app. Name a build with its own ' +
+        'identifier and file name, or close it yourself. See e2e/desktop-sync/README.md.',
+    )
+  }
+  if (previous) {
+    killDesktopPid(previous.pid)
+    await waitForExit(previous.pid)
   }
 
-  fs.rmSync(webviewUserData, { recursive: true, force: true })
+  const webviewUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'owlette-sync-webview2-'))
+  const child = spawn(exe, [], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+    env: agentEnv(programData, {
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP_PORT}`,
+      WEBVIEW2_USER_DATA_FOLDER: webviewUserData,
+    }),
+  })
+  child.unref()
+
+  const pid = child.pid
+  if (pid === undefined) throw new Error(`could not start ${exe}`)
+
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline && isDesktopPid(pid)) {
+    if (await cdpPageReady(CDP_PORT)) {
+      const session = { pid, port: CDP_PORT, webviewUserData }
+      fs.mkdirSync(OUTPUT_DIR, { recursive: true })
+      fs.writeFileSync(DESKTOP_SESSION_FILE, `${JSON.stringify(session, null, 2)}\n`)
+      return session
+    }
+    await delay(250)
+  }
+
+  killDesktopPid(pid)
+  await waitForExit(pid)
+  removeSandbox(webviewUserData)
   throw new Error(
-    `${exe} did not expose a debug page on port ${CDP_PORT} after ${attempts} attempts`,
+    `${exe} exposed no debug page on port ${CDP_PORT}. If it exited at once, an instance with ` +
+      'the same identifier holds the single-instance lock: see e2e/desktop-sync/README.md.',
   )
 }
 
@@ -139,12 +152,8 @@ export async function connectDesktopPage(
 
 /** Stop whatever `startDesktopOnSandbox` left running. Safe when nothing did. */
 export async function stopDesktopSession(): Promise<void> {
-  let session: DesktopProcess
-  try {
-    session = JSON.parse(fs.readFileSync(DESKTOP_SESSION_FILE, 'utf8')) as DesktopProcess
-  } catch {
-    return
-  }
+  const session = readDesktopSession()
+  if (!session) return
 
   killDesktopPid(session.pid)
   await waitForExit(session.pid)
@@ -152,9 +161,10 @@ export async function stopDesktopSession(): Promise<void> {
   // Only after the wait — WebView2 holds locks for as long as its browser
   // process lives.
   try {
-    fs.rmSync(session.webviewUserData, { recursive: true, force: true })
-  } catch {
-    // A lingering msedgewebview2.exe child; the OS reclaims the temp dir.
+    removeSandbox(session.webviewUserData)
+  } catch (err) {
+    // a lingering msedgewebview2.exe child is the usual cause, and the os reclaims the temp dir.
+    console.warn(`[desktop-sync] webview profile removal failed (continuing): ${String(err)}`)
   }
   fs.rmSync(DESKTOP_SESSION_FILE, { force: true })
 }

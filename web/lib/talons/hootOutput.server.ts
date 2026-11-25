@@ -195,7 +195,9 @@ async function checkSiteGuards(
   siteId: string,
 ): Promise<{ refusal: RunHootOutputResult } | { dispatch: SiteDispatchSet }> {
   try {
-    const machines = await listSiteMachines(db, siteId);
+    // the whole site: a talon spans the site, and the turn runner narrows the
+    // turn to its author's machine scope
+    const machines = await listSiteMachines(db, siteId, null);
     const online = machines.filter((machine) => machine.online);
     // Offline is classified first, so a site that is simply asleep never reads
     // back as "somebody switched hoot off".

@@ -51,8 +51,11 @@ import {
   createModel,
   type HootPromptMode,
   type ProcessSummary,
+  type PromptLocalTime,
 } from '@/lib/llm';
+import type { MachineActor } from '@/lib/capabilities';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
+import { UNATTENDED_EXCLUDED_TOOLS } from '@/lib/hoot/launchChange';
 import {
   buildExecutableTools,
   getHootRequireTier3Approval,
@@ -64,13 +67,16 @@ import {
 } from '@/lib/hoot-utils.server';
 import {
   applyApprovalConsumption,
+  incomingToolCallIds,
   reapplyConsumedParts,
+  refuseAnswersWithNoCard,
+  refuseUnissuedApprovals,
   repairDanglingToolParts,
   STILL_RUNNING_ERROR,
   type ApprovalConsumptionResult,
   type LostResultResolution,
 } from '@/lib/hoot/repairMessages';
-import { claimApproval } from '@/lib/hoot/approvalLedger.server';
+import { claimApproval, hasApprovalRequest } from '@/lib/hoot/approvalLedger.server';
 import { advisorCallsIn, modelHistoryFor, withAdvisor } from '@/lib/hoot/advisor';
 import { ADVISOR_TOOL_NAME } from '@/lib/llmModels';
 import {
@@ -89,13 +95,37 @@ import {
   type PriorTurn,
   type ResolvedTargets,
   type TurnTargetRecord,
+  type TurnTargetSource,
 } from '@/lib/hoot/target';
 import { categorizeNewChat } from '@/lib/hoot/categorizeChat.server';
+import { getSiteTimezone } from '@/lib/talons/store.server';
 import { UNTITLED_CHAT_TITLE } from '@/lib/hoot/untitledChat';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
 
 /** Transient heartbeat cadence — keeps proxies from seeing an idle stream. */
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+
+/**
+ * Turns a person drives from the dashboard: a message they sent, or their
+ * answer to an approval. Only these may ask them to approve an active-hours
+ * override; follow-ups and talons fire with nobody watching.
+ */
+const PERSON_TURN_SOURCES: ReadonlySet<TurnTargetSource> = new Set<TurnTargetSource>([
+  'chat',
+  'mention',
+  'resume',
+]);
+
+/**
+ * Turns whose chat a person answers approval cards on: theirs, and a follow-up,
+ * which parks until they come back. A talon's turn has nobody to come back for it,
+ * so a launch change there is refused.
+ */
+const LAUNCH_APPROVAL_TURN_SOURCES: ReadonlySet<TurnTargetSource> = new Set<TurnTargetSource>([
+  ...PERSON_TURN_SOURCES,
+  'followup',
+]);
 
 const timing = {
   heartbeatMs: HEARTBEAT_INTERVAL_MS,
@@ -144,6 +174,12 @@ export interface StartTurnParams {
    * for a person rather than auto-executing.
    */
   forceTier3Approval?: boolean;
+  /**
+   * The granted machine that started this turn (ADR 0017), when `userId` did
+   * not. The turn still runs on `userId`'s key and `access`; its server-side
+   * tools act, and are audited, as the machine.
+   */
+  machineActor?: MachineActor;
   source?: 'user' | 'followup' | 'talon';
 }
 
@@ -404,8 +440,10 @@ async function persistChatMessages(
  */
 export function startTurn(
   db: FirebaseFirestore.Firestore,
-  params: StartTurnParams,
+  unchecked: StartTurnParams,
 ): ReadableStream<InferUIMessageChunk<UIMessage>> {
+  // First, for every caller: the history comes from a browser, or from a chat one wrote.
+  const params = { ...unchecked, messages: refuseUnissuedApprovals(unchecked.messages) };
   const { chatId, turnId } = params;
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -440,6 +478,19 @@ export function startTurn(
   // stopped) — kills streamText and the in-flight tool poll loops.
   const abortController = new AbortController();
 
+  // The one reading of ownership, for the heartbeat and for a tool that asks between
+  // beats: a guarded `touch`, so it also bumps `updatedAt`. Abort only on genuine loss.
+  // A Firestore `error` is indeterminate — aborting on a single blip would drop a
+  // healthy in-flight response; the next heartbeat re-checks.
+  const checkOwnership = async () => {
+    const ownership = await touch(db, chatId, turnId);
+    if (ownership === 'lost') {
+      abortController.abort();
+      clearHeartbeat();
+    }
+    return ownership;
+  };
+
   // Set by onFinish. If the stream tears down without it (e.g. a chunk the
   // state machine rejects), the pump's finally closes the turn as errored so
   // the stream doc can't leak a fresh-looking 'running' state.
@@ -460,15 +511,7 @@ export function startTurn(
         } catch {
           // Stream already torn down — nothing to heartbeat.
         }
-        void touch(db, chatId, turnId).then((ownership) => {
-          // Abort only on genuine loss. A Firestore `error` is indeterminate —
-          // aborting on a single blip would drop a healthy in-flight response;
-          // the next heartbeat re-checks.
-          if (ownership === 'lost') {
-            abortController.abort();
-            clearHeartbeat();
-          }
-        });
+        void checkOwnership();
       }, timing.heartbeatMs);
 
       // Must precede the turn-start persist, which creates the doc.
@@ -480,9 +523,22 @@ export function startTurn(
         chatExistedAtStart = true;
       }
 
+      // the dashboard route refuses with a 402 before it gets here; this is the
+      // gate for follow-up and talon turns, which have no response to refuse
+      // with. ahead of the one-shot approval claim, so a refused turn claims nothing.
+      if (await requireEntitlement(params.siteId, 'owlette.hoot')) {
+        console.warn(
+          `[hoot] turn refused in chat ${sanitizeForLog(chatId)}: the site's plan does not include owlette.hoot`,
+        );
+        throw new Error(PLAN_REQUIRED_DETAIL['owlette.hoot']);
+      }
+
       const resolveLostResult = buildResolveLostResult(db, params.siteId, params.priorTurn);
+      const carded = await refuseAnswersWithNoCard(params.messages, (toolCallId, toolName) =>
+        hasApprovalRequest(db, chatId, toolCallId, toolName),
+      );
       const { messages: danglingRepaired, repairedToolCallIds } =
-        await repairDanglingToolParts(params.messages, { resolveLostResult });
+        await repairDanglingToolParts(carded.messages, { resolveLostResult });
       if (repairedToolCallIds.length > 0) {
         console.warn(
           `[hoot] repaired ${repairedToolCallIds.length} dangling tool part(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog(repairedToolCallIds.join(', '))}`,
@@ -497,10 +553,10 @@ export function startTurn(
         claim: (toolCallId) => claimApproval(db, chatId, toolCallId, { turnId }),
         resolveLostResult,
       });
-      consumedParts = consumption.consumedParts;
-      if (consumedParts.size > 0) {
+      consumedParts = new Map([...carded.refused, ...consumption.consumedParts]);
+      if (consumption.consumedParts.size > 0) {
         console.warn(
-          `[hoot] blocked re-execution of ${consumedParts.size} already-consumed approval(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog([...consumedParts.keys()].join(', '))}`,
+          `[hoot] blocked re-execution of ${consumption.consumedParts.size} already-consumed approval(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog([...consumption.consumedParts.keys()].join(', '))}`,
         );
       }
       const repairedMessages = consumption.messages;
@@ -521,10 +577,11 @@ export function startTurn(
       // Re-check the caller's resolved set against the site as it is NOW. This
       // only ever removes machines (see `narrowToLiveMachines`), so an approved
       // tool call cannot reach a machine the approver never saw.
-      const resolved = narrowToLiveMachines(
-        params.resolved,
-        await listSiteMachines(db, params.siteId),
-      );
+      // the listing is cut to the person's scope as well, though callers resolve
+      // within it: a machine dropped from the scope since then drops out here.
+      const machineScope = params.access.standing.machineIds;
+      const siteMachines = await listSiteMachines(db, params.siteId, machineScope);
+      const resolved = narrowToLiveMachines(params.resolved, siteMachines);
       if (resolved.ids.length === 0) throw noLiveMachinesError(params.turnTarget, resolved);
       // The record has to name what this turn actually dispatches to before it
       // dispatches: the NEXT approval in this chat binds to that list. A resume
@@ -543,13 +600,17 @@ export function startTurn(
       }
 
       const fanOut = resolved.fanOut;
+      // off the same listing: which targets' agents hold a restart for active hours.
+      const activeHoursGuardIds = resolved.ids.filter(
+        (id) => siteMachines.find((machine) => machine.id === id)?.activeHoursGuard === true,
+      );
       // A fan-out dispatches from the id LIST, so the positional id is only the
       // single path's target; in a fan-out it is just the legacy "not one
       // machine" view, and the `chatMachineId` default it feeds is always
       // overridden by `followupTarget` below.
       const dispatchMachineId = fanOut ? SITE_TARGET_ID : resolved.ids[0];
 
-      const [llmConfig, requireTier3Approval, processes] = await Promise.all([
+      const [llmConfig, requireTier3Approval, processes, localTime] = await Promise.all([
         resolveLlmConfig(db, params.userId),
         // A forced gate needs no site read: the setting could only turn it off,
         // and this flag exists to say it must not.
@@ -561,6 +622,16 @@ export function startTurn(
         fanOut
           ? Promise.resolve<ProcessSummary[]>([])
           : fetchProcessSummaries(db, params.siteId, resolved.ids[0]),
+        // a fan-out has no one machine's clock, so it reads the site's. a single
+        // machine's zone came with the listing above.
+        fanOut
+          ? getSiteTimezone(db, params.siteId).then(
+              (timeZone): PromptLocalTime => ({ scope: 'site', timeZone }),
+            )
+          : Promise.resolve<PromptLocalTime>({
+              scope: 'machine',
+              timeZone: siteMachines.find((machine) => machine.id === resolved.ids[0])?.timezone,
+            }),
       ]);
 
       const earnedTier = resolveHootMaxTier(params.access);
@@ -571,7 +642,10 @@ export function startTurn(
         params.maxToolTier === undefined
           ? earnedTier
           : (Math.min(params.maxToolTier, earnedTier) as ToolTier);
-      const toolDefs = getToolsByTier(effectiveTier);
+      // Turns that fire with nobody watching aren't offered these at all.
+      const toolDefs = getToolsByTier(effectiveTier).filter(
+        (def) => PERSON_TURN_SOURCES.has(params.turnTarget.source) || !UNATTENDED_EXCLUDED_TOOLS.has(def.name),
+      );
       const tools = buildExecutableTools(
         db,
         params.siteId,
@@ -583,9 +657,16 @@ export function startTurn(
         {
           userId: params.userId,
           userRole: params.access.role,
-          userSiteRole: params.access.siteRole,
+          userStanding: params.access.standing,
+          machineScope,
+          machineActor: params.machineActor,
           maxToolTier: effectiveTier,
           requireTier3Approval,
+          launchChangeApprovable: LAUNCH_APPROVAL_TURN_SOURCES.has(params.turnTarget.source),
+          allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),
+          activeHoursGuardIds,
+          turnId,
+          incomingToolCallIds: incomingToolCallIds(unchecked.messages),
           // A follow-up fires where it was promised (D-D): this turn's target
           // AFTER any mention narrowing, with `null` left as the dynamic "all".
           followupTarget: { machineIds: params.turnTarget.machineIds },
@@ -593,6 +674,7 @@ export function startTurn(
             onCommandQueued: (toolCallId: string, commandId: string, machineId: string) =>
               recordToolCommand(db, chatId, turnId, toolCallId, commandId, machineId),
             abortSignal: abortController.signal,
+            stillOwnsChat: checkOwnership,
           },
         },
       );
@@ -626,6 +708,8 @@ export function startTurn(
           skipped: resolved.skipped,
           processes,
           narrowedByMention: params.turnTarget.source === 'mention',
+          localTime,
+          activeHoursGuardIds,
         }),
         // Pass `tools` so per-tool toModelOutput hooks (e.g. capture_screenshot
         // → image-url) also project PRIOR-turn outputs into model content.

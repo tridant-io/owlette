@@ -5,8 +5,10 @@
  * `web/lib/authorizedHandler.server.ts`: happy path, allow-audit failure → 503,
  * capability + rate-limit kill-switch bypass (and their bypass metadata),
  * the swoop carve-out from the capability one (BYPASS_EXEMPT_CAPABILITIES),
- * api-key scope never bypassed, site-access 404, capability 403, rate-limit 429,
- * the platform handler's superadmin gate, and the `siteIdParam: 'body'` type error.
+ * api-key scope never bypassed, site-access 404, machine scope (404 off the
+ * scope, 403 site-wide, on both sides of the kill switch), capability 403,
+ * rate-limit 429, the plan lockout 402, the platform handler's superadmin gate,
+ * and the `siteIdParam: 'body'` type error.
  */
 
 import type { NextRequest } from 'next/server';
@@ -22,6 +24,8 @@ let siteDoc: { exists: boolean; data: () => unknown } = {
   exists: true,
   data: () => ({ owner: 'uid_alice' }),
 };
+/** reads of `sites/{siteId}` itself, so the plan step can be held to the one read site access made. */
+let siteDocReads = 0;
 // `customers/{uid}` for the control-plane billing gate. Absent by default, which
 // `resolveBillingState()` reads as 'trialing' — the posture every other test here assumes.
 /**
@@ -34,11 +38,11 @@ let memberDoc: { exists: boolean; data: () => unknown } = {
   data: () => undefined,
 };
 
-/** Give the caller per-site standing. */
-function setMember(role: 'owner' | 'admin' | 'member'): void {
+/** Give the caller per-site standing; `extra` adds fields to the row, such as `swoop`. */
+function setMember(role: 'owner' | 'admin' | 'member', extra?: Record<string, unknown>): void {
   memberDoc = {
     exists: true,
-    data: () => ({ uid: 'uid_alice', role, status: 'active', addedAt: new Date(0), addedBy: 'system:test' }),
+    data: () => ({ uid: 'uid_alice', role, status: 'active', addedAt: new Date(0), addedBy: 'system:test', ...extra }),
   };
 }
 
@@ -78,6 +82,7 @@ function buildDoc(path: string): unknown {
         return Promise.resolve(memberDoc);
       }
       if (path.startsWith('sites/')) {
+        if (/^sites\/[^/]+$/.test(path)) siteDocReads += 1;
         return Promise.resolve(siteDoc);
       }
       if (path.startsWith('customers/')) {
@@ -183,9 +188,14 @@ jest.mock('@/lib/apiAuth.server', () => {
     // The wrapper emits the api-key audit event since task 1.6; a no-op here
     // because this suite asserts authorization, not audit fan-out.
     auditApiKeyUse: jest.fn(),
-    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: 'site-a', siteData: {} })),
+    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: 'site-a', siteData: {}, machineIds: null })),
   };
 });
+
+const mockGetSiteEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+}));
 
 const warnSpy = jest.fn();
 const errorSpy = jest.fn();
@@ -204,6 +214,7 @@ import {
   authorizedSiteHandler,
   authorizedPlatformHandler,
   BYPASS_EXEMPT_CAPABILITIES,
+  PLAN_GATED_CAPABILITIES,
   type SiteIdSource,
 } from '@/lib/authorizedHandler.server';
 import {
@@ -212,6 +223,9 @@ import {
   requireScope,
   assertUserHasSiteAccess,
 } from '@/lib/apiAuth.server';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+import { scopeMatches, type ApiKeyScope } from '@/lib/apiKeyTypes';
+import type { Capability } from '@/lib/capabilities';
 
 const resolveAuthMock = resolveAuth as unknown as jest.Mock;
 const requireScopeMock = requireScope as unknown as jest.Mock;
@@ -238,11 +252,13 @@ beforeEach(() => {
   };
   userDoc = { exists: true, data: () => ({ role: 'admin', sites: ['site-a'] }) };
   siteDoc = { exists: true, data: () => ({ owner: 'uid_alice' }) };
+  siteDocReads = 0;
+  mockGetSiteEntitlements.mockReset();
   // Ownership is a member row now; the `owner` field above grants nothing.
   setMember('admin');
   customerDoc = { exists: false, data: () => undefined };
   requireScopeMock.mockReturnValue({ isLegacy: false });
-  assertUserHasSiteAccessMock.mockResolvedValue({ siteId: 'site-a', siteData: {} });
+  assertUserHasSiteAccessMock.mockResolvedValue({ siteId: 'site-a', siteData: {}, machineIds: null });
 });
 
 function makeRequest(url = 'http://localhost/api/sites/site-a/test', method = 'POST'): NextRequest {
@@ -255,6 +271,10 @@ function makeRequest(url = 'http://localhost/api/sites/site-a/test', method = 'P
 
 function pathParamsFor(siteId: string): { params: Promise<{ siteId: string }> } {
   return { params: Promise.resolve({ siteId }) };
+}
+
+function machineParamsFor(machineId: string): { params: Promise<{ siteId: string; machineId: string }> } {
+  return { params: Promise.resolve({ siteId: 'site-a', machineId }) };
 }
 
 // authorizedSiteHandler
@@ -279,7 +299,14 @@ describe('authorizedSiteHandler — happy path', () => {
     expect(res.status).toBe(200);
     expect(handler).toHaveBeenCalledTimes(1);
     const ctx = handler.mock.calls[0][1];
-    expect(ctx.actor).toEqual({ type: 'user', userId: 'uid_alice', role: 'admin', siteRoles: { ['site-a']: 'admin' } });
+    expect(ctx.actor).toEqual({
+      type: 'user',
+      userId: 'uid_alice',
+      role: 'admin',
+      siteRoles: { ['site-a']: 'admin' },
+      swoopModes: {},
+      machineScopes: { ['site-a']: null },
+    });
     expect(ctx.siteId).toBe('site-a');
     expect(typeof ctx.correlationId).toBe('string');
     expect(ctx.correlationId).toMatch(/^[0-9a-f]{22}$/);
@@ -411,12 +438,15 @@ describe('authorizedSiteHandler — kill switches', () => {
 });
 
 describe('authorizedSiteHandler — swoop capabilities are exempt from the capability kill switch', () => {
-  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities', () => {
+  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities, the fleet grant and site billing', () => {
     // SWOOP_SETTINGS_MANAGE belongs here because it is the switch in front of
     // the other two: a bypassable enablement route lets a member turn swoop on
-    // and then pass the exempt watch check on merit.
+    // and then pass the exempt watch check on merit. FLEET_SETTINGS_MANAGE is
+    // the same kind of switch: bypassable, a member could grant a machine
+    // commands over the whole site. SITE_BILLING_MANAGE: a member could put
+    // sites on the owner's card.
     expect([...BYPASS_EXEMPT_CAPABILITIES].sort()).toEqual(
-      ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SWOOP_SETTINGS_MANAGE'].sort()
+      ['FLEET_SETTINGS_MANAGE', 'MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SITE_BILLING_MANAGE', 'SWOOP_SETTINGS_MANAGE'].sort()
     );
   });
 
@@ -494,6 +524,269 @@ describe('authorizedSiteHandler — swoop capabilities are exempt from the capab
     expect(allow).toBeDefined();
     expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBeUndefined();
     expect(allow!.payload.enforcementBypassed).toBe(false);
+  });
+});
+
+// owner rulings 13-14. the mode is read off the member row and holds on both
+// sides of the kill switch, because the swoop capabilities are bypass-exempt.
+describe.each([
+  ['on', true],
+  ['off', false],
+])("authorizedSiteHandler — a member row's swoop mode, capability enforcement %s", (_label, enforcement) => {
+  beforeEach(() => {
+    configResult = { ...configResult, capability_enforcement: enforcement };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+  });
+
+  async function call(capability: 'MACHINE_REMOTE_CONTROL' | 'MACHINE_REMOTE_VIEW') {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+    return { res, handler };
+  }
+
+  function denyReason(): string | undefined {
+    const deny = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'deny');
+    return (deny?.payload as { denyReason?: string } | undefined)?.denyReason;
+  }
+
+  it('refuses an admin held to view MACHINE_REMOTE_CONTROL, with code capability_missing', async () => {
+    setMember('admin', { swoop: 'view' });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'capability_missing', detail: 'capability not granted' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(denyReason()).toBe('capability_missing');
+  });
+
+  it('grants a member set to control MACHINE_REMOTE_CONTROL', async () => {
+    setMember('member', { swoop: 'control' });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][1].actor.swoopModes).toEqual({ ['site-a']: 'control' });
+  });
+
+  it('refuses a member set to none MACHINE_REMOTE_VIEW, with code capability_missing', async () => {
+    setMember('member', { swoop: 'none' });
+    const { res, handler } = await call('MACHINE_REMOTE_VIEW');
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(handler).not.toHaveBeenCalled();
+    expect(denyReason()).toBe('capability_missing');
+  });
+
+  it('positive control: grants an admin with no mode MACHINE_REMOTE_CONTROL', async () => {
+    setMember('admin');
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('authorizedSiteHandler — a swoop mode reaches nothing outside swoop', () => {
+  // with the kill switch off this capability bypasses, and a member is waved
+  // through ('same switch, same member' above), so the control runs with it on.
+  it('positive control: a member set to control is refused MACHINE_EXEC_COMMAND with code forbidden', async () => {
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+    setMember('member', { swoop: 'control' });
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_EXEC_COMMAND', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+// machine scope is part of site access, so it holds on both sides of the kill
+// switch: the step runs before the switch is read.
+describe.each([
+  ['on', true],
+  ['off', false],
+])('authorizedSiteHandler — machine scope, capability enforcement %s', (_label, enforcement) => {
+  beforeEach(() => {
+    configResult = { ...configResult, capability_enforcement: enforcement };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+  });
+
+  async function call(
+    capability: Capability,
+    machineId: string | null,
+    extra: { apiKeyScope?: { resource: 'machine'; idParam: string } } = {},
+  ) {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path', ...extra })(handler);
+    const res = machineId === null
+      ? await wrapped(makeRequest(), pathParamsFor('site-a'))
+      : await wrapped(makeRequest(`http://localhost/api/sites/site-a/machines/${machineId}/test`), machineParamsFor(machineId));
+    return { res, handler };
+  }
+
+  function deny(): { denyReason?: string; metadata?: Record<string, unknown> } | undefined {
+    return setCalls.find((c) => c.payload.outcome === 'deny')?.payload as
+      | { denyReason?: string; metadata?: Record<string, unknown> }
+      | undefined;
+  }
+
+  describe('a scoped member, m1', () => {
+    beforeEach(() => setMember('member', { machineIds: ['m1'] }));
+
+    it('runs a MACHINE_VIEW route on m1, on the one site read', async () => {
+      const { res, handler } = await call('MACHINE_VIEW', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][1].actor.machineScopes).toEqual({ ['site-a']: ['m1'] });
+      expect(siteDocReads).toBe(1);
+    });
+
+    it('answers 404 on m2, with a machine_out_of_scope deny row and before the kill switch is read', async () => {
+      const { res, handler } = await call('MACHINE_VIEW', 'm2');
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ detail: 'machine not found or no access' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()).toMatchObject({ denyReason: 'machine_out_of_scope', metadata: { machineId: 'm2' } });
+      expect(setCalls.find((c) => c.payload.outcome === 'allow')).toBeUndefined();
+      expect(securityConfigReadSpy).not.toHaveBeenCalled();
+      expect(siteDocReads).toBe(1);
+    });
+  });
+
+  describe('a scoped member set to control, m1', () => {
+    beforeEach(() => setMember('member', { swoop: 'control', machineIds: ['m1'] }));
+
+    it('runs a MACHINE_REMOTE_CONTROL route on m1', async () => {
+      const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 404 on m2', async () => {
+      const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm2');
+
+      expect(res.status).toBe(404);
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_out_of_scope');
+    });
+  });
+
+  describe('a scoped admin, m1', () => {
+    beforeEach(() => setMember('admin', { machineIds: ['m1'] }));
+
+    it('runs MACHINE_EXEC_COMMAND on m1', async () => {
+      const { res, handler } = await call('MACHINE_EXEC_COMMAND', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses MACHINE_REMOVE on m1 with 403 forbidden, naming the machine in the deny row', async () => {
+      const { res, handler } = await call('MACHINE_REMOVE', 'm1');
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()).toMatchObject({ denyReason: 'machine_scope_site_wide', metadata: { machineId: 'm1' } });
+      expect(securityConfigReadSpy).not.toHaveBeenCalled();
+    });
+
+    it("refuses SWOOP_SETTINGS_MANAGE on m1 (kill's shape) with code capability_missing", async () => {
+      const { res, handler } = await call('SWOOP_SETTINGS_MANAGE', 'm1');
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'capability_missing', detail: 'capability not granted' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_scope_site_wide');
+    });
+
+    it.each([
+      ['SITE_MEMBER_MANAGE', 'forbidden'],
+      ['SWOOP_SETTINGS_MANAGE', 'capability_missing'],
+    ] as const)('refuses %s with no machineId with 403 %s', async (capability, code) => {
+      const { res, handler } = await call(capability, null);
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe(code);
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_scope_site_wide');
+      expect(deny()?.metadata).not.toHaveProperty('machineId');
+    });
+
+    it('with its own api key on machine=*:write: runs on m1 and answers 404 on m2', async () => {
+      const scopes: ApiKeyScope[] = [{ resource: 'machine', id: '*', permissions: ['write'] }];
+      resolveAuthResult = { userId: 'uid_alice', keyContext: { keyId: 'key-a', scopes } };
+      // the real match, so the key admits m2 and only the machine scope refuses it
+      requireScopeMock.mockImplementation((_auth, resource, id, permission) => {
+        if (!scopeMatches(scopes, resource, id, permission)) {
+          throw new ApiAuthError(403, 'insufficient scope', { code: 'scope_insufficient' });
+        }
+        return { isLegacy: false };
+      });
+      const apiKeyScope = { resource: 'machine' as const, idParam: 'machineId' };
+
+      const onM1 = await call('MACHINE_EXEC_COMMAND', 'm1', { apiKeyScope });
+      expect(onM1.res.status).toBe(200);
+      expect(requireScopeMock).toHaveBeenCalledWith(expect.anything(), 'machine', 'm1', 'write');
+
+      const onM2 = await call('MACHINE_EXEC_COMMAND', 'm2', { apiKeyScope });
+      expect(onM2.res.status).toBe(404);
+      expect(onM2.handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_out_of_scope');
+    });
+  });
+
+  it('a scoped admin set to view is refused MACHINE_REMOTE_CONTROL on m1 by the capability step', async () => {
+    setMember('admin', { swoop: 'view', machineIds: ['m1'] });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm1');
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(handler).not.toHaveBeenCalled();
+    expect(deny()?.denyReason).toBe('capability_missing');
+  });
+
+  it('a superadmin with no row runs on m2', async () => {
+    userDoc = { exists: true, data: () => ({ role: 'superadmin', sites: [] }) };
+    memberDoc = { exists: false, data: () => undefined };
+    const { res, handler } = await call('MACHINE_EXEC_COMMAND', 'm2');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('a whole-site admin is unchanged: MACHINE_REMOVE on m2 and SITE_MEMBER_MANAGE with no machineId run', async () => {
+    setMember('admin');
+    const onMachine = await call('MACHINE_REMOVE', 'm2');
+    const siteWide = await call('SITE_MEMBER_MANAGE', null);
+
+    expect(onMachine.res.status).toBe(200);
+    expect(siteWide.res.status).toBe(200);
+    expect(onMachine.handler.mock.calls[0][1].actor.machineScopes).toEqual({ ['site-a']: null });
+  });
+});
+
+describe('authorizedSiteHandler — machine scope leaves the kill switch intact', () => {
+  it('capability kill switch off: a whole-site member still reaches a non-exempt route on a machine', async () => {
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_EXEC_COMMAND', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest('http://localhost/api/sites/site-a/machines/m2/test'), machineParamsFor('m2'));
+
+    expect(res.status).toBe(200);
+    const allow = setCalls.find((c) => c.payload.outcome === 'allow');
+    expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBe('capability');
   });
 });
 
@@ -710,6 +1003,290 @@ describe('authorizedSiteHandler — handler error path', () => {
     await new Promise((r) => setImmediate(r));
     const errorEntry = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'error');
     expect(errorEntry).toBeDefined();
+  });
+});
+
+describe('authorizedSiteHandler — plan lockout', () => {
+  const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+  const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: {
+      'owlette.control': '0',
+      'owlette.deployments': '0',
+      'owlette.swoop': '0',
+      'owlette.talons': '0',
+      'owlette.api_keys': '0',
+    },
+    epoch: 0,
+  };
+  const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-key';
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  function rows(outcome: string) {
+    return setCalls.filter((c) => (c.payload as { outcome?: string }).outcome === outcome);
+  }
+
+  it('maps the capabilities to their tridant keys', () => {
+    expect(Object.fromEntries(PLAN_GATED_CAPABILITIES)).toEqual({
+      DEPLOYMENT_MANAGE: 'owlette.deployments',
+      ALERT_RULES_MANAGE: 'owlette.control',
+      MACHINE_REMOTE_CONTROL: 'owlette.swoop',
+      MACHINE_REMOTE_VIEW: 'owlette.swoop',
+      TALON_MANAGE: 'owlette.talons',
+    });
+  });
+
+  it('free: refuses a deployment POST with 402 plan_required and a plan_locked deny row', async () => {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(402);
+    expect(res.headers.get('Content-Type')).toContain('application/problem+json');
+    expect(await res.json()).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.deployments',
+      upgradeUrl: '/settings/plan',
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
+    const deny = rows('deny');
+    expect(deny).toHaveLength(1);
+    expect(deny[0].payload.denyReason).toBe('plan_locked');
+    expect(deny[0].payload.metadata).toMatchObject({ method: 'POST', entitlement: 'owlette.deployments' });
+    expect(rows('allow')).toHaveLength(0);
+    // the payer comes from the site doc site access already read.
+    expect(siteDocReads).toBe(1);
+  });
+
+  it('free: refuses a talon PATCH on owlette.talons', async () => {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'TALON_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(undefined, 'PATCH'), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(402);
+    expect((await res.json()).entitlement).toBe('owlette.talons');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('free: a DELETE and a GET under a gated capability go through without a plan lookup', async () => {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    expect((await wrapped(makeRequest(undefined, 'DELETE'), pathParamsFor('site-a'))).status).toBe(200);
+    expect((await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'))).status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('free: a write under an ungated capability goes through', async () => {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_CONFIG_WRITE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('free: a planExempt route goes through', async () => {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({
+      capability: 'MACHINE_REMOTE_CONTROL',
+      siteIdParam: 'path',
+      planExempt: true,
+    })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('the capability kill switch does not bypass it', async () => {
+    configResult = { ...configResult, capability_enforcement: false, rate_limit_enforcement: false };
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(402);
+    expect(handler).not.toHaveBeenCalled();
+    expect(rows('deny')[0].payload.denyReason).toBe('plan_locked');
+  });
+
+  it('runs after rate limiting: a rate-limited caller gets 429 without a plan lookup', async () => {
+    rateLimitResult = { ok: false, reason: 'rate_limited', retryAfterSec: 30 };
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(429);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('core: an alert rules write goes through on owlette.control', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'ALERT_RULES_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(undefined, 'PUT'), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    expect(rows('allow')).toHaveLength(1);
+  });
+
+  it.each([
+    ['DEPLOYMENT_MANAGE', 'owlette.deployments'],
+    ['MACHINE_REMOTE_CONTROL', 'owlette.swoop'],
+    ['MACHINE_REMOTE_VIEW', 'owlette.swoop'],
+  ] as const)('core: refuses a %s write on the pro key %s', async (capability, entitlement) => {
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ entitlement, detail: PLAN_REQUIRED_DETAIL[entitlement] });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('pro: a deployment and a swoop write go through', async () => {
+    mockGetSiteEntitlements.mockResolvedValue({
+      ...CORE,
+      ent: { ...CORE.ent, 'owlette.deployments': '1', 'owlette.swoop': '1' },
+    });
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    for (const capability of ['DEPLOYMENT_MANAGE', 'MACHINE_REMOTE_CONTROL'] as const) {
+      const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+      expect((await wrapped(makeRequest(), pathParamsFor('site-a'))).status).toBe(200);
+    }
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('enforcement off: a gated write goes through without any plan lookup', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(200);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    expect(siteDocReads).toBe(1);
+  });
+
+  describe('api keys need owlette.api_keys on every request', () => {
+    beforeEach(() => {
+      resolveAuthResult = { userId: 'uid_alice', keyContext: { keyId: 'key-a' } };
+    });
+
+    it('free: refuses a key, reads included, with a plan_locked deny row', async () => {
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability: 'MACHINE_VIEW', siteIdParam: 'path', apiKeyPermission: 'read' })(handler);
+
+      const res = await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({
+        code: 'plan_required',
+        entitlement: 'owlette.api_keys',
+        detail: PLAN_REQUIRED_DETAIL['owlette.api_keys'],
+      });
+      expect(handler).not.toHaveBeenCalled();
+      const deny = rows('deny');
+      expect(deny).toHaveLength(1);
+      expect(deny[0].payload.denyReason).toBe('plan_locked');
+      expect(deny[0].payload.metadata).toMatchObject({ method: 'GET', entitlement: 'owlette.api_keys' });
+      expect(rows('allow')).toHaveLength(0);
+      expect(siteDocReads).toBe(1);
+    });
+
+    it('free: a planExempt route still refuses a key', async () => {
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({
+        capability: 'MACHINE_REMOTE_CONTROL',
+        siteIdParam: 'path',
+        planExempt: true,
+      })(handler);
+
+      const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(402);
+      expect((await res.json()).entitlement).toBe('owlette.api_keys');
+    });
+
+    it('free: a session on the same read goes through without a plan lookup', async () => {
+      resolveAuthResult = { userId: 'uid_alice', keyContext: null };
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability: 'MACHINE_VIEW', siteIdParam: 'path', apiKeyPermission: 'read' })(handler);
+
+      const res = await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(200);
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    });
+
+    it('pro: a key goes through, a gated write included, on one plan lookup', async () => {
+      mockGetSiteEntitlements.mockResolvedValue({
+        ...FREE,
+        resolved: true,
+        standing: 'active',
+        ent: { 'owlette.deployments': '1', 'owlette.api_keys': '1' },
+      });
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+      const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(200);
+      expect(mockGetSiteEntitlements).toHaveBeenCalledTimes(1);
+    });
+
+    it('a key on a plan with api keys but not deployments is refused the gated write on owlette.deployments', async () => {
+      mockGetSiteEntitlements.mockResolvedValue({ ...FREE, ent: { ...FREE.ent, 'owlette.api_keys': '1' } });
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+      const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(402);
+      expect((await res.json()).entitlement).toBe('owlette.deployments');
+    });
+
+    it('enforcement off: a key goes through without any plan lookup', async () => {
+      delete process.env.PLAN_ENFORCEMENT;
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability: 'MACHINE_VIEW', siteIdParam: 'path', apiKeyPermission: 'read' })(handler);
+
+      const res = await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(200);
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+      expect(siteDocReads).toBe(1);
+    });
   });
 });
 

@@ -1,7 +1,7 @@
 /**
  * hoot's internal shared secret — presented by every server-to-server caller of the internal
  * endpoints (`/api/hoot/autonomous`, `/api/hoot/escalation`, `/api/alerts/trigger`,
- * `/api/talons/internal/match`, and the audit-emit hop in `lib/auditLogClient.ts`).
+ * and `/api/talons/internal/match`).
  *
  * The env var is still `CORTEX_INTERNAL_SECRET`: it is provisioned on Railway (dev + prod), Vercel
  * and the Firebase Functions runtime config, and `functions/src/lib/requireInternalSecret` compares
@@ -12,10 +12,14 @@
  * See `web/lib/hoot/WIRE_NAMES.md` for the full survivor inventory.
  */
 
-/** The deployed env-var name. Referenced in operator-facing diagnostics. */
-export const HOOT_INTERNAL_SECRET_ENV = 'CORTEX_INTERNAL_SECRET';
+import { secretMatches } from '@/lib/secretMatches.server';
 
 /** The configured internal secret, or `undefined` when the env is unset. */
 export function hootInternalSecret(): string | undefined {
   return process.env.CORTEX_INTERNAL_SECRET;
+}
+
+/** the caller presented the internal secret; false whenever it is unset. */
+export function hootInternalSecretMatches(presented: string | null): boolean {
+  return secretMatches(presented, hootInternalSecret());
 }

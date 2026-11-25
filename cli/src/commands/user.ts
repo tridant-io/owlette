@@ -45,30 +45,9 @@ interface ListResponse {
 const PROMOTE_ROLES = new Set(['admin', 'superadmin']);
 
 export function registerUserCommands(program: Command): void {
-  const user =
-    (program.commands.find((c) => c.name() === 'user') as Command | undefined) ??
-    program.command('user').description('platform user management (superadmin)');
-
-  // Overwrite any earlier description so help text is registration-order safe.
-  user.description('platform user management (superadmin)');
-
-  // Drop earlier sub-command registrations so a re-register doesn't double-list.
-  for (const verb of [
-    'list',
-    'get',
-    'promote',
-    'demote',
-    'assign-sites',
-    'remove-sites',
-    'delete',
-  ] as const) {
-    const existing = user.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = user.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const user = program
+    .command('user')
+    .description('platform user management (superadmin)');
 
   // list
 

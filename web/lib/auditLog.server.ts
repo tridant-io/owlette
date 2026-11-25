@@ -28,6 +28,10 @@ export type Role = 'member' | 'admin' | 'superadmin';
 export type SystemActorName =
   | 'cortex_autonomous'
   | 'cortex_provisioning'
+  // a superadmin's read of a customer's machine data, as the customer's own site
+  // audit row names it: the staff member's uid stays in the matching
+  // `global/audit_log` row (same correlationId). An audit SUBJECT only, like swoop_host.
+  | 'owlette_support'
   | 'scheduled_cleanup'
   // the swoop streamer reporting its own lifecycle and refusals through
   // `POST /api/agent/swoop/events`. An audit SUBJECT only — it invokes nothing,
@@ -47,7 +51,14 @@ export type SystemActor = {
   name: SystemActorName;
 };
 
-export type AuditActor = UserActor | SystemActor;
+/** a granted machine on the fleet routes (ADR 0017); its audit string is `machine:<machineId>`. */
+export type MachineActor = {
+  type: 'machine';
+  siteId: string;
+  machineId: string;
+};
+
+export type AuditActor = UserActor | SystemActor | MachineActor;
 
 export type AuditTargetKind =
   | 'site'
@@ -58,6 +69,8 @@ export type AuditTargetKind =
   | 'process'
   | 'preset'
   | 'installer'
+  // one issue in `bug_reports`, named by its number or doc id as the route was called
+  | 'issue'
   // one swoop session, named by its opaque sid — the row's `machineId` says
   // which machine it ran against.
   | 'swoop_session'
@@ -292,11 +305,14 @@ function redactActorForLog(actor: AuditActor): Record<string, unknown> {
       ...(actor.apiKeyId ? { apiKeyIdPrefix: actor.apiKeyId.slice(0, 8) } : {}),
     };
   }
+  // a machine id is a hostname that log lines carry whole everywhere, not a uid
+  if (actor.type === 'machine') return { type: 'machine', machineId: actor.machineId };
   return { type: 'system', name: actor.name };
 }
 
 function actorRoleLabel(actor: AuditActor): string {
   if (actor.type === 'system') return `system:${actor.name}`;
+  if (actor.type === 'machine') return 'machine';
   return actor.apiKeyId ? `api-key:${actor.role}` : actor.role;
 }
 

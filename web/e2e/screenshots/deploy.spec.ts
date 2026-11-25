@@ -7,11 +7,12 @@
  * and scheduled siblings, so the list reads as an active surface. The in-flight
  * row is expanded before capture.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 test.use(roleState('admin'));
 
@@ -56,7 +57,7 @@ test('deploy capability card preview', async ({ page }) => {
     await page.waitForTimeout(500);
 
     await page.screenshot({
-      path: 'public/landing-screens/preview-deploy.png',
+      path: themedPath('public/landing-screens/preview-deploy.png'),
       fullPage: false,
     });
   } finally {

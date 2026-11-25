@@ -7,19 +7,30 @@
  * after the per-site-roles migration — every `members/{uid}` row alive under a
  * site id nobody could reach. Ordering is the whole design:
  *
+ *   0. refuse, writing nothing, while a machine is switching into or out of the
+ *      site (`move_switching`): its agent holds only the target's tokens by then.
  *   1. audit to the PLATFORM sink, blocking and fail-closed. The site's own
  *      audit_log is a subcollection of the doc below, so a row written there dies
  *      with the evidence of who destroyed it.
- *   2. tombstone the id, so the slug cannot be re-registered mid-cascade.
+ *   2. tombstone the id, so the slug cannot be re-registered mid-cascade. then
+ *      stop the site's billing with tridant id (adr 0018), whenever owlette has a
+ *      record of it or tridant id bills the site, best effort: the delete goes
+ *      on when tridant id cannot be reached. then remove the site from tridant
+ *      id; one it still runs is retried by the daily job.
  *   3. revoke `agent_refresh_tokens` for the site. FIRST among the destructive
  *      steps: a refresh token outlives the site document, so revoking last leaves
  *      a window where the site is gone and an agent can still mint access tokens
- *      against it.
+ *      against it. The site's fleet sessions and call records (ADR 0017) go with
+ *      them: top-level collections too, which step 5 never reaches. every move
+ *      into or out of the site (`machine_moves`, top-level as well) is cancelled
+ *      just before, so a pending move into it cannot mint a token after the revoke.
  *   4. clear `users/{uid}.sites[]` for every member — read from the member rows,
  *      so it has to happen BEFORE they are deleted. Skipping it also strands a
  *      dead site id in the client's union, which reports as `membership_fallback`
  *      drift forever and blocks the wave 6.1 strip.
- *   5. recursively delete the site document and every subcollection under it.
+ *   5. recursively delete `config/{siteId}` (the site's process configs, display
+ *      layouts, restart schedules and presets live there, outside the site
+ *      document), then the site document and every subcollection under it.
  *
  * R2 IS NOT DELETED HERE, and the cascade makes that worse in a way worth stating.
  * The nightly chunk GC (functions/src/chunkGc.ts) enumerates sites with
@@ -44,6 +55,11 @@ import {
   writeGlobalAuditEntryBlocking,
   type AuditActor,
 } from '@/lib/auditLog.server';
+import { deleteFleetCalls } from '@/lib/fleet/calls.server';
+import { revokeFleetSessions } from '@/lib/fleet/session.server';
+import { cancelMovesForSite, switchingMoveForSite } from '@/lib/machineMoves.server';
+import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
+import { removeTridantSite } from '@/lib/tridantSiteRemoval.server';
 
 export interface DeleteSiteInput {
   siteId: string;
@@ -74,6 +90,7 @@ const CASCADE_BATCH = 400;
 
 export type DeleteSiteResult =
   | { kind: 'not_found' }
+  | { kind: 'move_switching'; direction: 'into' | 'out of' }
   | { kind: 'deleted'; siteId: string };
 
 export async function deleteSite(
@@ -87,6 +104,14 @@ export async function deleteSite(
   const existing = await siteRef.get();
   if (!existing.exists) {
     return { kind: 'not_found' };
+  }
+
+  // a machine switching into or out of the site holds only the target's tokens:
+  // deleting either end would leave it unpaired, or the source with a stale row.
+  // refused before anything is written. pending moves are cancelled below.
+  const switching = await switchingMoveForSite(db, input.siteId);
+  if (switching) {
+    return { kind: 'move_switching', direction: switching.targetSiteId === input.siteId ? 'into' : 'out of' };
   }
 
   // Record the deletion in the PLATFORM sink BEFORE destroying anything. The site's
@@ -135,6 +160,14 @@ export async function deleteSite(
     deletedAt: FieldValue.serverTimestamp(),
   });
 
+  // stop billing before anything is destroyed, best effort.
+  await stopBillingBeforeDelete(input.siteId, existing.data());
+  await removeTridantSite(input.siteId);
+
+  // every move into or out of the site, before the credentials: a pending move
+  // into it could otherwise mint the site a new agent token after the revoke.
+  await cancelMovesForSite(db, input.siteId);
+
   // 3. Agent credentials first — see the ordering note above.
   const tokenSnap = await db
     .collection('agent_refresh_tokens')
@@ -145,6 +178,10 @@ export async function deleteSite(
     for (const doc of tokenSnap.docs.slice(i, i + CASCADE_BATCH)) batch.delete(doc.ref);
     await batch.commit();
   }
+  // A fleet session (ADR 0017) is an agent credential too. It and the call
+  // records live outside the site document, so the cascade below never reaches them.
+  await revokeFleetSessions(db, { siteId: input.siteId });
+  await deleteFleetCalls(db, { siteId: input.siteId });
 
   // 4. Clear the legacy membership pointer while the rows that name the members
   //    still exist.
@@ -179,7 +216,11 @@ export async function deleteSite(
     reclaimed: false,
   });
 
-  // 5. The document and everything beneath it.
+  // 5. The site's process configs, display layouts, restart schedules and presets,
+  //    which live outside it under config/{siteId}, then the document and
+  //    everything beneath it. Config goes first: a retry after a failure there
+  //    still finds the site, and a retry after the site is gone would not.
+  await db.recursiveDelete(db.collection('config').doc(input.siteId));
   await db.recursiveDelete(siteRef);
 
   emitMutation({

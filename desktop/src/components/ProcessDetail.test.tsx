@@ -7,9 +7,7 @@ import type { ProcessEntry } from '@/lib/owletteConfig'
 import type { ProcessStatus } from '@/lib/processStatus'
 
 vi.mock('@/lib/pickers', () => ({
-  pickExecutable: vi.fn(),
-  pickFile: vi.fn(),
-  pickDirectory: vi.fn(),
+  pickPath: vi.fn(),
 }))
 
 const base: ProcessEntry = {
@@ -35,6 +33,7 @@ interface Options {
 
 function setup(process: ProcessEntry = base, options: Options = {}) {
   const onSave = vi.fn()
+  const onPathsEntered = vi.fn()
   const onLaunchMode = vi.fn()
   const onSchedules = vi.fn()
   const onRestart = vi.fn()
@@ -51,6 +50,7 @@ function setup(process: ProcessEntry = base, options: Options = {}) {
           sections={{ whatToRun: true, whenToRun: true, howToRun: true, ...options.sections }}
           onSectionToggle={onSectionToggle}
           onSave={onSave}
+          onPathsEntered={onPathsEntered}
           onLaunchMode={onLaunchMode}
           onSchedules={onSchedules}
           scheduleTimezone={options.scheduleTimezone}
@@ -67,6 +67,7 @@ function setup(process: ProcessEntry = base, options: Options = {}) {
 
   return {
     onSave,
+    onPathsEntered,
     onLaunchMode,
     onSchedules,
     onRestart,
@@ -89,6 +90,25 @@ function edit(input: HTMLInputElement, value: string) {
 
 beforeEach(() => {
   vi.useRealTimers()
+})
+
+describe('telling the app which paths were entered', () => {
+  it('reports the path fields a save changed, for this process', () => {
+    const { onPathsEntered } = setup()
+
+    edit(field('path / args'), 'C:\\show\\main.toe')
+
+    expect(onPathsEntered).toHaveBeenCalledExactlyOnceWith('a', [['file_path', 'C:\\show\\main.toe']])
+  })
+
+  it('reports nothing when a field that is not a path changed', () => {
+    const { onSave, onPathsEntered } = setup()
+
+    edit(field('name'), 'media player')
+
+    expect(onSave).toHaveBeenCalled()
+    expect(onPathsEntered).not.toHaveBeenCalled()
+  })
 })
 
 describe('auto-save', () => {
@@ -248,11 +268,11 @@ describe('the launch mode control', () => {
 
     rerender({ ...base, launch_mode: 'always' })
     expect(indicator.style.transform).toBe('translateX(100%)')
-    expect(indicator.className).toContain('bg-emerald-600')
+    expect(indicator.className).toContain('bg-success-solid')
 
     rerender({ ...base, launch_mode: 'scheduled' })
     expect(indicator.style.transform).toBe('translateX(200%)')
-    expect(indicator.className).toContain('bg-blue-600')
+    expect(indicator.className).toContain('bg-info-solid')
   })
 
   it('hangs the schedule pencil off the group, flush and outside the grid', () => {

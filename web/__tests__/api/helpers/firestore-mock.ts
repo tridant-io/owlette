@@ -7,6 +7,8 @@
  * `jest.mock('@/lib/firebase-admin', () => ({ getAdminDb: () => mockDbFactory() }))`).
  */
 
+import type { SwoopMode } from '@/lib/swoopMode';
+
 export const mocks = {
   /** doc().get() — called with the document's full path, so an implementation
    *  can answer per-collection (e.g. `users/{uid}` vs the route's own doc). */
@@ -121,6 +123,8 @@ function buildLegacyCollection(): Record<string, unknown> {
   };
 }
 
+let transactionChain: Promise<unknown> = Promise.resolve();
+
 /** Returns a mock Firestore db object. Use inside jest.mock factory. */
 export function mockDbFactory(): Record<string, unknown> {
   return {
@@ -142,11 +146,38 @@ export function mockDbFactory(): Record<string, unknown> {
      */
     getAll: (...refs: Array<{ get: () => Promise<unknown> }>) =>
       Promise.all(refs.map((ref) => ref.get())),
+    /**
+     * Runs the callback once. `tx.get` reads through the ref, so it shares the
+     * `mocks.get` queue; `tx.update` and `tx.set` land on `mocks.update` and
+     * `mocks.set`. Transactions run one after another across every db this factory
+     * returns, which is what firestore's retry-on-conflict amounts to for two
+     * writers of one document.
+     */
+    runTransaction: (fn: (tx: unknown) => Promise<unknown>) => {
+      const run = transactionChain.then(() =>
+        fn({
+          get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+          update: (ref: { update: (data: unknown) => unknown }, data: unknown) => {
+            ref.update(data);
+          },
+          set: (
+            ref: { set: (data: unknown, options?: unknown) => unknown },
+            data: unknown,
+            options?: unknown,
+          ) => {
+            ref.set(data, options);
+          },
+        }),
+      );
+      transactionChain = run.catch(() => undefined);
+      return run;
+    },
   };
 }
 
 /**
  * Give `uid` standing on `siteId`, as `membership.server.ts` would write it.
+ * `extra` adds the person's `swoop` mode to the row.
  *
  * Site-scoped capabilities resolve from this row and nothing else, so a suite
  * exercising anything beyond a superadmin has to call it.
@@ -155,6 +186,7 @@ export function seedMember(
   siteId: string,
   uid: string,
   role: 'owner' | 'admin' | 'member' = 'admin',
+  extra: { swoop?: SwoopMode } = {},
 ): void {
   mocks.memberDocs.set(`${siteId}/${uid}`, {
     uid,
@@ -162,6 +194,7 @@ export function seedMember(
     status: 'active',
     addedAt: new Date(0),
     addedBy: 'system:test',
+    ...extra,
   });
   // A member needs a live user document to pass the soft-delete check, and
   // seeding it here takes that read off the `mocks.get` queue — see `userDocs`.

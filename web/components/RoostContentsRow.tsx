@@ -11,6 +11,7 @@
 
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { formatBytes } from '@/lib/preUploadCheck';
 import { useRoostManifestFiles } from '@/hooks/useRoostManifestFiles';
 
@@ -33,37 +34,37 @@ export function RoostContentsRow({
 }: RoostContentsRowProps) {
   const [expanded, setExpanded] = useState(false);
   const canExpand = !!versionId && (totalFiles ?? 0) > 0;
+  const open = expanded && canExpand;
   const { files, loading, error } = useRoostManifestFiles(
     siteId,
     roostId,
     versionId,
-    expanded && canExpand,
+    open,
   );
 
   if (totalFiles === undefined && totalSize === undefined) return null;
 
   return (
-    <div>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <button
-          type="button"
-          onClick={canExpand ? () => setExpanded((v) => !v) : undefined}
-          disabled={!canExpand}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'hide file list' : 'show file list'}
-          className={`flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors ${
-            canExpand
-              ? 'hover:text-foreground cursor-pointer'
-              : 'cursor-default'
-          }`}
-        >
-          {expanded ? (
-            <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-          ) : (
-            <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-          )}
-          <span>contents</span>
-        </button>
+    <Collapsible open={open} onOpenChange={setExpanded} disabled={!canExpand}>
+      <div className="flex items-center justify-between gap-2">
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            aria-label={open ? 'hide file list' : 'show file list'}
+            className={`flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors ${
+              canExpand
+                ? 'hover:text-foreground cursor-pointer'
+                : 'cursor-default'
+            }`}
+          >
+            {open ? (
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            <span>contents</span>
+          </button>
+        </CollapsibleTrigger>
         <span className="text-xs text-muted-foreground tabular-nums">
           {totalFiles !== undefined && (
             <>
@@ -75,15 +76,18 @@ export function RoostContentsRow({
         </span>
       </div>
 
-      {expanded && canExpand && (
-        <div className="rounded border border-border/40 bg-background/50">
+      {/* room past the list's sides and foot, without moving it, for the outline the slide's
+          clip would cut: a scroller with nothing focusable in it is a tab stop */}
+      <CollapsibleContent className="-mx-1 -mb-1 overflow-hidden px-1 pb-1 data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+        {/* the gap under the row is the list's margin, so it slides in with the list */}
+        <div className="mt-2 rounded border border-border/40 bg-background/50">
           {loading && files.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
               <Loader2 className="h-3 w-3 animate-spin" />
               loading file list…
             </div>
           ) : error ? (
-            <div className="px-3 py-2 text-xs text-red-400/80">
+            <div className="px-3 py-2 text-xs text-danger/80">
               couldn&apos;t load file list — {error}
             </div>
           ) : files.length === 0 ? (
@@ -116,7 +120,7 @@ export function RoostContentsRow({
             </div>
           )}
         </div>
-      )}
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

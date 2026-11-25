@@ -26,8 +26,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
-import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSession } from '@/lib/apiAuth.server';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { recordAuthFailure, recordSecondFactorPassed } from '@/lib/authEvents.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   mfaProofErrorResponse,
   verifyPasskeyStepUpAssertion,
@@ -35,7 +37,7 @@ import {
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
     await assertActiveUser(userId);
 
     const body = await request.json();
@@ -54,12 +56,20 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       challengeId,
     });
     if (!proof.ok) {
+      recordAuthFailure(request, {
+        userId,
+        capability: 'AUTH_SECOND_FACTOR',
+        event: 'second_factor_failed',
+        reason: proof.code,
+        method: 'passkey',
+      });
       return mfaProofErrorResponse(proof);
     }
 
     // The ONLY session state this route writes. Never createSession (it re-mints
     // expiry and re-reads factor state) and never a custom token.
-    await markSessionMfaVerified();
+    await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
+    recordSecondFactorPassed(request, { userId, method: 'passkey' });
 
     return NextResponse.json({ success: true });
   } catch (error) {

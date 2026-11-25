@@ -62,9 +62,7 @@ test('admin creates a deployment — deployment doc + per-target install command
   await dialog.getByRole('button', { name: /^enter manually$/i }).click();
   await dialog.locator('#manual-checksum').fill(sha256);
 
-  // Rows are clickable divs, not labels — clicking the row runs toggleMachine.
-  const machineRow = dialog.locator('div').filter({ hasText: new RegExp(`^${MACHINE_ID}`) }).first();
-  await machineRow.click();
+  await dialog.getByRole('checkbox', { name: MACHINE_ID }).click();
 
   // Button text pluralises with selectedMachines.size.
   await dialog.getByRole('button', { name: /^deploy to 1 machine$/i }).click();

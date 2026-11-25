@@ -54,7 +54,6 @@ export default async function globalTeardown(): Promise<void> {
 
   try {
     removeSandbox(session.programData)
-    console.log(`[desktop-sync] sandbox removed: ${session.programData}`)
   } catch (err) {
     // A locked log handle is the usual cause and the OS reclaims the temp dir.
     console.warn(`[desktop-sync] sandbox removal failed (continuing): ${String(err)}`)

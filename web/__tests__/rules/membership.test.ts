@@ -32,6 +32,7 @@ import {
   getDocs,
   query,
   setDoc,
+  updateDoc,
   where,
 } from 'firebase/firestore';
 import {
@@ -332,6 +333,25 @@ describe('member documents are server-written only', () => {
     const db = await asUser(MEMBER_UID, 'member', [SITE_A]);
 
     await assertFails(deleteDoc(doc(db, 'sites', SITE_A, 'members', MEMBER_UID)));
+  });
+
+  // the update path, which nothing else pins: a swoop mode is set only through
+  // the members API, which refuses your own row and needs SITE_MEMBER_MANAGE
+  test('a member cannot give themselves swoop control', async () => {
+    const db = await asUser(MEMBER_UID, 'member', [SITE_A]);
+
+    await assertFails(
+      updateDoc(doc(db, 'sites', SITE_A, 'members', MEMBER_UID), { swoop: 'control' }),
+    );
+  });
+
+  test("a site admin cannot set another member's swoop from the client", async () => {
+    await asUser(OTHER_UID, 'member', [SITE_A]);
+    const db = await asUser(ADMIN_UID, 'admin', [SITE_A]);
+
+    await assertFails(
+      updateDoc(doc(db, 'sites', SITE_A, 'members', OTHER_UID), { swoop: 'control' }),
+    );
   });
 
   test('even a superadmin cannot write member rows from the client', async () => {

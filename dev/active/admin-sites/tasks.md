@@ -1,0 +1,1362 @@
+# Admin sites page and swoop mode (release 2) — Tasks
+**Progress**: 0/43 complete
+
+Read first: `context.md` (rulings, decisions, copy rules, commands, seams) and `plan.md`. All paths are relative to the repo root. Anchors such as `file.tsx:120` are origin/dev @ ab4689bb (4.1.25). 4.1.26 merges before this work starts, so if a line has moved, find it by the quoted code. Every user-facing string below is final copy (lowercase house style). Comments are lowercase and explain only the non-obvious why of the code as it now is; a comment never tells a later release what to do (those notes live in context.md "Seams for release 3"). After each edit, run `cd web && npx eslint <files you touched>` and fix what you introduced. Never touch `firestore.rules`, `.claude/hooks/` or `.claude/settings.json`.
+
+What each check covers: `npx tsc --noEmit` checks app code only, because `web/tsconfig.json` excludes `__tests__/**`, `e2e/**` and every `*.spec.ts`. Jest proves a test file; `npx playwright test --list <file>` proves a spec loads. Only Task 8.1 runs Playwright against the emulators (fixed ports, one build folder): no other task starts `firebase emulators:exec`.
+
+**Gate before wave 1:** the owner has answered plan.md "Questions for the owner". Tasks 2.8, 4.2 and 9.3 carry the answers to questions 3, 4 and 2. Record the answers in the Log.
+
+## Wave 1: foundations
+
+- [ ] **Task 1.1: the swoop mode in the access core**
+  - Files: `web/lib/swoopMode.ts` (new), `web/lib/capabilities.ts`, `web/lib/sitePolicy.server.ts`, `web/lib/authorizedHandler.server.ts`, `web/app/api/_shared.ts`, `web/lib/apiAuth.server.ts`, `web/lib/swoop/policy.server.ts`, `web/__tests__/lib/swoopMode.test.ts` (new), `web/__tests__/lib/sitePolicy.test.ts` (new), `web/__tests__/lib/capabilities.test.ts`, `web/__tests__/lib/swoop/policy.server.test.ts`, `web/__tests__/lib/authorizedHandler.test.ts`
+  - Do:
+    - **The rule (owner rulings 13-14).** A member row may carry `swoop: 'none' | 'view' | 'control'`, the person's swoop mode on that site.
+      - It changes swoop and nothing else: MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL. A member set to control gains control and no command, config or site-wide capability. An admin held to view (or none) loses control (and watching, for none) and keeps everything else.
+      - Absent means the role decides exactly as today: a member watches where the site's `membersMayWatch` allows, an admin or owner controls. So no existing row changes behaviour. The existing tests in the files below stay as they are: that is the proof.
+      - The owner's row never carries one: the owner always controls. Control still needs an enrolled second factor and the step-up.
+      - `membersMayWatch` is the default for members with no mode. An explicit mode wins.
+    - **New `web/lib/swoopMode.ts`.** Pure: no firebase or server import, because the dashboard imports it too (the reason `useSwoopSettings.ts:11-14` cannot import the server parse).
+      - `export const SWOOP_MODES = ['none', 'view', 'control'] as const;` and `export type SwoopMode = (typeof SWOOP_MODES)[number];`
+      - `export const SWOOP_MODE_LABELS: Record<SwoopMode, string> = { none: 'no swoop', view: 'watch', control: 'control' };`
+      - `export function parseSwoopMode(raw: unknown): SwoopMode | null`:
+        - `undefined` gives `null` (no mode; the role decides).
+        - Each of the three strings gives itself.
+        - Anything else that is present (`null`, `''`, `'Control'`, `true`, an object) gives `'none'`. Comment why: fail closed, so a hand-edited value never reads as a grant.
+      - `export function grantedSwoopMode(role: 'owner' | 'admin' | 'member', mode: SwoopMode | null): SwoopMode`: `'control'` for the owner; otherwise `mode ?? (role === 'member' ? 'view' : 'control')`. Doc: what the capability check grants.
+      - `export function effectiveSwoopMode(role: 'owner' | 'admin' | 'member', mode: SwoopMode | null, membersMayWatch: boolean): SwoopMode`: `'none'` when `role === 'member' && mode === null && !membersMayWatch`; otherwise `grantedSwoopMode(role, mode)`. Doc: what the person gets on a site with swoop on.
+    - **`web/lib/capabilities.ts`.**
+      - Import `type SwoopMode` from `@/lib/swoopMode`.
+      - `UserActor` (:97-116) gains `swoopModes?: Readonly<Record<string, SwoopMode>>`. Doc: explicit swoop modes by site, from the member row's `swoop`. A site absent here follows its role. Only MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL read it. Built only through `siteStanding`.
+      - New `export interface MemberStanding { role: SiteRole | null; swoopMode: SwoopMode | null }`.
+      - New `export function siteStanding(bySite: Readonly<Record<string, MemberStanding>>): { siteRoles: Record<string, SiteRole>; swoopModes?: Record<string, SwoopMode> }`:
+        - Both maps start as `Object.create(null)`, because `SITE_ID_RE` admits `__proto__` as a site id.
+        - For each own key of `bySite`: skip a null role. Set `siteRoles[id] = role`. Set `swoopModes[id] = swoopMode` only when the role is not `'owner'` and the mode is not null.
+        - Return `swoopModes` only when at least one site has a mode. An actor built from untouched rows is then exactly today's actor; `authorizedHandler.test.ts:295` pins that shape with `toEqual` and must stay as it is.
+        - Doc: every UserActor built from a member row gets its per-site fields here, so whatever the row carries reaches every gate. A builder that dropped the mode would hand an admin held to view their control back.
+      - New `export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | null`. It returns null for a system actor, when `swoopModes` is absent, and when `siteId` is not an own key (`Object.prototype.hasOwnProperty.call`).
+      - `hasCapability` (:233-275), in the site-scoped branch, after `siteRole` is read (:266-267) and before the matrix lookup (:268):
+        - For MACHINE_REMOTE_VIEW or MACHINE_REMOTE_CONTROL, with `siteRole !== 'owner'` and `explicitSwoopMode(actor, siteId) !== null`, return `mode === 'control'` for CONTROL and `mode !== 'none'` for VIEW.
+        - Otherwise the matrix answers, as today. The superadmin short-circuit stays first.
+      - Rewrite the comments on MACHINE_REMOTE_CONTROL (:8-14) and MACHINE_REMOTE_VIEW (:15-21):
+        - By default they belong to site admins and owners, and to members, respectively.
+        - A person's swoop mode on their member row widens or narrows these two and nothing else (owner ruling, 2026-11-04).
+        - Keep the rest: why they are split, and that they are exempt from the kill switch.
+    - **`web/lib/sitePolicy.server.ts`.**
+      - `SiteAccessFacts` (:46-73) gains `swoopMode: SwoopMode | null`. Doc: the member row's explicit swoop mode. It is null with no active membership, on an owner row, and with no `swoop` field.
+      - `deriveMembership` (:117) becomes `export function deriveMembership`, with no behaviour change. Add one comment line: exported so a listing of a user's sites reads member rows exactly as access does.
+      - New `export function deriveSwoopMode(memberData: Record<string, unknown> | null, role: MembershipRole): SwoopMode | null`. It returns null unless `role` is `'admin'` or `'member'`; otherwise `parseSwoopMode(memberData?.swoop)`.
+      - `resolveSiteAccess` (:157-169): set `swoopMode: deriveSwoopMode(memberData, membershipRole)` in `facts`. No extra read: it is the member document already in the one `getAll`.
+      - New `export async function listUserStanding(userId: string): Promise<Record<string, MemberStanding & { role: SiteRole }>>`, after `resolveSiteAccess`:
+        - Query `getAdminDb().collectionGroup('members').where('uid', '==', userId).get()`. The site id is `doc.ref.parent.parent?.id`, the role is `deriveMembership(doc.data() ?? null)`, and the mode is `deriveSwoopMode(data, role)`. Skip a null role.
+        - Build the result with `Object.create(null)`.
+        - Doc: the read counterpart of `resolveSiteAccess` across every site the user is on. Repeat the index note on `listUserSiteIds` (`web/lib/membership.server.ts:70-84`): the `members.uid` collection-group override, and status filtered in memory.
+    - **Every builder from a member row goes through `siteStanding`.** Each one swaps its hand-built `siteRoles` for `...siteStanding({ [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode } })`:
+      - `web/lib/authorizedHandler.server.ts`:
+        - `authToActor` (:250-262) takes `standing: { siteRoles: Record<string, SiteRole>; swoopModes?: Record<string, SwoopMode> }` in place of `siteRoles` and spreads it. Update its doc comment (:244-249).
+        - The site call (:612-620) passes `siteStanding(...)`. `loadUserActor` (:279) passes `{ siteRoles: {} }`.
+      - `web/app/api/_shared.ts`, in `requireSiteCapability` (:373-383).
+      - `web/lib/apiAuth.server.ts`, in `assertUserHasSiteCapability` (:465-472).
+    - **The wrapper's swoop refusal carries a code** (`authorizedHandler.server.ts:694`).
+      - When `capabilityExempt` (:673) is true, that is for swoop's three capabilities, return `problem({ type: ProblemType.Forbidden, title: 'forbidden', status: 403, detail: 'capability not granted', code: 'capability_missing' })`.
+      - Every other capability keeps `problemForbidden('capability not granted')`, whose code is `forbidden`.
+      - Comment why: swoop's viewer and lease end only on a coded refusal (`web/lib/swoop/backoff.ts:89-95`). A bare 403 reads as an edge in front of the app, so a person set to none would retry every 30 s for the life of the tab and write a deny audit row each time.
+      - `controlRefusedForCapability` (`web/lib/swoop/intent.ts:13-16`) already accepts this code, so a refused control ask still steps down to a watch ask.
+    - **`web/lib/swoop/policy.server.ts`.**
+      - At :227-230, `members_may_not_watch` applies only when the site role is `member` AND `explicitSwoopMode(input.actor, input.siteId) === null`.
+      - Rewrite that comment: the site's switch is the default for members with no swoop mode of their own, and an explicit mode on the row wins (owner ruling 13).
+      - In the module header (:5-6), the first layer becomes "the capability matrix, with a person's swoop mode, says who may watch or control at all".
+    - **Tests.**
+      - `swoopMode.test.ts`:
+        - `parseSwoopMode`: absent gives null; each mode gives itself; `null`, `''`, `'Control'`, `1` and `{}` give `'none'`.
+        - `grantedSwoopMode` and `effectiveSwoopMode` as one table over every role × mode (absent and the three) × `membersMayWatch`.
+      - `capabilities.test.ts`, in the file's style, keeping every existing case unchanged:
+        - The cross product role (member, admin, owner) × mode (absent, none, view, control) × (MACHINE_REMOTE_VIEW, MACHINE_REMOTE_CONTROL). Expected values follow `grantedSwoopMode`.
+        - The defaults agree with the matrix. For each role, `SiteRoleCapabilityMatrix[role]` includes CONTROL exactly when `grantedSwoopMode(role, null) === 'control'`, and VIEW exactly when it is not `'none'`.
+        - A member set to control holds nothing else: MACHINE_EXEC_COMMAND, MACHINE_CONFIG_WRITE, SWOOP_SETTINGS_MANAGE, SITE_MEMBER_MANAGE and MACHINE_ENROLL are all false.
+        - An admin held to view or none keeps SITE_MEMBER_MANAGE, SWOOP_SETTINGS_MANAGE and MACHINE_EXEC_COMMAND. It loses CONTROL, and VIEW too for none.
+        - An owner with a mode in a hand-built actor still holds both.
+        - A mode on `site_a` says nothing about `site_b`. A `swoopModes` keyed `constructor` or `__proto__` never throws or grants. Superadmin is unchanged.
+        - `siteStanding`: it skips null roles, drops an owner's mode, keeps `__proto__` as an own key, leaves `Object.prototype` untouched, and returns no `swoopModes` key when no site has a mode.
+      - `policy.server.test.ts` (actors :66-69, `access()` :73-83). Add `swoopModes` where a case needs it, and a new describe `swoop mode`:
+        - With `membersMayWatch` off:
+          - a member with no mode gets `members_may_not_watch`;
+          - with `view`, a watch ask is ok;
+          - with `control`, a control ask gets `step_up_required`, and is ok with `stepUpOpen: true`;
+          - with `none`, `capability_missing`.
+        - An admin held to view gets `capability_missing` for control and ok for watching. Held to none, it gets `capability_missing` for both.
+        - `evaluateLeaseRenewal` for a control viewer whose mode is now `view` gets `capability_missing`.
+        - A cross-check over role × mode × `membersMayWatch`, with the actor built by `siteStanding`:
+          - `evaluateSwoopAccess` for view is ok exactly when `effectiveSwoopMode !== 'none'`;
+          - for control with `stepUpOpen: true` it is ok exactly when it is `'control'`.
+      - `sitePolicy.test.ts` (`/** @jest-environment node */`):
+        - `deriveSwoopMode`: null for owner, inactive and null-role rows; a parse for admin and member rows.
+        - `listUserStanding`, against a mocked `getAdminDb().collectionGroup()` returning docs with `ref.parent.parent.id`:
+          - active rows map to `{ role, swoopMode }`;
+          - inactive rows and unknown roles are skipped;
+          - a site id `__proto__` comes back as an own key;
+          - for every fixture row, the entry equals `{ role: deriveMembership(row), swoopMode: deriveSwoopMode(row, deriveMembership(row)) }`, so there is one reading of a row.
+        - `resolveSiteAccess` puts the same `swoopMode` in `facts`.
+      - `authorizedHandler.test.ts`. `setMember` (:41-46) gains an optional second argument `extra?: Record<string, unknown>`, spread into the row. With `capability_enforcement` on, and again off:
+        - an admin row with `swoop: 'view'` is refused MACHINE_REMOTE_CONTROL: 403, body `code: 'capability_missing'`, deny audit `capability_missing`;
+        - a member row with `swoop: 'control'` is granted it;
+        - a member row with `swoop: 'none'` is refused MACHINE_REMOTE_VIEW with `capability_missing`;
+        - POSITIVE CONTROLS: an admin with no mode is granted CONTROL, and a member refused MACHINE_EXEC_COMMAND still gets `code: 'forbidden'`.
+  - Done when:
+    - `cd web && npx jest __tests__/lib/swoopMode.test.ts __tests__/lib/sitePolicy.test.ts __tests__/lib/capabilities.test.ts __tests__/lib/swoop __tests__/lib/authorizedHandler.test.ts __tests__/lib/authorizationParity.test.ts __tests__/lib/apiAuth.test.ts __tests__/api/scopeEnforcement.test.ts __tests__/api/planProFlags.test.ts __tests__/api/swoop` is green, with authorizationParity's read-cost pins unchanged.
+    - eslint is clean on the twelve files, and `npx tsc --noEmit` is clean.
+
+- [ ] **Task 1.2: member candidate helpers**
+  - Files: `web/lib/memberCandidates.ts` (new), `web/__tests__/lib/memberCandidates.test.ts` (new)
+  - Do: a pure module with no React.
+    - `export interface MemberCandidate { uid: string; email: string | null; displayName: string | null }`: one row of the route in Task 2.8.
+    - `export function candidateLabel(c: MemberCandidate): string` returns `c.email || c.displayName || 'this person'`.
+    - `export function isFullEmail(text: string): boolean` is true only when the trimmed text is 254 characters or fewer and matches `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`.
+    - `export function rankMemberCandidates(query: string, candidates: readonly MemberCandidate[], limit = 6): MemberCandidate[]`:
+      - The needle is the query trimmed and lowercased. An empty needle returns the first `limit` rows in the given order; the server already sorts them.
+      - The prefix group holds candidates whose email starts with the needle, whose display name does, or one of whose whitespace-separated display-name words does.
+      - The substring group holds the remaining candidates whose email or display name contains the needle.
+      - Keep input order inside each group and cap the result at `limit`. This mirrors `filterMentionOptions` (`web/lib/hoot/mentions.ts:281-298`).
+  - Done when:
+    - The test covers `isFullEmail`: a missing `@`, a missing dot, spaces and 255 characters are all false.
+    - It covers ranking: prefix before substring; "cal" finds "rae calloway" in the prefix group; matching is case-insensitive; an empty query returns the first 6 in order; the cap holds.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 1.3: site settings paths, and talon successors by site role**
+  - Files: `web/lib/siteSettingsPath.ts` (new), `web/lib/talonSuccessors.ts`, `web/__tests__/lib/siteSettingsPath.test.ts` (new), `web/__tests__/lib/talonSuccessors.test.ts`
+  - Do:
+    - New `web/lib/siteSettingsPath.ts`:
+      - `export const SITE_SECTIONS = ['general', 'members', 'machines', 'swoop', 'danger'] as const;` and `export type SiteSection = (typeof SITE_SECTIONS)[number];`.
+      - `export const SITE_SECTION_LABELS: Record<SiteSection, string> = { general: 'general', members: 'members', machines: 'machines', swoop: 'swoop & screens', danger: 'danger zone' };`.
+      - `export function parseSiteSection(raw: string | null): SiteSection` returns `'general'` for null or unknown values.
+      - `export function siteSettingsPath(siteId: string, section?: SiteSection): string` returns `/admin/sites/${encodeURIComponent(siteId)}`, plus `?section=${section}` unless the section is undefined or `'general'`.
+      - Comment: this is the one builder for every link to a site's settings (header, gear, dashboard "turn on swoop…", SwoopPicker, swoop viewer).
+    - `web/lib/talonSuccessors.ts`: add `export function siteTalonSuccessors(members: readonly { uid: string; email: string | null; displayName: string | null; role: string }[], excludeUid?: string): TalonSuccessorOption[]`.
+      - Keep rows whose site role is `owner` or `admin`, never `excludeUid`. The label is `email || displayName || uid`, sorted as `eligibleTalonSuccessors` sorts.
+      - Comment why: the server re-resolves `hasCapability(successor, TALON_MANAGE, siteId)` from the member row, so the site role is the right axis. `eligibleTalonSuccessors` (global role) stays for the fleet-wide picker on /admin/users.
+  - Done when:
+    - `siteSettingsPath.test.ts` covers every section, an id with a space encoded, no query for general or undefined, and junk parsing to general.
+    - `talonSuccessors.test.ts` adds `siteTalonSuccessors` cases: owner and admin kept, member and `excludeUid` dropped, labels, order. The existing cases are unchanged.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 1.4: admin panel entry — the sites nav item, and a guard that waits for memberships**
+  - Files: `web/app/admin/navItems.ts`, `web/components/RequireAdminAccess.tsx`, `web/__tests__/components/RequireAdminAccess.test.tsx`, `web/__tests__/components/AdminLayout.test.tsx`
+  - Do:
+    - **Bug first. Write the failing test before the fix.**
+      - The defect: `RequireAdminAccess` (:30-52) decides from `loading` and `administersAnySite`. AuthContext's `loading` ends with the user document, while the membership listener may still be loading; `userSites` stays `undefined` until both have delivered (`web/contexts/AuthContext.tsx:1214-1218`, type doc :366-374). A site admin who hard-loads any /admin page in that window is sent to /dashboard with "access denied". `web/e2e-live/specs/roles.spec.ts:27-31` works around it, and the new site settings links make hard loads common.
+      - The fix, in `RequireAdminAccess` only: `const resolving = loading || (!!user && userSites === undefined);`. While resolving, render the existing "verifying permissions..." spinner and skip the redirect. Do not change AuthContext.
+    - **`web/app/admin/navItems.ts:50-57`**: replace the `members` entry, in the same position, with `{ name: 'sites', href: '/admin/sites', icon: Building2, description: 'your sites, their members and settings', minRole: 'admin', group: 'people' }`. Import `Building2` and drop `UserPlus` if it is unused. `/admin/sites/{id}` inherits `admin` through `requiredRoleForPath` (:153-161).
+    - **`RequireAdminAccess.test.tsx`**:
+      - The pathname mock (:18) becomes `'/admin/sites'`. Add `userSites` (default `['site-a']`) to the auth mock.
+      - New case: signed in, `loading` false, `userSites` undefined, `administersAnySite` false. Expect the spinner, no children, no push and no toast. Then rerender with `userSites: ['site-a']` and `administersAnySite: true`, and the children render.
+      - Nav expectations (:158-201): `sites` replaces `members` everywhere (`'people: users, sites'`). `requiredRoleForPath('/admin/sites')` and `('/admin/sites/site-a')` are `'admin'`. `requiredRoleForPath('/admin/members')` (:217) is now `'superadmin'`: the old path fails closed, and Task 6.1 adds its redirect.
+    - **`AdminLayout.test.tsx`**: `usePathname` (:16) becomes `'/admin/sites'`, the child h1 `sites`, the active link `/admin/sites` (:67), and the collapsed rail link `sites` → `/admin/sites` (:73).
+  - Done when:
+    - The new guard case failed on the old code and passes after the fix; say so in the Log.
+    - Both test files are green, and eslint and tsc are clean.
+
+- [ ] **Task 1.5: one createSite, and lowercase site-creation copy**
+  - Files: `web/hooks/useFirestore.ts`, `web/components/CreateSiteDialog.tsx`, `web/__tests__/components/CreateSiteDialog.test.tsx`
+  - Do:
+    - **`useFirestore.ts`, lift `createSite`.** Move it out of `useSites` (:938-979) to a module-level `export async function createSite(siteId: string, name: string, timezone?: string, schedulesFollowSiteTime?: boolean): Promise<string>`, placed after `apiJson` (:135).
+      - The body is the same. The unused `_userId` parameter is dropped: the server takes the owner from the session.
+      - `useSites` keeps returning `createSite`, now that function.
+      - Why: `PageHeader` (Task 4.2) and `SiteList` (Task 2.6) create sites without opening another site listener.
+    - **`useFirestore.ts`, lowercase errors:**
+      - :973 becomes `` `site ID "${siteId}" is already taken. choose a different one.` ``.
+      - `updateSite` (:984): `'Site name cannot be empty'` becomes `'site name cannot be empty'`.
+    - **`useFirestore.ts`, `deleteSite`:**
+      - Delete the false comment "Firestore does not cascade-delete the machines subcollection." (:1010). The server cascades (`web/lib/actions/deleteSite.server.ts:5-22`).
+      - Delete the stale TODO and its logger line (:1017-1019). Cascade step 4 already clears every member's legacy `sites[]`.
+    - **`CreateSiteDialog.tsx`, the prop:** `onCreateSite` (:22-28) becomes `(siteId: string, siteName: string, timezone?: string, schedulesFollowSiteTime?: boolean) => Promise<string>`. The call (:179-185) drops `user.uid`. Keep the signed-in guard. Every caller passes `createSite` from `useSites` or `useCurrentSite`, so they compile unchanged.
+    - **`CreateSiteDialog.tsx`, toasts (:149-198)**, from title case to lowercase:
+      - The four guards read `'enter a site name'`, `'the site ID is missing'`, `'sign in to create a site'` and `'choose an available site ID'`.
+      - Success: `toast.success('site created', { description: \`${newSiteName} is ready for its first machine.\` })`.
+      - Failure: `toast.error('could not create the site', { description: message || 'try again in a moment.' })`. The 402 text "your plan doesn't cover another site" lands in the description, which `plans/free.spec.ts` reads.
+    - **`CreateSiteDialog.test.tsx`**: the call assertions at :118-124 and :143-149 drop `'creator-uid'`, and :162 becomes `const [, , timezone, flag] = onCreateSite.mock.calls[0];`.
+  - Done when: `cd web && npx jest __tests__/components/CreateSiteDialog.test.tsx __tests__/components/CreateSiteDialog.a11y.test.tsx __tests__/hooks/useSites.settle.test.ts` is green, and eslint and tsc are clean.
+
+- [ ] **Task 1.6: shared admin pieces**
+  - Files: `web/components/ui/button.tsx`, `web/components/admin/Panel.tsx` (new), `web/components/admin/SegmentedControl.tsx` (new), `web/components/admin/BackLink.tsx` (new), `web/components/admin/DetailSkeleton.tsx` (new), `web/components/admin/issues/IssueList.tsx`, `web/components/admin/issues/IssueDetail.tsx`, `web/components/admin/sites/highlightMatch.tsx` (new), `web/components/admin/sites/displayRole.ts` (git mv of `web/app/admin/members/displayRole.ts`), `web/app/admin/members/page.tsx` (import line :57 only), `web/__tests__/components/admin/sites/displayRole.test.ts` (git mv of `web/__tests__/app/members-display-role.test.ts`), `web/__tests__/components/admin/sites/highlightMatch.test.tsx` (new), `web/__tests__/components/admin/SegmentedControl.test.tsx` (new), `web/__tests__/components/admin/Panel.test.tsx` (new)
+  - Do: one copy of each piece the issue pages and the site pages share. `button.tsx` variants stay the single source of button styling.
+    - **`button.tsx` size `xs`**: `"h-7 rounded-md gap-1.5 px-2.5 text-xs sm:px-3 has-[>svg]:px-2.5"`. That is exactly what IssueList's StatusFilter builds today from `size="sm"` plus `className="h-7 px-2.5 text-xs sm:px-3"` (IssueList.tsx:35-42). Comment: a toggle inside a segmented control.
+    - **`SegmentedControl`**: `export function SegmentedControl<T extends string>({ label, options, value, onChange }: { label: string; options: readonly { value: T; label: string }[]; value: T; onChange: (next: T) => void })`.
+      - It renders `<div role="group" aria-label={label} className="flex flex-wrap gap-0.5 rounded-lg border border-border bg-card p-0.5">`, with one `<Button variant="ghost" size="xs" aria-pressed={value === o.value} onClick={() => onChange(o.value)}>` per option.
+      - IssueList's `StatusFilter` (:31-48) is deleted, and its caller renders `<SegmentedControl label="status" options={ISSUE_FILTERS.map((f) => ({ value: f, label: filterLabel(f) }))} … />`.
+    - **`Panel`**: `export function Panel({ id, title, description, actions, tone = 'default', className, children }: { id: string; title: string; description?: ReactNode; actions?: ReactNode; tone?: 'default' | 'danger'; className?: string; children: ReactNode })`.
+      - Root: `<section aria-labelledby={id} className={cn('rounded-xl border bg-card p-4 sm:p-5', tone === 'danger' ? 'border-danger-border' : 'border-border', className)}>`.
+      - Header row `mb-3 flex items-start justify-between gap-3`. On its left, a `min-w-0` div holds an `h2` with `id={id}` (`text-sm font-semibold`, `text-danger` for the danger tone, else `text-foreground`) and an optional `p.mt-0.5.text-xs.text-muted-foreground`. `actions` sit in a `shrink-0 flex items-center gap-2` on the right.
+      - IssueDetail's private `Panel` (:58-77) is deleted, and its uses import this one with the same id, title and className.
+    - **`BackLink`**: `export function BackLink({ href, label }: { href: string; label: string })`, IssueDetail's (:260-269) with the href and label as props. IssueDetail renders `<BackLink href="/admin/issues" label="issues" />`.
+    - **`DetailSkeleton`**: IssueDetail's (:271-279), moved verbatim and exported. IssueDetail imports it.
+    - **`highlightMatch.tsx`**: `export function highlightMatch(text: string, query: string): ReactNode`, copied verbatim from `ManageSitesDialog.tsx:27-52` with its by-day aa comment. The dialog keeps its own copy until Task 6.1 deletes it.
+    - **`displayRole`**: `git mv` it. Its comment's "on /admin/members" becomes "on any site-scoped surface (the site list, the members section)". The members page import becomes `'@/components/admin/sites/displayRole'` (the page is deleted in 6.1). `git mv` the test, fix its import (:12), and change its header line (:4) "/admin/members role labelling." to "site-scoped role labelling.".
+    - **Tests:**
+      - `SegmentedControl.test.tsx`: the group is named, only the chosen button is pressed, and a click calls `onChange` with that value.
+      - `Panel.test.tsx`: the h2 labels the section, the danger tone sets `text-danger`, and the description and actions render.
+      - `highlightMatch.test.tsx`: an empty query returns the text; there is one `<mark>` per case-insensitive match; the original casing is kept.
+  - Done when: `cd web && npx jest __tests__/components/admin` is green (it includes `issues/issuePages.test.tsx`); eslint is clean on the code files, and tsc is clean.
+
+- [ ] **Task 1.7: the viewer stops on a "no swoop" refusal, and says why**
+  - Files: `web/components/swoop/SwoopStage.tsx`, `web/__tests__/components/SwoopStage.test.tsx`, `web/__tests__/hooks/useSwoopSession.test.tsx`
+  - Do:
+    - Background. After Task 1.1, a person whose swoop mode is none is refused at the wrapper with 403 `capability_missing`, on the control ask and then on the watch ask.
+      - `useSwoopSession` already treats that as final (`useSwoopSession.ts:702-707`, `isWithdrawal` in `web/lib/swoop/backoff.ts:112-114`) and calls `setRefusal('capability_missing')`.
+      - The stage then shows the API's sentence, "capability not granted".
+      - The hook needs no change.
+    - `SwoopStage.tsx`, in the settled block (:303-338):
+      - Add `const noSwoopAccess = refusal === 'capability_missing';` beside `swoopOff` (:234).
+      - The main line becomes `state === 'ended' ? 'session ended' : noSwoopAccess ? "you can't use swoop on this site" : error`.
+      - With `noSwoopAccess`, a detail line `'a site owner or admin sets who can watch and control. ask one of them.'`, styled as the other details.
+      - The back button stays.
+      - `refusal` is set only by a final create refusal; a refused lease ends as `ended` with its own sentence. So this copy appears only when a session never started. Say that in one comment line.
+    - Tests:
+      - `SwoopStage.test.tsx`: `state: 'error'`, `refusal: 'capability_missing'` and `error: 'capability not granted'` render both new lines and the back link, never "capability not granted", and no "open site settings".
+      - `useSwoopSession.test.tsx`, with fake timers:
+        - The control POST answers 403 `{ code: 'capability_missing', detail: 'capability not granted' }`, then the watch POST answers the same.
+        - The hook ends in `state: 'error'` with `refusal: 'capability_missing'`.
+        - After advancing 60 s, exactly two session POSTs were made, so no reconnect ran.
+        - POSITIVE CONTROL: a watch POST answering a code-less 403 still schedules a retry. Keep the existing case if one already pins that.
+  - Done when: both test files are green, and eslint and tsc are clean.
+
+## Wave 2: the leaf pieces, the members hook, the candidates route, and kill
+
+- [ ] **Task 2.1: MemberSearchInput**
+  - Files: `web/components/admin/sites/MemberSearchInput.tsx` (new), `web/__tests__/components/admin/sites/MemberSearchInput.test.tsx` (new)
+  - Depends on: Task 1.2, Task 1.6
+  - Do:
+    - **API:**
+      - `export type AddMemberTarget = { kind: 'uid'; uid: string; label: string } | { kind: 'email'; email: string };`
+      - `export function MemberSearchInput({ id, describedBy, candidates, loading, error, disabled, onTargetChange, onSubmit }: { id: string; describedBy?: string; candidates: readonly MemberCandidate[]; loading: boolean; error: string | null; disabled?: boolean; onTargetChange: (target: AddMemberTarget | null) => void; onSubmit: () => void })`.
+    - **Built like the hoot `@` list.** Follow `web/app/hoot/components/MentionPopover.tsx:54-123` and `ChatInput.tsx:359-365`:
+      - A controlled `Popover`, with `PopoverAnchor asChild` around the `Input`.
+      - `PopoverContent`: `align="start" sideOffset={4} collisionPadding={8}`. `onOpenAutoFocus` and `onCloseAutoFocus` call `preventDefault()`. `onInteractOutside` calls `preventDefault()` when the event target is the input. className `w-[var(--radix-popover-trigger-width)] max-w-[calc(100vw-2rem)] border-border bg-secondary p-1`.
+    - **The input stays a textbox.** No `role="combobox"`: the axe gate rejects it in a form row (ChatInput.tsx:359-360).
+      - Attributes: `type="text"`, `inputMode="email"`, `autoComplete="off"`, `aria-autocomplete="list"`, `aria-controls={open && options.length ? listboxId : undefined}`, `aria-activedescendant={open && active ? optionId(active) : undefined}`, `aria-describedby={describedBy}`.
+      - The class includes `text-base md:text-sm`, so iOS does not zoom.
+      - Placeholder: `'search, or type an email'`.
+    - **Options:** `rankMemberCandidates(text, candidates, 6)`.
+      - Render `<ul role="listbox" id={listboxId} aria-label="people you can add">` only when there are options (an empty listbox fails axe).
+      - Each option is `<li role="option" id aria-selected={active} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(c)}>`.
+        - The primary line is `highlightMatch(c.displayName || c.email || 'unnamed account', text)` (text-sm).
+        - When both a name and an email exist, a second line shows `highlightMatch(c.email, text)` (text-xs, muted, `wrap-anywhere`).
+      - Six two-line rows fit with no scroll region (MentionPopover comment :79-90 on `scrollable-region-focusable`).
+    - **Status line.** A `p.px-2.py-1.5.text-xs.text-muted-foreground` inside the popover, never an option:
+      - Loading: `'loading people…'`.
+      - Error: `'could not load people from your other sites. you can still type a full email.'`.
+      - Text with no match: `'no one from your other sites matches “{text}”.'`, plus `' type their full email to add someone new.'` when the text is not a full email.
+    - **Open and close:** the list opens on focus or typing whenever there is an option or a status line to show. It closes on a pick, on Escape (Radix closes only the top layer, so the dialog stays open) and on interaction outside.
+    - **Keys:**
+      - ArrowDown and ArrowUp move the active option, wrapping, and open a closed list.
+      - Enter picks the active option (with `preventDefault`) when the list is open and one is active; otherwise it calls `onSubmit()`.
+      - While the text is not a full email, the default active option is index 0. Once it is a full email, only an exact email match is active, so Enter never adds someone else whose address merely contains the typed one.
+    - **Target:** computed in the handlers, never in an effect.
+      - A pick sets `{ kind: 'uid', uid, label: candidateLabel(c) }`, and the input shows that label.
+      - Typing clears a pick. An exact (case-insensitive) candidate email then gives that uid target; else a full email gives `{ kind: 'email', email: text.trim() }`; else null.
+  - Done when:
+    - jsdom tests (stub `ResizeObserver` and pointer capture as `PageHeader.test.tsx:51-58`) cover:
+      - Typing filters and highlights; arrows and Enter pick, and `onTargetChange` gets the uid target.
+      - A full unmatched email gives an email target, and Enter calls `onSubmit`.
+      - A full email that is a substring of another candidate's address is NOT picked by Enter.
+      - Escape closes the list without calling `onSubmit`.
+      - Both no-match lines appear, and so do the loading and error lines.
+      - The input carries `aria-autocomplete`, `aria-controls` and `aria-activedescendant`, and has no combobox role.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 2.2: SiteSwitches (swoop & screens)**
+  - Files: `web/components/admin/sites/SiteSwitches.tsx` (new), `web/__tests__/components/admin/sites/SiteSwitches.test.tsx` (new)
+  - Depends on: Task 1.6
+  - Do:
+    - Move `SiteSettingSwitch` from `ManageSitesDialog.tsx:54-110`, with its behaviour unchanged:
+      - It PATCHes `{ [field]: next }` the moment it moves.
+      - It is disabled while busy or loading, says nothing on success, and its state follows the snapshot hook.
+      - A failure becomes `toast.error(\`could not change ${label}\`, { description: detail })`: a lowercase title, with the server detail as the description.
+    - Export `SiteSwitches({ siteId }: { siteId: string })`. It is a `Panel` (Task 1.6) with id `site-section-swoop`, title `'swoop & screens'` and description `'these switches act the moment they move.'`, holding the two switches as `ManageSitesDialog.tsx:117-144` does.
+      - Ids `swoop-${siteId}` and `keep-awake-${siteId}`; labels exactly `'swoop'` and `'keep screens awake'`.
+      - URLs `/api/sites/{id}/swoop-settings` (field `enabled`) and `/display-settings` (field `keepAwake`).
+    - Fix the swoop copy. The old text, "let admins watch and control" (`:127`), is wrong: members watch by default (`web/hooks/useSwoopSettings.ts:30-35`), and since Task 1.1 a person's swoop mode can change who does what. Use:
+      - `settings.membersMayWatch ? "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members." : "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members."`.
+      - Keep screens awake keeps `"machines on this site never sleep, blank or lock"`.
+  - Done when:
+    - The tests port `web/__tests__/components/ManageSitesDialog.test.tsx:157-215`: each switch's URL, method and body; the switch disabled in flight; silence on success; failure toasts the server detail.
+    - A new case checks that the swoop description follows `membersMayWatch`.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 2.3: SiteGeneralSection**
+  - Files: `web/components/admin/sites/SiteGeneralSection.tsx` (new), `web/__tests__/components/admin/sites/SiteGeneralSection.test.tsx` (new)
+  - Depends on: Task 1.6
+  - Do:
+    - Props: `{ site: { id: string; name: string; timezone?: string }; onSave: (siteId: string, updates: { name?: string; timezone?: string }) => Promise<void> }`. `SiteSettings` passes `useSites().updateSite`.
+    - Panel: a `Panel` with id `site-section-general`, title `'general'` and description `"the site's name, and the timezone its talons and site-time schedules run on."`.
+    - Fields:
+      - `Label` `'site name'` with `Input id="site-settings-name"`. Enter in it saves.
+      - `Label` `'timezone'` with `TimezoneSelect id="site-settings-timezone"`.
+    - Save: one button, `'save'` (`'saving…'` while busy).
+      - It is disabled while saving, and when nothing changed: the trimmed name equals `site.name` and the timezone equals `site.timezone || 'UTC'`.
+      - It sends only the changed fields (a port of `ManageSitesDialog.tsx:287-319`).
+    - Toasts:
+      - Empty name: `toast.error('site name cannot be empty')`, and nothing is sent.
+      - Success: `toast.success('site updated')`.
+      - Failure: `toast.error('could not update the site', { description: message })`.
+    - Seed state from props once. `SiteSettings` remounts this with `key={\`${site.id}:${site.name}:${site.timezone ?? ''}\`}`, so a saved or remote change re-seeds it with no effect.
+    - Layout `flex flex-wrap items-end gap-3`, so it stacks at 390px.
+  - Done when:
+    - Tests cover: save disabled until something changes; only changed fields sent; the empty-name toast with no call; Enter saving; the failure toast carrying the message.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 2.4: SiteDangerZone**
+  - Files: `web/components/admin/sites/SiteDangerZone.tsx` (new), `web/__tests__/components/admin/sites/SiteDangerZone.test.tsx` (new)
+  - Depends on: Task 1.6
+  - Do:
+    - Props: `{ site: { id: string; name: string }; onDelete: (siteId: string) => Promise<void>; onDeleted: () => void }`.
+    - Panel: a `Panel` with id `site-section-danger`, title `'danger zone'` and tone `'danger'`. Inside, a `rounded-lg border border-danger-border bg-danger-surface p-4` block holds:
+      - `'delete this site'` (`text-sm font-medium text-danger`).
+      - `"removes its machines and their history, its roosts, talons and webhooks, and everyone's access to it."`.
+      - `Button variant="destructive"` `'delete site'`.
+    - Confirm dialog. Use its own `Dialog`, not `ConfirmDialog`, which closes before an async call finishes.
+      - `DialogTitle` `'delete site'`; `DialogDescription` `` `delete ${site.name}? this can't be undone.` ``.
+      - Body: `` `its machines lose their agent tokens and stop reporting until someone pairs them to another site. the site ID ${site.id} is retired and can't be used again.` ``. This is what `deleteSite.server.ts:5-22` does. The old "machine data may remain in Firestore" (`ManageSitesDialog.tsx:736-738`) is false and is not ported.
+      - Footer: `Button variant="outline"` `'cancel'` and `Button variant="destructive"` `'delete site'` (`'deleting…'`). Both are disabled while busy.
+      - Confirm: `await onDelete(site.id)`, then `toast.success('site deleted', { description: \`${site.name} and everything on it are gone.\` })`, then `onDeleted()`.
+      - Failure: `toast.error('could not delete the site', { description: message })`, and the dialog stays open.
+  - Done when:
+    - Tests cover: confirm calls `onDelete` then `onDeleted`; cancel calls neither; a failure keeps the dialog open and toasts; the copy names the site and its id and never says "may remain".
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 2.5: SiteMachinesList for the machines section**
+  - Files: `web/components/SiteMachinesList.tsx`, `web/__tests__/components/SiteMachinesList.test.tsx`
+  - Do:
+    - Doc comment (:35-42): it is the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`). Keep the reason it fetches through `GET /api/sites/{id}/machines`.
+    - Toasts:
+      - :103 becomes `toast.success('machine removed', { description: \`${removeTarget.name} is no longer on this site.\` })`.
+      - The failure becomes `toast.error('could not remove the machine', { description: message })`.
+    - Phone layout: the version column hides below sm.
+      - Replace the inline `gridTemplateColumns` (:156) with the classes `grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_64px] sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_64px]`.
+      - Give the version cell `hidden sm:block` (:174-176).
+      - The 64px actions column (restart, remove) stays fully on screen at 390px.
+    - Leave `onCountLoaded`: `ManageSitesDialog` still passes it, and Task 6.1 removes both.
+    - In the test file, the header comment (:5) "The manage-sites machine list restarts through…" becomes "The machines section of a site's settings restarts through…".
+  - Done when: the existing restart cases are green, a case for the new remove toast copy is added, and eslint and tsc are clean.
+
+- [ ] **Task 2.6: SiteList and /admin/sites**
+  - Files: `web/components/admin/sites/SiteList.tsx` (new), `web/app/admin/sites/page.tsx` (new), `web/app/admin/sites/layout.tsx` (new), `web/app/globals.css` (the comment above `.site-row-cv`, :1089-1094), `web/__tests__/components/admin/sites/SiteList.test.tsx` (new)
+  - Depends on: Task 1.3, Task 1.5, Task 1.6
+  - Do:
+    - **Routes:**
+      - `page.tsx` is `'use client'` and returns `<SiteList />`.
+      - `layout.tsx` is title-only, like `web/app/admin/members/layout.tsx`, with `title: 'admin · sites'`.
+    - **Shell and data:**
+      - The admin page shell: `<div className="p-4 sm:p-6 md:p-8"><div className="max-w-screen-2xl mx-auto">`.
+      - Sites, their loading and error state, and the current site come from `useCurrentSite()` (`sites`, `sitesLoading`, `sitesError`, `currentSiteId`). It already derives the current site (lastSiteId, then localStorage, then the first site; `web/hooks/useCurrentSite.ts:75-87`), so do not derive it again.
+      - `useAuth()` gives `isSuperadmin`, `isSiteAdmin` and `isSiteOwner`.
+      - Owner emails come from `useUserManagement(isSuperadmin)`, ported from `ManageSitesDialog.tsx:207-216`. Comment the current why only: the owner comes from the legacy `sites/{id}.owner` field because a member-row read for every row would cost more than the column is worth.
+    - **Header**, `AdminPageHeader`:
+      - Title `'sites'`, description `"the sites you belong to. a site's gear opens its settings."`.
+      - `actions`: `CompactButton icon={Plus} label="new site"`, which opens `CreateSiteDialog` with `onCreateSite={createSite}` (the module function from `@/hooks/useFirestore`, Task 1.5) and `onSiteCreated={(id) => router.push(siteSettingsPath(id))}`. Do NOT call `updateLastSite`: creating a site from the admin page does not change the dashboard's site, and it keeps e2e free of fixture drift.
+      - `toolbar`: the filter (only when there is more than one site) and a `StatChip` with the site count, label `'sites'`.
+    - **Filter.** Port `ManageSitesDialog.tsx:245-264` and :398-424:
+      - It matches name, id and timezone, plus owner email for superadmins, case-insensitively.
+      - Placeholder `'filter sites…'`, aria-label `'filter sites'`, a clear ✕ labelled `'clear filter'`. Escape in the input clears it.
+      - While filtering, show `'showing N of M sites'`. With no match, show a Search icon and `'no sites match “x”'`.
+      - No autofocus: it would raise a phone keyboard.
+    - **Order:** the current site comes first with a `'current'` badge (styling from `ManageSitesDialog.tsx:500-504`); the rest sort by name (:258-263).
+    - **Rows:** a `<ul>` of `<li className="site-row-cv …">`.
+      - From md up, one grid row: name | id | timezone | role or owner | gear.
+        - Id: a copy button, aria-label `` `copy site ID ${id}` ``, with `toast.success('site ID copied')` / `toast.error('could not copy the site ID')`.
+        - Role, for everyone but superadmins: `isSiteOwner(id) ? 'owner' : isSiteAdmin(id) ? 'admin' : 'member'`.
+        - Owner, for superadmins: "you", the email, or "—", as `ManageSitesDialog.tsx:547-564`.
+      - Below md: name and gear on the first line; id · timezone · role on the second.
+      - The gear appears only when `isSiteAdmin(site.id)`: `<IconButton asChild label={\`settings for ${site.name}\`} variant="ghost" size="icon-sm"><Link href={siteSettingsPath(site.id)}><Settings className="h-4 w-4" /></Link></IconButton>`. Other rows keep an empty cell so the columns line up.
+      - `highlightMatch` on name, id, timezone and owner email.
+      - No per-row swoop state: one Firestore listener per row would mean hundreds for a superadmin. A site's swoop section shows it.
+    - **States:**
+      - Loading: four skeleton rows (`IssueList.tsx:93-108`) and an sr-only `'loading sites'`.
+      - A sites error: a `bg-danger-surface border border-danger-border rounded-lg p-4 text-danger` box.
+      - No sites: an icon, `'no sites yet'` and `'create one with new site.'`.
+    - **`globals.css`:** rewrite the comment above `.site-row-cv` for the site list on /admin/sites, and drop the "active editor row" sentence. Keep the rule.
+  - Done when:
+    - Tests mock `useAuth`, `useCurrentSite`, `useUserManagement`, `next/navigation`, `CreateSiteDialog` and `toast`, and cover:
+      - Gear links only on administered sites, with href `/admin/sites/<id>`; a member-only row reads `member` and has no gear.
+      - A superadmin gets the owner column and a gear on every row.
+      - The current site is first, with its badge.
+      - The filter matches every field and shows `showing N of M sites` and the no-match copy.
+      - "new site" opens the dialog; its `onSiteCreated` pushes `/admin/sites/new-id` and never calls `updateLastSite`.
+      - Copy id toasts.
+    - jest is green, eslint is clean on the four code files, and tsc is clean.
+
+- [ ] **Task 2.7: useSiteMembers — swoop on members, add by uid, updateMember, error codes, candidates**
+  - Files: `web/hooks/useSiteMembers.ts`, `web/__tests__/hooks/useSiteMembers.test.ts`
+  - Depends on: Task 1.1 (`web/lib/swoopMode.ts`), Task 1.2
+  - Do:
+    - **Comments** (no change of behaviour):
+      - Header (:5-11): reads go through the route because a user may read only their own member row, not because "membership lives on users/{uid}". The hook is the single owner of `/members*` and `/member-candidates` requests.
+      - `SiteMemberRole` (:13): the role stored on the member row; `'superadmin'` is kept for `displayRole`, and the route never returns it.
+      - `globalRole` (:23): the account's platform role, which grants nothing on the site and drives nothing in the UI.
+    - **`SiteMember`** (:19-26) gains `swoop: SwoopMode | null` (import the type from `@/lib/swoopMode`). Doc: the person's own swoop mode on this site; null means their role decides (Task 3.5's GET).
+    - **`addMember`:**
+      - `AddSiteMemberInput` (:28-32) becomes `{ role: AddableSiteMemberRole; swoop?: SwoopMode } & ({ uid: string; email?: undefined } | { email: string; uid?: undefined })`.
+      - The POST body (:177) sends `role`, exactly the identifier given, and `swoop` only when it is given. Delete "uid variant is server-side only".
+      - `roleHonored` doc (:38-42): false means they were already on the site, nothing was written, and their role and swoop mode are unchanged.
+    - **Errors:** `SiteMemberApiError` gains `readonly code: string | undefined`, filled from the problem body's `code` in `problemError` (:82-90). Callers branch on codes such as `cannot_remove_owner` instead of matching prose.
+    - **New `updateMember`:**
+      - `updateMember(uid: string, patch: { role?: AddableSiteMemberRole; swoop?: SwoopMode | null }): Promise<UpdateSiteMemberResult>`, with `export interface UpdateSiteMemberResult { siteId: string; uid: string; role: AddableSiteMemberRole; swoop: SwoopMode | null }`. `swoop: null` puts the person back on their role's default.
+      - It PATCHes `/api/sites/{siteId}/members/{uid}` with `content-type` and `Idempotency-Key: makeIdempotencyKey('site-member-access-' + uid)`, body `JSON.stringify(patch)` (only the fields given). A non-2xx throws `problemError(res, 'failed to change their access')`; then `await refresh()`.
+      - Add it to `UseSiteMembersResult`.
+    - **New `export function useMemberCandidates(siteId: string | null | undefined): { candidates: MemberCandidate[]; loading: boolean; error: string | null }`:**
+      - It fetches `GET /api/sites/{siteId}/member-candidates` on mount and when `siteId` changes. The add dialog mounts only while open, so every open is fresh.
+      - It uses the same request-seq guard and pinned-on-error state as `refresh` (:128-159). The error fallback is `'failed to load people'`.
+      - Import `MemberCandidate` from `@/lib/memberCandidates`.
+  - Done when:
+    - `useSiteMembers.test.ts` keeps every existing case and adds:
+      - A `{uid, role}` add posts no email and no swoop; a `{email, role, swoop: 'control'}` add posts the swoop.
+      - The list carries `swoop` as the route returns it.
+      - `updateMember` PATCHes with an Idempotency-Key and exactly the given fields (`{swoop: null}` sends null), then refetches; a 409 rejects with `status` and `code`.
+      - `SiteMemberApiError.code` is read from the body.
+      - `useMemberCandidates` loads, surfaces an error, and drops a late response for a previous siteId (analog of :367).
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 2.8: the member-candidates route**
+  - Files: `web/app/api/sites/[siteId]/member-candidates/route.ts` (new), `web/__tests__/api/sites-member-candidates.test.ts` (new), `web/__tests__/api/membershipEscalation.test.ts`
+  - Depends on: Task 1.1 (`listUserStanding`, `siteStanding`)
+  - Do:
+    - **The rule (owner ruling 6).** The add-member search may offer only people with an active member row on a site where the caller holds SITE_MEMBER_MANAGE, minus the people already on the target site. A superadmin is offered every user except the target site's members.
+      - Never search the whole platform for a site admin. Anyone can create a site and become its owner (`web/app/api/sites/route.ts:129-136`), so a global search would list every account.
+      - Never resolve a typed email here. A full email keeps going through `POST /api/sites/{siteId}/members {email}`, which adds the person and is audited.
+      - Superadmin accounts are never offered (default, owner question 3 at approval; follow his answer and log it). Superadmins reach every site without a row, and `membership.server.ts:19-22` says they are deliberately not members.
+    - **New `web/app/api/sites/[siteId]/member-candidates/route.ts`.** Use a sibling segment, not `members/candidates`, which would shadow `members/[uid]` for a uid literally named "candidates".
+      - Wrapper: `export const GET = authorizedSiteHandler<{ siteId: string }>({ capability: 'SITE_MEMBER_MANAGE', siteIdParam: 'path', apiKeyPermission: ['read', 'admin'] })(async (_request, ctx) => { ... })`.
+      - Handler, in order:
+        1. `if (ctx.auth.keyContext !== null)` return `problem({ type: ProblemType.Forbidden, title: 'forbidden', status: 403, code: 'api_key_not_permitted', detail: 'member candidates cannot be listed with an api key.' })`. Pattern: `web/app/api/sites/[siteId]/display-settings/route.ts:36-46`.
+        2. `if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, ctx.siteId))` return 403 with code `site_member_manage_required` (already documented in api/errors.mdx) and detail `'listing member candidates requires the SITE_MEMBER_MANAGE capability on this site'`. Comment why: the wrapper skips its capability check while `capability_enforcement` is off. Same reasoning as members POST, `members/route.ts:162-192`.
+        3. `onTarget` = the ids of rows in `sites/{siteId}/members` with `status === 'active'`.
+        4. If `ctx.actor.role === 'superadmin'`: read `db.collection('users').select('email', 'displayName', 'deletedAt', 'role').get()`, with no `orderBy`; that would drop legacy docs without `createdAt` (`.select` precedent: `web/lib/planUsage.server.ts:73`).
+        5. Otherwise:
+           - `const standing = await listUserStanding(ctx.actor.userId)` and `const actor = { ...ctx.actor, ...siteStanding(standing) }`. This is the same row reading every gate uses.
+           - `manageable = Object.keys(standing).filter((id) => hasCapability(actor, Capability.SITE_MEMBER_MANAGE, id))`. There is no local role check: `hasCapability` is the one authority.
+           - Read every manageable site's members in parallel (active rows only) and union the uids, minus `onTarget`.
+           - Read the user docs with `db.getAll(...)` in chunks of 100.
+        6. Keep a doc only if it exists, `typeof deletedAt !== 'number'`, `role !== 'superadmin'`, and its uid is not in `onTarget`.
+        7. Map each to exactly `{ uid, email: string | null, displayName: string | null }`: never a role, global role, swoop mode or sites. Sort by `(displayName || email || uid)` with `localeCompare(…, undefined, { sensitivity: 'base' })`.
+        8. `return applyAuthDeprecations(NextResponse.json({ candidates }), ctx.scopeCheck)`, inside a try/catch that returns `problemFromError(err, 'sites/[siteId]/member-candidates:GET')`.
+      - No `withRateLimit`: the wrapper's per-capability limiter (SITE_MEMBER_MANAGE 30/min) is enough for one call per dialog open. Log nothing about who was found.
+      - The header comment covers:
+        - what the route returns and for whom;
+        - why it is fetched once and not searched with `?q=`: Firestore has no case-insensitive text match, and each request costs an audit row and the shared 30/min budget;
+        - why API keys are refused: one site's key must not read its owner's other rosters;
+        - that exact email lives only in POST.
+    - **Tests, `web/__tests__/api/sites-member-candidates.test.ts`** (`/** @jest-environment node */`).
+      - Mocks:
+        - The wrapper, as in `web/__tests__/api/sites-members.test.ts:19-48`, but reading a mutable `mockCtx` (actor, `auth.keyContext`) per test.
+        - `@/lib/sitePolicy.server` for `listUserStanding` only (`...jest.requireActual`).
+        - A bespoke `@/lib/firebase-admin` double. The shared firestore-mock has no `select` or `collectionGroup`, so build one with `collection('sites').doc(id).collection('members').get()`, `collection('users').select(...).get()`, `collection('users').doc(uid)` and `getAll(...refs)`.
+      - Cases:
+        - (a) An API key gets 403 `api_key_not_permitted`, with no Firestore read.
+        - (b) An actor whose `siteRoles` say `member` on the target (the wrapper bypassed, as under the kill switch) gets 403 `site_member_manage_required`.
+        - (c) Admin of target `site-a` and of `site-b`, member of `site-c`. Rosters: a = {self, x}; b = {self, y, z (user has `deletedAt`), w (row `status: 'invited'`)}; c = {q}. The result is exactly `[y]`.
+        - (d) A target-site member who is also on another administered site is never returned.
+        - (e) An owner whose only site is the target gets `[]`.
+        - (f) An admin of `site-b` held to `swoop: 'none'` there still counts `site-b` (the mode changes swoop only).
+        - (g) A superadmin gets every user doc except target members, soft-deleted users and `role: 'superadmin'` docs. A doc with no `createdAt` is included.
+        - (h) Every candidate has exactly the keys `uid`, `email`, `displayName`.
+        - (i) Results sort case-insensitively by name, else email.
+        - (j) 250 uids reach `getAll` in chunks of at most 100.
+    - **`web/__tests__/api/membershipEscalation.test.ts`**: add `describe('13. member candidates stay closed to a plain member with the kill switch off', …)` in the file's numbered style.
+      - With `mockCapabilityEnforcement = false`, a plain site member's session gets 403 `site_member_manage_required`.
+      - POSITIVE CONTROL: a site admin, with the switch still off, gets 200.
+      - The file's Firestore double has no `collectionGroup`, so stub `listUserStanding` with `jest.mock('@/lib/sitePolicy.server', () => ({ ...jest.requireActual('@/lib/sitePolicy.server'), listUserStanding: … }))`. That keeps the real `resolveSiteAccess` that blocks 1-12 use.
+  - Done when:
+    - `cd web && npx jest __tests__/api/sites-member-candidates.test.ts __tests__/api/membershipEscalation.test.ts __tests__/api/sites-members.test.ts` is green.
+    - eslint is clean on the three files, and tsc is clean.
+
+- [ ] **Task 2.9: kill and the site's session list need a site owner or admin**
+  - Files: `web/app/api/sites/[siteId]/machines/[machineId]/swoop/kill/route.ts`, `web/app/api/sites/[siteId]/swoop/sessions/route.ts`, `web/__tests__/api/swoop/settings-and-kill.test.ts`, `web/__tests__/api/swoop/site-sessions.test.ts`
+  - Depends on: Task 1.1
+  - Do:
+    - **Why.** Both routes sit on MACHINE_REMOTE_CONTROL today (`kill/route.ts:179-186`, `swoop/sessions/route.ts:108-112`), and the swoop mode now hands that capability to members and takes it from admins.
+      - Kill ends every session on the machine and closes every user's step-up windows there (`kill/route.ts:114`).
+      - The list returns every viewer's uid, email and name for the whole site.
+      - A member set to control must gain neither ("nothing else", ruling 13; emails for owners and admins only, ruling 7).
+      - An admin held to view must keep both, or `/admin/swoop` would read their 403 as an empty site (`web/app/admin/swoop/page.tsx:93-94`).
+    - **Change.** In both wrappers, `capability: Capability.MACHINE_REMOTE_CONTROL` becomes `Capability.SWOOP_SETTINGS_MANAGE`: site owner or admin, still exempt from the kill switch, and planExempt stays on kill.
+      - Rewrite the comment above each export (kill :174-178, list :104-107). Ending everyone's sessions on a machine, and seeing everyone in the site's sessions with their email, administer the site's swoop; they are not watching or controlling. So they take the swoop-settings capability, whatever the caller's own swoop mode.
+      - The budget moves from 10/min to SWOOP_SETTINGS_MANAGE's 30/min (`web/lib/rateLimit.server.ts:50`). Leave `rateLimit.server.ts` alone.
+    - **Tests.** Each file seeds member rows through its own helper (`seedMember`, settings-and-kill.test.ts:202; site-sessions.test.ts:149); let it take an optional `swoop`.
+      - A member row with `swoop: 'control'` is refused kill and the list: 403, with code `capability_missing` because the capability is exempt. Nothing is killed or listed.
+      - POSITIVE CONTROL: an admin row with `swoop: 'view'` kills (200, `mockKill` called) and lists (200).
+      - Every existing case stays green: a member is refused, and an api key is refused before any read.
+  - Done when: `cd web && npx jest __tests__/api/swoop __tests__/lib/swoop` is green, and eslint and tsc are clean.
+
+## Wave 3: the add dialog, the members API, and the pages stop hosting the old dialog
+
+- [ ] **Task 3.1: AddMemberDialog and the shared access fields**
+  - Files: `web/components/admin/sites/MemberAccessFields.tsx` (new), `web/components/admin/sites/AddMemberDialog.tsx` (new), `web/__tests__/components/admin/sites/MemberAccessFields.test.tsx` (new), `web/__tests__/components/admin/sites/AddMemberDialog.test.tsx` (new)
+  - Depends on: Task 1.1, Task 2.1, Task 2.7
+  - Do:
+    - **`MemberAccessFields`** is the role and swoop fields that both this dialog and Task 4.1's change access dialog render.
+      - Exports:
+        - `export type SwoopChoice = 'default' | SwoopMode;`
+        - `export function toSwoopChoice(mode: SwoopMode | null): SwoopChoice` and `export function fromSwoopChoice(choice: SwoopChoice): SwoopMode | null`. `'default'` is the absent field.
+        - `export function MemberAccessFields({ idPrefix, role, swoop, onRoleChange, onSwoopChange, membersMayWatch, disabled }: { idPrefix: string; role: AddableSiteMemberRole; swoop: SwoopChoice; onRoleChange: (r: AddableSiteMemberRole) => void; onSwoopChange: (c: SwoopChoice) => void; membersMayWatch: boolean; disabled?: boolean })`.
+      - Role: `<Label htmlFor={\`${idPrefix}-role\`}>role</Label>`, a `Select` (member | admin) with `aria-describedby={\`${idPrefix}-role-hint\`}`, then `<p id={\`${idPrefix}-role-hint\`} className="text-xs text-muted-foreground">` showing:
+        - member: `'views machines, takes screenshots and opens live view. no commands and no configuration.'`
+        - admin: `'runs the site: everything a member can, plus commands and configuration, swoop settings, deployments, roosts, talons, webhooks, alert rules, pairing machines and managing members.'`
+      - Swoop: `<Label htmlFor={\`${idPrefix}-swoop\`}>swoop</Label>`, a `Select` whose options are `default` 'by role', `none` 'no swoop', `view` 'watch' and `control` 'control', then `<p id={\`${idPrefix}-swoop-hint\`}>` showing:
+        - default, member, `membersMayWatch`: `'by role: a member watches.'`
+        - default, member, not `membersMayWatch`: `"by role: members don't watch on this site."`
+        - default, admin: `'by role: an admin watches and takes control.'`
+        - none: `"can't open swoop on this site's machines."`
+        - view: `'watches, and never takes control.'`
+        - control: `'watches, and takes control after confirming a second factor.'`
+      - Labels come from `SWOOP_MODE_LABELS` where they match. Theme tokens only.
+    - **`AddMemberDialog`**:
+      - Props: `{ siteId: string; membersMayWatch: boolean; onOpenChange: (open: boolean) => void; addMember: UseSiteMembersResult['addMember'] }`. `SiteMembersSection` mounts it only while open, so it renders `<Dialog open onOpenChange={onOpenChange}>`, and `useMemberCandidates(siteId)` fetches fresh on every open.
+      - Copy:
+        - `DialogTitle` `'add member'`, with the Plus icon, as `app/admin/members/page.tsx:569-570`.
+        - `DialogDescription` `'give someone with an owlette account access to this site.'`.
+      - Fields:
+        - `<Label htmlFor="add-member-query">name or email</Label>`, then `<MemberSearchInput id="add-member-query" describedBy="add-member-query-hint" … />`, then `<p id="add-member-query-hint" className="text-xs text-muted-foreground">pick someone from your other sites, or type the full email they signed up with.</p>`.
+        - `<MemberAccessFields idPrefix="add-member" … />`, starting at role `member` and swoop `default`. The old "admin is an account-level role…" hint (`page.tsx:634-641`) is a defect and is not ported.
+      - Footer: `Button variant="outline"` `'cancel'` and `Button` `'add member'` (Plus; `'adding…'`). The add button is disabled with no target and while adding.
+      - Submit, from the button or the search's `onSubmit`:
+        - A uid target sends `addMember({ uid, role, ...swoopPart })`; an email target sends `addMember({ email, role, ...swoopPart })`.
+        - `swoopPart` is `{ swoop }` only when the choice is not `'default'`, so an untouched dialog writes no field.
+      - Toasts. `label` is the uid target's label, or the email.
+        - `roleHonored` true: `toast.success('member added', { description: \`${label} now has ${role} access to this site.\` })`.
+        - `roleHonored` false: `toast.info('already on this site', { description: \`${label} was already a member, so nothing changed. change their access from their row.\` })`. The old toast ignored this flag (`page.tsx:171-173`).
+        - Close the dialog after either.
+        - A `SiteMemberApiError` with status 404: `toast.error('no account found for that email', { description: 'they need an owlette account before they can be added to a site.' })`, and the dialog stays open.
+        - Any other error: `toast.error('could not add member', { description: message })`.
+  - Done when:
+    - `MemberAccessFields.test.tsx`: every help line for every role × choice × `membersMayWatch`; both selects are labelled and described; the choices map to and from the field (`default` is null).
+    - `AddMemberDialog.test.tsx` mocks `useMemberCandidates` and `toast` and uses the real search input:
+      - A pick sends `{uid, role: 'member'}` with no swoop and toasts `member added`; a typed full email sends `{email}`.
+      - Choosing swoop `control` sends `swoop: 'control'`; choosing admin sends admin.
+      - `roleHonored` false toasts info; a 404 toasts the error and keeps the dialog.
+      - Add stays disabled with no target; no text says "account-level".
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 3.2: the dashboard stops hosting the dialog**
+  - Files: `web/app/dashboard/page.tsx`
+  - Depends on: Task 1.3
+  - Do:
+    - Delete:
+      - The `ManageSitesDialog` dynamic import (:75-78).
+      - The `manageDialogOpen` and `manageEditSiteId` state (:126-127).
+      - The `<ManageSitesDialog>` element (:1036-1065).
+      - PageHeader's `onManageSites` and `onSiteSettings` props (:1027-1031). They stay optional on PageHeader until Task 4.2 removes them.
+    - The site-pick effect (:771-793):
+      - Delete the `?settings=` branch (:773-785). Keep lastSiteId → localStorage → `sites[0]` (:786-791).
+      - Drop deps the remaining body no longer reads (`isSiteAdmin`, `updateLastSite`).
+      - Nothing produces that link after Task 3.4: only SwoopPicker and the swoop viewer did, and grep finds no desktop or agent producer.
+    - `onSiteSettings` (:926-929) becomes `useStableCallback(() => router.push(siteSettingsPath(currentSiteId, 'swoop')))`.
+      - It still feeds the machine card and list item "turn on swoop…" (`MachineContextMenu.tsx:439-450`, passed at :1295 and :1329), which now opens the site's swoop & screens section.
+      - `MachineContextMenu` and its test keep their `onSiteSettings` prop unchanged.
+    - The `useSites` destructure (:121) drops `updateSite` and `deleteSite`, which are now unused. Keep `createSite` for the first-run `CreateSiteDialog` (:1067-1072, and its dynamic import :79-82), which is unchanged.
+  - Done when: eslint on the file is clean; tsc is clean; grep finds no `ManageSitesDialog`, `?settings` or `manageEditSiteId` left in it.
+
+- [ ] **Task 3.3: the other pages stop hosting the dialog**
+  - Files: `web/app/talons/page.tsx`, `web/app/roosts/RoostsPageClient.tsx`, `web/app/deployments/page.tsx`, `web/app/logs/page.tsx`, `web/app/hoot/components/HootChatView.tsx`, `web/app/demo/page.tsx`, `web/__tests__/app/roosts-page.swap.test.tsx`
+  - Do:
+    - In each of the four pages, remove:
+      - The `ManageSitesDialog` and `CreateSiteDialog` imports, their elements and their state.
+      - PageHeader's `onManageSites` and `onSiteSettings` props.
+      - The now-unused `createSite`, `updateSite`, `deleteSite` and `pickSite` from the `useCurrentSite()` destructure.
+    - Anchors per page:
+      - talons: :16, :20, :50-54, :68-70, :166-173, :178-202.
+      - roosts: :31-32, :61-64, :72-74, :290-297, :303-327.
+      - deployments: :24-25, :341-344, :353-355, :540-547, :552-576.
+      - logs: :25-26, :469-472, :536-538, :890-897, :903-929.
+    - Keep `selectSite` / `handleSiteChange` (the switcher) and `NoSitesEmptyState`.
+    - `HootChatView.tsx:845`: delete `onManageSites={() => {}}`, a "manage sites" item that did nothing.
+    - `demo/page.tsx:136`: delete `onManageSites={noop}`. Keep `noop` only if something else still uses it.
+    - `roosts-page.swap.test.tsx`: delete the `ManageSitesDialog` and `CreateSiteDialog` mocks (:193-201). A `jest.mock` of a deleted module fails the suite.
+  - Done when: eslint is clean on the six source files; `cd web && npx jest __tests__/app/roosts-page.swap.test.tsx __tests__/components/HootChatView.test.tsx` is green; tsc is clean.
+
+- [ ] **Task 3.4: swoop's way to the switch**
+  - Files: `web/components/swoop/SwoopPicker.tsx`, `web/app/swoop/[siteId]/[machineId]/page.tsx`, `web/__tests__/components/SwoopPicker.test.tsx`, `web/__tests__/app/swoop-viewer-refused.test.tsx`, `web/__tests__/components/SwoopStage.test.tsx`
+  - Depends on: Task 1.3, Task 1.7 (it also edits `SwoopStage.test.tsx`)
+  - Do:
+    - Source:
+      - `SwoopPicker.tsx:399`: `` href={`/dashboard?settings=${encodeURIComponent(siteId)}`} `` becomes `href={siteSettingsPath(siteId, 'swoop')}`.
+      - Viewer `page.tsx:156`: `settingsHref={isSiteAdmin(siteId) ? siteSettingsPath(siteId, 'swoop') : null}`.
+      - The link text stays `'open site settings'`.
+    - Tests:
+      - `SwoopPicker.test.tsx:217` expects `'/admin/sites/site-1?section=swoop'`.
+      - `swoop-viewer-refused.test.tsx:82` expects `'/admin/sites/site%201?section=swoop'`.
+      - `SwoopStage.test.tsx:401, 412, 426` pass `settingsHref: '/admin/sites/site-1?section=swoop'`. SwoopStage only renders the prop; this keeps the dead URL out of the repo.
+  - Done when: the three test files are green; eslint and tsc are clean; `git grep -n "?settings=" -- web/app web/components web/__tests__` returns nothing.
+
+- [ ] **Task 3.5: the members API carries the swoop mode, and member and site routes re-check in the handler**
+  - Files: `web/lib/membership.server.ts`, `web/app/api/sites/[siteId]/members/route.ts`, `web/app/api/sites/[siteId]/members/[uid]/route.ts`, `web/app/api/sites/[siteId]/route.ts`, `web/lib/swoop/revokeViewerSessions.server.ts`, `web/__tests__/lib/membership.test.ts`, `web/__tests__/api/sites-members.test.ts`, `web/__tests__/api/membershipEscalation.test.ts`, `web/__tests__/rules/membership.test.ts`
+  - Depends on: Task 1.1, Task 2.8 (it also edits `membershipEscalation.test.ts`)
+  - Do:
+    - **The writer, `web/lib/membership.server.ts`.**
+      - `MemberDoc` (:36-45) gains `swoop?: SwoopMode`. Doc: present only when someone set it; absent means the role decides; never stored as null, and never on the owner's row.
+      - `addMember` (:100-135) takes `swoop?: SwoopMode` and spreads it into the created doc only when given. Without it the doc is exactly the five fields, so `membership.test.ts:122-140`'s `toEqual` stays as it is.
+      - Replace `changeRole` (:137-168) with `export async function updateMember(input: { siteId: string; uid: string; role?: AssignableRole; swoop?: SwoopMode | null; db?: FirebaseFirestore.Firestore }): Promise<MembershipResult<{ before: MemberAccess; after: MemberAccess }>>`, with `export interface MemberAccess { role: MemberRole; swoop: SwoopMode | null }`:
+        - A given role outside `ASSIGNABLE_ROLES` gives `invalid_role`, as before.
+        - In one transaction, read inside it as now: a missing row gives `not_member`, and an owner row gives `is_owner`.
+        - The update holds `role` when one is given, `swoop` when a mode is given, and `swoop: FieldValue.delete()` when it is null. With neither, nothing is written.
+        - `before` is `{ role: row.role, swoop: parseSwoopMode(row.swoop) }`, and `after` is the row as written.
+        - The module header's invariants paragraph (:13-17) names `updateMember` where it named `changeRole`.
+    - **`members/route.ts`.**
+      - GET (:113-139): each member gains `swoop: deriveSwoopMode(row.data() ?? null, rowRole)` (from `@/lib/sitePolicy.server`), so it is null by role, null on the owner's row, and `'none'` for a malformed value. Add `swoop` to the header comment (:1-24).
+      - POST: after the role check (:244-253), an optional `swoop`.
+        - Absent is fine. One of the three strings is fine. Anything else, `null` included, gives `problemValidation('swoop must be none, view or control', { 'body.swoop': ['must be one of: none, view, control'] })`.
+        - Pass it to `addMember`. A re-add writes nothing, the mode included, which `roleHonored: false` already says.
+        - `emitMutation` attributes gain `requestedSwoop` when it is given.
+    - **`members/[uid]/route.ts`, PATCH (:339-441), in this order:**
+      1. The self refusal stays first (:358-359).
+      2. NEW: `if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId))` return `problem({ type: ProblemType.Forbidden, title: 'forbidden', status: 403, detail: 'changing a member requires the SITE_MEMBER_MANAGE capability on this site', instance: \`/api/sites/${siteId}/members/${uid}\`, code: 'site_member_manage_required' })`. It goes before the body read and before `withIdempotency`. The comment points at the members POST comment (`members/route.ts:162-181`) for why. Add one more sentence: the swoop mode makes this route a second way to hand out MACHINE_REMOTE_CONTROL.
+      3. Body: `role` is optional (`admin` | `member`). `swoop` is optional (`none` | `view` | `control` | `null`, where null means back to the role's default). With neither, return `problemValidation('role or swoop is required', { 'body.role': ['provide role, swoop or both'], 'body.swoop': ['provide role, swoop or both'] })`. A bad value gets a 400 on its own field, with `'body.swoop': ['must be one of: none, view, control, or null for the role default']`.
+      4. Call `updateMember({ siteId, uid, role, swoop })` inside `withIdempotency`.
+      5. On ok, revoke what was lost, computed with `grantedSwoopMode` (`@/lib/swoopMode`) on `before` and `after`:
+         - From anything but `none` to `none`: `revokeSwoopSessionsForUser` without `controlOnly`.
+         - Else from `control` to anything else: with `controlOnly: true`.
+         - The reason is `'role_changed'` when the role moved, else `'swoop_changed'`.
+         - Fire and forget, as now. Replace the comment at :382-384.
+         - So a role change keeps an explicit mode, and an admin set to control who is demoted keeps control.
+      6. `is_owner` gives 409 `cannot_change_owner_role`, with detail `"the owner's role and swoop come with ownership; transfer ownership via POST /api/sites/{siteId}/transfer-ownership instead"`. `not_member` gives 404, as now.
+      7. `emitMutation`: the verb is `member_role_changed` when a role was sent, else `member_swoop_changed`. Attributes carry `role` and/or `swoop` as sent.
+      8. The response is `{ siteId, uid, role: after.role, swoop: after.swoop }`.
+      9. The header comment (:318-338) covers swoop, the re-check, and that a role change keeps an explicit mode.
+    - **`members/[uid]/route.ts`, DELETE (:100-316):** the same re-check, right after the self refusal (:125-126) and before the talon parameter and the body read, with detail `'removing a member requires the SITE_MEMBER_MANAGE capability on this site'`.
+    - **`web/app/api/sites/[siteId]/route.ts`, DELETE (:168-216):** at the top of the handler, before the body read (:179) and `withIdempotency`, `if (!hasCapability(ctx.actor, Capability.SITE_DELETE, ctx.siteId)) return problemForbidden('capability not granted');`. That is the same answer the wrapper gives with enforcement on, so it needs no new code or docs row. Comment why: the break-glass skips SITE_DELETE in the wrapper; same reason as members POST.
+    - **`revokeViewerSessions.server.ts`:** the reason union (:37) gains `'swoop_changed'`.
+    - **Public repo.** These three re-checks close a gap that is live on prod (`main` lacks them too) while `capability_enforcement` is off.
+      - The commit message is neutral, `feat: members carry a swoop mode through the members api`, with no exploit detail, and no changelog line names the re-checks.
+      - The push waits for the owner's answer to plan.md question 2 (Task 9.3).
+    - **Tests.**
+      - `membership.test.ts`, every existing case kept:
+        - `addMember` with a swoop writes it, and without one writes exactly the five fields.
+        - Port the five `changeRole` cases (:182-216) to `updateMember`.
+        - Add `updateMember` cases:
+          - a mode is set, and `null` deletes the field (the double's delete op);
+          - a role-only change keeps an existing swoop;
+          - `before` and `after` are returned;
+          - neither field writes nothing;
+          - an owner row is refused whatever is sent.
+      - `sites-members.test.ts` (the wrapper is mocked inline, :19-47). Replace every `changeRole` reference.
+        - GET returns `swoop`: null when absent, the value when set, `'none'` when malformed, null on the owner's row.
+        - POST writes `swoop` when given and nothing when not. A bad value gives 400 `body.swoop`.
+        - PATCH:
+          - `{swoop: 'control'}` on a member sets it, with no revoke.
+          - `{swoop: 'view'}` on an admin revokes `controlOnly`, with reason `swoop_changed`.
+          - `{swoop: 'none'}` revokes without `controlOnly`.
+          - `{swoop: null}` deletes the field.
+          - `{role: 'member'}` on an admin with no mode revokes `controlOnly`, with reason `role_changed` (the existing :1083 case).
+          - `{role: 'member'}` on an admin set to control does not revoke and keeps the mode.
+        - `{}` gives 400; `{swoop: 'bogus'}` gives 400 `body.swoop`; the owner's row gives 409; your own row gives 403 before any body read.
+        - The response shape and the two verbs.
+      - `membershipEscalation.test.ts`. Update the header and comments that name `changeRole` (:17, :698, :798). Add numbered blocks; each refusal has a POSITIVE CONTROL. Mock `@/lib/actions/deleteSite.server`'s `deleteSite` with a `jest.fn()` resolving `{ kind: 'deleted', siteId }` for block 16.
+        - 14. `members PATCH re-checks SITE_MEMBER_MANAGE with the kill switch off`: a plain member PATCHing another member to `{role: 'admin'}` gets 403 `site_member_manage_required`, and the row is unchanged. Control: a site admin, switch off, gets 200.
+        - 15. `members DELETE re-checks SITE_MEMBER_MANAGE with the kill switch off`: a plain member DELETEing another member gets 403, and the row remains. Control: an admin gets 200.
+        - 16. `site DELETE re-checks SITE_DELETE with the kill switch off`: a plain member gets 403, and `deleteSite` is not called. Control: the owner gets 200, and it is called once.
+        - 17. `a plain member cannot hand out swoop control with the kill switch off`: a member PATCHing another member to `{swoop: 'control'}` gets 403; a member POSTing `{uid: OUTSIDER, role: 'member', swoop: 'control'}` gets 403 (POST's existing re-check). Control: an admin's PATCH gets 200, and the row reads `control`.
+        - 18. `nobody sets their own swoop mode or the owner's`, with the switch on and off: an admin PATCHing their own row to `{swoop: 'control'}` gets 403 `cannot_modify_own_membership`, and PATCHing the owner to `{swoop: 'none'}` gets 409 `cannot_change_owner_role`. Control: an admin PATCHing another member's swoop gets 200.
+      - `rules/membership.test.ts`, in "member documents are server-written only" (:300-350). Import `updateDoc`.
+        - `a member cannot give themselves swoop control`: `updateDoc` on their own row with `{swoop: 'control'}` fails.
+        - `a site admin cannot set another member's swoop from the client`: it fails.
+        - Rules unchanged: this pins the update path, which nothing covered.
+  - Done when:
+    - `cd web && npx jest __tests__/lib/membership.test.ts __tests__/api/sites-members.test.ts __tests__/api/membershipEscalation.test.ts __tests__/api/sites.test.ts __tests__/api/users.test.ts __tests__/api/swoop` is green.
+    - `cd web && npm run test:rules` is green. It needs the emulator on :8080, so run it alone: no other task runs emulators.
+    - eslint is clean on the eight code and test files, and tsc is clean.
+
+## Wave 4: the members section, the header, and the pill check
+
+Before this wave starts, message the site-billing session (owlette-65, `../Owlette-site-billing-wt`). Its planned billing row in `ManageSitesDialog.tsx` (its tasks.md:136-139) has to land on the site settings page instead (general, or a section of its own), because Task 6.1 deletes the dialog. Log that it was sent.
+
+- [ ] **Task 4.1: SiteMembersSection and the change access dialog**
+  - Files: `web/components/admin/sites/SiteMembersSection.tsx` (new), `web/components/admin/sites/ChangeAccessDialog.tsx` (new), `web/__tests__/components/admin/sites/SiteMembersSection.test.tsx` (new), `web/__tests__/components/admin/sites/ChangeAccessDialog.test.tsx` (new)
+  - Depends on: Task 1.3, Task 1.6, Task 2.7, Task 3.1
+  - Do: port from the origin/dev copy of the members page, `git show origin/dev:web/app/admin/members/page.tsx`. Never read the working copy, which Task 6.1 deletes.
+    - **API:** `export function SiteMembersSection({ siteId }: { siteId: string })`. No column props.
+    - **Data:**
+      - `useSiteMembers(siteId)`: members, loading, error, refresh, addMember, removeMember and updateMember.
+      - `useTalonReassign().fetchSiteAuthored`, `useAuth().user`.
+      - `useSwoopSettings(siteId).settings.membersMayWatch`, for the effective swoop column and the help lines.
+    - **Frame:** a `Panel` with id `site-section-members`, title `'members'` and description `'the people who can reach this site, their role and their swoop.'`. Its `actions` hold `CompactButton icon={Plus} label="add member"`, which mounts `<AddMemberDialog siteId={siteId} membersMayWatch={membersMayWatch} addMember={addMember} onOpenChange={setAddOpen} />` while open.
+    - **Table:** port page.tsx:390-562.
+      - Below md, the block layout with cells reordered; the `you` badge; `'no email on file'`.
+      - Columns from md up: member | role | swoop | actions. Below md, the swoop label sits on the role line, after the badge.
+      - Role badges through `displayRole`: owner (Crown), admin (ShieldAlert, success), member (Users).
+      - The swoop cell is `SWOOP_MODE_LABELS[effectiveSwoopMode(displayRole(m.role), m.swoop, membersMayWatch)]`. A non-owner row with `swoop === null` adds a muted `' · by role'`. The owner's row reads `'control'` and nothing more.
+      - States: the error box, the `'loading members...'` spinner, and `'no members found'`.
+    - **Row menu.** The ⋮ button is labelled `` `options for ${email || displayName || uid}` ``, with the tooltip `'member options'`.
+      - `'change access...'` shows when `member.role !== 'owner' && member.uid !== user?.uid`. The server refuses both of those rows anyway (`cannot_change_owner_role`, `cannot_modify_own_membership`; `members/[uid]/route.ts:55-98, 397-408`).
+      - `'remove...'` shows when `member.role !== 'owner'`. On your own row it refuses with the existing toast `'cannot remove yourself'` / `'ask another admin on this site to remove your access.'` (page.tsx:195-200).
+      - With neither, the cell shows `'—'`.
+    - **`ChangeAccessDialog`**: `{ member: SiteMember; membersMayWatch: boolean; onOpenChange: (open: boolean) => void; updateMember: UseSiteMembersResult['updateMember'] }`. It replaces page.tsx:730-810 and drops every "account-level" line.
+      - `DialogTitle` `'change access'`; description `` `choose ${label}'s role and swoop on this site.` ``.
+      - `<MemberAccessFields idPrefix="change-access" … />`, seeded from `displayRole(member.role)` (never `globalRole`) and `toSwoopChoice(member.swoop)`.
+      - Footnote: `'this changes their access to this site only.'`, plus whichever of these applies, using `grantedSwoopMode` on the seeded and the chosen values:
+        - losing swoop entirely: `' any swoop session they are in here ends.'`
+        - losing control only: `' any swoop session they control here ends; watching carries on.'`
+      - Buttons: outline `'cancel'`, and `'save'` (`'saving…'`), disabled while unchanged or busy.
+      - Save calls `updateMember(uid, patch)` with only the changed fields; `'default'` becomes `swoop: null`.
+        - Then `toast.success('access updated', { description: \`${label} is now ${role === 'admin' ? 'an admin' : 'a member'} on this site. swoop: ${SWOOP_MODE_LABELS[effective]}${byRole ? ' (by role)' : ''}.\` })`.
+        - Failure: `toast.error('could not change their access', { description: message })`, and the dialog stays open.
+    - **Remove dialog.** Port page.tsx:674-726 (its copy is correct) and the talon flow (:192-256), with two fixes:
+      - Successors come from `siteTalonSuccessors(members, memberToRemove.uid)` (Task 1.3), not the global-role list (:137-150).
+      - Detect the owner refusal with `err instanceof SiteMemberApiError && err.code === 'cannot_remove_owner'`, not `/owner/i` (:242).
+    - `label` is `member.email || member.displayName || 'this member'`.
+  - Done when:
+    - `SiteMembersSection.test.tsx` mocks `useSiteMembers`, `useTalonReassign`, `useAuth`, `useSwoopSettings`, `AddMemberDialog`, `ChangeAccessDialog` and `toast`, and covers:
+      - Row menus: the owner row shows `—`; your own row has remove but no change access; other rows have both.
+      - The swoop column: by role for a member (`watch · by role`; `no swoop · by role` with `membersMayWatch` off), an explicit `control` on a member, `watch` on an admin held to view, and `control` on the owner.
+      - Remove offers only the site's owners and admins as successors, and the owner refusal is matched by code.
+      - "add member" mounts the dialog.
+    - `ChangeAccessDialog.test.tsx` uses the real fields:
+      - It is seeded from the site role and the mode.
+      - Changing the role sends `{role}`. Changing the swoop to watch on an admin sends `{swoop: 'view'}` and shows the control footnote. Back to by role sends `{swoop: null}`. No mode sends `{swoop: 'none'}` with the "ends" footnote.
+      - Save is disabled while unchanged; the success toast copy is exact; a failure keeps the dialog.
+    - jest is green, and eslint and tsc are clean.
+
+- [ ] **Task 4.2: PageHeader owns the site entries**
+  - Files: `web/components/PageHeader.tsx`, `web/__tests__/components/PageHeader.test.tsx`
+  - Depends on: Task 1.3, Task 1.5, Task 3.2, Task 3.3
+  - Do:
+    - **Props:** remove `onManageSites` and `onSiteSettings` (:92-94, :105-106). No caller passes them after wave 3.
+    - **Derive, after :195:**
+      - `const showSiteEntries = !disableNav && !!user;`
+      - `const siteSettingsHref = showSiteEntries && currentSiteId && isSiteAdmin(currentSiteId) ? siteSettingsPath(currentSiteId) : null;`
+      - `const canManageSites = showSiteEntries && (isSuperadmin || administersAnySite);`
+      - `const canCreateSite = showSiteEntries && !isSuperadmin && !administersAnySite;`. Owner ruling 5: "new site" is for people who administer nothing; everyone else creates from /admin/sites.
+      - Delete `openSiteSettings` (:197).
+    - **Entries.** The switcher (:269-287) and the drawer (:530-555) both get the same three:
+      - `'site settings'` (SlidersHorizontal) → `router.push(siteSettingsHref)`.
+      - `'manage sites'` (Settings) → `router.push('/admin/sites')`.
+      - `'new site'` (Plus) → `setCreateSiteOpen(true)`.
+      - The separator shows when any of the three does. The drawer closes itself before it navigates or opens the dialog.
+    - **CreateSiteDialog, owned here.** Mirror the dashboard's `next/dynamic` import (`app/dashboard/page.tsx:79-82`): `const CreateSiteDialog = dynamic(() => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })), { ssr: false, loading: () => null });`.
+      - Mount it beside `ReportBugDialog` with `open={createSiteOpen} onOpenChange={setCreateSiteOpen} onCreateSite={createSite} onSiteCreated={(id) => onSiteChange?.(id)}`, with `createSite` from `@/hooks/useFirestore`.
+      - The new site becomes current through the page's own handler, which also saves it as the last site (context.md decision 10; follow the owner's answer to question 4 and log it). The pages' old `pickSite` (switch without saving) is gone.
+    - **User menu (:422-430):** `router.push(isSuperadmin ? '/admin/installers' : '/admin/sites')`. Update the comment above it.
+    - **Tests.** Rework the auth mock (:34-43) so `isSuperadmin`, `administersAnySite` and `isSiteAdmin` vary per test. Mock `@/components/CreateSiteDialog` to a stub that shows `create-site-dialog` while open and has a button calling `onSiteCreated('new-site')`. Cases:
+      - A site admin's switcher has `site settings` (pushes `/admin/sites/site-a`) and `manage sites` (pushes `/admin/sites`), and no `new site`.
+      - A member who administers nothing gets only `new site`, which opens the dialog; its `onSiteCreated` calls `onSiteChange('new-site')`.
+      - A superadmin gets `manage sites` and no `new site`.
+      - `disableNav` shows none of the three.
+      - The drawer offers the same entries.
+      - The user menu's `admin panel` goes to `/admin/sites` for a site admin and to `/admin/installers` for a superadmin.
+      - Keep the existing drawer, scrim and plan tests.
+    - If `next/dynamic` does not resolve the mock under jest, await it with `findBy*`. If it still cannot, import `CreateSiteDialog` statically and record that in the Log.
+  - Done when: jest is green, and eslint and tsc are clean (no caller passes the removed props).
+
+- [ ] **Task 4.3: swoop's viewer pills show emails to site owners and admins only**
+  - Files: 4.1.26's viewer-pill email gate and its test. Find them with `git grep -n -i "email" -- web/components/swoop "web/app/api/sites/[siteId]/machines/[machineId]/swoop" web/lib/swoop web/hooks/useSwoopSession.ts`. No other wave-4 task touches a swoop file. Record the paths in the Log.
+  - Depends on: Task 1.1
+  - Do:
+    - Owner ruling 7: a viewer pill's hover shows the email only to site admins and owners.
+    - Read what 4.1.26's gate keys on.
+      - Right: the caller's site role, which is `hasCapability(actor, Capability.SITE_MEMBER_MANAGE, siteId)` on the server or `isSiteAdmin(siteId)` in the browser, or superadmin.
+      - Wrong: `ctl`, MACHINE_REMOTE_CONTROL, or anything else a swoop mode changes. If it is wrong, re-key it on the site role, with a one-line comment on why (a swoop mode changes control and nothing else).
+    - Either way, add a test in the gate's own test file:
+      - A member whose swoop mode is control gets no viewer emails. That is a member row with `swoop: 'control'` on the server, or `isSiteAdmin` false while the viewer holds control in the browser.
+      - POSITIVE CONTROL: a site admin held to view still gets them.
+  - Done when: the gate's test file is green, eslint and tsc are clean, and the Log names the gate's file and what it keyed on before.
+
+## Wave 5: the site settings page
+
+- [ ] **Task 5.1: SiteSettings and /admin/sites/[siteId]**
+  - Files: `web/components/admin/sites/SiteSettings.tsx` (new), `web/app/admin/sites/[siteId]/page.tsx` (new), `web/app/admin/sites/[siteId]/layout.tsx` (new), `web/__tests__/components/admin/sites/SiteSettings.test.tsx` (new)
+  - Depends on: every task in waves 1-4
+  - Do:
+    - **Component:** `export function SiteSettings({ siteId, section, onSectionChange, onDeleted }: { siteId: string; section: SiteSection; onSectionChange: (next: SiteSection) => void; onDeleted: (administersAnotherSite: boolean) => void })`. It is route-agnostic, with no router inside, so it could later be mounted in a dialog (owner ruling 4).
+    - **Data:** `useAuth()` (user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner), and `useSites(user?.uid, userSites, isSuperadmin)` for the site, `updateSite` and `deleteSite`.
+    - **States:**
+      - While sites load: `DetailSkeleton` (Task 1.6) and an sr-only `'loading site'`.
+      - The site is not in `sites`: a SearchX icon, the h1 `'site not found'`, and `nothing you can reach answers to <span className="font-mono">{siteId}</span>.`.
+      - The site is listed but `!isSiteAdmin(siteId)`: the h1 is the site name, then `` `you're a member of ${site.name}. ask its owner or an admin to change its settings.` ``. No sections render.
+    - **Header, for admins:**
+      - The h1 is the site name (`text-2xl md:text-3xl font-bold text-foreground wrap-anywhere`).
+      - Under it, the id as a font-mono copy button: aria-label `` `copy site ID ${id}` ``, with SiteList's toasts.
+      - Unless the caller is a superadmin, a role badge reading `owner` or `admin`. A superadmin's `isSiteOwner` is always true, so they get no badge.
+    - **Section control:** `<SegmentedControl label="site settings sections" options={visible.map((s) => ({ value: s, label: SITE_SECTION_LABELS[s] }))} value={effective} onChange={onSectionChange} />` (Task 1.6).
+      - `danger zone` shows only when `isSiteOwner(siteId)` (owner or superadmin, matching the server's SITE_DELETE).
+      - The effective section is the requested one if it is visible, else `general`. The control wraps, so every button stays on screen at 390px.
+    - **Body:**
+      - general: `<SiteGeneralSection key={\`${site.id}:${site.name}:${site.timezone ?? ''}\`} site={site} onSave={updateSite} />`.
+      - members: `<SiteMembersSection siteId={site.id} />`.
+      - machines: a `Panel` with id `site-section-machines`, title `'machines'` and description `"restart or remove this site's machines. add one from the dashboard's + button."`, around `<SiteMachinesList siteId={site.id} />`.
+      - swoop: `<SiteSwitches siteId={site.id} />`.
+      - danger: `<SiteDangerZone site={site} onDelete={deleteSite} onDeleted={…} />`.
+        - `onDeleted` computes `isSuperadmin || sites.some((s) => s.id !== site.id && isSiteAdmin(s.id))` and passes it on.
+        - Set a local `deleted` flag so nothing renders (no "site not found" flash) while the parent navigates.
+    - **`page.tsx`:**
+      - `'use client'`. `const { siteId } = use(params)`. An inner component under `<Suspense fallback={null}>` reads `parseSiteSection(useSearchParams().get('section'))`.
+      - The admin shell: `p-4 sm:p-6 md:p-8` and `max-w-screen-2xl mx-auto`.
+      - `<BackLink href="/admin/sites" label="sites" />` (Task 1.6).
+      - `onSectionChange` calls `router.replace(siteSettingsPath(siteId, next), { scroll: false })`.
+      - `onDeleted` calls `router.replace(another ? '/admin/sites' : '/dashboard')`. With no administered site left, /admin/sites would bounce with "access denied".
+    - **`layout.tsx`:** title-only, `metadata: { title: 'admin · site settings' }`.
+  - Done when:
+    - Tests stub the five section components, `useAuth` and `useSites`, and cover:
+      - The loading skeleton, not-found, and the member-only refusal (no section group).
+      - An admin sees four section buttons and an owner five; `section='danger'` for an admin renders general.
+      - A click calls `onSectionChange`, and each section value renders its stub with the site.
+      - A superadmin gets no role badge.
+      - `onDeleted` gets false when it was the caller's only administered site, and true otherwise.
+    - jest is green, and eslint and tsc are clean.
+
+## Wave 6: removals
+
+- [ ] **Task 6.1: delete what the pages replaced**
+  - Files:
+    - Delete: `web/components/ManageSitesDialog.tsx`, `web/__tests__/components/ManageSitesDialog.test.tsx`, `web/app/admin/members/page.tsx`, `web/app/admin/members/layout.tsx`.
+    - Edit: `web/next.config.ts`, `web/components/SiteMachinesList.tsx`, `web/hooks/useCurrentSite.ts`, `web/hooks/useFirestore.ts`, `web/components/ManageUserSitesDialog.tsx`, `web/components/AccountSettingsDialog.tsx`, `web/app/admin/users/page.tsx`, `web/app/talons/components/TalonEditorDialog.tsx`, `web/components/MachinePowerConfirm.tsx`, `web/lib/timeUtils.ts`, `web/app/api/sites/[siteId]/members/[uid]/route.ts` (comment only), `web/__tests__/api/sites-machines.test.ts` (comment only), `web/__tests__/components/MachinePowerConfirm.test.tsx` (comment only).
+  - Depends on: Task 4.1, Task 4.2, Task 5.1
+  - Do:
+    - **Deletions:**
+      - `git rm` the four files. Their switch tests now live in `SiteSwitches.test.tsx` (Task 2.2).
+      - `SiteMachinesList.tsx`: delete the `onCountLoaded` prop (:31-32, :43, :60, and the deps at :64). Its only caller is gone.
+      - `useCurrentSite.ts`: delete `pickSite`, `createSite`, `updateSite`, `deleteSite` and `checkSiteIdAvailability` from the result type and the implementation (:49-53, :63-66, :102-104, :115-119). Prove with `git grep` that nothing reads them.
+      - `useFirestore.ts`: delete `checkSiteIdAvailability` (:1022-1043) and its return entry (:1045). Its only consumer was useCurrentSite's pass-through; prove it with `git grep`.
+    - **Redirect:** in `next.config.ts` `redirects()` (:32+), add `{ source: '/admin/members', destination: '/admin/sites', permanent: false }` with a one-line comment: old bookmarks and links; a 307 until the release reaches prod, so a revert is not cached in browsers (plan.md Rollback).
+    - **Copy and comments that name deleted surfaces:**
+      - `ManageUserSitesDialog.tsx:229`: "…a per-site role is set from that site's members page." becomes "…a per-site role is set in that site's members section (admin panel → sites)."
+      - `ManageUserSitesDialog.tsx:389-392`: drop "same shape as the delete confirmation in ManageSitesDialog".
+      - `AccountSettingsDialog.tsx:547`: "(set in manage sites)" becomes "(set in site settings)".
+      - `admin/users/page.tsx`:
+        - :176-177, the comment becomes "that hook also feeds the owner column on /admin/sites".
+        - :617, the row-menu label `'manage sites'` becomes `'manage site access'`, its dialog's own title, which frees "manage sites" for the switcher entry. Grep `web/__tests__` and `web/e2e` for the old label and update any match.
+        - Rename the dialog's state `manageSitesDialogOpen` / `setManageSitesDialogOpen` (:100, :204, :801) to `manageSiteAccessOpen` / `setManageSiteAccessOpen`.
+      - `TalonEditorDialog.tsx:308-310`: drop "(see ManageSitesDialog for the same pattern)".
+      - `MachinePowerConfirm.tsx:5`: "the manage-sites machine list" becomes "the machines section of a site's settings".
+      - `timeUtils.ts:141`: "site (manage-sites)" becomes "site (site settings)".
+      - `members/[uid]/route.ts:74`: `` `app/admin/members/page.tsx` `` becomes `` `components/admin/sites/SiteMembersSection.tsx` ``.
+      - `sites-machines.test.ts:369`: "the manage-sites machine list" becomes "the machines section of a site's settings".
+      - `MachinePowerConfirm.test.tsx:6`: "the manage-sites machine list" becomes "the machines section of a site's settings".
+  - Done when:
+    - `git grep -n -e ManageSitesDialog -e "admin/members" -e "manage-sites" -- web/app web/components web/hooks web/lib web/__tests__ web/next.config.ts` returns only the next.config redirect and the fail-closed `requiredRoleForPath('/admin/members')` case in `RequireAdminAccess.test.tsx` (Task 1.4).
+    - The full `cd web && npx jest` is green (this task runs alone in its wave), eslint is clean on the edited files, and tsc is clean.
+
+## Wave 7: e2e specs, docs and the contract (authored in parallel; nothing here runs the emulators)
+
+Every spec that seeds a site or a row releases it in its hooks (`releaseFixtureSite`, `revokeMembership` in `web/e2e/helpers/seed.ts`), and resets `users/{uid}.lastSiteId` if it changed (`FieldValue.delete()`). The suite runs with `workers: 1`, so a grant left behind changes site auto-selection for later specs. Each spec task's done-when is eslint plus `npx playwright test --list` under the spec's config. Task 8.1 then runs them all, serially, against one build.
+
+- [ ] **Task 7.1: create, rename, switches and delete on the new pages**
+  - Files: `web/e2e/specs/sites/create-site.spec.ts`, `web/e2e/specs/sites/edit-site.spec.ts`, `web/e2e/specs/sites/delete-site.spec.ts`
+  - Do: all three run as superadmin.
+    - create-site:
+      - Go to `/dashboard`, open the switcher's `manage sites`, and expect the URL `/admin/sites` and h1 `sites`. Then press `new site`; the create dialog steps are unchanged (`customize site ID`, `#site-id`, `create-site-timezone`, `create site`).
+      - Expect the toast `/site created/i`, then the URL `/admin/sites/<id>` with the new name as h1.
+      - Keep the Admin SDK read-through (owner `super-uid`, timezone, `schedulesFollowSiteTime: true`).
+      - Taken id: the same entry path, the same assertions.
+      - afterEach: `releaseFixtureSite(newSiteId, 'super-uid')`. The old spec left its site behind.
+    - edit-site:
+      - Go to `/admin/sites/site-to-rename` (h1 `Original Rename Target`), fill `getByLabel('site name')` and press `save`.
+      - Expect the toast `/site updated/i`, the new h1, and the read-through.
+      - Empty name: the toast `/site name cannot be empty/i`, and Firestore is unchanged.
+      - Switches: open `?section=swoop` and keep the assertions and read-backs from the old spec :90-129.
+    - delete-site:
+      - Go to `?section=danger`, press `delete site`, and expect a dialog named `/^delete site$/` that contains the name. Confirm with the exact `delete site`.
+      - Expect the toast `/site deleted/i`, the URL `/admin/sites`, and the doc gone.
+      - Cancel keeps the site and the button.
+    - Rewrite each header comment.
+  - Done when: eslint is clean, and `cd web && npx playwright test --list --project=chromium e2e/specs/sites/create-site.spec.ts e2e/specs/sites/edit-site.spec.ts e2e/specs/sites/delete-site.spec.ts` lists their tests.
+
+- [ ] **Task 7.2: per-site role boundaries on the new pages**
+  - Files: `web/e2e/specs/sites/delete-site-owner.spec.ts`, `web/e2e/specs/sites/site-role-boundaries.spec.ts`
+  - Do:
+    - delete-site-owner (the member fixture owns `site-owned-by-member`):
+      - `/admin/sites` shows a gear on the owned site and none on `Site A (Assigned)`.
+      - Deleting through `/admin/sites/site-owned-by-member?section=danger` lands on `/dashboard`, because the member now administers nothing. Expect the doc gone.
+      - Negative: `/admin/sites/site-A` shows the member refusal copy and no `site settings sections` group.
+    - site-role-boundaries:
+      - owner: a gear on site-C, and five section buttons on `/admin/sites/site-C`, `danger zone` included.
+      - Membership alone: the legacy `sites[]` test still finds `Site C (Owned)` and its gear on /admin/sites.
+      - Site admin, with borrowed site-C admin: four sections and no `danger zone`, and `?section=danger` renders general (`save` visible, no `delete site`). The same holds on site-A.
+      - member: the switcher has `new site` but neither `site settings` nor `manage sites`. `/admin/sites` and `/admin/sites/site-A` send them to `/dashboard` with `access denied`.
+      - Keep it non-destructive.
+  - Done when: eslint is clean, and `npx playwright test --list --project=chromium` on both files lists their tests.
+
+- [ ] **Task 7.3: the site list and the header's entries** (new spec)
+  - Files: `web/e2e/specs/sites/site-list.spec.ts` (new)
+  - Do:
+    - admin:
+      - `/admin/sites` lists `Site A (Assigned)` with the gear `settings for Site A (Assigned)` → `/admin/sites/site-A`, and not site-B.
+      - The switcher's `site settings` → `/admin/sites/site-A`, `manage sites` → `/admin/sites`, and there is no `new site`.
+    - superadmin:
+      - Every seeded site has a gear.
+      - The filter `site-b` leaves one row and `showing 1 of N sites`, and Escape clears it.
+      - The owner column shows `owner@e2e.test` for site-C.
+    - member:
+      - The switcher's `new site` creates a site. Expect the toast `/site created/i`, the switcher showing the new name, and a read-back with owner `member-uid`.
+      - afterEach: `releaseFixtureSite(id, 'member-uid')`, and delete `users/member-uid.lastSiteId`.
+  - Done when: eslint is clean, and `npx playwright test --list --project=chromium` lists the spec's tests.
+
+- [ ] **Task 7.4: the members section** (new spec)
+  - Files: `web/e2e/specs/sites/site-members.spec.ts` (new)
+  - Do:
+    - **Setup:**
+      - beforeAll: `seedSite({ id: 'site-members-e2e', name: 'Site M (members e2e)', owner: 'someone-else', timezone: 'UTC' })` and `grantMembership('site-members-e2e', 'admin-uid', 'admin')`.
+      - afterAll: `revokeMembership` for `member-uid` and `owner-uid` on it, then `releaseFixtureSite('site-members-e2e', 'admin-uid')`.
+    - **As admin:**
+      - Queries pin a person. Earlier specs in the full run leave dedicated users on site-A (`dedicatedUser`, `web/e2e/helpers/coverageSeed.ts:506-515`: display name `E2E <role> <suffix>`, email `e2e-<role>-<suffix>@example.test`). The `E2E admin …` ones sort ahead of `E2E Member`, so a bare `e2e` query can push `member@e2e.test` past the 6-row cap.
+      - Search, in the UI: open `/admin/sites/site-members-e2e?section=members`, press `add member` and focus `name or email`.
+        - Type `member@e2e`: the listbox `people you can add` holds exactly one option, `member@e2e.test`.
+        - Type `owner@e2e`, then `super@e2e`: each gives no option and the line `no one from your other sites matches “…”.`. That is the privacy rule: site-C is not the admin's, and superadmins are never offered.
+      - Pick: type `member@e2e` and click `getByRole('option', { name: /member@e2e\.test/ })`, never ArrowDown and Enter. Then press `add member`. Expect the toast `/member added/i`, the row, and an Admin SDK read of `sites/site-members-e2e/members/member-uid` matching `{ role: 'member', status: 'active', addedBy: 'admin-uid' }` with no `swoop` field.
+      - Full-email fallback: type `owner@e2e.test`, choose swoop `watch` in the dialog, and add. Read the row back with `swoop: 'view'`.
+      - Re-add: `member@e2e.test` again toasts `/already on this site/i`, and the row is unchanged.
+      - Access, on member-uid's row: `change access...` → role admin → `save`. Expect the toast `/access updated/i`, an `admin` badge and the row read back as admin.
+      - Then `change access...` → swoop `control` → `save`: the row reads `swoop: 'control'`, and the swoop cell reads `control`.
+      - Then swoop `by role` → `save`: the field is gone in the read-back, and the cell reads `control · by role`.
+      - Then role back to member: the cell reads `watch · by role`.
+      - Own row: it has `remove...` but no `change access...`.
+      - Remove: `remove...` → `remove member`. Expect the row gone, read back as null.
+    - **As owner** on site-C: their own owner row shows `—`, and its swoop cell reads `control`.
+    - **The route** (an in-page fetch, pattern `access-control/admin-api-403.spec.ts:22-41`):
+      - The admin's own session on `GET /api/sites/site-members-e2e/member-candidates`, before any add, includes `member-uid`. It never includes `owner-uid` (site-C is not theirs), `super-uid` or `admin-uid` (on the site), and every entry has exactly `uid`, `email` and `displayName`. The privacy rule is proven here, not by what fits in six rows.
+      - A member session on `GET /api/sites/site-A/member-candidates` gets 403.
+      - A key from `mintApiKey` (`helpers/apiKey.ts:43`) for admin-uid, with `site=site-members-e2e` read and admin, gets 403 `api_key_not_permitted`.
+      - A superadmin session on site-members-e2e gets `member@` and `owner@`, never `super@`, and never anyone already on the site.
+  - Done when: eslint is clean, and `npx playwright test --list --project=chromium` lists the spec's tests.
+
+- [ ] **Task 7.5: other specs that went through the dialog**
+  - Files: `web/e2e/specs/swoop/turning-it-on.spec.ts`, `web/e2e/specs/dispatch/active-hours.spec.ts`, `web/e2e/specs/plans/free.spec.ts`
+  - Do:
+    - turning-it-on:
+      - Replace `expectSiteSettings` (:45-50) with `expectSwoopSection(page)`: the URL ends with `/admin/sites/site-A?section=swoop`, and the switch `swoop` (exact) has `aria-checked="false"`.
+      - Test :65: the switcher's `site settings` → `/admin/sites/site-A`, h1 `Site A (Assigned)`.
+      - Test :73 becomes "the swoop section link lands on the switch": `goto('/admin/sites/site-A?section=swoop')`, then `expectSwoopSection`.
+      - Rewrite the header comment; no `/dashboard?settings=`.
+    - active-hours.spec.ts:155-173:
+      - Go to `/admin/sites/site-A?section=machines` and press `restart ${MACHINE_ID}`. The dialog assertions are unchanged.
+      - Rename the test "the site settings machine list asks the same question".
+    - free.spec.ts:184-204: after `signIn`, the switcher's `manage sites` (the free user owns a site) → `/admin/sites` → `new site`. The rest is unchanged; the refusal text is now the toast's description.
+  - Done when: eslint is clean, and `npx playwright test --list --project=chromium` on the three files lists their tests.
+
+- [ ] **Task 7.6: phone coverage (mobile-chromium)**
+  - Files: `web/e2e/specs/mobile/admin-sites.spec.ts` (git mv of `web/e2e/specs/mobile/sites-dialogs.spec.ts`, rewritten), `web/e2e/specs/mobile/admin-drawer.spec.ts`
+  - Do:
+    - Run as superadmin unless noted. Keep the old header's rule: geometry with `expectFullyWithinViewport`, never a forced click, and `assertNoHorizontalOverflow` after each step. Seed `site-mobile-taken` as now.
+    - Tests:
+      1. The drawer's `manage sites` → `/admin/sites`; h1 `sites`, and the drawer is gone.
+      2. The icon-only `new site` and the filter are fully in view. Create a site → `/admin/sites/<id>`; read it back; release it.
+      3. `/admin/sites/site-mobile-taken` fits:
+         - The back link, the h1 and every section button are in view.
+         - general: the name input and `save`.
+         - swoop: both switches (never tapped).
+         - members: `add member`, one row's options button, and that row's swoop label.
+         - danger: `delete site`.
+      4. The add-member dialog: type `e2e`. The listbox, its options, the role select, the swoop select, `cancel` and `add member` are all in view.
+      5. The taken-id block, reached from the sites page's `new site`.
+      6. As member: the drawer offers `new site` and no `site settings` or `manage sites`. Tapping it opens `create new site` fully in view; cancel.
+    - admin-drawer.spec.ts: goto `/admin/sites`, heading `sites`, and the link `/sites/` has `aria-current` `page`.
+  - Done when: eslint is clean, and `npx playwright test --list --project=mobile-chromium` on both files lists their tests.
+
+- [ ] **Task 7.7: guards, a11y, theme review, coverage map**
+  - Files: `web/e2e/specs/access-control/route-guards.spec.ts`, `web/e2e/specs/access-control/pageheader.spec.ts`, `web/e2e/specs/a11y/route-smoke.spec.ts`, `web/e2e/theme-review/routes.spec.ts`, `web/e2e/COVERAGE.md`
+  - Do:
+    - route-guards: in `SITE_SCOPED_ROUTES` (:13-20), `/admin/members` becomes `/admin/sites`, and add `/admin/sites/site-A`. Add a test: an admin opening `/admin/members` ends on `/admin/sites`.
+    - pageheader: the :9 comment and :49-54 now expect `/admin/sites`.
+    - route-smoke:
+      - In the admin block, add full-page scans of `/admin/sites` (heading `sites`) and `/admin/sites/site-A` (heading `Site A (Assigned)`).
+      - Add a test with its own site. beforeAll: `seedSite({ id: 'site-a11y-members', name: 'Site A11y (members)', owner: 'someone-else', timezone: 'UTC' })`, then `grantMembership('site-a11y-members', 'admin-uid', 'admin')`. afterAll: `releaseFixtureSite('site-a11y-members', 'admin-uid')`. Without the site doc, the page says "site not found" and the dialog never renders.
+      - The test opens `/admin/sites/site-a11y-members?section=members` and the add-member dialog. It types `member@e2e` so the listbox shows `member@e2e.test` highlighted: a bare `e2e` can push it past the six rows (Task 7.4). Then it scans the whole page. The popover is not modal, as with the mention list (:145-157).
+    - theme-review :151: `'members'` becomes `'sites'`. Add `{ slug: 'admin-site-settings', path: (siteId) => \`/admin/sites/${siteId}?section=members\`, role: 'superadmin', scenario: 'dashboard-mixed-states' }`, and the same with slug `admin-site-swoop` and `?section=swoop`.
+    - COVERAGE.md:
+      - :45 becomes rows for `/admin/sites` and `/admin/sites/[siteId]`, naming site-list.spec, site-members.spec and mobile/admin-sites.spec.
+      - :59 adds `GET member-candidates` (site-members.spec plus jest).
+      - A row for the swoop mode: the members section sets it (site-members.spec), and the viewer obeys it (swoop/session.spec, describe `swoop mode`, Task 7.9).
+      - :71-73: the PageHeader entries (site settings / manage sites / new site) are covered by site-list.spec and mobile/admin-sites.spec, and the site pages at phone widths by mobile/admin-sites.spec. The old dialog history shrinks to one line.
+  - Done when: eslint is clean; `npx playwright test --list --project=chromium` lists the three specs; `npx playwright test --config=playwright.theme-review.config.ts --list` lists the new slugs. Task 8.1 runs them and takes the theme captures for 9.1.
+
+- [ ] **Task 7.8: tutorial scenes and the live-dev smoke**
+  - Files: `web/e2e/videos/02-day-zero.video.ts`, `web/e2e/videos/14-team-and-alerts.video.ts`, `web/e2e/videos/17-fleet-maintenance.video.ts`, `web/e2e-live/specs/roles.spec.ts`, `web/e2e-live/README.md`
+  - Do:
+    - **Scene 02, b08 (:309-354):**
+      - The switcher's `site settings` opens `/admin/sites/<NYC Office id>` (general). Highlight the timezone field showing the detected zone, read back from the browser as today.
+      - Edit nothing, and leave with `page.goto('/dashboard')` before `signOut`.
+      - Keep the `narrate` cue names.
+    - **Scene 14, b01/b02 (:182-225):**
+      - The admin panel lands on `/admin/sites`; then the gear, then `members`.
+      - Type `rae@e2e.test` into `name or email` and add.
+      - The narration cue `'b02 promotion is account-level — the operator'` (:224) is now false. Hold the row menu's `change access...` on camera instead, and flag the voiceover line in the Log for the owner (plan.md question 8). Do not edit `dev/video-tutorials/`.
+    - **Scene 17, b03 (:181-201):** `manage sites` → gear → `machines`. The version column still shows at 1080p.
+    - **`roles.spec.ts`:**
+      - The site admin reaches the members section through the user menu's `admin panel` (lands on `/admin/sites`), then the `settings for <smoke-live name>` gear, then `members`. The add field's label is `name or email`.
+      - The role change is now a click: the menu holds `['change access...', 'remove...']`. Use the dialog's `role` select and `save`, and read the row back.
+      - NEW hard loads, where the guard bug was seen. As smoke-siteadmin, a fresh `page.goto('/admin/sites')` and `page.goto('/admin/sites/<smoke-live id>?section=members')` each settle on their page with no `access denied` toast. This proves Task 1.4 on dev.
+      - Rewrite the header's "settled product decision" paragraph and its note on hard loads (:16-31). It now says site admins change roles in the UI (owner ruling, 2026-11-04), and that the guard waits for memberships.
+      - Member: `goto('/admin/sites')` ends on `/dashboard` with `access denied`.
+      - Keep the API-level controls.
+    - **`e2e-live/README.md:233-243`:** update it to match.
+  - Done when:
+    - eslint is clean on the five files.
+    - `npx playwright test --config=playwright.videos.config.ts --list` lists the three scenes.
+    - `npx playwright test --config=playwright.live.config.ts --list e2e-live/specs/roles.spec.ts` lists the spec. If that config refuses to load without the live env, say so in the Log; Task 9.3 runs it against dev.
+
+- [ ] **Task 7.9: swoop obeys the swoop mode** (e2e)
+  - Files: `web/e2e/specs/swoop/session.spec.ts`, `web/e2e/helpers/seed.ts`
+  - Do:
+    - **`seed.ts`:**
+      - `seedMemberRow` (:211-228) gains an optional fourth argument `extra?: { swoop?: SwoopMode }`, spread into the row only when it is given.
+      - `grantMembership` (:186-200) passes the same `extra` through.
+      - Import the type from `web/lib/swoopMode.ts`, the way the e2e helpers already import app code. Check with `git grep -n "from '@/" web/e2e/helpers`; else use a relative path.
+      - Every existing caller is unchanged.
+    - **`session.spec.ts`:**
+      - :460-463: the href becomes `` `/admin/sites/${SITE_ID}?section=swoop` ``.
+      - beforeAll (after :236):
+        - Seed three machines, `MODE_CONTROL_ID = \`mach-mode-control-${SUFFIX}\``, `MODE_VIEW_ID` and `MODE_NONE_ID`, with `seedMachine`.
+        - Seed three people:
+          - `modeOperator`: `seedTotpUser`, then `grantMembership(SITE_ID, uid, 'member', { swoop: 'control' })`;
+          - `heldAdmin`: `seedTotpUser`, then `'admin'` with `{ swoop: 'view' }`;
+          - `offMember`: a dedicated member with no second factor, the `watcher` pattern at :231-236, then `'member'` with `{ swoop: 'none' }`.
+      - A new `test.describe('swoop mode', …)`, each test using `signIn` (:118-140), `freshTotp` and `recordSwoopResponses` as the file already does:
+        1. `a member whose swoop mode is control takes control after the step-up`:
+           - Sign in with the secret, then go to `/swoop/${SITE_ID}/${MODE_CONTROL_ID}`.
+           - The dialog shows `/confirm it.s you/i`; fill a fresh code and confirm.
+           - The 201's `data.ctl` is true, and `readSession` viewers equal `[[modeOperator.uid, true]]`.
+           - End the session.
+        2. `an admin held to watch gets view only, with no ceremony`:
+           - Sign in with the secret and go to `MODE_VIEW_ID`.
+           - The 201's `ctl` is false, there is no dialog, and `/view only/i` is visible.
+           - End the session.
+        3. `a member with no swoop is refused for good`:
+           - Sign in and go to `MODE_NONE_ID`.
+           - The alert line (`p[role="alert"]`, :110) shows `you can't use swoop on this site`.
+           - Wait 5 s, then expect exactly two session POSTs (the control ask, then the watch ask) and no `reconnecting in` text.
+      - afterAll cleanup follows the file's own pattern for its seeded people.
+  - Done when: eslint is clean on both files, and `npx playwright test --list --project=chromium e2e/specs/swoop/session.spec.ts` lists the new describe.
+
+- [ ] **Task 7.10: the admin docs**
+  - Files: `web/content/docs/dashboard/admin/sites.mdx` (new), `web/content/docs/dashboard/admin/member-management.mdx`, `web/content/docs/dashboard/admin/index.mdx`, `web/content/docs/dashboard/admin/meta.json`, `web/content/docs/dashboard/admin/user-management.mdx`, `web/content/docs/dashboard/index.mdx`
+  - Do:
+    - **Style:** lowercase prose, as in the neighbouring pages. Glossary terms only: site, site role, site admin, superadmin, swoop mode; never "org", "tenant", or "operators" for owlette's staff (say "owlette's superadmins"). The path is written "admin panel → sites". Claim nothing the code does not do.
+    - **New `sites.mdx`:**
+      - Frontmatter: `title: "sites"`, a description, and `keywords: ["site settings", "manage sites", "new site", "rename site", "delete site", "site timezone", "swoop switch", "keep screens awake", "site members", "site machines"]`.
+      - Location: `admin panel → sites` (`/admin/sites`).
+      - Who opens it: owners and admins of at least one site; owlette's superadmins see every site.
+      - The list: the columns, the current badge, the filter, and a gear only where you are owner or admin. A site you only belong to has none, and opening its settings says so.
+      - New site: from this page; from the switcher's `new site` if you run no site yet; from `create your first site` on an empty dashboard.
+      - A site's settings (`/admin/sites/{siteId}`, the switcher's `site settings`, `?section=`), section by section:
+        - general: name and timezone, applied on save.
+        - members: link to member management.
+        - machines: restart (it asks about active hours; link to machine-monitoring's active-hours section) and remove; `awake`.
+        - swoop & screens: the two switches act the moment they move. Swoop by default: owners and admins watch and control, and members watch when the site lets them; a person's swoop mode changes that (link `member-management#swoop-mode`). Link `swoop#turning-it-on` and `getting-started#keep-screens-awake`.
+        - danger zone: owners only. Deleting removes the machines and their history, the roosts, talons and webhooks, and everyone's access; the agent tokens are revoked; the ID is retired.
+    - **`member-management.mdx`, rewritten:**
+      - Keep the slug and the headings `## changing a role`, `## what the roles mean`, `## transferring ownership` and `### talon reassignment`: other pages link to them. Add `## swoop mode` after `## what the roles mean`.
+      - Location: `admin panel → sites → a site's gear → members` (`/admin/sites/{siteId}?section=members`).
+      - The list's columns now include **swoop**: the person's effective swoop, with `· by role` when no mode is set.
+      - Adding a member:
+        - Search by name or email. It offers people on the other sites where you are owner or admin, minus the people already here; owlette's superadmins can find every account.
+        - A single-site customer gets no suggestions, so type the full email they signed up with.
+        - **role** and **swoop** are chosen in the same dialog; **by role** leaves the swoop mode unset.
+        - `no account found for that email`. `already on this site` changes nothing, the swoop mode included. The owner and deleted accounts cannot be added.
+      - `## swoop mode`:
+        - Each person can have their own swoop mode on the site: **no swoop**, **watch** or **control**. Without one, the role decides: members watch where the site lets members watch, admins and owners control.
+        - It changes swoop and nothing else: a member set to control takes control (after confirming a second factor) and still has no commands or configuration; an admin held to watch keeps everything else an admin does.
+        - The owner always controls. Nobody changes their own. A member set to control cannot kill sessions or see the site's session list; an admin held to watch still can.
+        - Lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in.
+        - The API equivalent: `PATCH /api/sites/{siteId}/members/{uid}` with `{ "swoop": "control" }`, or `null` for by role.
+      - `## changing a role`: the row menu's `change access...`, for owners and admins, on rows other than your own and the owner's. It holds the role and the swoop mode. Demotion ends control sessions unless their swoop mode keeps control. The API and CLI equivalents remain; the CLI's `set-role` changes only the role.
+      - The successor picker lists this site's owners and admins.
+      - Transferring ownership is still API/CLI only.
+      - Delete every note that documented a UI defect (:54, :56, :79, :98).
+      - :27 becomes: the list shows only this site's members, and the add box suggests only people already on other sites you run.
+      - Keep :100 ("to narrow someone's access…"); release 3 changes it.
+    - **`admin/index.mdx`:**
+      - :17 is a `sites` row (`/admin/sites`).
+      - :24: the site selector applies to the other pages.
+      - :48: role and swoop changes are made in the members section (link `member-management#changing-a-role`).
+      - :56: the panel opens on **sites**.
+      - :57: the direct URLs list.
+    - **`meta.json`:** insert `"sites"` after `"index"`.
+    - **`user-management.mdx`:**
+      - :11 tells customers to manage who reaches their sites from admin panel → sites → members.
+      - :61 and :77 rename `manage sites` to `manage site access` (renamed in Task 6.1).
+    - **`dashboard/index.mdx:43`:** `| **sites** | \`/admin/sites\` | site admins | [sites and their settings](/docs/dashboard/admin/sites) |`.
+  - Done when:
+    - `git grep -n -F -e "/admin/members" -e "pencil" -e "edit site" -e "account-level" -- <the six files>` returns nothing. "manage sites" survives only as the switcher entry and in `sites.mdx`'s keywords.
+    - Every link added points at a page and anchor that exist: grep the target heading. Task 8.1 runs `public/docs-links.spec.ts`.
+
+- [ ] **Task 7.11: the other docs that named the dialog**
+  - Files: `web/content/docs/dashboard/getting-started.mdx`, `web/content/docs/dashboard/timezones.mdx`, `web/content/docs/dashboard/account-settings.mdx`, `web/content/docs/dashboard/machine-monitoring.mdx`, `web/content/docs/dashboard/talons.mdx`, `web/content/docs/getting-started.mdx`, `web/content/docs/setup/firebase.mdx`
+  - Do: the same style rules as Task 7.10.
+    - **`dashboard/getting-started.mdx`:**
+      - :66: with no sites, click **create your first site**. Otherwise open the site switcher and choose **new site**, or, if you own or run a site, **manage sites** → **new site**.
+      - :75-82: keep the `## site settings` heading (`swoop.mdx` links its anchor).
+        - A site's settings are a page in the admin panel. The switcher's **site settings** opens it for the site you are on, and admin panel → **sites** lists every site you belong to, with a gear on each you run. Owners and admins open it; members don't.
+        - Keep the switches table, with the swoop row reading "by default, members watch".
+        - Delete "each row in manage sites also shows whether that site has swoop on".
+        - Link the new sites page.
+      - Keep `### keep screens awake` and its anchor.
+      - :98: on a site's settings page, the **machines** section shows **awake** beside a machine while it holds.
+      - :148: the admin panel line covers sites (members, machines, switches) and the rest.
+    - **`timezones.mdx`:** :13 says "changeable afterwards in the site's settings"; :77 says "the site's settings edit its name and timezone, not this flag".
+    - **`account-settings.mdx:35`:** "set in site settings".
+    - **`machine-monitoring.mdx:186`:** "and the restart button in the machines section of a site's settings ask the same way".
+    - **`talons.mdx:40`:** "from a site's [members](/docs/dashboard/admin/member-management) section".
+    - **Top-level `getting-started.mdx`:**
+      - :28 gets the same create path as :66 above.
+      - :120 becomes `[**add people to a site**](/docs/dashboard/admin/member-management) — give a colleague a role on a site`.
+    - **`setup/firebase.mdx:184`:** "give people access to a site from its members section (admin panel → sites → the site's gear)".
+  - Done when: `git grep -n -F -e "in manage sites" -e "manage sites edits" -e "**manage sites**' machine list" -e "**edit site**" -e "that site's members" -e "/admin/members" -- <the seven files>` returns nothing, and every link added points at a heading that exists.
+
+- [ ] **Task 7.12: the swoop and access reference docs**
+  - Files: `web/content/docs/dashboard/swoop.mdx`, `web/content/docs/reference/authentication.mdx`, `web/content/docs/reference/firestore-data-model.mdx`, `web/content/docs/api/errors.mdx`, `web/content/docs/api/rate-limits.mdx`
+  - Do: the same style rules as Task 7.10. 4.1.26 edited swoop.mdx and errors.mdx, so find the lines by their text.
+    - **`swoop.mdx`:**
+      - :38: a site owner or admin flips it on the site's settings page → **swoop & screens** (the site switcher's **site settings**, or admin panel → **sites** → the site's gear).
+      - :40: **turn on swoop…** opens that section.
+      - :42: the rest of the site policy is still API-only; a person's own swoop mode is set in the members section (link `member-management#swoop-mode`).
+      - :47, the `membersMayWatch` row: "whether a site member with no swoop mode of their own may watch".
+      - `## watching versus control` (:65-75): the table's headers become `| | who, by default | what it takes |`. Add the swoop mode paragraph:
+        - a site owner or admin can give anyone on the site a swoop mode of their own: no swoop, watch or control;
+        - it changes swoop and nothing else;
+        - a member set to control takes control after the second factor and has no commands or configuration;
+        - an admin held to watch keeps the rest;
+        - the owner always controls.
+      - `## admin → swoop` (:309-313): the page and **kill** are for site owners and admins whatever their own swoop mode; a member set to control gets neither.
+      - Refusal codes (:338-356):
+        - The `forbidden` row becomes `capability_missing` at the start of a session: "your site role or swoop mode doesn't include what was asked. a control ask then asks to watch instead; a watch ask stops, and the viewer says you can't use swoop on this site". The next column reads "asks to watch instead, then stops".
+        - Keep the lease row.
+        - `members_may_not_watch`: "you are a member with no swoop mode of your own, and `membersMayWatch` is off".
+    - **`reference/authentication.mdx`:**
+      - The capability table (:345-349): the member row says `MACHINE_REMOTE_VIEW` "by default"; the admin row says `MACHINE_REMOTE_CONTROL` "by default".
+      - A sentence under the table: a swoop mode on the member row (`swoop`: `none`, `view` or `control`) overrides the role for `MACHINE_REMOTE_VIEW` and `MACHINE_REMOTE_CONTROL` only, and never on the owner's row. Link `member-management#swoop-mode`.
+      - :353: site owners and admins set site roles and swoop modes from a site's members section, or with `PATCH /api/sites/{siteId}/members/{uid}`. Drop "shows its role control to superadmins only".
+    - **`firestore-data-model.mdx`**, the members table (:116-122): add `| \`swoop\` | string | optional. \`none\`, \`view\` or \`control\`: the person's own swoop mode. absent means the role decides; never on the owner's row. any other value reads as \`none\`. |`.
+    - **`api/errors.mdx`**, the `capability_missing` row (:280): "your site role or swoop mode doesn't include watching or control, at the start of a swoop session or at a lease renewal after it changed".
+    - **`api/rate-limits.mdx`** (:108-109): `MACHINE_REMOTE_CONTROL` covers "starting a swoop control session"; `SWOOP_SETTINGS_MANAGE` covers "site swoop settings, swoop kills, the site's session list".
+  - Done when: `git grep -n -F -e "the site's pencil" -e "members page" -e "control | site owners and admins | the machine remote-control capability" -- <the five files>` returns nothing, and every link added points at a heading that exists.
+
+- [ ] **Task 7.13: the contract and the record**
+  - Files: `web/openapi.yaml`, `GLOSSARY.md`, `README.md`, `docs/changelog.md`, `web/content/docs/changelog.mdx`, `docs/adr/0015-adding-a-member-searches-only-your-own-sites.md` (new), `.claude/skills/codebase-map/SKILL.md`, `.claude/skills/firebase-integration/SKILL.md`
+  - Do:
+    - **`openapi.yaml`, the new path.** Add `/api/sites/{siteId}/member-candidates` right after the `/api/sites/{siteId}/members` block, before `/api/sites/{siteId}/transfer-ownership` (dev :10345). Model it on `getSwoopSettings` (:8687-8715):
+      - `parameters` with `$ref: '#/components/parameters/SiteIdPath'`.
+      - `get`: `operationId: listSiteMemberCandidates`, `tags: [Site Members]`, `summary: list people who can be added to a site`, `security: [{ firebaseIdToken: [] }]`.
+      - The description states the rule. The response carries no role, global role, swoop mode or site list. It never resolves an email (`POST /members {email}` does). The list is fetched once and filtered in the browser. Its `### Authentication and scopes` block:
+        - signed-in session only;
+        - SITE_MEMBER_MANAGE on the site (owner or admin; superadmins anywhere), re-checked in the handler so the capability_enforcement break-glass does not open it;
+        - API keys get `403 api_key_not_permitted`;
+        - it shares the 30/min SITE_MEMBER_MANAGE budget.
+      - `200` schema: `{ candidates: [{ uid: string, email: string|null, displayName: string|null }] }`, all three required, with an example. Plus `401`, `403`, `404`, `429`, `500` and `503` via `#/components/responses/*`.
+    - **`openapi.yaml`, the members operations** (dev :10219-10560). Use OpenAPI 3.1 `type: [string, 'null']` for a nullable field.
+      - GET items gain `swoop` (`none | view | control | null`; null means the role decides), required.
+      - POST's body gains an optional `swoop` (`none | view | control`). A re-add writes nothing, the mode included (`roleHonored: false`).
+      - PATCH's body becomes `role` and/or `swoop`, with `minProperties: 1`. Drop `required: [role]`. `swoop: null` returns to the role's default. The response gains `swoop`. The description covers:
+        - losing control ends the person's control seats, and losing swoop ends all their seats;
+        - a role change keeps an explicit mode;
+        - `403 cannot_modify_own_membership` and `409 cannot_change_owner_role` apply to swoop too;
+        - `403 site_member_manage_required` always applies, whatever `capability_enforcement` is set to.
+      - DELETE's description says SITE_MEMBER_MANAGE is checked whatever `capability_enforcement` is set to. Neutral wording: no exploit narrative.
+    - **`openapi.yaml`, swoop:**
+      - `listSiteSwoopSessions` (:8625) and `killSwoopOnMachine` (:8424): "Requires the swoop-settings capability (site admin or owner), whatever the caller's own swoop mode".
+      - In every 403 list that names `members_may_not_watch` (grep finds six on dev: :8067, :8152, :8214, :8293, :8400, :8607): `capability_missing` also comes from the capability gate, when your site role or swoop mode does not include what was asked, and `members_may_not_watch` applies only to a member with no swoop mode of their own.
+    - **`openapi.yaml`, deleteSite.** In the description (:4789-4793), replace "Deletes the top-level site document… Subcollection cascade cleanup is deferred from the MVP surface." with what `web/lib/actions/deleteSite.server.ts:5-22` does: it audits, retires the id, revokes the site's agent refresh tokens, clears members' legacy `sites[]`, and deletes the site and every subcollection.
+    - **`GLOSSARY.md`, under "Pairing and access":**
+      - **Site role** (:93-95): keep the definition and add "A swoop mode on the same row can widen or narrow swoop alone."
+      - New **Swoop mode**, right after it:
+        - `**Swoop mode**:`
+        - `A person's own swoop on one site, set on their member row: \`none\`, \`view\` (watch) or \`control\`. Without one, the site role decides: members watch where the site lets members watch, admins and owners control. It changes swoop and nothing else, control still needs a step-up, and the owner's row never carries one.`
+        - `_Avoid_: swoop role, swoop permission, swoop access level`
+      - New **Site settings**, after Swoop mode:
+        - `**Site settings**:`
+        - `A site's own page in the admin panel, \`/admin/sites/{siteId}\`: its name and timezone, members, machines, the swoop and keep screens awake switches, and deleting it. The site's owners and admins open it from the site switcher or from the site's gear on admin panel → sites.`
+        - `_Avoid_: site editor, manage sites dialog`
+      - **Viewer** (:182-184): "The side of a session that watches or is in control, in a browser tab or an owlette swoop window. Which one is the person's swoop mode, or by default their site role (members watch, owners and admins control); control also needs a step-up."
+      - **Kill** (:194-196): "A site owner's or admin's stop of every swoop session on a machine, whatever their own swoop mode…", keeping the rest.
+    - **`README.md`:**
+      - :37: "watching and control follow each person's swoop mode on the site: by default members watch and site owners and admins control, and a site's owners and admins can set anyone's to none, watch or control. control always needs a fresh second factor."
+      - :55: add "a site's owners and admins run it from its settings page in the admin panel: members with their roles and swoop modes, machines, and the swoop and keep screens awake switches."
+    - **Both changelogs**, under `## [Unreleased]`, identical text in the files' existing style:
+      - `### added — each person's swoop on a site`: owners and admins set a person to no swoop, watch or control in the members section. A member set to control takes control after a second factor and gets nothing else; an admin held to watch keeps the rest. The site's members-may-watch setting is now the default for members without one. Kill and the admin swoop page stay with site owners and admins.
+      - `### added — each site has a settings page`: admin panel → sites; the gear; the five sections; the switcher's site settings, manage sites and new site.
+      - `### added — finding someone to add`: suggestions from your other sites; a full email still adds anyone with an account; owlette never searches every account for you.
+      - `### changed — site owners and admins change roles in the dashboard`.
+      - `### fixed`:
+        - the role dialog no longer calls the role account-wide;
+        - the talon successor list offers the site's owners and admins;
+        - re-adding a member says it changed nothing;
+        - the swoop switch says members watch;
+        - the delete dialog says what deleting a site does;
+        - a site admin opening an admin page in a fresh tab is no longer sent away.
+      - `### removed — the manage sites dialog and /admin/members`: it now redirects to /admin/sites.
+      - No line names the in-handler re-checks (Task 3.5, public repo).
+    - **New ADR `docs/adr/0015-adding-a-member-searches-only-your-own-sites.md`.** The number is fixed: machine scope's ADR is 0016 (both plans say so). Format: one paragraph plus `## Consequences`, as `docs/adr/0013-*.md`.
+      - Decision: adding a member searches only the people on sites you already administer, plus an exact email for anyone else. Superadmins search everyone.
+      - Why: site creation is self-serve, so any account can become a site admin, and a platform-wide search would list every account. The union of rosters a caller can already read through GET members discloses nothing new.
+      - Consequences:
+        - a single-site customer gets no suggestions;
+        - the list is fetched once per dialog and filtered in the browser;
+        - API keys are refused;
+        - exact email stays in POST, where a hit adds the person and is audited;
+        - which sites count is decided by `hasCapability` over the same row reading every gate uses;
+        - a later request for global search must argue against this ADR.
+    - **`.claude/skills/codebase-map/SKILL.md`:**
+      - :19: `/admin/members` becomes `/admin/sites`, `/admin/sites/[siteId]`.
+      - The web components line adds `admin/sites` (the site list and the site settings sections) and the shared `admin/Panel`, `SegmentedControl`, `BackLink`.
+      - The lib line adds `swoopMode.ts` (the swoop mode's labels and rules, shared by server and dashboard).
+      - The hooks table adds `useSiteMembers.ts` | `useSiteMembers(siteId)` (list, add, remove, `updateMember`), `useMemberCandidates(siteId)`.
+    - **`.claude/skills/firebase-integration/SKILL.md:19-23`:** the member row is `{ uid, role, status, addedAt, addedBy, swoop? }`, with one line: `swoop` is the person's swoop mode, absent = by role, written only by `lib/membership.server.ts`.
+  - Done when: `cd web && npm run validate:api` passes; `npx jest __tests__/api/openapi.test.ts` passes; the two Unreleased sections are identical (diff them); the ADR file is `0015`.
+
+## Wave 8: run the e2e once, serially
+
+- [ ] **Task 8.1: build once and run every new and changed spec**
+  - Files: none of its own. A failure is fixed in the owning task's files (spec, app code or docs). Each fix is recorded in the Log with the task that owned the file, and the jest for any app file touched is rerun.
+  - Depends on: every task in waves 1-7
+  - Do:
+    1. `cd web && npm run e2e:build` once. Nothing else builds `.next-e2e` or binds the emulator ports while this runs.
+    2. One emulator session for chromium, from the repo root:
+       - `firebase emulators:exec --only auth,firestore,storage --project demo-playwright-e2e "cd web && npx playwright test --project=chromium <files>"`.
+       - `<files>`:
+         - `e2e/specs/sites/{create-site,edit-site,delete-site,delete-site-owner,site-role-boundaries,site-list,site-members}.spec.ts`
+         - `e2e/specs/swoop/{turning-it-on,session}.spec.ts`
+         - `e2e/specs/dispatch/active-hours.spec.ts`, `e2e/specs/plans/free.spec.ts`
+         - `e2e/specs/access-control/{route-guards,pageheader}.spec.ts`
+         - `e2e/specs/a11y/route-smoke.spec.ts`
+         - `e2e/specs/admin/swoop.spec.ts` (kill moved capability)
+         - `e2e/specs/api-sprint/site-members.spec.ts` (the members API contract with a key)
+         - `e2e/specs/public/docs-links.spec.ts`
+    3. The same for `--project=mobile-chromium` with `e2e/specs/mobile/{admin-sites,admin-drawer}.spec.ts`.
+    4. The theme-review slugs `admin-sites`, `admin-site-settings` and `admin-site-swoop` with `--config=playwright.theme-review.config.ts`. Keep the captures for 9.1.
+    5. Where the video rig runs on this box (`web/e2e/videos/README.md`), scenes 02, 14 and 17 with `--config=playwright.videos.config.ts --grep <scene>`. If the rig cannot run here, say so in the Log.
+    6. A late `ERR_ADDRESS_IN_USE` or a stuck load is this box's ephemeral ports: wait two minutes and rerun that file once. A second failure is a real failure: fix it.
+  - Done when: every listed file passes in one clean run, after the last fix, and the Log lists each fix with its owning task.
+
+## Wave 9: verification and release
+
+- [ ] **Task 9.1: the local gate**
+  - Files: none of its own. Fixes go back into the owning task's files; record results in the Log.
+  - Depends on: Task 8.1
+  - Do:
+    1. Run everything from a named branch (`feat/admin-sites`): a detached HEAD grades main. Run `node scripts/check-security-alerts.mjs`. Exit 1 blocks the release; never ack on your own judgment.
+    2. `cd web && npm run lint && npm run typecheck && npm test -- --ci && npm run test:rules && npm run validate:api`.
+    3. `cd web && npm run e2e` (chromium and mobile-chromium), the full suite. Late `ERR_ADDRESS_IN_USE` failures: rerun once after TIME_WAIT drains; use shifted ports (`web/e2e/README.md`) only if another session holds the emulator.
+    4. These greps must match nothing outside `docs/changelog.md` and `web/content/docs/changelog.mdx`:
+       - Over `web` and `README.md`, use `git grep -n -F` with each of: `ManageSitesDialog`, `?settings=`, `onManageSites`, `admin is an account-level role`, `this changes the account, not just this site`, `machine data may remain`.
+       - `/admin/members`, except the next.config redirect, the fail-closed case in `RequireAdminAccess.test.tsx` and the route-guards redirect test.
+       - Over `web/content/docs`, the three docs tasks' strings (7.10-7.12).
+    5. Copy Task 8.1's theme captures and the 390px screenshots from the mobile run, in both themes, to the scratchpad.
+  - Done when:
+    - Every step is green and every grep is clean.
+    - **OWNER STEP:** the owner has looked, in a headed emulator preview (seed and open admin and member windows; the dev passkey does not pass on localhost), at:
+      - /admin/sites;
+      - a site's sections;
+      - the members section with its swoop column;
+      - the add-member list and the change access dialog at 390px;
+      in light and dark, and has accepted the visuals.
+
+- [ ] **Task 9.2: the 4.1.27 build, uploaded to dev before any push**
+  - Files: `VERSION`, `agent/VERSION`, `web/package.json` (through `node scripts/sync-versions.js`), `docs/changelog.md`, `web/content/docs/changelog.mdx`, `web/public/docs-screens/*` (refresh script)
+  - Depends on: Task 9.1
+  - Do: follow `.claude/skills/build-system/SKILL.md` → "Agent Installer Release" and `docs/runbooks/agent-installer-release.md`. Releases are full releases (owner ruling 8).
+    1. Read `VERSION` on dev. The next patch after 4.1.26 is expected to be 4.1.27; confirm before using it.
+    2. `node scripts/sync-versions.js 4.1.27`. Move the Unreleased entries in BOTH changelogs under `## [4.1.27] - <date>`, then commit `release: 4.1.27`. Any security acks go in the body, with reasons.
+    3. Windows: the signed full build, non-interactive as the skill shows (`OWLETTE_SIGN=1`, stdin from NUL, by full path, in the background). It produces `agent/build/installer_output/Owlette-Installer-v4.1.27.exe`.
+    4. macOS pkg on the MBA (`ssh rosco@192.168.88.46` via `zsh -lc`; the repo arrives by push to the `mba` remote). **OWNER STEP** only if the MBA is asleep or its notary profile has vanished again.
+    5. Linux deb on the kiosk VM (Hyper-V `owlette-kiosk`).
+    6. After the build: `node scripts/refresh-docs-screens.mjs` (the skill requires it).
+    7. Upload all three to dev through the skill's signed-URL → finalize flow. **OWNER STEP:** explicit go for finalize / setAsLatest on dev.
+    8. Verify dev's downloads: each platform's link serves 4.1.27 with a matching sha256.
+  - Done when: dev hands out 4.1.27 for Windows, macOS and Linux and the downloads verify. Nothing has been pushed or merged yet.
+
+- [ ] **Task 9.3: ship to dev and prove it there**
+  - Files: none
+  - Depends on: Task 9.2
+  - Do:
+    1. **OWNER STEP, before any push:** his answer to plan.md question 2 (the in-handler re-checks in Task 3.5 close a gap that is live on prod).
+       - If the private security plan ships them first, rebase onto that fix, rerun Task 3.5's jest, and keep this release's swoop blocks.
+       - If he lets them ride here, push as is. Commit and PR wording stays neutral either way.
+    2. Push with an explicit refspec: `git push origin feat/admin-sites:feat/admin-sites`. A branch cut from origin/dev tracks dev, so a bare push would land there.
+    3. Open the PR to `dev`; its body ends with the attribution line. **OWNER STEP:** go to merge.
+    4. After the merge, run `gh run watch <id> --exit-status` on the playwright e2e run, in the background. On failure, read `gh run view <id> --log-failed` and propose a fix. Never auto-push.
+    5. Prove it on dev.owlette.app:
+       - `cd web && npm run smoke:dev`, including the re-homed roles.spec and its hard loads. It needs `agent/config/firebase-creds-dev.json` and `web/.env.local`. **OWNER STEP** if either is missing.
+       - `curl -s "$OWLETTE_DEV_API_URL/api/openapi"` lists `listSiteMemberCandidates`.
+       - `curl` on `GET /api/sites/<a dev site>/member-candidates`:
+         - with no auth it gets 401, which proves it is deployed and gated;
+         - with `x-api-key: $OWLETTE_API_KEY` it gets a 403, which proves keys are refused. Any 403 counts: `api_key_not_permitted`, `scope_insufficient` or a capability refusal, depending on the key's scopes and its owner's standing.
+    6. **OWNER STEPS** on dev.owlette.app, on his phone and on desktop, in light and dark:
+       - The switcher's site settings, manage sites and new site, each from an account that should see it.
+       - admin panel → sites → a gear → every section.
+       - Add a member by search and by full email.
+       - Make a member an admin and back.
+       - With swoop off, the viewer's "open site settings" lands on the switch.
+       - Swoop mode, on a dev test site with test accounts that have a second factor:
+         - set a member to control: they take control after the step-up, and their machine menu offers no commands;
+         - hold an admin to watch: they get "view only";
+         - set someone to no swoop: they get "you can't use swoop on this site", and it does not retry.
+       - Slawek: the owner sets his swoop mode to control on elm-gate, where he stays a member. Slawek needs his own second factor enrolled. Ask him to take control of TEC-B4A, and log the result.
+    7. **OWNER STEP:** go to tag. Then tag `v4.1.27`, and record the results in this Log and the project memory.
+  - Done when: CI is green on dev, `smoke:dev` is green, the owner's steps are signed off, and the tag is pushed.
+
+## Wave 10: owner additions for 4.1.27 (2026-11-04, after the release branch was cut)
+
+Owner requests made while 4.1.27 was in flight, run on `release/4.1.27` as plain commits behind the release commit; task files in the session scratchpad (`waves/admin-sites/wave-10/`).
+
+- [x] **Task 10.1: a search in the site switcher when there are many sites** (`SiteSwitcherList`, threshold 10, in the header's switcher and the owlette swoop picker; e2e `sites/site-switcher-search.spec.ts`) — dda46440, changelog 7f03f711.
+- [x] **Task 10.2: the pill's pointer icon points top-left on a side bar** (`UPRIGHT` counter-rotation) — e3098011.
+- [x] **Task 10.3: a pill lights while its viewer moves the pointer, and fills while you click** (`lib/swoop/activity.ts`, `useSwoopViewerActivity`; others' clicks wait on the streamer publishing buttons in `vpos`) — b59ea3aa.
+- [x] **Task 10.4: another controller's pointer carries no name** (the bar names them; `SwoopPresence` keeps the tint) — 0bde2d54.
+- [x] **Task 10.5: codeql's property-injection alerts** (425-429, the september false positives 311-313 re-fired by `siteStanding({ [siteId]: … })`): the builder takes `[siteId, standing]` pairs and makes null-prototype records from entries — 0cd17001; the dead dependabot-423 ack dropped — 8aaac99e.
+
+## Wave 11: kick someone from a swoop session (2026-11-04 late; owner: "in the pill menu under email, there should be a button 'kick'")
+
+Design (settled): the protocol has no per-viewer evict, so a kick is the revocation cut (`endSwoopSessionForUser`, extracted from `revokeViewerSessions.server.ts`): the record ends `kicked` with `endedFor`, the streamer is killed, everyone else comes back on the ladder, and the kicked page stops on the record's word ("a site admin removed you from this session.") since its access is intact and a rejoin would succeed; reconnect is the deliberate rejoin. Gate `SWOOP_SETTINGS_MANAGE`, as kill; anyone but yourself, no hierarchy. Task files in the session scratchpad (`waves/admin-sites/wave-11/`).
+
+- [x] **Task 11.1: the route `POST …/sessions/{sid}/kick` `{ viewerId }`, the GET's per-viewer `kickable`, the page's stop, `useSwoopViewerNames.kickable`, `lib/swoop/kick.ts`, the pill menu (`viewer-menu` popover) with kick under the email and a confirm dialog, unit tests.** — 63c1c1c0; follow-ups 48dd747a (api reference, error codes, "swoop mode" wording).
+- [x] **Task 11.2: the e2e (`swoop/viewer-pills.spec.ts`: the admin kicks the member), swoop.mdx, rate-limits.mdx, both changelogs.** — fa92090c; the fake host's roster now names only the session it serves (85cc7b88), which the spec had trimmed by hand.
+
+## Wave 12: the machine picker's cards say who is connected (2026-11-04 late; owner: "these cards in the swoop desktop all should show who is connected to a machine")
+
+- [x] **Task 12.1: the mirror writes `swoopSeats` (uid, displayName, ctl; never the email) beside the count; `useMachines` parses it; the picker card lists the people on the right (first name and last initial, a pointer for control and an eye for a watcher, `+N`, `(you)`, full names on hover); `swoop/picker.spec.ts`; swoop.mdx; both changelogs.** — 717d152b.
+
+## Log
+
+- Wave 12 (picker cards), 2026-11-05 ~02:30 PST: 717d152b; mutation checks 5/5; the e2e seeds the mirror directly, so the live path from a session to the names on a card rests on the unit tests of the sync. Review of the kick (three axes, wf_8772fe11-ba2): pass with notes, all fixed in 9f68c85b (a kick is final for its person in the continuity rule; the shared end-for-user function leaves the audit row to each caller; "took you out", not "removed"; the step-up claim corrected). Session spec 22/22 on the rig.
+- Wave 11 (kick), 2026-11-05 ~01:30 PST: both executors done (63c1c1c0, fa92090c); the pills spec with the new kick test passed on the rig after the fake-host roster fix (2 passed, 1.0 min); jest on every suite importing the changed modules passed (68 suites, 1592 tests in 11.1's run). Dev had moved under PR #474 (c7a53fa4, the 4.1.26 screenshots), which left the PR conflicting and GitHub ran no workflow on the pushed head; merged origin/dev into release/4.1.27 as f5a97522 keeping the 4.1.27 screenshots. CodeQL's five js/remote-property-injection alerts (the September false positives 311-313 re-fired by `siteStanding({ [siteId]: … })`) are fixed by 0cd17001: the builder takes `[siteId, standing]` pairs and builds null-prototype records from entries.
+### 2026-11-04
+- Plan created from the 2026-11-04 research maps and owner decisions; not started. Starts after 4.1.26 merges to dev.
+- Revised against two critiques. The swoop mode (owner rulings 13-14) is now part of this release:
+  - Tasks 1.1, 1.7, 2.7, 2.9, 3.5, 4.3 and 7.9 are new or widened.
+  - Kill and the site's session list move to SWOOP_SETTINGS_MANAGE.
+  - Member PATCH/DELETE and site DELETE re-check their capability in the handler.
+- The waves were restructured:
+  - removals run after the site settings page (wave 6);
+  - e2e and docs are authored in wave 7 and run once, serially, in wave 8;
+  - shared admin pieces (Panel, SegmentedControl, BackLink, DetailSkeleton, button `xs`) replace copies;
+  - `accessColumn` and the `_userId` parameter are gone;
+  - the search input is `MemberSearchInput`.
+- ADR 0015 is this release's; machine scope's ADR is 0016 (its plan was updated to match).
+- 2026-11-04 ~03:40, decisions by Claude under the owner's standing rulings (the owner may override; questions 2 and 5 were put to the owner directly):
+  - Q1 Slawek stopgap: the owner's own dashboard click (admin on elm-gate); nothing for this plan.
+  - Q2 in-handler re-checks: build them here; push with neutral wording unless the owner says "private plan first" (Task 9.3 waits for that word).
+  - Q3 superadmin accounts stay out of the candidates list. Q4 "new site" from the header saves the new site as the last site.
+  - Q5 kill and the site session list need SWOOP_SETTINGS_MANAGE (proceeding; the owner was told). Q6 the dashboard reads the mode in release 3. Q7 SDK/CLI later. Q8 voiceover later.
+  - Version 4.1.27. Branch `feat/admin-sites` cut from the tip of `fix/swoop-second-viewer-joins` (4.1.26's branch) so the rebase onto dev after 4.1.26 merges is clean.
+- Task 8.1, the e2e run, on the default ports (no other session held them):
+  - Before the run: `## swoop mode` is at member-management.mdx:42. 7.7's COVERAGE.md rows match their specs as written; none trimmed.
+  - First build: chromium 169 passed, 2 failed; mobile-chromium 7 passed.
+    - `a11y/route-smoke`, dark, the add-member list (Task 2.1's `MemberSearchInput.tsx`, fixed in e0fb7154). Over the active row's accent fill, axe measured the muted email line at 4.40:1 and the cyan mark at 3.58:1. That row alone now takes `text-accent-foreground/80` for its email line and, in dark, `text-accent-foreground` for its marks (7.58:1 and 6.64:1), as `MachineTargetPicker`'s focused row does. Every other row keeps the muted line. jest MemberSearchInput 16/16. Frames of the open list in both themes are in the session scratchpad (`a11y-evidence/`).
+    - `swoop/session` "the kill switch ends a live session" (Task 7.9's `session.spec.ts`, fixed in 1a2fb8a3). `host.leases` was read once after the picture, but the page presents its lease only after minting it: the trace has the mint returning about 6 ms after the assertion. The race predates this release. The file's three `host.leases` reads now poll.
+  - After one rebuild: chromium 171 passed (8.0 min), mobile-chromium 7 passed, theme review 12 passed (`admin-sites`, `admin-site-settings`, `admin-site-swoop`, dark and light, desktop and mobile). The captures stay in `web/e2e/.output/theme-review/`, with a copy in the session scratchpad (`theme-review-8.1/`), for 9.1.
+  - Videos: the rig runs here only on its fallback. The capture probe's ddagrab smoke fails on this box (killed at its timeout; the box had been idle about 5 h), so the scenes ran with `OWLETTE_VIDEO_CAPTURE_PATH=fallback` (gdigrab + libx264).
+    - First run: 02 passed; 14 failed at b02's owner row; 17 failed at b06 on "4 live", with 9 live.
+    - Scene 14 (Task 7.8's file, fixed in 509e4e04). Its owner was the site doc's `owner` field, which the members list has not read since 2026-09-07 (a3ac32d1, 2e339740), so b02 could not pass before this release either. It also never deleted its five `agent_refresh_tokens`, which were 17's extra five. The owner is now an owner member row, and the finally deletes that row and the tokens.
+    - Rerun, one session: 02, 14 and 17 passed (14.1 min).
+    - For the re-record (question 8): scene 02 leaves its day-zero user on site-A, so 14's members table films an extra "E2E member day-zero-totp-…" row.
+  - Every listed file passed in one clean run after its last fix. Scene 14's fix touches only the video suite, so the chromium, mobile and theme runs before it stand.
+- Task 4.3, the viewer-pill email gate, after 4.1.26 merged in (366f39db):
+  - The gate is `withEmail` in the GET of `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route.ts`; its test file is `web/__tests__/api/swoop/sessions.test.ts` ("naming the people in it"). The pills (`SwoopToolbar.tsx`, `hooks/useSwoopViewerNames.ts`) show only what that read sends.
+  - Before this task it already keyed on the site role: `ctx.actor.siteRoles[ctx.siteId]` owner or admin, or `ctx.actor.role` superadmin. Never `ctl` or MACHINE_REMOTE_CONTROL, so the route is unchanged.
+  - Added: a member set to control, whose seat holds control, gets names and no email. The site has `membersMayWatch` off, so only that mode lets them in. POSITIVE CONTROL: an admin held to watch gets every email, and the same admin's control ask is refused with 403 `capability_missing`.
+  - Proof the tests can fail: re-keying the gate on MACHINE_REMOTE_CONTROL or on the caller's seat `ctl` fails both, and dropping either fixture's mode fails its test. jest 95/95.
+- Task 8.2, the final rig run on the merged tree (7291f13b: 4.1.26 merged in as 366f39db, then Task 4.3), on the default ports (no other session held them), against one build (`npm run e2e:build`, BUILD_ID `L2J7Oy1mOKBAXUqj7YomW`):
+  - chromium: `sites`, `access-control` and `swoop` (all eleven files, `viewer-pills.spec.ts` among them; the task said ten), plus `admin/swoop`, `public/docs-links`, `a11y/route-smoke`, `plans/free` and `dispatch/active-hours`. 246 tests in 31 files.
+    - First run: 245 passed, 1 failed (13.5 min). The failure was `swoop/session` "an admin demoted mid-session", at its first picture (session.spec.ts:958), before the demotion. In the trace the fake host's page spent 46.2 s in its first `answer` (its next took 0.3 s), so the operator's page re-minted twice and showed "connection lost". That is the fake host's own WebRTC set-up on a blank page, late in the run (test 222 of 246), with no app code in it; the test passed twice on the 4.1.26 branch.
+    - That file alone, rerun once after the box's two minutes: 22 passed (4.6 min). No fix.
+    - Final run of the whole set: 246 passed (10.8 min).
+  - mobile-chromium: `mobile/admin-sites` and `mobile/admin-drawer`, 7 passed (1.3 min), and 7 passed in the final run (56 s). `swoop/viewer-pills.spec.ts` collects no test under mobile-chromium, because the project's `testMatch` is `mobile/`; the spec takes its member window to 390x844 itself, and that runs in chromium.
+  - Theme review (`--grep admin-site`): 12 passed (1.3 min), `admin-sites`, `admin-site-settings` and `admin-site-swoop`, dark and light, desktop and mobile. Every capture is byte-identical to 8.1's (sha256), so the merge changed nothing on those pages as captured. Copies are in the session scratchpad (`theme-review-8.2/`).
+  - Fix commits: none. No emulator, server or browser process was left running.
+  - Unverified: nothing ran against dev.owlette.app or on a real phone.

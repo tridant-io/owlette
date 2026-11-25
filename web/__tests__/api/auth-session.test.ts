@@ -10,6 +10,8 @@ jest.mock('@/lib/withRateLimit', () => ({
   withRateLimit: (handler: unknown) => handler,
 }));
 
+jest.mock('@/lib/authEvents.server');
+
 jest.mock('@/lib/sessionManager.server', () => ({
   createSession: (...args: unknown[]) => mockCreateSession(...args),
   destroySession: jest.fn(),
@@ -30,6 +32,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import { POST } from '@/app/api/auth/session/route';
+import { recordAuthFailure, recordSignIn } from '@/lib/authEvents.server';
 
 function request(body: Record<string, unknown>): NextRequest {
   return new NextRequest('http://localhost/api/auth/session', {
@@ -61,6 +64,55 @@ describe('POST /api/auth/session', () => {
     expect(res.status).toBe(403);
     expect(body.error).toBe('User is deleted or inactive');
     expect(mockCreateSession).not.toHaveBeenCalled();
+    expect(recordSignIn).not.toHaveBeenCalled();
+    expect(recordAuthFailure).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      capability: 'AUTH_SIGN_IN',
+      event: 'sign_in_failed',
+      reason: 'user_deleted',
+      role: 'member',
+    });
+  });
+
+  it('records a refusal under the verified uid when the body names another user', async () => {
+    const res = await POST(request({ idToken: 'firebase-id-token', userId: 'someone-else' }));
+
+    expect(res.status).toBe(403);
+    expect(recordAuthFailure).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      capability: 'AUTH_SIGN_IN',
+      event: 'sign_in_failed',
+      reason: 'user_id_mismatch',
+    });
+  });
+
+  it('records nothing for an invalid token, where no uid can be trusted', async () => {
+    mockVerifyIdToken.mockRejectedValue(new Error('bad token'));
+
+    const res = await POST(request({ idToken: 'bad' }));
+
+    expect(res.status).toBe(401);
+    expect(recordAuthFailure).not.toHaveBeenCalled();
+    expect(recordSignIn).not.toHaveBeenCalled();
+  });
+
+  it('records the sign-in with the user role, provider and auth_time', async () => {
+    const authTime = Math.floor(Date.now() / 1000);
+    mockUserDocGet.mockResolvedValue({ exists: true, data: () => ({ role: 'superadmin' }) });
+    mockVerifyIdToken.mockResolvedValue({
+      uid: 'user-1',
+      auth_time: authTime,
+      firebase: { sign_in_provider: 'google.com' },
+    });
+
+    await POST(request({ idToken: 'firebase-id-token' }));
+
+    expect(recordSignIn).toHaveBeenCalledWith(expect.anything(), {
+      userId: 'user-1',
+      role: 'superadmin',
+      method: 'google.com',
+      authTime,
+    });
   });
 
   it('allows first login when users doc is not bootstrapped yet', async () => {
@@ -74,6 +126,89 @@ describe('POST /api/auth/session', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(mockCreateSession).toHaveBeenCalledWith('user-1', 3);
+    expect(mockCreateSession).toHaveBeenCalledWith('user-1', 3, undefined, undefined, undefined);
+  });
+
+  it('refuses an ID token signed in before a password reset, so it cannot start a new session', async () => {
+    // firebase's revocation check: with checkRevoked, a token signed in before the
+    // account's tokensValidAfterTime throws auth/id-token-revoked.
+    const signedInAt = Math.floor(Date.now() / 1000) - 600;
+    const revokedAt = Date.now() - 60_000;
+    mockVerifyIdToken.mockImplementation(async (_token: string, checkRevoked?: boolean) => {
+      if (checkRevoked && signedInAt * 1000 < revokedAt) {
+        throw Object.assign(new Error('revoked'), { code: 'auth/id-token-revoked' });
+      }
+      return { uid: 'user-1', auth_time: signedInAt };
+    });
+
+    const res = await POST(request({ idToken: 'pre-reset-id-token' }));
+
+    expect(res.status).toBe(401);
+    expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  describe('app-link appLinkMfa claim', () => {
+    const decoded = (provider: string, claims: Record<string, unknown> = {}) => ({
+      uid: 'user-1',
+      auth_time: Math.floor(Date.now() / 1000),
+      firebase: { sign_in_provider: provider, identities: {} },
+      ...claims,
+    });
+
+    it('passes the claim and the approver ceremony time to createSession for a custom-token sign-in', async () => {
+      const ceremonyAt = Date.now() - 90_000;
+      mockVerifyIdToken.mockResolvedValue(
+        decoded('custom', { appLinkMfa: 'challenge', appLinkMfaAt: ceremonyAt }),
+      );
+      const res = await POST(request({ idToken: 'firebase-id-token' }));
+      expect(res.status).toBe(200);
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'challenge', ceremonyAt, undefined);
+    });
+
+    it('passes the network the approver ceremony ran on, for swoop', async () => {
+      const ceremonyAt = Date.now() - 90_000;
+      mockVerifyIdToken.mockResolvedValue(
+        decoded('custom', { appLinkMfa: 'challenge', appLinkMfaAt: ceremonyAt, appLinkMfaNet: 'asn:64500' }),
+      );
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'challenge', ceremonyAt, 'asn:64500');
+    });
+
+    it('dates a claim with no ceremony time at 0, so it never reads as fresh', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom', { appLinkMfa: 'challenge' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'challenge', 0, undefined);
+    });
+
+    it('passes a device-trust claim through as device-trust', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom', { appLinkMfa: 'device-trust' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, 'device-trust', 0, undefined);
+    });
+
+    it.each(['password', 'google.com'])('ignores the claim on a %s sign-in', async (provider) => {
+      mockVerifyIdToken.mockResolvedValue(decoded(provider, { appLinkMfa: 'challenge' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, undefined, undefined, undefined);
+    });
+
+    it('passes nothing for a custom-token sign-in without the claim (passkey)', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom'));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(mockCreateSession).toHaveBeenCalledWith('user-1', 7, undefined, undefined, undefined);
+      expect(recordSignIn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ method: 'passkey' }),
+      );
+    });
+
+    it('records an app-link sign-in as app_link', async () => {
+      mockVerifyIdToken.mockResolvedValue(decoded('custom', { appLinkMfa: 'challenge' }));
+      await POST(request({ idToken: 'firebase-id-token' }));
+      expect(recordSignIn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ method: 'app_link' }),
+      );
+    });
   });
 });

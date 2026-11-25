@@ -8,7 +8,7 @@
  * production. Here the emulator loads functions/lib and Firestore delivers the
  * event, so the whole path is exercised.
  *
- * Scope note: only the five FIRESTORE triggers register. The scheduled
+ * Scope note: only the FIRESTORE triggers register. The scheduled
  * (pubsub) functions log "function ignored because the pubsub emulator does
  * not exist or is not running" — `pubsub` is not in the emulator set — so
  * processRetryQueue, chunkGcNightly and the sweep dailies are out of reach
@@ -19,7 +19,8 @@
  */
 
 import { expect, test } from '@playwright/test';
-import { Timestamp } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { verifyRecord, type AuditRecord } from '@/lib/auditLogVerify';
 import { getAdminDb } from '../../helpers/emulator';
 
 const SITE_ID = 'e2e-functions-triggers';
@@ -149,5 +150,39 @@ test.describe('firestore triggers', () => {
       .collection('commands')
       .doc('completed')
       .delete();
+  });
+
+  test('onAuditQueued drains a burst of queued audit events into one verified chain', async () => {
+    const db = getAdminDb();
+    // a site of its own, so its chain starts at genesis
+    const site = db.collection('sites').doc(`${SITE_ID}-audit-${Date.now()}`);
+    const targets = Array.from({ length: 50 }, (_, i) => `t${i}`);
+
+    // queued all at once, as a burst of changes on one site reaches the web emitter
+    await Promise.all(
+      targets.map((target) =>
+        site.collection('audit_queue').add({
+          event: { kind: 'process_mutated', siteId: site.id, actor: 'user:e2e', occurredAt: Date.now(), target, attributes: {} },
+          enqueuedAt: FieldValue.serverTimestamp(),
+        }),
+      ),
+    );
+
+    const chain = await waitFor('the queue to drain into the audit log', async () => {
+      const [queued, log] = await Promise.all([
+        site.collection('audit_queue').get(),
+        site.collection('audit_log').orderBy('recordedAt').get(),
+      ]);
+      return queued.empty && log.size === targets.length ? log.docs.map((d) => d.data() as AuditRecord) : null;
+    });
+
+    expect(chain.map((r) => r.event.target).sort()).toEqual([...targets].sort());
+    chain.forEach((record, i) => {
+      expect(verifyRecord(record, i === 0 ? null : chain[i - 1])).toMatchObject({ ok: true, isGenesis: i === 0 });
+    });
+    expect((await site.collection('audit_log_meta').doc('head').get()).get('hash')).toBe(chain[chain.length - 1].hash);
+
+    await site.collection('audit_log').get().then((s) => Promise.all(s.docs.map((d) => d.ref.delete())));
+    await site.collection('audit_log_meta').get().then((s) => Promise.all(s.docs.map((d) => d.ref.delete())));
   });
 });

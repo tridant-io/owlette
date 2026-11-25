@@ -26,7 +26,7 @@ export function getUserDisplayText(user: User | null): string {
 }
 
 /** "Dylan R." for compact UI; first name alone when there is no surname. */
-export function getUserShortName(user: User | null): string {
+export function getUserShortName(user: Pick<User, 'displayName' | 'email'> | null): string {
   if (!user) return '';
 
   if (user.displayName) {

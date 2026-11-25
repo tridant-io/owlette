@@ -3,6 +3,7 @@
  *
  * List hash-chained audit records for a site, newest first. Legacy
  * `limit` and `cursor` aliases are accepted for existing callers.
+ * Site admins and owners only (`requireAuditLogCapability`).
  */
 
 import type { NextRequest } from 'next/server';
@@ -21,6 +22,7 @@ import {
 } from '@/lib/pagination';
 import {
   applyAuthDeprecations,
+  requireAuditLogCapability,
   requireSiteAuthAndScope,
 } from '../../../_shared';
 
@@ -47,6 +49,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const { siteId } = await params;
     const auth = await requireSiteAuthAndScope(request, siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireAuditLogCapability(auth.auth, siteId);
+    if (capabilityError) return capabilityError;
 
     const qp = request.nextUrl.searchParams;
     const kindFilter = qp.get('kind');

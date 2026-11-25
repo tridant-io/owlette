@@ -62,8 +62,9 @@ _SYSTEMD_START_TYPES = {
     'masked': 'disabled', 'masked-runtime': 'disabled',
 }
 
-# A systemd unit name or a launchd label, either with an instance suffix.
-_SERVICE_NAME = re.compile(r'^[\w.@:\-]+$')
+# A systemd unit name or a launchd label, either with an instance suffix. Never a
+# leading dash: systemctl and launchctl would read it as an option.
+_SERVICE_NAME = re.compile(r'^[\w.@:][\w.@:\-]*\Z')
 
 # What manage_windows_service can do here: launchd has no pause/continue, and
 # systemd's restart policy is unit configuration, not a runtime call.
@@ -393,7 +394,7 @@ def check_pending_reboot(params, config):
     that a restart completes counts, as on Windows: an update that is merely
     available is not a reboot the machine is waiting on. Neither POSIX source
     says when the next update is due, and only macOS records when the last one
-    landed.
+    landed. Neither queues file renames for the next boot the way Windows does.
     """
     del params, config
     if _is_macos():
@@ -406,6 +407,7 @@ def check_pending_reboot(params, config):
     return {
         'pending': bool(reasons),
         'reasons': reasons,
+        'file_renames': False,
         'last_update_installed': last_update_installed,
         'next_scheduled_update': None,
     }

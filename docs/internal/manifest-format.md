@@ -9,6 +9,8 @@
 | **owner** | roost (project distribution v2) |
 | **scope** | normative for all v2 uploads, downloads, gc, and rollback paths |
 
+> **as shipped:** this is the spec as approved on 2026-04-19, kept as written. the code renamed manifest to version in 2.10.0 and departs from this shape: the mediaType is `application/vnd.owlette.version.v1+json`; `config` is `{}`, with author, timestamps, totals and `parentVersionId` on the firestore version doc (`sites/{siteId}/roosts/{roostId}/versions/{versionId}`); a file entry carries only `path`, `size` and `chunks`; `files` must be non-empty; the version id is the sha-256 of the body's sorted-key json, not a ulid; the roost doc's pointer fields are `currentVersionId`, `previousVersionId` and `versionUrl`; and `POST /api/roosts/{roostId}/versions` checks shape and chunk presence at finalize, while the agent's `sync_version.py` enforces paths and sizes. where the two differ, the code is the reference: `web/lib/chunking.ts`, `web/app/api/roosts/[roostId]/versions/route.ts`, `agent/src/sync_version.py`.
+
 > the manifest is the **authoritative file list** for an upload. every chunk reference here is what the agent will fetch, verify, and assemble. nothing else in the system is allowed to disagree with the manifest — if firestore and the manifest conflict, the manifest wins.
 
 ---

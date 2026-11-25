@@ -1,38 +1,36 @@
 /**
- * Sites — delete as the role a real self-serve customer actually has.
+ * sites — delete as the role a real self-serve customer has.
  *
- * Every signup is born `role: 'member'` (`lib/actions/bootstrapUser.server.ts`) and
- * `POST /api/sites` has no capability gate, so the person who creates a site is a
- * member who owns it. The global role holds no site-scoped capability, so
- * authorization has to come from ownership.
+ * every signup is born a global `member` (`lib/actions/bootstrapUser.server.ts`) and
+ * `POST /api/sites` has no capability gate, so whoever creates a site is a member who
+ * owns it. SITE_DELETE sits on the `owner` row of `SiteRoleCapabilityMatrix` and
+ * nowhere else, so only the member row can grant it. `delete-site.spec.ts` cannot
+ * catch a break here: it runs as a superadmin, for whom `hasCapability` answers before
+ * the site is considered. an owner's delete failed on production that way on 2026-09-04.
  *
- * Since wave 5.1 that is a plain matrix lookup: SITE_DELETE sits on the `owner`
- * row of `SiteRoleCapabilityMatrix` and nowhere else, resolved from
- * `sites/{siteId}/members/{uid}`. It used to be an ownership SHORT-CIRCUIT that
- * read `sites/{id}.owner` and bypassed the matrix; without it, deletion failed
- * with "capability not granted" (reported on production by Davor, 2026-09-04).
- * `delete-site.spec.ts` could never catch that: it runs `roleState('superadmin')`,
- * and superadmin returns true from `hasCapability` before the site is considered.
- *
- * The second test is the negative control, and wave 6.4 changed what it asserts.
- * The delete control is now gated on the same predicate the server uses, so a
- * member of a site they do not own is never OFFERED the action — previously it
- * rendered for everyone and answered with a refusal toast.
+ * the member owns `site-owned-by-member` and only belongs to `Site A (Assigned)`, so
+ * deleting the owned site leaves them administering nothing. the page then sends them
+ * to /dashboard, because /admin/sites would turn them away, and the admin panel lets
+ * them go without an access denied.
  */
 
-import { test, expect } from '@playwright/test';
-import { FieldValue } from 'firebase-admin/firestore';
+import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite, TEST_USERS } from '../../helpers/seed';
+import { grantMembership, releaseFixtureSite, seedSite, TEST_USERS } from '../../helpers/seed';
 
 test.use(roleState('member'));
 
 const MEMBER_UID = TEST_USERS.member.uid;
 const OWNED_SITE_ID = 'site-owned-by-member';
 const OWNED_SITE_NAME = 'Member Owned Site';
-/** Seeded baseline site: assigned to the member, owned by someone else. */
+/** seeded baseline site: the member belongs to it, someone else owns it. */
 const ASSIGNED_SITE_NAME = 'Site A (Assigned)';
+
+/** a sonner toast, so page copy with the same words can't match. */
+function toast(page: Page, title: string) {
+  return page.locator('[data-sonner-toast]').filter({ hasText: title });
+}
 
 test.beforeEach(async () => {
   await seedSite({
@@ -41,74 +39,54 @@ test.beforeEach(async () => {
     owner: MEMBER_UID,
     timezone: 'UTC',
   });
-  // Membership as well as ownership: `useSites` lists from `users/{uid}.sites[]`,
-  // so an owned-but-unlisted site never reaches the dialog to be clicked.
-  await getAdminDb()
-    .collection('users')
-    .doc(MEMBER_UID)
-    .update({ sites: FieldValue.arrayUnion(OWNED_SITE_ID) });
+  await grantMembership(OWNED_SITE_ID, MEMBER_UID, 'owner');
 });
 
 test.afterEach(async () => {
-  // Restore the shared baseline — later specs assert against the member's own sites.
-  await getAdminDb()
-    .collection('users')
-    .doc(MEMBER_UID)
-    .update({ sites: FieldValue.arrayRemove(OWNED_SITE_ID) });
-  await getAdminDb().collection('sites').doc(OWNED_SITE_ID).delete();
+  // the member row as well as the site: a row that outlives its site still counts as administering it
+  await releaseFixtureSite(OWNED_SITE_ID, MEMBER_UID);
 });
 
-async function openManageSitesDialog(page: import('@playwright/test').Page) {
-  await page.goto('/dashboard');
-  await page.getByTestId('site-switcher-trigger').click();
-  await page.getByRole('menuitem', { name: /manage sites/i }).click();
-  const dialog = page.getByRole('dialog', { name: /manage sites/i });
-  await expect(dialog).toBeVisible();
-  return dialog;
-}
+test('the sites page has a gear on the site they own and none on one they only belong to', async ({
+  page,
+}) => {
+  await page.goto('/admin/sites');
+  const list = page.getByRole('list', { name: 'sites' });
 
-async function confirmDeleteOf(page: import('@playwright/test').Page, siteName: string) {
-  const manageDialog = await openManageSitesDialog(page);
-  await manageDialog.getByRole('button', { name: `delete ${siteName}` }).click();
+  await expect(
+    list.getByRole('link', { name: `settings for ${OWNED_SITE_NAME}`, exact: true })
+  ).toBeVisible();
+  await expect(list.getByText(ASSIGNED_SITE_NAME, { exact: true })).toBeVisible();
+  await expect(
+    list.getByRole('link', { name: `settings for ${ASSIGNED_SITE_NAME}`, exact: true })
+  ).toHaveCount(0);
+});
 
-  // Scope by title: the manage-sites dialog is still open behind this one.
-  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/i });
-  await expect(confirmDialog).toBeVisible();
-  await expect(confirmDialog).toContainText(siteName);
+test('deleting the only site a member administers lands them on the dashboard', async ({ page }) => {
+  await page.goto(`/admin/sites/${OWNED_SITE_ID}?section=danger`);
+  await page.getByRole('button', { name: 'delete site', exact: true }).click();
 
-  // Exact match: the "delete {site name}" row buttons behind would match the substring.
+  const confirmDialog = page.getByRole('dialog', { name: /^delete site$/ });
+  await expect(confirmDialog).toContainText(OWNED_SITE_NAME);
   await confirmDialog.getByRole('button', { name: 'delete site', exact: true }).click();
-}
 
-test('a member can delete a site they own', async ({ page }) => {
-  await confirmDeleteOf(page, OWNED_SITE_NAME);
-
-  await expect(page.getByText(/deleted successfully/i)).toBeVisible();
+  await expect(toast(page, 'site deleted')).toBeVisible();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  // toasts drain one at a time, so a refusal fired on the way out would still be here
+  await expect(toast(page, 'access denied')).toHaveCount(0);
 
   const snap = await getAdminDb().collection('sites').doc(OWNED_SITE_ID).get();
   expect(snap.exists).toBe(false);
 });
 
-test('a member is offered neither delete nor edit on a site they only belong to', async ({ page }) => {
-  const manageDialog = await openManageSitesDialog(page);
+test('a member is refused the settings of a site they only belong to', async ({ page }) => {
+  await page.goto('/admin/sites/site-A');
 
-  // Owned: both controls, because owner sits above admin in the matrix.
   await expect(
-    manageDialog.getByRole('button', { name: `delete ${OWNED_SITE_NAME}` })
+    page.getByText(
+      `you're a member of ${ASSIGNED_SITE_NAME}. ask its owner or an admin to change its settings.`,
+      { exact: true }
+    )
   ).toBeVisible();
-  await expect(
-    manageDialog.getByRole('button', { name: `edit ${OWNED_SITE_NAME}` })
-  ).toBeVisible();
-
-  // Merely a member: neither. Delete is owner-only (SITE_DELETE) and rename is
-  // site-admin (SITE_MEMBER_MANAGE); both would be refused server-side.
-  await expect(
-    manageDialog.getByRole('button', { name: `delete ${ASSIGNED_SITE_NAME}` })
-  ).toHaveCount(0);
-  await expect(
-    manageDialog.getByRole('button', { name: `edit ${ASSIGNED_SITE_NAME}` })
-  ).toHaveCount(0);
-
-  const snap = await getAdminDb().collection('sites').doc('site-A').get();
-  expect(snap.exists).toBe(true);
+  await expect(page.getByRole('group', { name: 'site settings sections' })).toHaveCount(0);
 });

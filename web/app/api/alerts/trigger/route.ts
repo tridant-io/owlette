@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
 import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS, SEVERITY_COLORS, METRIC_LABELS, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
@@ -8,7 +8,7 @@ import { fireWebhooks } from '@/lib/webhookSender.server';
 import { tapTalonMatcher } from '@/lib/talons/matcher.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
-import { hootInternalSecret } from '@/lib/hootInternalSecret';
+import { hootInternalSecretMatches } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
 
 /**
@@ -23,10 +23,7 @@ import { sanitizeForLog } from '@/lib/logSanitize';
  */
 export async function POST(request: NextRequest) {
   try {
-    const secret = request.headers.get('x-internal-secret');
-    const expectedSecret = hootInternalSecret();
-
-    if (!expectedSecret || secret !== expectedSecret) {
+    if (!hootInternalSecretMatches(request.headers.get('x-internal-secret'))) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -67,8 +64,8 @@ export async function POST(request: NextRequest) {
           const subject = safeEmailSubject(`[${severityLabel}] ${ruleName} — ${machineId}`);
 
           for (const recipient of recipients) {
-            // Skip if user has muted this machine
-            if (recipient.mutedMachines.includes(machineId)) continue;
+            // Skip if user has muted this machine or their machine scope does not reach it
+            if (!recipientWantsMachine(recipient, machineId)) continue;
 
             try {
               const unsubscribeUrl = recipient.userId !== 'fallback'

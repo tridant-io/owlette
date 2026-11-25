@@ -10,6 +10,7 @@ import {
 } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
+  mfaChallengeProblem,
   problem,
   problemFromError,
   problemTokenExpired,
@@ -19,7 +20,9 @@ import {
 } from '@/lib/apiErrors';
 import {
   assertScopesGrantable,
+  INVALID_MAX_TOOL_TIER,
   MAX_NAME_LENGTH,
+  requireVerifiedSessionForToolTier,
   validateScopes,
 } from './_shared';
 import {
@@ -27,6 +30,8 @@ import {
   type ApiKeyRecord,
   type ApiKeyListItem,
   buildApiKeyListItem,
+  DEFAULT_MAX_TOOL_TIER,
+  isToolTier,
   MINTED_API_KEY_ENVIRONMENT,
   DEFAULT_TTL_DAYS,
   MAX_TTL_DAYS,
@@ -37,12 +42,14 @@ interface CreateKeyBody {
   scopes?: unknown;
   ttlDays?: unknown;
   environment?: unknown;
+  maxToolTier?: unknown;
 }
 
 /**
  * POST /api/keys — create a scoped API key.
  * Body: `{ name, scopes: [{resource, id, permissions[]}], ttlDays? (1-365,
- * default 90), environment? (ignored — every key is minted 'live') }`.
+ * default 90), environment? (ignored — every key is minted 'live'), maxToolTier?
+ * (1-3, default 1; above 1 needs a verified session) }`.
  * Returns the raw key ONCE; only its SHA-256 hash is stored.
  */
 export const POST = withRateLimit(
@@ -84,6 +91,15 @@ export const POST = withRateLimit(
       }
       const ttlDays = rawTtl;
 
+      const maxToolTier = body.maxToolTier === undefined ? DEFAULT_MAX_TOOL_TIER : body.maxToolTier;
+      if (!isToolTier(maxToolTier)) {
+        return problemValidation(INVALID_MAX_TOOL_TIER);
+      }
+      if (maxToolTier > DEFAULT_MAX_TOOL_TIER) {
+        const unverified = await requireVerifiedSessionForToolTier(request, userId);
+        if (unverified) return unverified;
+      }
+
       // `body.environment` is ignored, not rejected: the shipped CLI and both
       // SDKs still send it, and 400-ing would break them over a no-op field.
       const environment = MINTED_API_KEY_ENVIRONMENT;
@@ -108,6 +124,7 @@ export const POST = withRateLimit(
         keyPrefix,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
         createdAt: FieldValue.serverTimestamp(),
         lastUsedAt: null,
@@ -127,6 +144,7 @@ export const POST = withRateLimit(
         keyId,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
       };
       batch.set(db.collection('api_keys').doc(keyHash), lookup);
@@ -145,6 +163,7 @@ export const POST = withRateLimit(
           environment,
           keyPrefix,
           scopeCount: scopes.length,
+          maxToolTier,
           ttlDays,
         },
       });
@@ -156,11 +175,14 @@ export const POST = withRateLimit(
         name,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
         keyPrefix,
       });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
+        const refused = mfaChallengeProblem(error);
+        if (refused) return refused;
         if (error.code === 'token_expired') {
           const expiredAt =
             typeof error.details?.expiredAt === 'number' ? error.details.expiredAt : undefined;
@@ -214,6 +236,8 @@ export const GET = withRateLimit(
       return NextResponse.json({ success: true, keys });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
+        const refused = mfaChallengeProblem(error);
+        if (refused) return refused;
         if (error.code === 'token_expired') {
           const expiredAt =
             typeof error.details?.expiredAt === 'number' ? error.details.expiredAt : undefined;

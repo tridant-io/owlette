@@ -29,6 +29,7 @@ import {
   type Subscription,
   type WebhookPayload,
 } from './lib/webhookLogic';
+import { validateWebhookUrl } from './lib/webhookUrl';
 
 export interface DeliveryRecord {
   /** Stable id — also the firestore doc id. */
@@ -145,15 +146,23 @@ export async function attemptDelivery(
   const freshSignature = signPayload(record.canonicalBody, record.secret, now.getTime());
   const headers = { ...record.headers, 'Roost-Signature': freshSignature };
 
+  // checked at send, not only at save: the address behind a saved url can change
+  const urlCheck = await validateWebhookUrl(record.url);
   let status: number | null = null;
-  try {
-    const resp = await deps.http.post(record.url, headers, record.canonicalBody);
-    status = resp.status;
-  } catch {
-    status = null; // network error
+  if (urlCheck.ok) {
+    try {
+      const resp = await deps.http.post(urlCheck.url, headers, record.canonicalBody);
+      status = resp.status;
+    } catch {
+      status = null; // network error
+    }
   }
 
-  const outcome = classifyResponse(status);
+  // a lookup that failed is retried like any network error; any other refusal is final
+  const outcome: DeliveryOutcome =
+    urlCheck.ok || urlCheck.reason === 'dns_resolve_failed'
+      ? classifyResponse(status)
+      : { kind: 'permanent_failure', reason: `url_refused_${urlCheck.reason}` };
 
   if (outcome.kind === 'success') {
     const updated: DeliveryRecord = {
@@ -315,7 +324,7 @@ export const processRetryQueue = onSchedule(
   },
 );
 
-function getDefaultHttpClient(): HttpClient {
+export function getDefaultHttpClient(): HttpClient {
   return {
     async post(url, headers, body) {
       try {
@@ -323,6 +332,7 @@ function getDefaultHttpClient(): HttpClient {
           method: 'POST',
           headers,
           body,
+          redirect: 'manual',
           // receivers must respond within 10s
           signal: AbortSignal.timeout(10_000),
         });

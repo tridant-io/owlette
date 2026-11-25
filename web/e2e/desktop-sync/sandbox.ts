@@ -268,8 +268,16 @@ export function clearSession(): void {
   fs.rmSync(SESSION_FILE, { force: true })
 }
 
-/** Remove the scratch tree. Guarded — this is a recursive delete. */
-export function removeSandbox(programData: string): void {
-  assertSandboxSafe(programData)
-  fs.rmSync(programData, { recursive: true, force: true })
+/**
+ * remove a scratch tree. guarded — this is a recursive delete, which
+ * OWLETTE_E2E_KEEP_SCRATCH turns off for a run where none is allowed.
+ */
+export function removeSandbox(tree: string): void {
+  assertSandboxSafe(tree)
+  if (process.env.OWLETTE_E2E_KEEP_SCRATCH) {
+    console.log(`[desktop-sync] scratch tree kept: ${tree}`)
+    return
+  }
+  console.log(`[desktop-sync] removing scratch tree: ${tree}`)
+  fs.rmSync(tree, { recursive: true, force: true })
 }

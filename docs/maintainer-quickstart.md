@@ -1,16 +1,17 @@
 # maintainer quickstart
 
-This is the canonical first-time path for an engineer cloning Owlette to develop or self-host it; use [README.md](../README.md) for the product overview. It links to the existing setup and operations docs instead of duplicating their deeper procedures. AI-agent operating notes live in [.claude/CLAUDE.md](../.claude/CLAUDE.md) and [agent/CLAUDE.md](../agent/CLAUDE.md), but those are not a replacement for this human onboarding path.
+This is the canonical first-time path for an engineer cloning Owlette to develop or self-host it; use [README.md](../README.md) for the product overview. It links to the existing setup and operations docs instead of duplicating their deeper procedures. Claude Code's operating rules live in [.claude/CLAUDE.md](../.claude/CLAUDE.md) and the settled decisions in [docs/adr/](adr/); neither replaces this human onboarding path. [agent/CLAUDE.md](../agent/CLAUDE.md) is local hoot's runtime prompt, not coding guidance.
 
 ## prerequisites
 
 | tool | version | required for | doc reference |
 |------|---------|--------------|---------------|
-| Windows 10/11 64-bit | — | agent dev/build, installer | not portable to Mac/Linux yet |
+| Windows 10/11 64-bit | — | the Windows agent build and installer | the macOS `.pkg` and Linux `.deb` build on their own OS: see [agent/README.md](../agent/README.md) |
 | Node.js | 22.x (see [/.nvmrc](../.nvmrc)) | web, desktop, functions, cli, sdks | [package.json engines field](../package.json) |
 | npm | >=10.0.0 | all js packages | [package.json](../package.json) |
 | Python | 3.11 | agent venv + tests, SDK dev (SDK requires >=3.10). The installer build downloads its own embedded 3.11.8 | [scripts/bootstrap-windows.ps1](../scripts/bootstrap-windows.ps1), [sdks/python/pyproject.toml](../sdks/python/pyproject.toml) |
-| Rust (rustup) + MSVC C++ build tools + WebView2 | stable | desktop app (`desktop/`) and the `owlette-host` service host (`agent/host`), both compiled by the full installer build | [desktop/README.md](../desktop/README.md) |
+| Rust (rustup) + MSVC C++ build tools + WebView2 | stable | the desktop app and owlette swoop (`desktop/`), the `owlette-host` service host (`agent/host`) and the streamer (`agent/swoop`), all compiled by the full installer build | [desktop/README.md](../desktop/README.md) |
+| CMake | any (the copy inside Visual Studio is found on its own) | the streamer's vendored opus; the full installer build stops without it | [agent/build_installer_full.bat](../agent/build_installer_full.bat) |
 | JDK 21 (Temurin) | 21.x | Firebase emulators in rules tests and e2e | [web/e2e/README.md](../web/e2e/README.md) |
 | firebase-tools | 15.x (global) | emulators + rules/functions deploy (13.x cannot run the functions emulator) | [web/e2e/README.md](../web/e2e/README.md) |
 | Inno Setup | 6.x | installer build | [agent/build_installer_full.bat](../agent/build_installer_full.bat) (set `%ISCC%`, put `iscc` on PATH, or use the default install path) |
@@ -48,10 +49,8 @@ None of these are committed. Create the ones for the work you are doing; files w
 | `web/.env.local` | `web/.env.example` | web dev server — Firebase creds from [setup/firebase.mdx](../web/content/docs/setup/firebase.mdx); the full key registry is [scripts/env-manifest.json](../scripts/env-manifest.json) |
 | `.claude/.env.local` | `.claude/.env.example` | Owlette API calls and installer uploads. The example only lists `OWLETTE_API_KEY`; also set `OWLETTE_API_KEY_PROD` (installer-scoped), `OWLETTE_DEV_API_URL`, `OWLETTE_PROD_API_URL`, and for R2 provisioning `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_R2_API_TOKEN` |
 | `functions/.env.<projectId>` — one per project in [.firebaserc](../.firebaserc) (`owlette-dev-3838a`, `owlette-prod-90a12`) | `functions/.env.example` | Cloud Functions deploys. A missing file still deploys "successfully" with the functions silently broken — see [manual-infrastructure.md](runbooks/manual-infrastructure.md) |
-| `test/integration/.env.test` | `test/integration/.env.test.example` | integration tests |
 | `scripts/.env.local` | none | `scripts/upload-cortex-cli.mjs` and `scripts/migrations/audit-legacy-api-keys.mjs`: `FIREBASE_PROJECT_ID_{DEV,PROD}`, `FIREBASE_CLIENT_EMAIL_{DEV,PROD}`, `FIREBASE_PRIVATE_KEY_{DEV,PROD}` (falls back to the unsuffixed trio in `web/.env.local`) |
-| `.claude/.env.tridant` | none | `scripts/dev/rotate-tridant-env.sh` and `rotate-functions-env.sh`: `R2_S3_ENDPOINT`, `R2_APP_S3_ACCESS_KEY_ID`, `R2_APP_S3_SECRET_ACCESS_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY_TRIDANT`, `TURNSTILE_SECRET_TRIDANT` |
-| `infra/cloudflare/terraform.tfvars` | `infra/cloudflare/terraform.tfvars.example` | Cloudflare load balancer — see [.claude/skills/cf-load-balancing.md](../.claude/skills/cf-load-balancing.md) |
+| `infra/cloudflare/terraform.tfvars` | `infra/cloudflare/terraform.tfvars.example` | Cloudflare load balancer — see [.claude/skills/cf-load-balancing/SKILL.md](../.claude/skills/cf-load-balancing/SKILL.md) |
 | `dev/video-tutorials/voiceover/.env` | `.env.example` in that folder | tutorial voiceover generation only |
 
 ## step 3: CLI logins
@@ -62,7 +61,7 @@ Only needed for the operations named; day-to-day dev needs none beyond `gh`.
 |-----|---------------------|----------|
 | `gh` | `gh auth login` | `/preflight` security-alert gate (`scripts/check-security-alerts.mjs`), watching CI runs |
 | `firebase` | `firebase login` | rules, indexes, and functions deploys ([setup/firebase.mdx](../web/content/docs/setup/firebase.mdx)); the local emulators need no login |
-| `railway` | `railway login` | `scripts/sync-env.mjs` and the rotation scripts ([.claude/skills/env-management.md](../.claude/skills/env-management.md)) |
+| `railway` | `railway login` | `scripts/sync-env.mjs` ([.claude/skills/env-management/SKILL.md](../.claude/skills/env-management/SKILL.md)) |
 | `vercel` | `vercel login`, then `vercel link` in `web/` | `scripts/sync-env.mjs` against the Vercel failover project |
 | `gcloud` | `gcloud auth login` | one-time infrastructure bootstrap in [manual-infrastructure.md](runbooks/manual-infrastructure.md) |
 | `terraform` | no login — export `CLOUDFLARE_API_TOKEN` in the shell (never in a file) | `infra/cloudflare` |
@@ -101,7 +100,7 @@ Run the checks for what you changed:
 
 ## week-1: ship a new installer
 
-Treat [docs/internal/version-management.md](internal/version-management.md) and [docs/changelog.md](changelog.md) as authoritative for releases and release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust for the desktop app and `owlette-host`. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
+The release recipe is [agent-installer-release.md](runbooks/agent-installer-release.md), [docs/internal/version-management.md](internal/version-management.md) says what a version bump writes, and [docs/changelog.md](changelog.md) is the release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust and CMake for the desktop apps, `owlette-host` and the streamer. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
 
 ## credentials bootstrap order
 
@@ -111,15 +110,15 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 4. Cloudflare R2 → run `/scripts/provision-r2.mjs` (buckets + CORS), mint the S3 access keys in the Cloudflare dashboard, and configure the env vars
 5. Cloud Functions secrets → `functions/.env.<projectId>` per [manual-infrastructure.md](runbooks/manual-infrastructure.md)
 6. npm publishing needs no token — `cli-publish.yml` and `node-sdk-publish.yml` use npm OIDC trusted publishing
-7. Agent installer code signing — not in place; installers ship unsigned with SmartScreen warnings (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
+7. Windows installer signing — Azure Artifact Signing on a local build with `OWLETTE_SIGN=1` and on CI's tagged builds; `scripts/setup-ci-signing.sh` sets up the CI side (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
 
 ## machine-bound state — do not copy across machines
 
-> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key, which rides the same cipher and migrates with it.
+> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to local hoot's LLM key, which rides the same cipher and migrates with it.
 
 ## known portability gaps (open work)
 
-- Code signing is deferred as a business decision ([runbooks/index.md](runbooks/index.md))
+- Local Windows signing needs the machine setup in [agent-installer-release.md](runbooks/agent-installer-release.md)
 - See [docs/changelog.md](changelog.md) for completed portability fixes
 
 ## runbooks
@@ -142,4 +141,3 @@ For specific operational procedures, see the dedicated runbooks:
 - [web/e2e/README.md](../web/e2e/README.md)
 - [docs/internal/version-management.md](internal/version-management.md)
 - GUI automation machine setup (internal, unpublished): [docs/internal/gui-automation-machine-setup.md](internal/gui-automation-machine-setup.md) — provisioning a Windows box for native GUI automation (video capture + the full-machine e2e gate); executable form: `scripts/bootstrap-gui-automation.ps1`
-- Full-machine e2e harness (install→pair→GUI→uninstall release gate): [e2e-machine/README.md](../e2e-machine/README.md) — setting up e2e testing on a new computer; Wave 0 auth spike is runnable today

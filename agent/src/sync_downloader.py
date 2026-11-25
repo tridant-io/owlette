@@ -45,6 +45,7 @@ import requests
 import threading as _threading_for_lock  # alias to avoid shadowing param `threading.Event`
 
 import shared_utils
+from installer_utils import redact_query_strings
 from sync_state import SyncState
 
 logger = logging.getLogger(__name__)
@@ -415,10 +416,10 @@ def _download_one(
             return
 
         except requests.RequestException as e:
-            last_err = e
+            last_err = ChunkDownloadError(redact_query_strings(e))
             logger.warning(
                 f"sync_downloader: {chunk_hash[:12]}… attempt {attempt}/{retry_budget} "
-                f"network error: {e}"
+                f"network error: {last_err}"
             )
             _backoff(attempt)
         except OSError as e:

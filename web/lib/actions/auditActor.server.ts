@@ -14,3 +14,11 @@ export function siteAuditActor(ctx: SiteHandlerContext): string {
     ? `apiKey:${ctx.auth.keyContext.keyId}`
     : `user:${ctx.actor.userId}`;
 }
+
+/**
+ * a granted machine acting through the fleet routes (ADR 0017). no
+ * SiteHandlerContext ever carries one, so the fleet code builds its string here.
+ */
+export function machineAuditActor(machineId: string): string {
+  return `machine:${machineId}`;
+}

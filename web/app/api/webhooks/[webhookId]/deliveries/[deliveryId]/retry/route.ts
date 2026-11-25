@@ -9,7 +9,7 @@
  * identical to the original so receivers that dedup on it see the same event, and
  * `attempt: 0` gives the retry a full backoff budget even if the original exhausted its.
  *
- * Scope: site:<id>:write. roost public api wave 6.7.
+ * Scope: site:<id>:write, plus WEBHOOK_MANAGE. roost public api wave 6.7.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -35,6 +35,7 @@ import {
   auditActorIdentifier,
   applyAuthDeprecations,
   requireSiteAuthAndScope,
+  requireWebhookManageCapability,
   validateSiteIdBody,
 } from '../../../../../_shared';
 
@@ -73,6 +74,9 @@ export async function POST(
 
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'write');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
 
     const rawBody = await request.text().catch(() => '');
     const idem = await checkIdempotency(

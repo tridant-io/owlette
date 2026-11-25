@@ -58,6 +58,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     role: 'admin',
     isSuperadmin: false,
     isSiteAdmin: () => true,
+    machineScope: () => null,
     userSites: ['site-a'],
     lastSiteId: 'site-a',
     lastMachineIds: {},
@@ -188,16 +189,6 @@ jest.mock('@/components/ConfirmDialog', () => ({
 
 jest.mock('@/components/MinimizedUploadCard', () => ({
   MinimizedUploadCard: () => <div data-testid="minimized-upload-card" />,
-}));
-
-jest.mock('@/components/ManageSitesDialog', () => ({
-  ManageSitesDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="manage-sites-dialog" /> : null,
-}));
-
-jest.mock('@/components/CreateSiteDialog', () => ({
-  CreateSiteDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="create-site-dialog" /> : null,
 }));
 
 jest.mock('@/components/AccountSettingsDialog', () => ({

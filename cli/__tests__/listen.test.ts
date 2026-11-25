@@ -1,7 +1,76 @@
-import { _internals } from '../src/commands/listen';
+import { Command } from 'commander';
+import { _internals, registerListenCommand } from '../src/commands/listen';
+import { _resetConfigCache } from '../src/config';
 import { createHmac } from 'crypto';
 
 const { parseSseBlock, buildForwardHeaders } = _internals;
+
+describe('owlette listen', () => {
+  let originalFetch: typeof global.fetch;
+  let sigintBefore: NodeJS.SignalsListener[];
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    sigintBefore = process.listeners('SIGINT') as NodeJS.SignalsListener[];
+    _resetConfigCache();
+    process.env.OWLETTE_TOKEN = 'owk_live_testtoken';
+    process.env.OWLETTE_API_URL = 'https://dev.test';
+    process.env.OWLETTE_PROFILE = 'default';
+    process.exitCode = 0;
+    jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    for (const listener of process.listeners('SIGINT')) {
+      if (!sigintBefore.includes(listener as NodeJS.SignalsListener)) process.off('SIGINT', listener);
+    }
+    delete process.env.OWLETTE_TOKEN;
+    delete process.env.OWLETTE_API_URL;
+    delete process.env.OWLETTE_PROFILE;
+    process.exitCode = 0;
+    jest.restoreAllMocks();
+  });
+
+  it('sends the key only in the Authorization header, and forwards what the stream carries', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'event: connected\ndata: {}\n\nevent: closing\ndata: {"reason":"max_duration_reached"}\n\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    global.fetch = jest.fn(async (url: string, init: RequestInit = {}) => {
+      calls.push({ url, init });
+      return calls.length === 1
+        ? ({ ok: true, status: 200, headers: new Headers(), body: stream } as Response)
+        : ({ ok: true, status: 204, headers: new Headers() } as Response);
+    }) as unknown as typeof global.fetch;
+
+    const program = new Command();
+    program.name('owlette').exitOverride().option('--profile <name>');
+    registerListenCommand(program);
+    await program.parseAsync(
+      ['listen', '--site', 'site-1', '--forward-to', 'http://localhost:3999/hook'],
+      { from: 'user' },
+    );
+
+    const streamUrl = new URL(calls[0]!.url);
+    expect(streamUrl.origin + streamUrl.pathname).toBe('https://dev.test/api/events/stream');
+    expect(streamUrl.searchParams.get('siteId')).toBe('site-1');
+    expect(calls[0]!.url).not.toContain('owk_');
+    expect([...streamUrl.searchParams.keys()]).toEqual(['siteId']);
+    expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+      'Bearer owk_live_testtoken',
+    );
+    expect(calls[1]!.url).toBe('http://localhost:3999/hook');
+    expect((calls[1]!.init.headers as Record<string, string>)['Roost-Event']).toBe('closing');
+  });
+});
 
 describe('parseSseBlock', () => {
   it('parses a canonical event+data pair', () => {

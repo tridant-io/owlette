@@ -50,8 +50,9 @@ export class SystemPresetValidationError extends Error {
   }
 }
 
+// capped so the preset id stays inside the 128 characters update and delete accept
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 64).replace(/^-+|-+$/g, '');
 }
 
 /**

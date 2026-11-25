@@ -38,7 +38,7 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSession: (...a: unknown[]) => mockRequireSession(...a),
+    requirePreMfaSession: (...a: unknown[]) => mockRequireSession(...a),
   };
 });
 
@@ -145,11 +145,20 @@ describe('GET /api/mfa/factors', () => {
 
   it('reports whether this session has already cleared a challenge', async () => {
     mockAssertActiveUser.mockResolvedValue({ mfaFactors: { totp: true, passkeys: 0 } });
-    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaRequired: true, mfaVerified: true });
 
     const body = await (await GET(createMockRequest('/api/mfa/factors'))).json();
 
     expect(body.mfaVerified).toBe(true);
+  });
+
+  it('agrees with the gate about a sign-in from before the account held a factor', async () => {
+    mockAssertActiveUser.mockResolvedValue({ mfaFactors: { totp: true, passkeys: 0 } });
+    mockGetSessionData.mockResolvedValue({ userId: USER_ID, mfaRequired: false, mfaVerified: true });
+
+    const body = await (await GET(createMockRequest('/api/mfa/factors'))).json();
+
+    expect(body.mfaVerified).toBe(false);
   });
 
   it('reports a zero-factor account as zero rather than erroring', async () => {

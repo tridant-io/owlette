@@ -585,7 +585,11 @@ describe('channel messages', () => {
       reason: 'clipboard_too_large',
     });
     // an image gets the larger cap, and a single chunk still cannot exceed 16 KiB
-    expect(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 2 * 1024 * 1024 }), { ctl: true }).ok).toBe(true);
+    expect(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 15 * 1024 * 1024 }), { ctl: true }).ok).toBe(true);
+    expect(verdict(decodeControlMessage(JSON.stringify({ ...base, fmt: 'png', totalBytes: 15 * 1024 * 1024 + 1 }), { ctl: true }))).toEqual({
+      expect: 'reject',
+      reason: 'clipboard_too_large',
+    });
     const fatChunk = { ...base, totalBytes: 100, data: Buffer.alloc(17 * 1024, 0x41).toString('base64') };
     expect(verdict(decodeControlMessage(JSON.stringify(fatChunk), { ctl: true }))).toEqual({
       expect: 'reject',
@@ -601,6 +605,30 @@ describe('channel messages', () => {
     });
   });
 
+  it('a cursor shape upload carries its scale, absent meaning as captured, and never below one', () => {
+    const upload = { t: 'cshape', id: 7, hotX: 1, hotY: 2, w: 32, h: 32, png: 'AA==' };
+    const plain = decodeCursorMessage(JSON.stringify(upload));
+    expect(plain.ok && plain.value.t === 'cshape' && plain.value.scale).toBeUndefined();
+    const shrunk = decodeCursorMessage(JSON.stringify({ ...upload, scale: 2 }));
+    expect(shrunk.ok && shrunk.value.t === 'cshape' && shrunk.value.scale).toBe(2);
+    expect(verdict(decodeCursorMessage(JSON.stringify({ ...upload, scale: 0 })))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
+  it('a cursor shape upload names the dpi it was drawn at, absent from an older host, and never zero', () => {
+    const upload = { t: 'cshape', id: 8, hotX: 10, hotY: 10, w: 56, h: 80, png: 'AA==' };
+    const older = decodeCursorMessage(JSON.stringify(upload));
+    expect(older.ok && older.value.t === 'cshape' && older.value.dpi).toBeUndefined();
+    const retina = decodeCursorMessage(JSON.stringify({ ...upload, dpi: 192 }));
+    expect(retina.ok && retina.value.t === 'cshape' && retina.value.dpi).toBe(192);
+    expect(verdict(decodeCursorMessage(JSON.stringify({ ...upload, dpi: 0 })))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
   it('never throws on junk', () => {
     for (const decode of [decodeInputMessage, decodeCursorMessage, decodeControlMessage, decodeFeedbackMessage]) {
       expect(decode('not json').ok).toBe(false);
@@ -608,6 +636,24 @@ describe('channel messages', () => {
       expect(decode('[]').ok).toBe(false);
       expect(decode('null').ok).toBe(false);
     }
+  });
+});
+
+describe('the pipe', () => {
+  it('a kill names the service’s own stop, and nothing else', () => {
+    const stop = decodePipeControl('{"type":"kill","sid":"sid_1","reason":"service_stop"}');
+    expect(stop.ok && stop.value).toEqual({ type: 'kill', sid: 'sid_1', reason: 'service_stop' });
+    // a reason this build does not know refuses the line rather than reading
+    // as somebody's decision.
+    expect(verdict(decodePipeControl('{"type":"kill","reason":"session_change"}'))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
+  it('a viewer let go for a restart says so', () => {
+    const left = decodePipeEvent('{"type":"viewer_left","sid":"sid_1","viewer":"viewer_1","reason":"restart"}');
+    expect(left.ok && left.value).toEqual({ type: 'viewer_left', sid: 'sid_1', viewer: 'viewer_1', reason: 'restart' });
   });
 });
 
@@ -639,5 +685,16 @@ describe('the bundle is refused rather than repaired', () => {
     for (const secret of ['FAKE.HOST.TOKEN', 'FAKE-TURN-CREDENTIAL', 'WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo']) {
       expect(rendered).not.toContain(secret);
     }
+  });
+});
+
+describe('hello-host clipboardReads', () => {
+  const hello = { t: 'hello-host', codec: 'h264', width: 1, height: 1, displays: [], streamerEpoch: 0, protocolVersion: 1 };
+
+  it('takes an older host\'s silence as true, and reads false when the host says so', () => {
+    const silent = decodeControlMessage(JSON.stringify(hello), { ctl: false });
+    expect(silent.ok && silent.value.t === 'hello-host' && silent.value.clipboardReads).toBe(true);
+    const off = decodeControlMessage(JSON.stringify({ ...hello, clipboardReads: false }), { ctl: false });
+    expect(off.ok && off.value.t === 'hello-host' && off.value.clipboardReads).toBe(false);
   });
 });

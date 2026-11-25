@@ -132,6 +132,15 @@ describe('createSystemPreset — firestore write', () => {
     });
   });
 
+  it('mints an id the update and delete actions accept, however long the software name', async () => {
+    const result = await createSystemPreset(
+      { actor },
+      { ...validInput, software_name: 'TouchDesigner Commercial Edition '.repeat(6) },
+    );
+    // the PRESET_ID_RE in updateSystemPreset and deleteSystemPreset
+    expect(result.presetId).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+  });
+
   it('strips undefined optional fields before writing', async () => {
     await createSystemPreset(
       { actor },

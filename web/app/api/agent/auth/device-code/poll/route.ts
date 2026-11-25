@@ -2,37 +2,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
+import { mintAgentIdToken, newRefreshToken } from '@/lib/agentCredentials.server';
 import { apiError } from '@/lib/apiErrorResponse';
+import { emitMutation } from '@/lib/auditLogClient';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
 import { normalizePairPhrase } from '@/lib/pairPhrases';
+import {
+  ensureAgentAuthUser,
+  fleetSenderOnSite,
+  machineLimitRefusal,
+  machineOnSite,
+  recordPairing,
+  sanitizeMachineId,
+} from '@/lib/pairingPlan.server';
 
 const MINT_CLAIM_LEASE_MS = 60_000;
 
-function sanitizeMachineId(value: unknown): { ok: true; machineId: string | null } | { ok: false } {
-  if (value === undefined || value === null) {
-    return { ok: true, machineId: null };
-  }
-
-  if (typeof value !== 'string') {
-    return { ok: false };
-  }
-
-  const machineId = value.trim();
-  if (
-    machineId.length < 1 ||
-    machineId.length > 128 ||
-    machineId.includes('/') ||
-    /[\x00-\x1F]/.test(machineId)
-  ) {
-    return { ok: false };
-  }
-
-  return { ok: true, machineId };
-}
-
 /**
  * POST /api/agent/auth/device-code/poll — agent polls for authorization.
- * 202 pending · 200 authorized · 410 expired · 404 unknown code.
+ * 202 pending · 200 authorized · 402 machine limit `{ error }` (a code refused at
+ * authorize, or a deferred mint the site's plan has no slot for) · 409 `{ error }`
+ * a deferred mint for a machine already on the site that the code neither names nor
+ * allows with `replaceAnyMachine`, which never covers a sender in the site's fleet
+ * grant (the phrase is left unused) · 410 expired · 404 unknown code.
+ *
+ * Audits `site_mutated` / `machine.pair` when a deferred mint issues credentials,
+ * as the user who authorized the code, with `existingMachine` and `replaceAnyMachine`.
+ * The interactive mint is audited at authorize.
  *
  * Body is one of:
  * - deviceCode — interactive flow, preferred; the 200 carries
@@ -156,6 +152,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return { body: { status: 'pending' }, status: 202 } as const;
       }
 
+      if (data.status === 'refused') {
+        return { error: data.refusedReason as string, status: 402 } as const;
+      }
+
       if (data.status === 'authorized') {
         const isV1 =
           data.wrapVersion === DEVICE_CODE_WRAP_VERSION &&
@@ -200,6 +200,19 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             return { body: { status: 'pending' }, status: 202 } as const;
           }
 
+          const existingMachine = await machineOnSite(transaction, data.siteId, machineId);
+          const replaceAnyMachine = data.replaceAnyMachine === true;
+          if (
+            existingMachine &&
+            data.replaceMachineId !== machineId &&
+            (!replaceAnyMachine || (await fleetSenderOnSite(transaction, data.siteId, machineId)))
+          ) {
+            return {
+              error: `${machineId} is already on this site. to reinstall it, generate a code that names it.`,
+              status: 409,
+            } as const;
+          }
+
           transaction.update(docRef, {
             mintMachineId: machineId,
             mintVersion: version,
@@ -210,6 +223,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             siteId: data.siteId as string,
             authorizedBy: data.authorizedBy as string,
             machineId: machineId as string,
+            existingMachine,
+            replaceAnyMachine,
           } as const;
         }
 
@@ -223,6 +238,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
               phrase: docRef.id,
             },
             status: 200,
+            paired: { siteId: data.siteId as string, machineId: data.machineId as string },
           } as const;
         }
 
@@ -244,8 +260,15 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       return { error: 'Invalid device code state', status: 400 } as const;
     });
 
-    if ('claim' in result) {
+    if (result.claim) {
       const claimedMachineId = result.machineId;
+      // the phrase is not consumed and the claim lease just lapses, so the same
+      // phrase works once a machine is removed.
+      const refusal = await machineLimitRefusal(result.siteId, claimedMachineId);
+      if (refusal) {
+        return NextResponse.json({ error: refusal }, { status: 402 });
+      }
+
       const agentUid = `agent_${result.siteId}_${claimedMachineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
       const claims = {
         role: 'agent',
@@ -254,53 +277,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         version,
       };
 
-      const adminAuth = getAdminAuth();
-      const customToken = await adminAuth.createCustomToken(agentUid, claims);
+      await ensureAgentAuthUser(getAdminAuth(), agentUid);
+      const idToken = await mintAgentIdToken(agentUid, claims);
 
-      const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
-      if (!firebaseApiKey) {
-        throw new Error('Firebase API key not configured');
-      }
-
-      const authResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customToken, returnSecureToken: true }),
-        }
-      );
-
-      if (!authResponse.ok) {
-        const errorData = await authResponse.json();
-        throw new Error(`Failed to exchange custom token: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      authResponse.body?.cancel();
-
-      await adminAuth.setCustomUserClaims(agentUid, claims);
-
-      const customTokenWithClaims = await adminAuth.createCustomToken(agentUid, claims);
-      const refreshAuthResponse = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${firebaseApiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: customTokenWithClaims, returnSecureToken: true }),
-        }
-      );
-
-      if (!refreshAuthResponse.ok) {
-        const errorData = await refreshAuthResponse.json();
-        throw new Error(`Failed to refresh token with claims: ${errorData.error?.message || 'Unknown error'}`);
-      }
-
-      const refreshAuthData = await refreshAuthResponse.json();
-      const idToken = refreshAuthData.idToken;
-
-      const crypto = await import('crypto');
-      const refreshToken = crypto.randomBytes(64).toString('base64url');
-      const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
+      const { refreshToken, refreshTokenHash } = newRefreshToken();
       const refreshTokenRef = adminDb.collection('agent_refresh_tokens').doc(refreshTokenHash);
 
       const done = await adminDb.runTransaction(async (transaction) => {
@@ -337,6 +317,25 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return NextResponse.json({ error: 'Invalid pairing phrase' }, { status: 404 });
       }
 
+      emitMutation({
+        kind: 'site_mutated',
+        siteId: result.siteId,
+        actor: `user:${result.authorizedBy}`,
+        targetId: claimedMachineId,
+        attributes: {
+          verb: 'machine.pair',
+          endpoint: '/api/agent/auth/device-code/poll',
+          method: 'POST',
+          siteId: result.siteId,
+          machineId: claimedMachineId,
+          deferredTokenMint: true,
+          existingMachine: result.existingMachine,
+          replaceAnyMachine: result.replaceAnyMachine,
+        },
+      });
+
+      await recordPairing(result.siteId, claimedMachineId);
+
       return NextResponse.json(
         {
           accessToken: idToken,
@@ -353,6 +352,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { error: result.error },
         { status: result.status }
       );
+    }
+
+    // stamped at handover, not at authorize: an authorize after the installer
+    // stopped polling must not leave a machine doc that holds a plan slot.
+    if (result.paired) {
+      await recordPairing(result.paired.siteId, result.paired.machineId);
     }
 
     return NextResponse.json(result.body, { status: result.status });

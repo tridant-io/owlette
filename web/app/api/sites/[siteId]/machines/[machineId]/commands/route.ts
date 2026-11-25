@@ -6,20 +6,25 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import {
-  problem,
-  problemFromError,
-  problemValidation,
-  ProblemType,
-} from '@/lib/apiErrors';
+import { problem, problemFromError, problemValidation, ProblemType } from '@/lib/apiErrors';
+import { commandErrorToProblem, unsupportedCommandType } from '@/lib/machineCommandProblem';
 import { applyAuthDeprecations, readAndParseJsonBody } from '../../../../../_shared';
 import { withIdempotency } from '@/lib/idempotency';
-import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
+import {
+  authorizedSiteHandler,
+  type SiteHandlerContext,
+  type SiteRouteHandler,
+} from '@/lib/authorizedHandler.server';
+import { normalizeMaxToolTier } from '@/lib/apiKeyTypes';
 import { Capability } from '@/lib/capabilities';
+import { callTier, registryValueRefusal } from '@/lib/hoot/launchChange';
+import { toolTierOf } from '@/lib/mcp-tools';
+import { requestSignInCeremony, stepUpReadsOpen } from '@/lib/swoop/stepUp.server';
 import {
   ALLOWED_COMMAND_TYPES,
   executeMachineCommand,
   ExecuteMachineCommandError,
+  parseActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
 
 interface RouteParams {
@@ -38,23 +43,22 @@ const DEFAULT_TIMEOUT_S = 60;
 const MAX_TIMEOUT_S = 600;
 
 type NormalizedCommand =
-  | { ok: true; type: string; payload: Record<string, unknown> }
+  | {
+      ok: true;
+      type: string;
+      payload: Record<string, unknown>;
+      activeHoursOverride?: { reason: string };
+    }
   | { ok: false; response: NextResponse };
+
+/** the types the agent's active-hours guard refuses without an override. */
+const ACTIVE_HOURS_GUARDED_TYPES: ReadonlySet<string> = new Set<string>([
+  'reboot_machine',
+  'shutdown_machine',
+]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function unsupportedCommandType(cmdType: string): NextResponse {
-  return problem({
-    type: ProblemType.ValidationFailed,
-    title: 'unsupported command type',
-    status: 400,
-    detail:
-      `command type '${cmdType}' is not accepted on this endpoint. ` +
-      `allowed types: ${[...ALLOWED_COMMAND_TYPES].sort().join(', ')}`,
-    code: 'unsupported_command_type',
-  });
 }
 
 function copyOptionalString(
@@ -133,9 +137,61 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
 
   const payload: Record<string, unknown> = { timeout_seconds: timeoutSeconds };
 
+  const override = parseActiveHoursOverride(inputParams.active_hours_override);
+  if (!override.ok) {
+    return {
+      ok: false,
+      response: problemValidation(`params.active_hours_override: ${override.error}`, {
+        'body.params.active_hours_override': [override.error],
+      }),
+    };
+  }
+  if (override.override && !ACTIVE_HOURS_GUARDED_TYPES.has(cmdType)) {
+    return {
+      ok: false,
+      response: problemValidation(
+        'params.active_hours_override is only accepted for reboot_machine and shutdown_machine',
+        { 'body.params.active_hours_override': ['not accepted for this command type'] },
+      ),
+    };
+  }
+
   if (cmdType === 'reboot_machine' || cmdType === 'shutdown_machine') {
     const error = copyOptionalPositiveInteger(inputParams, payload, 'delay_seconds', 0);
     if (error) return { ok: false, response: error };
+    const when = inputParams.when;
+    if (when !== undefined) {
+      if (cmdType !== 'reboot_machine') {
+        return {
+          ok: false,
+          response: problemValidation('params.when is only accepted for reboot_machine', {
+            'body.params.when': ['not accepted for shutdown_machine'],
+          }),
+        };
+      }
+      if (when !== 'now' && when !== 'after_active_hours') {
+        return {
+          ok: false,
+          response: problemValidation('params.when must be "now" or "after_active_hours"', {
+            'body.params.when': ['invalid value'],
+          }),
+        };
+      }
+      // an override restarts inside the window and a deferral waits it out; one call can't mean both.
+      if (when === 'after_active_hours' && override.override) {
+        return {
+          ok: false,
+          response: problemValidation(
+            'params.active_hours_override cannot be combined with params.when "after_active_hours"',
+            {
+              'body.params.when': ['conflicts with active_hours_override'],
+              'body.params.active_hours_override': ['conflicts with when "after_active_hours"'],
+            },
+          ),
+        };
+      }
+      payload.when = when;
+    }
   } else if (cmdType === 'capture_screenshot') {
     const monitor = inputParams.monitor;
     if (monitor !== undefined) {
@@ -308,37 +364,7 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
     }
   }
 
-  return { ok: true, type: cmdType, payload };
-}
-
-function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
-  if (err.code === 'unsupported_command_type') {
-    return unsupportedCommandType(err.detail.match(/'([^']+)'/)?.[1] ?? 'unknown');
-  }
-  if (err.code === 'machine_offline') {
-    return problem({
-      type: ProblemType.Conflict,
-      title: 'machine offline',
-      status: 409,
-      detail: err.detail,
-      code: 'machine_offline',
-    });
-  }
-  if (err.status === 404) {
-    return problem({
-      type: ProblemType.NotFound,
-      title: 'machine not found',
-      status: 404,
-      detail: err.detail,
-    });
-  }
-  return problem({
-    type: ProblemType.ValidationFailed,
-    title: 'validation failed',
-    status: err.status,
-    detail: err.detail,
-    code: err.code,
-  });
+  return { ok: true, type: cmdType, payload, activeHoursOverride: override.override };
 }
 
 /**
@@ -351,6 +377,57 @@ const VIEW_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'start_live_view',
   'stop_live_view',
 ]);
+
+/**
+ * Who may run this tool here. An api key runs up to its `maxToolTier`; a person
+ * runs tier 3 only on an open step-up window for this machine. Tiers come from
+ * lib/mcp-tools.ts, where a name nobody classified counts as tier 3, and a call
+ * that changes what the machine launches counts as tier 3 whatever its tool's tier,
+ * as hoot asks a person for one (ADR 0019).
+ */
+async function toolCallRefusal(
+  request: NextRequest,
+  ctx: SiteHandlerContext,
+  machineId: string,
+  toolName: string,
+  toolParams: unknown,
+): Promise<NextResponse | null> {
+  // the registry values hoot refuses are refused here too, for an agent too old to refuse them itself
+  const registryRefusal = registryValueRefusal(toolName, toolParams);
+  if (registryRefusal) {
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: registryRefusal.status,
+      detail: registryRefusal.detail,
+      code: registryRefusal.error,
+    });
+  }
+  const tier = callTier(toolName, toolParams, toolTierOf(toolName));
+  const key = ctx.auth.keyContext;
+  if (key) {
+    const maxToolTier = normalizeMaxToolTier(key.maxToolTier);
+    if (tier <= maxToolTier) return null;
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: 403,
+      detail: `this call is tier ${tier} and this api key's maxToolTier is ${maxToolTier}. the key's owner can raise it on the api keys page.`,
+      code: 'max_tool_tier_exceeded',
+    });
+  }
+  if (tier < 3) return null;
+  const userId = ctx.actor.userId;
+  const ceremony = await requestSignInCeremony(request, userId);
+  if (await stepUpReadsOpen(request, { userId, siteId: ctx.siteId, machineId }, ceremony)) return null;
+  return problem({
+    type: ProblemType.Unauthorized,
+    title: 'step-up required',
+    status: 401,
+    detail: 'this call is tier 3 and needs an open step-up window on this machine. confirm your identity, then try again.',
+    code: 'step_up_required',
+  });
+}
 
 const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params }) => {
   try {
@@ -372,6 +449,17 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
         const normalized = normalizeCommandBody(body);
         if (!normalized.ok) return normalized.response;
 
+        if (normalized.type === 'mcp_tool_call') {
+          const refusal = await toolCallRefusal(
+            request,
+            ctx,
+            machineId,
+            normalized.payload.tool_name as string,
+            normalized.payload.tool_params ?? {},
+          );
+          if (refusal) return refusal;
+        }
+
         try {
           const result = await executeMachineCommand(
             {
@@ -383,7 +471,11 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
                 : `user:${ctx.actor.userId}`,
               correlationId: ctx.correlationId,
             },
-            { type: normalized.type, payload: normalized.payload },
+            {
+              type: normalized.type,
+              payload: normalized.payload,
+              activeHoursOverride: normalized.activeHoursOverride,
+            },
           );
 
           return applyAuthDeprecations(

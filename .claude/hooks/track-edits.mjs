@@ -6,11 +6,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { EDIT_LOG as SESSION_FILE } from './lib/edit-log.mjs'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const SESSION_FILE = join(__dirname, '..', 'session-edits.json')
 const MAX_AGE_MS = 10 * 60 * 1000 // 10 minutes
 
 // Read JSON from stdin
@@ -40,7 +37,8 @@ try {
   entries.push({
     path: filePath,
     timestamp: now,
-    tool: data.tool_name
+    tool: data.tool_name,
+    session: data.session_id
   })
 
   writeFileSync(SESSION_FILE, JSON.stringify(entries, null, 2))

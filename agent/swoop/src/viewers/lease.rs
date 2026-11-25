@@ -14,12 +14,12 @@
 //!    the viewer is dropped at `expiry + 30 s` and not before.
 //!
 //! the ledger is the bookkeeping only. the session loop owns the acting on it:
-//! on every [`lapsed`](LeaseLedger::lapsed) id it must
-//! `input_tx.send(ToInput::ReleaseAll)` (trigger 1 of the four `release_all`
-//! triggers — `SendInput` does not reset keyboard state, so a viewer dropped
-//! mid-chord leaves those keys down forever), close that viewer's peer, call
-//! `SignalClient::end_viewer(viewer, LeftReason::LeaseExpired)` and report the
-//! drop to `/api/agent/swoop/events`. keeping that here would put the peer, the
+//! on every [`lapsed`](LeaseLedger::lapsed) id it reports the drop to
+//! `/api/agent/swoop/events` and calls
+//! `SignalClient::end_viewer(viewer, LeftReason::LeaseExpired)`, whose departure
+//! releases that viewer's held keys and nobody else's (`SendInput` does not
+//! reset keyboard state, so a viewer dropped mid-chord leaves those keys down
+//! forever) and closes its peer. keeping that here would put the peer, the
 //! input thread and the socket inside a type whose job is one integer per
 //! viewer.
 

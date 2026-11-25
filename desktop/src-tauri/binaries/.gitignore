@@ -1,0 +1,4 @@
+# the swoop streamer is staged here as a tauri sidecar by
+# agent/build/macos/build.sh and rust-build.yml; it is a build output.
+*
+!.gitignore

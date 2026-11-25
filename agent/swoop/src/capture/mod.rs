@@ -15,17 +15,33 @@
 //! ```
 //!
 //! Expected on a two-monitor dev box: `frame_from_every_attached_output`
-//! captures a frame from each attached monitor and prints its texture size —
-//! on the 0.8 box 1920x1080 for the landscape panel and 3840x2160 for the
-//! rotate270 4K one, which is the texture size, not the 2160x3840 its mode
-//! reports.
+//! captures a frame from each attached monitor and prints its size — on the
+//! 0.8 box 1920x1080 for the landscape panel and 2160x3840 for the rotate270
+//! 4K one, whose 3840x2160 texture is turned upright.
+//!
+//! # Rotation
+//!
+//! A rotated output's texture is the un-rotated framebuffer. [`Duplication`]
+//! turns its copy upright on the GPU ([`crate::gpu::scale::Downscaler::rotate`])
+//! before handing it out, so every frame and size here is the desktop as it
+//! is displayed, and nothing downstream needs to know the output was turned.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(windows)]
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use crate::cursor::PointerSample;
+#[cfg(windows)]
+use crate::gpu::scale::{Downscaler, ScaleError};
 use crate::gpu::Frame;
 
+// macOS captures through ScreenCaptureKit, behind `platform::macos::CaptureSource`.
+#[cfg(target_os = "macos")]
+pub mod sck;
+// a synthetic source for the `testhooks` build only; it renders into d3d11
+#[cfg(all(windows, feature = "testhooks"))]
 pub mod testpattern;
 
 /// Blocking `AcquireNextFrame` timeout in milliseconds.
@@ -48,15 +64,18 @@ pub const ACQUIRE_TIMEOUT_MS: u32 = 8;
 /// back". On a static desktop an image may not arrive for seconds (a genuinely
 /// idle output produced 0.28 frames/s), and the session cannot hold a black
 /// screen that long.
+#[cfg(windows)]
 const RECOVERY_GRACE: Duration = Duration::from_millis(250);
 
 /// `DuplicateOutput` returned E_ACCESSDENIED in 3 of 12 measured mode-change
 /// events and succeeded on the next attempt 50 ms later.
+#[cfg(windows)]
 const REDUPLICATE_RETRY: Duration = Duration::from_millis(50);
 
 /// Bounded, so a duplication that never comes back is exit 12 rather than a
 /// session that hangs. Measured detect → first picture was p50 210 ms, max
 /// 330 ms, so this is ~30x the worst case.
+#[cfg(windows)]
 const REDUPLICATE_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A source of desktop frames.
@@ -81,8 +100,8 @@ pub trait Source: Send {
 ///
 /// Desktop Duplication hands out three spaces that are easy to confuse and were
 /// measured to be different on the 0.8 box: the texture, output-local
-/// un-rotated coordinates (dirty rects and pointer positions), and the virtual
-/// desktop (`DesktopCoordinates`). They are not interchangeable.
+/// un-rotated coordinates (dirty and move rects), and the virtual desktop
+/// (`DesktopCoordinates`). They are not interchangeable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub left: i32,
@@ -148,13 +167,13 @@ impl Rotation {
         matches!(self, Rotation::Rotate90 | Rotation::Rotate270)
     }
 
-    /// Swap width and height for a rotated output.
+    /// Swap width and height for a rotated output: its texture's size to the
+    /// size it is displayed at.
     ///
     /// `DXGI_OUTDUPL_DESC.ModeDesc` is in rotated desktop orientation while the
     /// texture is not: the 0.8 box's rotate270 output reports a 2160x3840 mode
-    /// and hands back a 3840x2160 texture, so sizing an encoder from the mode
-    /// produces a transposed surface. The swap is its own inverse, so this maps
-    /// either direction.
+    /// and hands back a 3840x2160 texture. The swap is its own inverse, so this
+    /// maps either direction.
     pub fn swap_axes(self, size: (u32, u32)) -> (u32, u32) {
         if self.transposes() {
             (size.1, size.0)
@@ -172,8 +191,8 @@ pub struct OutputInfo {
     pub device_name: String,
     /// Virtual-desktop coordinates, negative in either axis.
     pub desktop_rect: Rect,
-    /// Un-applied. Applying it is the streamer's job (plan.md Task 6.4), not
-    /// this module's.
+    /// As Desktop Duplication reports it. [`Duplication`] applies it, so
+    /// nothing after capture has a rotation to apply.
     pub rotation: Rotation,
 }
 
@@ -186,60 +205,17 @@ pub struct MoveRect {
 
 /// Per-frame metadata, in output-local un-rotated coordinates.
 ///
-/// Move rects are read because the API requires the order, not because they
-/// pay: 0.8 measured zero of them in 5,981 frames across seven scenes,
-/// including dragged windows, `ScrollWindowEx` blits and a browser scroll.
-/// Nothing may be optimised on their presence. Dirty rects are the opposite —
-/// 0.01% of an idle output against 92% of a scrolling browser — and the whole
-/// metadata read costs 16 bytes at p50.
+/// Nothing consumes it yet. Desktop Duplication's own rects are not read on
+/// Windows: the read is two calls inside the window that holds the frame, which
+/// serialises every duplication in the process. Spike 0.8's numbers, for the
+/// first consumer: zero move rects in 5,981 frames across seven scenes,
+/// dragged windows and scrolls included, so nothing may be optimised on their
+/// presence; dirty rects cover 0.01% of an idle output and 92% of a scrolling
+/// browser.
 #[derive(Debug, Default, Clone)]
 pub struct FrameRects {
     pub moves: Vec<MoveRect>,
     pub dirty: Vec<Rect>,
-}
-
-/// `DXGI_OUTDUPL_MOVE_RECT` is a `POINT` then a `RECT`: six i32, no padding.
-const MOVE_RECT_WORDS: usize = 6;
-/// `RECT`: four i32.
-const DIRTY_RECT_WORDS: usize = 4;
-
-/// Desktop Duplication writes both lists into the single
-/// `TotalMetadataBufferSize` buffer: the move rects at the front, the dirty
-/// rects immediately after however many bytes the move-rect read reported.
-/// Handing the dirty-rect parser the front of the buffer parses move rects as
-/// RECTs and yields plausible garbage rather than an error, which is why the
-/// API makes the order a requirement.
-fn split_metadata(words: &[i32], move_words: usize) -> (&[i32], &[i32]) {
-    words.split_at(move_words.min(words.len()))
-}
-
-fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
-    let (rects, _) = words.as_chunks::<MOVE_RECT_WORDS>();
-    rects
-        .iter()
-        .map(|w| MoveRect {
-            source: (w[0], w[1]),
-            dest: Rect {
-                left: w[2],
-                top: w[3],
-                right: w[4],
-                bottom: w[5],
-            },
-        })
-        .collect()
-}
-
-fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
-    let (rects, _) = words.as_chunks::<DIRTY_RECT_WORDS>();
-    rects
-        .iter()
-        .map(|w| Rect {
-            left: w[0],
-            top: w[1],
-            right: w[2],
-            bottom: w[3],
-        })
-        .collect()
 }
 
 /// HRESULTs `DuplicateOutput` returns transiently while the desktop is changing
@@ -249,6 +225,7 @@ fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
 /// cross-adapter pair returned in 4 of 4 measured attempts, i.e. the device is
 /// on the wrong adapter and needs a new device on the output's own adapter, not
 /// another attempt. Retrying it burns the whole deadline and then fails anyway.
+#[cfg(any(windows, test))]
 fn is_retryable_duplicate_error(hresult: u32) -> bool {
     matches!(
         hresult,
@@ -290,7 +267,7 @@ impl RebuildSignal {
 use windows::{
     core::{Error as WinError, Interface},
     Win32::{
-        Foundation::{E_FAIL, HANDLE, HMODULE, RECT},
+        Foundation::{E_FAIL, HANDLE, HMODULE},
         Graphics::{
             Direct3D::{
                 D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0,
@@ -307,8 +284,7 @@ use windows::{
                 CreateDXGIFactory1, IDXGIAdapter1, IDXGIDevice1, IDXGIFactory1, IDXGIOutput,
                 IDXGIOutput1, IDXGIOutput5, IDXGIOutputDuplication, IDXGIResource,
                 DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND,
-                DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
-                DXGI_OUTPUT_DESC,
+                DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
             },
         },
         System::{
@@ -321,18 +297,6 @@ use windows::{
         },
         UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
     },
-};
-
-// The metadata buffer is i32-wide so the two API calls write through a pointer
-// with the alignment their structs need, and so the parsers above can be pure.
-// Both structs are arrays of i32 with no padding; these assertions are what
-// makes that reinterpretation sound.
-#[cfg(windows)]
-const _: () = {
-    assert!(std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() == MOVE_RECT_WORDS * 4);
-    assert!(std::mem::align_of::<DXGI_OUTDUPL_MOVE_RECT>() == 4);
-    assert!(std::mem::size_of::<RECT>() == DIRTY_RECT_WORDS * 4);
-    assert!(std::mem::align_of::<RECT>() == 4);
 };
 
 /// Per-monitor-v2, before the first DXGI call.
@@ -485,6 +449,8 @@ struct Live {
     /// duplication in the session behind Desktop Duplication's global lock.
     copy: Option<ID3D11Texture2D>,
     copy_size: (u32, u32),
+    /// A rotated output's copy turned upright, for the copy it was opened on.
+    turn: Option<Downscaler>,
 }
 
 #[cfg(windows)]
@@ -496,6 +462,7 @@ impl Live {
         desc: &D3D11_TEXTURE2D_DESC,
     ) -> windows::core::Result<usize> {
         if self.copy.is_none() || self.copy_size != (desc.Width, desc.Height) {
+            self.turn = None;
             let mut wanted = *desc;
             wanted.MipLevels = 1;
             wanted.ArraySize = 1;
@@ -518,6 +485,48 @@ impl Live {
         unsafe { self.context.CopyResource(dst, src) };
         Ok(dst.as_raw() as usize)
     }
+
+    /// `copy` as the output displays it: a rotated output's turned upright on
+    /// the GPU, at the cost of one blit, once per frame however many tiers
+    /// encode it.
+    fn upright(&mut self, copy: Frame, rotation: Rotation) -> Result<Frame, ScaleError> {
+        if rotation == Rotation::Identity {
+            return Ok(copy);
+        }
+        let mut turn = match self.turn.take() {
+            Some(turn) => turn,
+            None => Downscaler::rotate(&copy, rotation)?,
+        };
+        let frame = turn.scale(&copy)?;
+        self.turn = Some(turn);
+        Ok(frame)
+    }
+}
+
+/// What a duplication was opened at: the frame size and the mode's refresh
+/// rate, for the log line every open and rebuild writes.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Mode {
+    size: (u32, u32),
+    /// `DXGI_RATIONAL`, numerator over denominator. A zero denominator is a
+    /// rate the driver did not state.
+    refresh: (u32, u32),
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (width, height) = self.size;
+        match self.refresh {
+            (_, 0) => write!(f, "{width}x{height}"),
+            // Two decimals, which is what tells 59.94 from 60.
+            (num, den) => {
+                let hz = (f64::from(num) / f64::from(den) * 100.0).round() / 100.0;
+                write!(f, "{width}x{height}@{hz}Hz")
+            }
+        }
+    }
 }
 
 /// Open a device and a duplication for the named output.
@@ -525,7 +534,7 @@ impl Live {
 /// The factory is created fresh every time on purpose: after a mode change the
 /// old one is stale, and the output's rect and mode can have changed under us.
 #[cfg(windows)]
-fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32, u32))> {
+fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, Mode)> {
     set_dpi_awareness();
     let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }?;
     let mut a = 0u32;
@@ -550,11 +559,11 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32
             let (device, context) = create_device(&adapter)?;
             let dup = duplicate(&output, &device)?;
             let info = output_info(&desc);
-            // `ModeDesc` is in rotated desktop orientation; the texture is not.
-            // Un-rotating it here is what makes `size()` right before the first
-            // frame lands.
+            // `ModeDesc` is in the desktop's orientation, as the frames this
+            // hands out are; the texture is not. Taking it here is what makes
+            // `size()` right before the first frame lands.
             let mode = unsafe { dup.GetDesc() }.ModeDesc;
-            let size = info.rotation.swap_axes((mode.Width, mode.Height));
+            let size = (mode.Width, mode.Height);
             return Ok((
                 Live {
                     device,
@@ -562,9 +571,13 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32
                     dup,
                     copy: None,
                     copy_size: (0, 0),
+                    turn: None,
                 },
                 info,
-                size,
+                Mode {
+                    size,
+                    refresh: (mode.RefreshRate.Numerator, mode.RefreshRate.Denominator),
+                },
             ));
         }
     }
@@ -572,51 +585,6 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, (u32
         DXGI_ERROR_NOT_FOUND,
         format!("no attached output named {device_name}"),
     ))
-}
-
-/// Read both metadata lists out of the one `TotalMetadataBufferSize` buffer:
-/// all move rects, then all dirty rects, in that order.
-#[cfg(windows)]
-fn read_rects(
-    dup: &IDXGIOutputDuplication,
-    needed: u32,
-    buffer: &mut Vec<i32>,
-    out: &mut FrameRects,
-) {
-    out.moves.clear();
-    out.dirty.clear();
-    if needed == 0 {
-        return;
-    }
-    let words = needed.div_ceil(4) as usize;
-    if buffer.len() < words {
-        buffer.resize(words, 0);
-    }
-
-    let mut move_bytes = 0u32;
-    if unsafe { dup.GetFrameMoveRects(needed, buffer.as_mut_ptr().cast(), &mut move_bytes) }.is_err()
-    {
-        move_bytes = 0;
-    }
-    let move_words = (move_bytes / 4) as usize;
-
-    let mut dirty_bytes = 0u32;
-    if unsafe {
-        dup.GetFrameDirtyRects(
-            needed.saturating_sub(move_bytes),
-            buffer.as_mut_ptr().add(move_words).cast(),
-            &mut dirty_bytes,
-        )
-    }
-    .is_err()
-    {
-        dirty_bytes = 0;
-    }
-
-    let used = (move_words + (dirty_bytes / 4) as usize).min(buffer.len());
-    let (moves, dirty) = split_metadata(&buffer[..used], move_words);
-    out.moves = parse_move_rects(moves);
-    out.dirty = parse_dirty_rects(dirty);
 }
 
 /// What one `AcquireNextFrame` produced, before the caller decides what to do
@@ -633,15 +601,18 @@ enum Step {
 pub struct Duplication {
     output: OutputInfo,
     size: (u32, u32),
+    /// What the last open found, so a rebuild's line can say what changed.
+    mode: Option<Mode>,
     live: Option<Live>,
     signal: RebuildSignal,
     generation: u64,
-    rects: FrameRects,
-    metadata: Vec<i32>,
     /// Set while a rebuilt duplication has yet to produce a frame with a real
     /// desktop image.
     recovering: Option<Instant>,
     idr_requested: bool,
+    /// The shape is only readable while this duplication holds the frame, so
+    /// the reader lives beside it.
+    reader: crate::cursor::PointerReader,
 }
 
 #[cfg(windows)]
@@ -652,18 +623,18 @@ impl Duplication {
         let mut source = Self {
             output: output.clone(),
             size: (0, 0),
+            mode: None,
             live: None,
             generation: signal.generation(),
             signal,
-            rects: FrameRects::default(),
-            metadata: Vec::new(),
             recovering: None,
             idr_requested: false,
+            reader: crate::cursor::PointerReader::new(),
         };
         // The first duplication takes the same retry as a rebuild: a session can
         // be asked for while the desktop is still settling, and those failures
         // are the transient ones either way.
-        source.rebuild()?;
+        source.rebuild("opened")?;
         Ok(source)
     }
 
@@ -671,11 +642,6 @@ impl Duplication {
     /// change the rotation.
     pub fn output(&self) -> &OutputInfo {
         &self.output
-    }
-
-    /// Metadata for the frame `next_frame` last returned.
-    pub fn last_rects(&self) -> &FrameRects {
-        &self.rects
     }
 
     /// True once after every rebuild: the next encoded frame must be an IDR,
@@ -691,17 +657,35 @@ impl Duplication {
         self.signal.bump();
     }
 
-    fn rebuild(&mut self) -> anyhow::Result<()> {
+    /// `why` is the log line's word for what happened: the first open, or
+    /// what the rebuild answers.
+    fn rebuild(&mut self, why: &str) -> anyhow::Result<()> {
         // Drop the stale duplication, its device and its factory before
         // re-enumerating: the output's coordinates and mode can have changed,
         // and the old duplication still holds the output.
         self.live = None;
-        let deadline = Instant::now() + REDUPLICATE_DEADLINE;
+        let started = Instant::now();
+        let deadline = started + REDUPLICATE_DEADLINE;
         loop {
+            // Only the input desktop can be duplicated, and only from a thread
+            // on it: left on the desktop a UAC prompt switched away from, every
+            // attempt is E_ACCESSDENIED, and the capture loop's own look never
+            // came round inside this retry — a frozen picture for the whole
+            // deadline, then exit 12.
+            follow_input_desktop();
             match open_live(&self.output.device_name) {
-                Ok((live, output, size)) => {
+                Ok((live, output, mode)) => {
+                    let was = match self.mode.replace(mode) {
+                        Some(was) if was != mode => format!(", was {was}"),
+                        _ => String::new(),
+                    };
+                    ::log::info!(
+                        "swoop: capture of {} {why} in {} ms at {mode}{was}",
+                        output.device_name,
+                        started.elapsed().as_millis()
+                    );
                     self.output = output;
-                    self.size = size;
+                    self.size = mode.size;
                     self.live = Some(live);
                     self.generation = self.signal.generation();
                     self.recovering = Some(Instant::now());
@@ -730,48 +714,43 @@ impl Duplication {
     /// runs before `ReleaseFrame` because `GetFramePointerShape` is only legal
     /// while the frame is held.
     ///
-    /// The duplication is lent for the call rather than handed out: there is
-    /// one per output per process, and the calls it is wanted for are invalid
-    /// outside this window.
-    ///
-    /// The call site Wave 5's capture thread wants, with `cursor` owning both
-    /// helpers and the tracker:
+    /// The sample is built here, from the frame info and this duplication's
+    /// own pointer reader, so the observer never sees a Win32 type: the
+    /// session's cursor path is the same on every platform. A shape that
+    /// cannot be read is logged and carried as `None`.
     ///
     /// ```text
-    /// let mut reader = cursor::PointerReader::new();
-    /// let frame = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+    /// let frame = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
     ///     // None when the frame carried no pointer news at all (20.4% of
     ///     // frames); the position on those is stale, not (0,0).
-    ///     if let Some(at) = cursor::pointer_position(info) {
-    ///         if let Some(msg) = tracker.on_position(at, &geometry, ts_us) {
+    ///     if let Some(at) = sample.position {
+    ///         if let Some(msg) = tracker.on_position(at, &geometry, clock.us(sample.ts_ticks)) {
     ///             send(msg);
     ///         }
     ///     }
-    ///     match reader.shape(dup, info) {
-    ///         Ok(Some((shape, bytes))) => match tracker.on_shape(&shape, bytes, geometry.dpi) {
+    ///     if let Some((shape, bytes)) = sample.shape {
+    ///         match tracker.on_shape(&shape, bytes, &geometry) {
     ///             Ok(Some(msg)) => send(msg),
     ///             Ok(None) => {}          // a shape the viewer already has
     ///             Err(e) => log_and_continue(e),
-    ///         },
-    ///         Ok(None) => {}              // no shape change on this frame
-    ///         Err(e) => log_and_continue(e),
+    ///         }
     ///     }
     /// })?;
     /// ```
     pub fn next_frame_with(
         &mut self,
         timeout_ms: u32,
-        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+        observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Option<Frame>> {
         if self.live.is_none() || self.generation != self.signal.generation() {
-            self.rebuild()?;
+            self.rebuild("rebuilt after a desktop switch")?;
         }
         match self.step(timeout_ms, observer)? {
             Step::Frame(frame) => Ok(Some(frame)),
             Step::Nothing => Ok(None),
             Step::Lost => {
                 self.signal.bump();
-                self.rebuild()?;
+                self.rebuild("rebuilt after ACCESS_LOST")?;
                 Ok(None)
             }
         }
@@ -780,19 +759,20 @@ impl Duplication {
     fn step(
         &mut self,
         timeout_ms: u32,
-        observer: &mut dyn FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
+        observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Step> {
         let Self {
+            output,
             size,
             live,
-            rects,
-            metadata,
             recovering,
+            reader,
             ..
         } = self;
         let Some(live) = live.as_mut() else {
             return Ok(Step::Lost);
         };
+        let rotation = output.rotation;
 
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
@@ -808,7 +788,19 @@ impl Duplication {
         // Before anything else and before `ReleaseFrame`: the pointer news on a
         // frame with no desktop image is still pointer news, and the shape can
         // only be read while the frame is held.
-        observer(&live.dup, &info);
+        let shape = match reader.shape(&live.dup, &info) {
+            Ok(shape) => shape,
+            Err(e) => {
+                ::log::warn!("swoop: cursor shape read: {e}");
+                None
+            }
+        };
+        observer(&PointerSample {
+            position: crate::cursor::pointer_position(&info),
+            // qpc ticks, the clock `platform::clock` reads on windows.
+            ts_ticks: info.LastMouseUpdateTime,
+            shape,
+        });
 
         let Some(resource) = resource else {
             let _ = unsafe { live.dup.ReleaseFrame() };
@@ -827,30 +819,27 @@ impl Duplication {
         let stale = info.LastPresentTime == 0;
         let emit = !stale || recovering.is_some_and(|since| since.elapsed() >= RECOVERY_GRACE);
 
-        let copied = if emit {
-            read_rects(&live.dup, info.TotalMetadataBufferSize, metadata, rects);
-            Some(live.copy_frame(&texture, &desc))
-        } else {
-            None
-        };
+        let copied = emit.then(|| live.copy_frame(&texture, &desc));
         // Back as early as possible: every duplication in the session is
         // serialised behind Desktop Duplication's lock while a frame is held.
+        // A rotated output's turn reads only the copy, so it comes after.
         let _ = unsafe { live.dup.ReleaseFrame() };
 
         match copied {
             None => Ok(Step::Nothing),
             Some(handle) => {
-                // After the `?`: a failed copy is not a recovery, and the size
-                // it would have reported is the one we could not take.
-                let handle = handle?;
-                *size = (desc.Width, desc.Height);
-                *recovering = None;
-                Ok(Step::Frame(Frame {
-                    handle,
+                // After the `?`s: a failed copy or turn is not a recovery, and
+                // the size it would have reported is the one we could not take.
+                let copy = Frame {
+                    handle: handle?,
                     width: desc.Width,
                     height: desc.Height,
                     captured_qpc: if stale { qpc_now() } else { info.LastPresentTime },
-                }))
+                };
+                let frame = live.upright(copy, rotation)?;
+                *size = (frame.width, frame.height);
+                *recovering = None;
+                Ok(Step::Frame(frame))
             }
         }
     }
@@ -862,55 +851,44 @@ impl Source for Duplication {
     /// [`Duplication::next_frame_with`] instead — the pointer data is on the
     /// same acquire and cannot be read afterwards.
     fn next_frame(&mut self, timeout_ms: u32) -> anyhow::Result<Option<Frame>> {
-        self.next_frame_with(timeout_ms, &mut |_, _| {})
+        self.next_frame_with(timeout_ms, &mut |_| {})
     }
 
-    /// The acquired texture's size, never the mode's: they differ on a rotated
-    /// output.
+    /// The frame's size: the desktop rect's, a rotated output's texture turned
+    /// upright.
     fn size(&self) -> (u32, u32) {
         self.size
     }
 }
 
-/// Follows the input desktop for one thread.
-///
-/// Deliberately not `Send`: a desktop association belongs to the thread that
-/// made it, so the watcher is created on the capture thread and stays there.
 #[cfg(windows)]
-pub struct DesktopWatcher {
-    desktop: Option<HDESK>,
-    name: String,
+thread_local! {
+    /// The desktop this thread took through [`follow_input_desktop`], by handle
+    /// and name. Per thread because the attachment is, and shared by every look
+    /// on the thread — the capture loop's and a rebuild's — so one switch is
+    /// taken once and costs one re-duplication, not two. Never closed: a
+    /// thread's own desktop cannot be, and the capture thread lives as long as
+    /// the process.
+    static ATTACHED: std::cell::RefCell<Option<(HDESK, String)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
+/// [`DesktopWatcher::follow`], for a look that has no watcher: a rebuild.
 #[cfg(windows)]
-impl DesktopWatcher {
-    pub fn new() -> Self {
-        Self {
-            desktop: None,
-            name: String::new(),
-        }
-    }
-
-    /// Attach this thread to the input desktop, returning true when it changed
-    /// and the caller's duplications therefore have to be rebuilt.
-    ///
-    /// A failed `OpenInputDesktop` is not proof that the machine is locked: it
-    /// is equally what a thread without the rights to the current desktop gets,
-    /// and what a switch in progress returns. The previous desktop is kept and
-    /// capture carries on.
-    pub fn follow(&mut self) -> bool {
-        let opened = unsafe {
-            OpenInputDesktop(
-                DESKTOP_CONTROL_FLAGS(0),
-                false,
-                DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
-            )
-        };
-        let Ok(desktop) = opened else {
-            return false;
-        };
-        let name = desktop_name(desktop).unwrap_or_default();
-        if self.desktop.is_some() && name == self.name {
+fn follow_input_desktop() -> bool {
+    let opened = unsafe {
+        OpenInputDesktop(
+            DESKTOP_CONTROL_FLAGS(0),
+            false,
+            DESKTOP_ACCESS_FLAGS(DESKTOP_READOBJECTS.0 | DESKTOP_WRITEOBJECTS.0),
+        )
+    };
+    let Ok(desktop) = opened else {
+        return false;
+    };
+    let name = desktop_name(desktop).unwrap_or_default();
+    ATTACHED.with_borrow_mut(|attached| {
+        if attached.as_ref().is_some_and(|(_, current)| *current == name) {
             let _ = unsafe { CloseDesktop(desktop) };
             return false;
         }
@@ -918,17 +896,36 @@ impl DesktopWatcher {
             let _ = unsafe { CloseDesktop(desktop) };
             return false;
         }
-        if let Some(previous) = self.desktop.replace(desktop) {
+        if let Some((previous, _)) = attached.replace((desktop, name)) {
             let _ = unsafe { CloseDesktop(previous) };
         }
-        self.name = name;
         true
+    })
+}
+
+/// Follows the input desktop for the thread it is used on.
+///
+/// Deliberately not `Send`: a desktop association belongs to the thread that
+/// made it, so the watcher is created on the capture thread and stays there.
+#[cfg(windows)]
+pub struct DesktopWatcher(std::marker::PhantomData<*const ()>);
+
+#[cfg(windows)]
+impl DesktopWatcher {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
     }
 
-    /// The input desktop this thread is attached to (`Default`, `Winlogon`,
-    /// `Screen-saver`), empty until the first successful `follow`.
-    pub fn name(&self) -> &str {
-        &self.name
+    /// Attach this thread to the input desktop, returning true when this call
+    /// moved it, so the caller's duplications have to be rebuilt. A switch a
+    /// rebuild already followed returns false: that rebuild was the one.
+    ///
+    /// A failed `OpenInputDesktop` is not proof that the machine is locked: it
+    /// is equally what a thread without the rights to the current desktop gets,
+    /// and what a switch in progress returns. The previous desktop is kept and
+    /// capture carries on.
+    pub fn follow(&mut self) -> bool {
+        follow_input_desktop()
     }
 }
 
@@ -936,17 +933,6 @@ impl DesktopWatcher {
 impl Default for DesktopWatcher {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(windows)]
-impl Drop for DesktopWatcher {
-    fn drop(&mut self) {
-        if let Some(desktop) = self.desktop.take() {
-            // Fails while this thread is still attached; there is nothing to do
-            // about it and the handle dies with the thread either way.
-            let _ = unsafe { CloseDesktop(desktop) };
-        }
     }
 }
 
@@ -965,34 +951,6 @@ fn desktop_name(desktop: HDESK) -> Option<String> {
     }
     .ok()?;
     Some(wide_to_string(&buffer))
-}
-
-/// The capture thread body: follow the input desktop, then block in
-/// `AcquireNextFrame`.
-///
-/// There is no timer and no sleep — the compositor paces this loop, and the
-/// session's floor frame rate is a separate periodic IDR, not an attempt to
-/// pull frames faster. Both callbacks run on this thread; the frame's handle is
-/// valid only for the length of `on_frame`, and `on_pointer` sees every
-/// acquired frame, including the ones that carry no picture (see
-/// [`Duplication::next_frame_with`]).
-#[cfg(windows)]
-pub fn capture_loop(
-    source: &mut Duplication,
-    watcher: &mut DesktopWatcher,
-    stop: &std::sync::atomic::AtomicBool,
-    mut on_frame: impl FnMut(&Frame),
-    mut on_pointer: impl FnMut(&IDXGIOutputDuplication, &DXGI_OUTDUPL_FRAME_INFO),
-) -> anyhow::Result<()> {
-    while !stop.load(Ordering::Relaxed) {
-        if watcher.follow() {
-            source.request_rebuild();
-        }
-        if let Some(frame) = source.next_frame_with(ACQUIRE_TIMEOUT_MS, &mut on_pointer)? {
-            on_frame(&frame);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1046,6 +1004,20 @@ mod tests {
         assert!(virtual_bounds(&[]).is_none());
     }
 
+    /// The rebuild line's mode: a whole rate as a whole number, an NTSC one to
+    /// the two decimals that tell it from 60, and an unstated one left out.
+    #[cfg(windows)]
+    #[test]
+    fn a_mode_reads_as_size_at_its_refresh_rate() {
+        let mode = |refresh| Mode {
+            size: (1920, 1080),
+            refresh,
+        };
+        assert_eq!(mode((60, 1)).to_string(), "1920x1080@60Hz");
+        assert_eq!(mode((60_000, 1_001)).to_string(), "1920x1080@59.94Hz");
+        assert_eq!(mode((0, 0)).to_string(), "1920x1080");
+    }
+
     #[test]
     fn rotation_maps_every_dxgi_value() {
         // UNSPECIFIED and anything unrecognised read as identity.
@@ -1069,60 +1041,6 @@ mod tests {
         assert_eq!(Rotation::Rotate270.swap_axes((3840, 2160)), (2160, 3840));
         assert_eq!(Rotation::Identity.swap_axes((1920, 1080)), (1920, 1080));
         assert_eq!(Rotation::Rotate180.swap_axes((1920, 1080)), (1920, 1080));
-    }
-
-    #[test]
-    fn move_rects_are_read_before_dirty_rects_out_of_one_buffer() {
-        // One move rect (source point then destination rect) followed by two
-        // dirty rects, laid out as Desktop Duplication writes them.
-        let buffer: Vec<i32> = vec![10, 20, 0, 0, 100, 50, 1, 2, 3, 4, 5, 6, 7, 8];
-        let (moves, dirty) = split_metadata(&buffer, MOVE_RECT_WORDS);
-
-        assert_eq!(
-            parse_move_rects(moves),
-            vec![MoveRect {
-                source: (10, 20),
-                dest: Rect {
-                    left: 0,
-                    top: 0,
-                    right: 100,
-                    bottom: 50
-                },
-            }]
-        );
-        assert_eq!(
-            parse_dirty_rects(dirty),
-            vec![
-                Rect {
-                    left: 1,
-                    top: 2,
-                    right: 3,
-                    bottom: 4
-                },
-                Rect {
-                    left: 5,
-                    top: 6,
-                    right: 7,
-                    bottom: 8
-                },
-            ]
-        );
-
-        // Reading the dirty rects from the front of the same buffer parses the
-        // move rect as RECTs: plausible rectangles, silently wrong, never an
-        // error. That is the whole reason the order is a contract.
-        assert_ne!(parse_dirty_rects(&buffer)[0], parse_dirty_rects(dirty)[0]);
-    }
-
-    #[test]
-    fn a_truncated_trailing_rect_is_ignored() {
-        // The split is driven by byte counts the API reports, so a parser that
-        // ran off the end would read another frame's metadata.
-        assert!(parse_move_rects(&[1, 2, 3]).is_empty());
-        assert_eq!(parse_dirty_rects(&[1, 2, 3, 4, 5]).len(), 1);
-        let (moves, dirty) = split_metadata(&[1, 2, 3, 4], 99);
-        assert_eq!(moves.len(), 4);
-        assert!(dirty.is_empty());
     }
 
     #[test]
@@ -1182,9 +1100,9 @@ mod tests {
             let (mut observed, mut pointer_news) = (0usize, 0usize);
             while Instant::now() < deadline {
                 let frame = source
-                    .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |_dup, info| {
+                    .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                         observed += 1;
-                        if info.LastMouseUpdateTime != 0 {
+                        if sample.position.is_some() {
                             pointer_news += 1;
                         }
                     })
@@ -1197,22 +1115,20 @@ mod tests {
             let Some((width, height)) = captured else {
                 panic!("no frame from {} within 10 s", info.device_name);
             };
-            // The texture, never the transposed mode.
+            // The desktop as displayed, a rotated output's texture upright.
             assert_eq!(source.size(), (width, height));
             assert_eq!(
-                info.rotation.swap_axes((width, height)),
+                (width, height),
                 (
                     info.desktop_rect.width() as u32,
                     info.desktop_rect.height() as u32
                 ),
-                "un-rotated texture does not match the desktop rect"
+                "the frame is not the desktop rect's size"
             );
             assert!(observed >= 1, "the pointer observer never ran");
             println!(
-                "{} texture {width}x{height} rotation={:?} dirty_rects={} observed={observed} pointer_news={pointer_news}",
-                info.device_name,
-                info.rotation,
-                source.last_rects().dirty.len()
+                "{} frame {width}x{height} rotation={:?} observed={observed} pointer_news={pointer_news}",
+                info.device_name, info.rotation
             );
         }
     }

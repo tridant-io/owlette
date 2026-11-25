@@ -19,7 +19,10 @@ import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { getAdminAuth } from '@/lib/firebase-admin';
 import { createSession } from '@/lib/sessionManager.server';
+import { SESSION_LIFETIME_DAYS } from '@/lib/sessionCutoff.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import { apiError } from '@/lib/apiErrorResponse';
+import { recordAuthFailure } from '@/lib/authEvents.server';
 import { ApiAuthError, assertActiveUser } from '@/lib/apiAuth.server';
 import {
   getRpId,
@@ -102,6 +105,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     });
 
     if (!verification.verified) {
+      recordAuthFailure(request, {
+        userId,
+        capability: 'AUTH_SIGN_IN',
+        event: 'sign_in_failed',
+        reason: 'passkey_assertion_failed',
+        method: 'passkey',
+      });
       return NextResponse.json(
         { error: 'Authentication verification failed' },
         { status: 400 }
@@ -120,7 +130,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // the authenticator checked the human — the basis for one ceremony counting
     // as two factors. `'passkey-uv'` is hardcoded on purpose: it is server-side
     // only and must never be derived from the request.
-    await createSession(userId, 7, 'passkey-uv');
+    await createSession(
+      userId,
+      SESSION_LIFETIME_DAYS,
+      'passkey-uv',
+      undefined,
+      await signInCeremonyNetwork(request, userId),
+    );
 
     const adminAuth = getAdminAuth();
     const customToken = await adminAuth.createCustomToken(userId);

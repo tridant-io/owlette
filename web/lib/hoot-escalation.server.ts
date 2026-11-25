@@ -5,7 +5,7 @@
  * Server-side only — never import this in client components.
  */
 
-import { getSiteAlertRecipients, getMachineTimezone } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
 import { getResend, FROM_EMAIL, ENV_LABEL, isProduction } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
@@ -36,7 +36,8 @@ export async function escalate(
 
   let anySent = false;
   for (const recipient of recipients) {
-    if (recipient.mutedMachines.includes(machineName)) continue;
+    // machineName is the machine id here, as the timezone lookup above reads it
+    if (!recipientWantsMachine(recipient, machineName)) continue;
 
     const unsubscribeUrl = recipient.userId !== 'fallback'
       ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`

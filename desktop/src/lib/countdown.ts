@@ -1,9 +1,10 @@
 /**
- * The reboot countdown, as a value. Rules ported unchanged from
- * `agent/src/prompt_restart.py`: two-minute wait, an indefinite operator pause,
- * reboot the moment it runs out. The prompt is now a window in this app, not a
- * python process — hence `owlette_service._is_restart_prompt_active` tracking
- * its own launch instead of scanning.
+ * The reboot countdown, as a value. Rules ported unchanged from the python
+ * prompt 3.0.0 removed (`prompt_restart.py`): two-minute wait, an indefinite
+ * operator pause, reboot the moment it runs out. The prompt is now a window in
+ * this app, not a python process — hence
+ * `owlette_service._is_restart_prompt_active` tracking its own launch instead
+ * of scanning.
  *
  * State lives here, not in the component, so the arithmetic is testable without
  * a clock.

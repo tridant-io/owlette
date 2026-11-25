@@ -189,12 +189,21 @@ export async function listConversations(
         .orderBy('updatedAt', 'desc')
         .limit(fetchLimit);
     }
-    if (cursorSnap) q = q.startAfter(cursorSnap);
-    const snap = await q.get();
-    for (const d of snap.docs) {
-      const shaped = shapeConversationDoc(d.data() ?? {});
-      if (!options.includeDeleted && shaped.deletedAt) continue;
-      merged.push(shaped);
+    // soft-deleted rows are dropped after the read, so keep reading this chunk
+    // until it yields fetchLimit live rows or runs out; one short read would end
+    // pagination early.
+    let after = cursorSnap;
+    let live = 0;
+    for (;;) {
+      const snap = await (after ? q.startAfter(after) : q).get();
+      for (const d of snap.docs) {
+        const shaped = shapeConversationDoc(d.data() ?? {});
+        if (!options.includeDeleted && shaped.deletedAt) continue;
+        merged.push(shaped);
+        live++;
+      }
+      if (live >= fetchLimit || snap.docs.length < fetchLimit) break;
+      after = snap.docs[snap.docs.length - 1];
     }
   }
 

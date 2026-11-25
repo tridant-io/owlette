@@ -83,8 +83,8 @@ function isIOSStandalone(): boolean {
 
 /**
  * Firebase codes meaning "this environment cannot open a sign-in popup". Single
- * source of truth for AuthContext's toast decision and both auth pages'
- * remediation notice — all three must agree.
+ * source of truth for both auth pages' remediation notice and for how
+ * AuthContext reports the failure — all three must agree.
  */
 const POPUP_UNAVAILABLE_CODES = new Set([
   'auth/popup-blocked',
