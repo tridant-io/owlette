@@ -23,7 +23,7 @@ import fleet_session
 import site_move_commands
 import sleep_watch
 from command_router import COMMAND_DEFERRED, CommandRouter
-from keep_awake import KeepAwake
+from keep_awake import KeepAwake, on_mains_power, reachable_backend
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import logging
@@ -189,6 +189,10 @@ ROOST_SCRUB_CHECK_ITERATIONS = max(1, ROOST_SCRUB_CHECK_INTERVAL_SECONDS // SLEE
 # report every minute, so a session hold shows within half a minute of it.
 DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS = 30
 DISPLAY_AWAKE_CHECK_ITERATIONS = max(1, DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+# whether a machine that can be swooped into should stay reachable is worked out
+# this often: unplugging a laptop lets it sleep within half a minute.
+STAY_REACHABLE_CHECK_INTERVAL_SECONDS = 30
+STAY_REACHABLE_CHECK_ITERATIONS = max(1, STAY_REACHABLE_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
 # What the desktop app holds of keep screens awake in the user's session
 # (desktop/src-tauri/src/awake.rs): a JSON object carrying `held` (bool) and
 # `at` (unix seconds), rewritten on every change and every minute as the
@@ -1341,6 +1345,15 @@ class OwletteService:
         self._display_awake_daemon = None
         self._display_awake_thread = None
         self._display_awake_mirrored = None
+        # stay reachable for swoop (_check_stay_reachable), macOS only: the
+        # system alone, while swoop is on here (the doorbell's enable bit) and
+        # the Mac is on mains power. The counter starts full so the first tick
+        # decides.
+        self.stay_reachable = (
+            KeepAwake(backend=reachable_backend(), label='stay reachable')
+            if sys.platform == 'darwin' else None)
+        self._stay_reachable_wanted = False
+        self._stay_reachable_counter = STAY_REACHABLE_CHECK_ITERATIONS
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -1956,14 +1969,15 @@ class OwletteService:
         except Exception as e:
             logging.debug(f"[SHUTDOWN] Final status write failed: {e}")
 
-        # After the writes that matter: the hold would go with the process
-        # anyway, and release() waits up to two seconds for the let-go.
-        keep_awake = getattr(self, 'keep_awake', None)
-        if keep_awake is not None:
-            try:
-                keep_awake.release()
-            except Exception as e:
-                logging.debug(f"[SHUTDOWN] keep-awake release failed: {e}")
+        # After the writes that matter: the holds would go with the process
+        # anyway, and release() waits up to two seconds for each let-go.
+        for name in ('keep_awake', 'stay_reachable'):
+            holder = getattr(self, name, None)
+            if holder is not None:
+                try:
+                    holder.release()
+                except Exception as e:
+                    logging.debug(f"[SHUTDOWN] {name} release failed: {e}")
 
         elapsed = time.monotonic() - started
         if elapsed > SCM_STOP_GRACE_SECONDS:
@@ -3330,6 +3344,34 @@ class OwletteService:
         )
         thread.start()
         self._display_awake_thread = thread
+
+    def _check_stay_reachable(self):
+        """Keep a Mac with swoop on from sleeping while it is on mains power,
+        so a session reaches it with nobody there. Only the system is held:
+        the display still sleeps and the screen still locks, and a session
+        wakes them. Runs on the 5s tick at its own 30 s pace; the power source
+        is a quick read, and set_wanted returns at once.
+
+        Not on Windows: a PC whose only lock is the one on waking from sleep
+        would stop locking.
+        """
+        if self.stay_reachable is None or not self.is_alive:
+            # not a Mac; or graceful_shutdown has let go, and a tick still
+            # under way must not take the hold back.
+            return
+        self._stay_reachable_counter += 1
+        if self._stay_reachable_counter < STAY_REACHABLE_CHECK_ITERATIONS:
+            return
+        self._stay_reachable_counter = 0
+        # the current doorbell's word: a stopped one reads off, so an unpaired
+        # machine is let go even before its client is.
+        doorbell = self.swoop_doorbell
+        wanted = (self.firebase_client is not None
+                  and doorbell is not None and doorbell.enabled
+                  and on_mains_power())
+        if wanted != self._stay_reachable_wanted:
+            self.stay_reachable.set_wanted(wanted)
+            self._stay_reachable_wanted = wanted
 
     def _mirror_display_awake(self, client, daemon):
         """Write displayAwake onto the machine document when it has changed.
@@ -10077,6 +10119,7 @@ class OwletteService:
 
                 # The site's keep screens awake switch, read the same way.
                 self._check_keep_awake()
+                self._check_stay_reachable()
 
                 self.current_time = datetime.datetime.now()
 

@@ -56,7 +56,7 @@ the **swoop** entry appears in a machine's context menu once that machine's agen
 
 the viewer opens in a new browser tab at `/swoop/<siteId>/<machineId>`. the monitor icon beside **swoop** opens it in [owlette swoop](#owlette-swoop) instead. `/swoop` lists the machines of a site that your access covers as cards, each one click from a session, with the same icon. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which opens the page in owlette swoop when it is installed and in your browser otherwise; the session itself starts in the page.
 
-a session needs the machine to be online. swoop cannot reach a machine that has not dialled in: the request is refused with `machine_offline`, and the viewer keeps retrying until the machine is back.
+a session needs the machine to be online. swoop cannot reach a machine that has not dialled in: the request is refused with `machine_offline`, and the viewer keeps retrying until the machine is back. an asleep machine cannot take a session either; a Mac with swoop on [stays awake on mains power](#on-macos).
 
 swoop does not open the machine you are sitting at. a browser cannot tell which computer it runs on, so the first try reaches the machine, which sees the session coming from itself and ends it with "you're on this machine". from then on that browser shows swoop greyed out for that machine, labelled **you're on this machine**. the record lives in that browser only (owlette swoop keeps its own) and covers one machine at a time, and a session that does connect to the machine clears it. this needs agent 4.1.6; an older agent shows you a picture of your own screen instead.
 
@@ -317,6 +317,8 @@ a Mac hosts swoop on Apple silicon with macOS 15 or later, from agent 4.1.0. a s
 without Accessibility you can still watch: the picture, the cursor, the audio and the clipboard from the Mac all work, but your keyboard and mouse are dropped, so a paste reaches the Mac's clipboard without being pasted.
 
 - **the screen stays lit.** a session wakes the Mac's display and keeps it from sleeping while it captures
+- **a locked Mac takes a session**, its lock screen in the picture
+- **it stays awake for one on mains power.** while swoop is on for a Mac and it runs on mains power, owlette keeps it from going to sleep, so a session reaches it with nobody there. its display still turns off and its screen still locks as its settings say, and a session wakes the display. on battery it sleeps as its settings say, and a closed lid or sleep from the Apple menu still puts it to sleep. this needs agent 4.2.6
 - **the menu bar shows the capture.** while a session captures, macOS shows its own screen recording indicator in the menu bar, and owlette cannot hide it. stopping the capture from that indicator ends the session for everyone, as an admin's kill does, rather than restarting it over the person at the Mac
 - **macOS asks again after about thirty days** without a capture whether owlette may keep recording the screen. someone at the Mac has to answer it; owlette can neither answer it nor turn it off
 - **the keyboard follows the Mac.** from a PC, ctrl acts as cmd, so ctrl+c copies on the Mac. the keyboard menu has two settings: **shortcuts match** (the default), where ctrl sends cmd and the Windows key sends the Mac's control, and **keys match**, where ctrl is the Mac's own control key and the Windows key is cmd. the menu shows what each of your modifier keys does under the setting you chose. outside fullscreen your own Windows keeps the Windows key for itself, so the menu's **hold cmd for the next key** sends cmd with your next key press. a Mac viewing a Windows machine does the reverse: cmd acts as ctrl, and control is the Windows key. the keyboard menu lists the Mac's own shortcuts (cmd+tab, cmd+space, cmd+q, and cmd+control+q to lock) in place of ctrl+alt+del, print screen and pause are dropped because a Mac has no key for them, and the Mac's keyboard layout decides what a key types
@@ -353,6 +355,7 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 | "you're on this machine" instead of a picture of your own screen | 4.1.6 |
 | host a session on Windows without an NVIDIA GPU | 4.1.9 |
 | keeps its resolution on a slow connection; sharper text on an NVIDIA GPU, where a picture that stops moving also sharpens in about half a second; a cleaner picture when a Windows machine with no GPU, such as a virtual machine, scales its screen down; a Windows display turned to portrait arrives upright | 4.2.0 |
+| a Mac with swoop on stays awake on mains power | 4.2.6 |
 
 ---
 
