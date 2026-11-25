@@ -101,10 +101,10 @@ ed25519-dalek = "=3.0.0"
 
 # Bundle secrets and derived keys are wiped on drop; `derive` for the
 # ZeroizeOnDrop the bundle types need.
-zeroize = { version = "=1.9.1", features = ["derive"] }
+zeroize = { version = "=1.9.2", features = ["derive"] }
 
 # Single-use `jti` values and DTLS/ICE nonces.
-rand = "=0.10.3"
+rand = "=0.10.4"
 
 # capture → encode → per-viewer sender hand-offs. Bounded channels with
 # try_send are how a slow viewer drops frames instead of stalling capture.
@@ -125,7 +125,7 @@ tracing = { version = "=0.1.44", default-features = false, features = ["std", "l
 # Vendor DLLs (NVENC, and whatever spike 6.7 picks) are loaded by absolute path
 # at runtime, never linked. Exit condition: none — this is how the binary stays
 # startable on a machine with no GPU vendor runtime at all.
-libloading = "=0.9.0"
+libloading = "=0.9.1"
 
 # The signaling socket — `src/signal/socket.rs`, the one place in this crate
 # that opens one. The rest of `signal/` is sans-IO behind `SignalTransport`.
