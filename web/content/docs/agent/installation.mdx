@@ -39,7 +39,7 @@ download the file for the machine's platform, run it with administrator rights, 
 2. click the download button in the header bar.
 3. save the Windows installer (the `.exe` above) to the target machine.
 4. right-click the installer and select **Run as administrator**.
-5. follow the installer wizard. its optional **AI tools** page, unticked, asks to add hoot to the AI tools on this computer once a site admin allows it — see [hoot mcp](/docs/agent/hoot-mcp#from-the-installer).
+5. follow the installer wizard. its optional **AI tools** page, unticked, asks a site admin, when you pair, to let the AI tools on this computer act on other machines — see [hoot mcp](/docs/agent/hoot-mcp#from-the-installer).
 6. the owlette window opens on **join a site**, showing the pairing phrase, the authorization link for the server you installed against, and the environment it belongs to. the agent starts polling immediately. there is no console.
 7. authorize the machine: click **open owlette.app/add** in that window to pair from this machine — the button names `dev.owlette.app` on a `/SERVER=dev` install — or visit the displayed link from your phone or another computer and enter the phrase. pairing completes within seconds of approval.
 8. meanwhile the installer registers and starts the Windows service. this is unconditional — a machine that is never paired still ends up with a running service, it simply has no site to talk to yet.
@@ -357,7 +357,7 @@ use **Windows Settings** > **Apps** > **Owlette** > **Uninstall**.
 
 the uninstaller:
 
-1. closes the desktop app and owlette swoop.
+1. has the desktop app take [hoot](/docs/agent/hoot-mcp) out of the AI tools, waits up to 45 seconds for it, then closes the desktop app and owlette swoop. if the app is not running then, or the account it added hoot for is signed out, hoot stays: remove it from the AI tool by hand.
 2. stops and deregisters `OwletteService` by running `tools\owlette-host.exe uninstall`, which waits for the service to fully stop so the agent can report itself offline first.
 3. undoes swoop's machine-wide changes: it removes the `Owlette swoop` firewall rules and puts the `SoftwareSASGeneration` policy back to what it was before swoop set it. a machine that never ran swoop has nothing to undo.
 4. removes the Windows Defender exclusions that pre-PawnIO versions added, plus any leftover legacy WinRing0 driver services. the PawnIO driver stays installed — it is a shared component other tools use; remove it separately from installed apps if it is no longer needed.
@@ -373,6 +373,10 @@ in non-silent uninstall mode, the uninstaller asks whether to remove all owlette
 there is no uninstaller for macOS. remove owlette by hand, in this order — it is the same stop the package itself runs before an upgrade:
 
 ```bash
+# take hoot out of the AI tools: the owlette app does it, then quits
+sudo touch "/Library/Application Support/Owlette/ipc/fleet/uninstalling"
+sleep 30
+
 # stop the service, and the app for the account you are signed in as
 sudo launchctl bootout system/app.owlette.agent
 sudo launchctl bootout gui/$(id -u)/app.owlette.desktop
@@ -382,7 +386,10 @@ sudo rm /Library/LaunchDaemons/app.owlette.agent.plist /Library/LaunchAgents/app
 sudo rm -rf /Applications/owlette.app "/Applications/owlette swoop.app" "/Library/Application Support/Owlette/runtime"
 sudo pkgutil --forget app.owlette.runtime
 sudo pkgutil --forget app.owlette.app
+sudo rm -f "/Library/Application Support/Owlette/ipc/fleet/uninstalling"
 ```
+
+on owlette 4.2.4 and earlier the app ignores the first step. on a machine that was never paired, `touch` says there is no such folder: there is no hoot to take out. if the app is not running, hoot stays: remove it from the AI tool by hand.
 
 this leaves the data root, `/Library/Application Support/Owlette`, with the configuration, tokens and logs a reinstall reads back, and the `_owlette` group. delete the folder and the group (`sudo dseditgroup -o delete _owlette`) only for a full cleanup. quit the app from its menu in any other account that is signed in.
 

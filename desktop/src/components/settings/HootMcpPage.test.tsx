@@ -87,7 +87,7 @@ describe('HootMcpPage states', () => {
     const { onTurnOn } = show()
 
     await screen.findByText(
-      "ai tools on this computer can't use hoot. turning this on asks a site admin to allow it.",
+      "ai tools on this computer list hoot but can't act on other machines until a site admin allows it. turning this on asks one.",
     )
     expect(hootSwitch().getAttribute('aria-checked')).toBe('false')
     expect(screen.getByLabelText('let ai tools on this computer act on other machines in TEC')).toBe(
@@ -259,29 +259,33 @@ describe('HootMcpPage command', () => {
     expect(screen.getByTestId('hoot-command-state').textContent).toBe('click to copy')
   })
 
-  it('shows the command only when granted, with tools found or none', async () => {
-    for (const state of [null, off]) {
-      fleetState.mockResolvedValue(state)
-      const { unmount } = render(
-        <HootMcpPage
-          command={[PYTHON, SCRIPT]}
-          paired
-          siteName="TEC"
-          pending={state === off}
-          onTurnOn={vi.fn()}
-          onTurnOff={vi.fn()}
-        />,
-      )
-      await act(async () => {})
-      expect(screen.queryByTestId('hoot-command')).toBeNull()
-      unmount()
-    }
-    show({ paired: false })
+  it('shows no tools and no command before the service has answered or when not paired', async () => {
+    fleetState.mockResolvedValue(null)
+    show()
+    await act(async () => {})
     expect(screen.queryByTestId('hoot-command')).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
     cleanup()
 
-    fleetState.mockResolvedValue(granted)
+    show({ paired: false })
+    expect(screen.queryByTestId('hoot-command')).toBeNull()
+  })
+
+  it('shows the tools and the command allowed or not, so a tool can be left out either way', async () => {
+    for (const [state, pending] of [
+      [off, false],
+      [off, true],
+      [granted, false],
+    ] as const) {
+      fleetState.mockResolvedValue(state)
+      show({ pending })
+      expect(await screen.findByRole('checkbox', { name: 'cursor' })).toBeTruthy()
+      expect(screen.getByTestId('hoot-command')).toBeTruthy()
+      cleanup()
+    }
+
     hootTools.mockResolvedValue(TOOLS.map((tool) => ({ ...tool, found: false })))
+    fleetState.mockResolvedValue(off)
     show()
     expect(await screen.findByTestId('hoot-command')).toBeTruthy()
   })

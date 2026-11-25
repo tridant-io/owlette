@@ -184,7 +184,7 @@ pub fn run() {
       // status file, and this holds the idle lock and screensaver it cannot.
       awake::spawn(&root);
 
-      // Keeps the AI tools in step with this machine's hoot mcp grant.
+      // Lists hoot in the AI tools, and takes it out again at uninstall.
       hoot_sync::spawn(app.handle());
 
       // Publish our PID so the service stops spawning trays at us. Process-lifetime;

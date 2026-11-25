@@ -35,12 +35,12 @@ def test_symbols_fleet_mcp_imports_exist():
 
 
 def test_server_takes_the_handlers_and_runs_the_way_fleet_mcp_calls_it():
-    """build_server passes a name, version and two handlers; serve() calls
+    """build_server passes a name, version, instructions and two handlers; serve() calls
     create_initialization_options and run(read, write, options)."""
     from mcp.server import Server
 
     params = inspect.signature(Server.__init__).parameters
-    for name in ('name', 'version', 'on_list_tools', 'on_call_tool'):
+    for name in ('name', 'version', 'instructions', 'on_list_tools', 'on_call_tool'):
         assert name in params, f'Server() no longer takes {name}'
 
     server = Server('owlette', version='0.0.0', on_list_tools=None, on_call_tool=None)

@@ -59,7 +59,7 @@ pub fn hoot_tools(sync: State<'_, HootSync>) -> Vec<HootTool> {
   sync.tools()
 }
 
-/// Tick or untick one tool, and bring it in step with the grant now.
+/// Tick or untick one tool, and add hoot to it or take it out now.
 #[tauri::command(async)]
 pub fn set_hoot_tool(
   app: AppHandle,
@@ -70,10 +70,10 @@ pub fn set_hoot_tool(
   sync.set_tool(&app, &id, on)
 }
 
-/// Remove hoot from the tools now and keep the grant off locally until the service agrees.
+/// Show the grant as off until the service agrees. hoot stays in the tools, where it says it is off.
 #[tauri::command(async)]
-pub fn hoot_hold_off(app: AppHandle, sync: State<'_, HootSync>) {
-  sync.hold_off(&app);
+pub fn hoot_hold_off(sync: State<'_, HootSync>) {
+  sync.hold_off();
 }
 
 /// This machine's name, as the fleet knows it (`COMPUTERNAME`).

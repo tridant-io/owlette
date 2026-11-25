@@ -12,6 +12,12 @@ The tool catalog and every result come from the server's fleet routes, so the
 surface grows without an agent release. The one local tool, ``fleet_status``,
 says whether there is a session and, when there is none, how to get one.
 
+The desktop app adds this server to the AI tools on every paired machine,
+allowed or not, so an assistant on a machine that may not act yet is told why
+and where to change it: in the server's instructions, in fleet_status's
+description and in every refused call. The reason comes from the service's
+``state.json`` beside the session file.
+
 Never imports auth_manager or secure_storage and never refreshes anything: a
 401 means read the file once more and retry, nothing else.
 """
@@ -22,6 +28,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 import time
 import uuid
@@ -39,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 
 SESSION_FILE = 'session.json'
+STATE_FILE = 'state.json'
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 IMAGE_CHUNK_BYTES = 64 * 1024
@@ -57,11 +65,43 @@ TERMINAL_STATUSES = ('completed', 'failed')
 
 SESSION_FIELDS = ('token', 'apiBase', 'siteId', 'machineId')
 
-NO_SESSION = (
-    "no session: this machine may not act on its site. a site owner or site admin "
-    "grants it in the site's settings, and the owlette agent on this machine then "
-    "keeps a session for it."
+ABOUT = (
+    "hoot is owlette's fleet tools: an AI assistant on this machine reads and acts on "
+    "the other machines of its owlette site (their processes, logs, metrics, "
+    "screenshots and restarts), as far as a site owner or site admin allows."
 )
+ABOUT_ON = ABOUT + " list_machines names the machines; fleet_status says what this machine may do."
+
+# why there is no session, each saying what the person at this machine can do
+NOT_READY = (
+    "hoot mcp is not ready on this machine: owlette has not heard from the server "
+    "yet. check that owlette is running and this machine is in a site."
+)
+NOT_IN_A_SITE = (
+    "hoot mcp is off: this machine is not in an owlette site. join one from the "
+    "owlette app on this machine."
+)
+NOT_ALLOWED = (
+    "hoot mcp is off: this machine is not allowed to act on other machines in its "
+    "site. a site owner or site admin allows it {where}. tell the person you are "
+    "working with; once it is allowed, restart this tool to load hoot's tools."
+)
+NO_SESSION_YET = (
+    "hoot mcp is allowed on this machine, but owlette holds no session for it right "
+    "now. check that owlette is running; it fetches one within a minute."
+)
+REFUSED = (
+    "owlette refused hoot's tools for this machine ({problem}). once that is fixed, "
+    "restart this tool to load them."
+)
+UNREACHABLE = "hoot mcp could not reach owlette ({error}); try again shortly."
+REACHES_NONE = (
+    "this machine is allowed but reaches no machines yet: a site owner or site "
+    "admin picks them {where}."
+)
+IN_THE_ADMIN_PANEL = "in the owlette admin panel"
+# fleet_session's adminUrl query: two ids, each quoted with nothing safe
+ADMIN_QUERY = re.compile(r'site=[A-Za-z0-9%._~-]+&machine=[A-Za-z0-9%._~-]+')
 NOT_OWLETTE = (
     "no session: the session file names a server that is not owlette ({host}), "
     "so it is ignored."
@@ -87,6 +127,61 @@ def session_path():
     return os.path.join(shared_utils.get_data_path('ipc/fleet'), SESSION_FILE)
 
 
+def state_path():
+    """Where the agent writes what the server last said of this machine's grant."""
+    return os.path.join(shared_utils.get_data_path('ipc/fleet'), STATE_FILE)
+
+
+def read_state():
+    """The service's state file as a dict, or None when there is none to read."""
+    try:
+        with open(state_path(), encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def off_reason(state):
+    """Why this machine has no session, from the state file the service wrote."""
+    if state is None:
+        return NOT_READY
+    if state.get('granted') is True:
+        return NO_SESSION_YET
+    # the service writes no admin link once the machine has left its site
+    if state.get('adminUrl') is None:
+        return NOT_IN_A_SITE
+    return NOT_ALLOWED.format(where=_where(state))
+
+
+def reach_note(state):
+    """What to tell an assistant when the grant names no machines, else None.
+    An older server sends no grant detail (no tier), which says nothing of reach."""
+    if (state is None or state.get('granted') is not True or state.get('wholeSite') is True
+            or not _is_number(state.get('maxTier'))):
+        return None
+    ids = state.get('machineIds')
+    if isinstance(ids, list) and ids:
+        return None
+    return REACHES_NONE.format(where=_where(state))
+
+
+def instructions():
+    """What a client is told about hoot when it connects, which some show the
+    model: while this machine has no session, why and what to do first."""
+    session, why = read_session()
+    if session is None:
+        return f'{why} {ABOUT}'
+    note = reach_note(read_state())
+    return f'{ABOUT_ON} {note}' if note else ABOUT_ON
+
+
+def fleet_status_tool(why):
+    """fleet_status, its description led by why it is the only tool, since a
+    client shows the model tool descriptions."""
+    return {**FLEET_STATUS_TOOL, 'description': f"{why} {FLEET_STATUS_TOOL['description']}"}
+
+
 def read_session():
     """This machine's fleet session as (session, None), or (None, why) when
     there is none to use.
@@ -100,21 +195,21 @@ def read_session():
         with open(session_path(), encoding='utf-8') as f:
             data = json.load(f)
     except (OSError, ValueError):
-        return None, NO_SESSION
+        return None, off_reason(read_state())
     if not isinstance(data, dict) or not all(
         isinstance(data.get(field), str) and data[field] for field in SESSION_FIELDS
     ):
-        return None, NO_SESSION
+        return None, off_reason(read_state())
     # requests refuses such a header with an error that quotes its whole value
     token = data['token']
     if not token.isprintable() or any(c.isspace() for c in token):
-        return None, NO_SESSION
+        return None, off_reason(read_state())
     if not shared_utils.is_owlette_api_base(data['apiBase']):
         return None, NOT_OWLETTE.format(host=_host(data['apiBase']))
     expires_at = data.get('expiresAt')
     if (not _is_number(expires_at) or not math.isfinite(expires_at)
             or expires_at <= time.time()):
-        return None, NO_SESSION
+        return None, off_reason(read_state())
     return {
         'token': data['token'],
         'expiresAt': expires_at,
@@ -187,6 +282,9 @@ class FleetClient:
                 f"server: {_host(session['apiBase'])}",
                 f"expires: {expires.strftime('%Y-%m-%d %H:%M:%S UTC')}",
             ]
+            note = reach_note(read_state())
+            if note:
+                lines.append(note)
         if self.last_refusal:
             lines.append(f'the server refused the last request: {self.last_refusal}')
         return '\n'.join(lines)
@@ -197,14 +295,15 @@ class FleetClient:
         tools = [FLEET_STATUS_TOOL]
         try:
             response = await asyncio.to_thread(self._send, 'GET', '/agent/fleet/tools')
-        except NoSession:
-            return tools
+        except NoSession as e:
+            return [fleet_status_tool(str(e))]
         except requests.RequestException as e:
             logger.warning(f"Could not list the fleet tools: {type(e).__name__}")
-            return tools
+            return [fleet_status_tool(UNREACHABLE.format(error=type(e).__name__))]
         if response.status_code != 200:
-            logger.warning(f"The fleet tools route refused: {_problem_text(response)}")
-            return tools
+            problem = _problem_text(response)
+            logger.warning(f"The fleet tools route refused: {problem}")
+            return [fleet_status_tool(REFUSED.format(problem=problem))]
         catalog = _json(response).get('tools')
         for entry in catalog if isinstance(catalog, list) else []:
             try:
@@ -332,7 +431,8 @@ class FleetClient:
 
 
 def build_server(fleet):
-    """The MCP server named owlette, serving `fleet`'s tools."""
+    """The MCP server named owlette, serving `fleet`'s tools. Its instructions
+    are read once, when the client connects."""
 
     async def list_tools(ctx, params):
         return types.ListToolsResult.model_validate({'tools': await fleet.list_tools()})
@@ -345,6 +445,7 @@ def build_server(fleet):
     return Server(
         'owlette',
         version=shared_utils.APP_VERSION,
+        instructions=instructions(),
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
@@ -398,6 +499,20 @@ def _json(response):
     except ValueError:
         return {}
     return body if isinstance(body, dict) else {}
+
+
+def _where(state):
+    """'at <admin link>' for the state file's link when it is exactly owlette's
+    admin page for hoot as fleet_session writes it, else the words for it: the
+    file's text reaches the model, so nothing else from it is passed on."""
+    url = state.get('adminUrl')
+    if not isinstance(url, str):
+        return IN_THE_ADMIN_PANEL
+    for environment in ('production', 'development'):
+        page = shared_utils.get_api_base_url(environment)[:-len('/api')] + '/admin/hoot?'
+        if url.startswith(page) and ADMIN_QUERY.fullmatch(url[len(page):]):
+            return f'at {url}'
+    return IN_THE_ADMIN_PANEL
 
 
 def _host(url):

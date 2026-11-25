@@ -186,7 +186,7 @@ export default function AddMachinePage() {
             <div className="space-y-3">
               <p className="text-muted-foreground">
                 <span className="break-all text-foreground">{machineId}</span> asked to let
-                ai tools on it use hoot.
+                ai tools on it act on other machines.
               </p>
               <Button
                 onClick={() =>

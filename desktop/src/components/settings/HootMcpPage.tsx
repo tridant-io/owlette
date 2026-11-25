@@ -43,8 +43,9 @@ function openLink(url: string, what: string) {
  * opens the admin panel), and the grant itself arrives from the admin panel
  * through the service's state file, which this page re-reads. `pending` is
  * App's: it asked and has not yet seen the grant. Under the switch: how far and
- * on which machines the admin allowed, the tools the app adds hoot to, and the
- * command for any other tool.
+ * on which machines the admin allowed, then, allowed or not, the tools the app
+ * adds hoot to and the command for any other tool. hoot tells a tool on a
+ * machine not allowed why and where to allow it.
  */
 export function HootMcpPage({
   command,
@@ -128,22 +129,28 @@ export function HootMcpPage({
         <Status>join a site first.</Status>
       ) : state === null ? (
         <Status>waiting for the owlette service to check with the server.</Status>
-      ) : granted ? (
-        <GrantedBody state={state} tools={tools} command={command} onToggleTool={toggleTool} />
-      ) : pending ? (
-        <Status>
-          waiting for a site admin to allow it.
-          {state.adminUrl && (
-            <LinkButton onClick={() => openLink(state.adminUrl!, 'the admin panel')}>
-              open admin panel
-            </LinkButton>
-          )}
-        </Status>
       ) : (
-        <Status>
-          ai tools on this computer can&apos;t use hoot. turning this on asks a site admin to allow
-          it.
-        </Status>
+        <>
+          {granted ? (
+            <Grant state={state} />
+          ) : pending ? (
+            <Status>
+              waiting for a site admin to allow it.
+              {state.adminUrl && (
+                <LinkButton onClick={() => openLink(state.adminUrl!, 'the admin panel')}>
+                  open admin panel
+                </LinkButton>
+              )}
+            </Status>
+          ) : (
+            <Status>
+              ai tools on this computer list hoot but can&apos;t act on other machines until a site
+              admin allows it. turning this on asks one.
+            </Status>
+          )}
+          <Tools tools={tools} onToggleTool={toggleTool} />
+          <CommandBox command={command} />
+        </>
       )}
 
       <div className="border-t py-3">
@@ -169,66 +176,64 @@ function LinkButton({ onClick, children }: { onClick: () => void; children: Reac
   )
 }
 
-function GrantedBody({
-  state,
+function Grant({ state }: { state: FleetState }) {
+  return (
+    <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 border-t py-3 text-sm">
+      <dt className="text-muted-foreground">how far</dt>
+      <dd>{state.maxTier === null ? 'not set' : (TIER_NAMES[state.maxTier] ?? 'not set')}</dd>
+      <dt className="text-muted-foreground">on which machines</dt>
+      <dd className="break-words">{machinesText(state)}</dd>
+      {state.adminUrl && (
+        <>
+          <dt />
+          <dd>
+            <LinkButton onClick={() => openLink(state.adminUrl!, 'the admin panel')}>
+              change in the admin panel
+            </LinkButton>
+          </dd>
+        </>
+      )}
+    </dl>
+  )
+}
+
+function Tools({
   tools,
-  command,
   onToggleTool,
 }: {
-  state: FleetState
   tools: HootTool[] | null
-  command: string[]
   onToggleTool: (tool: HootTool, on: boolean) => void
 }) {
-  const found = tools?.filter((tool) => tool.found) ?? []
-  const missing = tools?.filter((tool) => !tool.found).map((tool) => tool.label) ?? []
+  if (!tools) return null
+  const found = tools.filter((tool) => tool.found)
+  const missing = tools.filter((tool) => !tool.found).map((tool) => tool.label)
+  if (found.length === 0) {
+    return (
+      <Status>
+        no ai tools the app knows are on this computer. add hoot to yours with the command below.
+      </Status>
+    )
+  }
   return (
-    <>
-      <dl className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 border-t py-3 text-sm">
-        <dt className="text-muted-foreground">how far</dt>
-        <dd>{state.maxTier === null ? 'not set' : (TIER_NAMES[state.maxTier] ?? 'not set')}</dd>
-        <dt className="text-muted-foreground">on which machines</dt>
-        <dd className="break-words">{machinesText(state)}</dd>
-        {state.adminUrl && (
-          <>
-            <dt />
-            <dd>
-              <LinkButton onClick={() => openLink(state.adminUrl!, 'the admin panel')}>
-                change in the admin panel
-              </LinkButton>
-            </dd>
-          </>
-        )}
-      </dl>
-      {tools &&
-        (found.length > 0 ? (
-          <div className="flex flex-col gap-2 border-t py-3 text-sm">
-            <span className="text-muted-foreground">add hoot to these ai tools on this computer</span>
-            {found.map((tool) => (
-              <div key={tool.id} className="flex items-center gap-2">
-                <Checkbox
-                  id={`settings-tool-${tool.id}`}
-                  checked={tool.on}
-                  onCheckedChange={(next) => onToggleTool(tool, next === true)}
-                />
-                <Label htmlFor={`settings-tool-${tool.id}`} className="font-normal">
-                  {tool.label}
-                </Label>
-              </div>
-            ))}
-            <span className="text-xs text-muted-foreground">
-              restart a tool after a change.
-              {missing.length > 0 && ` not found here: ${missing.join(', ')}.`}
-            </span>
-          </div>
-        ) : (
-          <Status>
-            no ai tools the app knows are on this computer. add hoot to yours with the command
-            below.
-          </Status>
-        ))}
-      <CommandBox command={command} />
-    </>
+    <div className="flex flex-col gap-2 border-t py-3 text-sm">
+      <span className="text-muted-foreground">add hoot to these ai tools on this computer</span>
+      {found.map((tool) => (
+        <div key={tool.id} className="flex items-center gap-2">
+          <Checkbox
+            id={`settings-tool-${tool.id}`}
+            checked={tool.on}
+            onCheckedChange={(next) => onToggleTool(tool, next === true)}
+          />
+          <Label htmlFor={`settings-tool-${tool.id}`} className="font-normal">
+            {tool.label}
+          </Label>
+        </div>
+      ))}
+      <span className="text-xs text-muted-foreground">
+        restart a tool after a change.
+        {missing.length > 0 && ` not found here: ${missing.join(', ')}.`}
+      </span>
+    </div>
   )
 }
 

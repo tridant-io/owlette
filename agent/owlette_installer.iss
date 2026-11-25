@@ -241,6 +241,9 @@ Name: "{commonappdata}\Owlette\update-staging"
 Type: files; Name: "{commonappdata}\Owlette\logs\gui.log*"
 Type: files; Name: "{commonappdata}\Owlette\logs\tray.log*"
 Type: files; Name: "{commonappdata}\Owlette\logs\report_issue.log*"
+; An uninstall that died part way leaves its hoot marker (RemoveHootFromAiTools);
+; the app this install starts must not read it as an uninstall under way.
+Type: files; Name: "{commonappdata}\Owlette\ipc\fleet\uninstalling"
 ; Clean up shortcuts from earlier versions that have since been renamed, so an
 ; upgrade doesn't leave a confusing duplicate in the Start menu. The single
 ; Start-menu tray entry is now "{group}\Owlette" (it was "Owlette Tray Icon"),
@@ -544,6 +547,9 @@ var
   AppOpenedByHandoff: Boolean;
   // Created in InitializeWizard; stays unticked when ShouldSkipPage hides it.
   HootPage: TInputOptionWizardPage;
+  // Set at uninstall when RemoveHootFromAiTools wrote its marker in a fleet
+  // folder it checked, so usPostUninstall deletes only that file.
+  HootMarkerWritten: Boolean;
 
 // The only table in this script that produces user-facing hosts and configure_site
 // arguments. Everything that needs the server — the configure_site.py args, the GUI
@@ -590,7 +596,7 @@ begin
   if MemoTasksInfo <> '' then Result := Result + MemoTasksInfo + NewLine + NewLine;
   Result := Result + 'Owlette server:' + NewLine + Space + GetWebHost();
   if HootTicked() then
-    Result := Result + NewLine + NewLine + 'AI tools:' + NewLine + Space + 'Add hoot to the AI tools on this computer';
+    Result := Result + NewLine + NewLine + 'AI tools:' + NewLine + Space + 'Ask a site admin to let AI tools here act on other machines';
 end;
 
 function GetConfigureArgs(Param: String): String;
@@ -701,11 +707,12 @@ end;
 
 procedure InitializeWizard();
 begin
-  HootPage := CreateInputOptionPage(wpSelectDir, 'AI tools', 'Let AI tools on this computer use hoot?',
-    'Claude Code, Cursor, VS Code and other tools that support MCP get hoot''s tools to act on other machines in your site. ' +
-    'After pairing, a site admin chooses how far it may go. You can change this later in Owlette''s settings.',
+  HootPage := CreateInputOptionPage(wpSelectDir, 'AI tools', 'Let AI tools on this computer act on other machines?',
+    'Owlette adds hoot to the AI tools it knows on this computer, such as Claude Code, Cursor and VS Code. ' +
+    'Tick this to ask a site admin, when you pair, to let them act on other machines in your site; the admin chooses how far. ' +
+    'You can change this later in Owlette''s settings.',
     False, False);
-  HootPage.Add('Add hoot to the AI tools on this computer');
+  HootPage.Add('Ask a site admin to let AI tools here act on other machines');
   HootPage.Values[0] := False;
 end;
 
@@ -1317,6 +1324,41 @@ begin
   end;
 end;
 
+// The desktop app adds hoot to the AI tools of every account that runs it.
+// Only that account's own app may take it out: this uninstaller is elevated,
+// and an elevated write into a profile is open to a link swapped under it,
+// while runasoriginaluser is not offered at uninstall. So write a marker in
+// ipc\fleet and wait for each running app to remove hoot and quit
+// (hoot_sync.rs). Called at usUninstall, before [UninstallRun]: an upgraded
+// machine's uninstall log still holds older installs' entries, which kill
+// the app at once.
+procedure RemoveHootFromAiTools();
+var
+  ResultCode: Integer;
+begin
+  // ipc is writable by users, so ipc\fleet counts only as the folder the
+  // service made: a real directory owned by SYSTEM or Administrators, which
+  // users can then neither write in nor swap. One a user planted (a junction
+  // or a mount point) would aim this elevated write elsewhere. Exit 0: the
+  // marker is written and the apps running now, by pid, have quit or had 45
+  // seconds; 2: no such folder, so nothing to do. One the service relaunches
+  // meanwhile sees the marker too.
+  Log('Asking the desktop apps to take hoot out of the AI tools...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command "' +
+    '$d = ''' + ExpandConstant('{commonappdata}\Owlette\ipc\fleet') + '''; ' +
+    '$i = Get-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue; ' +
+    'if (-not $i -or -not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { exit 2 }; ' +
+    'if ((Get-Acl -LiteralPath $d).GetOwner([Security.Principal.SecurityIdentifier]).Value -notin ''S-1-5-18'', ''S-1-5-32-544'') { exit 2 }; ' +
+    '[IO.File]::WriteAllText((Join-Path $d ''uninstalling''), ''''); ' +
+    'Get-Process -Name owlette-desktop -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
+    'Wait-Process -Timeout 45 -ErrorAction SilentlyContinue; exit 0"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  HootMarkerWritten := ResultCode = 0;
+  Log('Hoot marker step returned: ' + IntToStr(ResultCode));
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;
@@ -1326,6 +1368,7 @@ begin
   begin
     // Log uninstallation
     Log('Uninstalling Owlette...');
+    RemoveHootFromAiTools();
   end
   else if CurUninstallStep = usPostUninstall then
   begin
@@ -1354,6 +1397,9 @@ begin
       DelTree(DataDir + '\logs\swoop', True, True, True);
       DelTree(DataDir + '\ipc\swoop', True, True, True);
       DeleteFile(DataDir + '\tmp\swoop_side_effects.json');
+      // its apps are gone; a reinstall must not read it as an uninstall under way
+      if HootMarkerWritten then
+        DeleteFile(DataDir + '\ipc\fleet\uninstalling');
       // Remove installed doc files (but not user data files)
       DeleteFile(InstallDir + '\README.md');
       DeleteFile(InstallDir + '\LICENSE');
