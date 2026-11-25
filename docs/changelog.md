@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.2.6] - 2026-11-25
+
 ### changed
 
 - a Mac with swoop on stays awake on mains power, so swoop reaches it locked. [more](https://owlette.app/docs/dashboard/swoop#on-macos)
