@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.2.5] - 2026-11-24
+
 ### added
 
 - the site switcher, in the header and in owlette swoop, shows how many machines you can reach on each site.
