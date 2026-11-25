@@ -236,6 +236,23 @@ describe('hoot mcp in settings', () => {
     expect(await screen.findByText('waiting for a site admin to allow it.')).toBeTruthy()
   })
 
+  it('says hoot mcp is on once a site admin allows it', async () => {
+    pairedConfig()
+    host.fleet = OFF
+    render(<App />)
+    fireEvent.click(await hootSwitch())
+    fireEvent.click(await screen.findByRole('button', { name: 'open admin panel' }))
+    expect(await screen.findByText('waiting for a site admin to allow it.')).toBeTruthy()
+
+    host.fleet = GRANTED
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    expect(await screen.findByText('hoot mcp is on')).toBeTruthy()
+    expect(screen.getByText('restart your ai tools to load its tools.')).toBeTruthy()
+  })
+
   it('says so when the server has not been heard from, and opens nothing', async () => {
     pairedConfig()
     host.fleet = { ...OFF, adminUrl: null }
@@ -270,7 +287,9 @@ describe('hoot mcp in settings', () => {
     fireEvent.click(await hootSwitch())
 
     const confirm = await screen.findByText('turn off hoot mcp?')
-    expect(confirm.closest('[role="dialog"]')!.textContent).toContain('TEST-BOX stops acting on other machines')
+    expect(confirm.closest('[role="dialog"]')!.textContent).toContain(
+      'TEST-BOX stops acting on other machines. ai tools on this computer keep hoot, which then says it is off.',
+    )
     expect(host.holdOff).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'turn off' }))
@@ -290,7 +309,7 @@ describe('hoot mcp in settings', () => {
     expect(screen.getByText('the host could not write the hold')).toBeTruthy()
   })
 
-  it('toasts what the host added when the grant lands, and what it could not', async () => {
+  it('toasts what the host added to the ai tools, and what it could not', async () => {
     render(<App />)
     await waitFor(() => expect(host.synced.length).toBeGreaterThan(0))
 
@@ -298,17 +317,16 @@ describe('hoot mcp in settings', () => {
       for (const handler of host.synced) {
         handler({
           payload: {
-            granted: true,
             added: ['claude code', 'cursor'],
             removed: [],
-            failed: [{ label: 'vs code', error: 'mcp.json has comments' }],
+            failed: [{ label: 'vs code', action: 'add', error: 'mcp.json has comments' }],
           },
         })
       }
     })
 
-    expect(await screen.findByText('hoot mcp is on')).toBeTruthy()
-    expect(screen.getByText('added to claude code and cursor. restart them to use it.')).toBeTruthy()
+    expect(await screen.findByText('hoot is in your ai tools')).toBeTruthy()
+    expect(screen.getByText('added to claude code and cursor. restart them to see it.')).toBeTruthy()
     expect(screen.getByText('could not add hoot to vs code')).toBeTruthy()
     expect(screen.getByText('mcp.json has comments')).toBeTruthy()
   })
@@ -319,7 +337,9 @@ describe('hoot mcp in settings', () => {
 
     act(() => {
       for (const handler of host.synced) {
-        handler({ payload: { granted: false, added: [], removed: [], failed: [{ label: 'codex', error: 'busy' }] } })
+        handler({
+          payload: { added: [], removed: [], failed: [{ label: 'codex', action: 'remove', error: 'busy' }] },
+        })
       }
     })
 

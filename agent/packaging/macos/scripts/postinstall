@@ -44,6 +44,9 @@ if [ ! -f "${DATA_ROOT}/tmp/json.lock" ]; then
   : > "${DATA_ROOT}/tmp/json.lock"
 fi
 chown "root:${GROUP}" "${DATA_ROOT}/tmp/json.lock" && chmod 660 "${DATA_ROOT}/tmp/json.lock"
+# an uninstall's hoot marker (installation.mdx) left behind would read to the
+# app this install starts as an uninstall under way: it strips hoot and quits.
+rm -f "${DATA_ROOT}/ipc/fleet/uninstalling"
 [ -f "${DATA_ROOT}/config/config.json" ] && chmod 660 "${DATA_ROOT}/config/config.json"
 [ -f "${DATA_ROOT}/config/machine_id" ] && chmod 640 "${DATA_ROOT}/config/machine_id"
 # the runtime is the package's: root's, readable by the group, never writable

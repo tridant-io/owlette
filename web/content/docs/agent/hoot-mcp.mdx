@@ -16,11 +16,13 @@ the machine the AI agent runs on must be on Windows or macOS, on owlette 4.2.0 o
 
 ## turn it on
 
+hoot is in the AI tools on the machine from the start: once the machine is in its site, the owlette app adds hoot to the [AI tools](#the-ai-tools) it finds. until a site admin allows the machine, hoot tells the tool it is off and gives the link that allows it, so its agent can pass that on.
+
 turn it on from the machine; a site admin allows it. the site's plan must include hoot.
 
-1. in the owlette desktop app on the machine, open the menu, choose **settings**, then **hoot mcp**, and turn the switch on. confirm. on Windows you can instead tick **AI tools** in the installer, see [from the installer](#from-the-installer). hoot mcp is not offered on Linux.
+1. in the owlette desktop app on the machine, open the menu, choose **settings**, then **hoot mcp**, and turn the switch on. confirm. you can instead open the link hoot gave the AI tool, or on Windows tick **AI tools** in the installer, see [from the installer](#from-the-installer). hoot mcp is not offered on Linux.
 2. the admin panel opens at this machine, on **hoot** under **fleet**. you need to own the site or be one of its admins. the card **allow &lt;machine&gt; to act on other machines** sets **how far** (read to start) and **on which machines** (chosen machines, none picked to start; the whole site only if you choose it). allowing it also turns on the site's **let machines act on other machines**.
-3. within about a minute, the app adds hoot to the AI tools it finds on the machine. restart a tool that was open.
+3. restart an AI tool that was open, so it loads hoot's tools.
 
 every change saves as you make it and takes effect within seconds. you can also allow a machine yourself from the list under **let machines act on other machines**, without the app: the machine follows the admin panel either way.
 
@@ -30,11 +32,11 @@ the app only asks. a machine acts on others when a site admin has allowed it, an
 
 ### from the installer
 
-on Windows, the installer has an optional **AI tools** page, unticked: **Add hoot to the AI tools on this computer**. it is skipped on silent installs, `/ADD=` installs and upgrades of a paired machine. ticked, once the machine is paired the browser's "machine authorized" screen offers **allow it to use hoot** to a site admin, which opens the same card. ticking it grants nothing by itself.
+on Windows, the installer has an optional **AI tools** page, unticked: **Ask a site admin to let AI tools here act on other machines**. it is skipped on silent installs, `/ADD=` installs and upgrades of a paired machine. ticked, once the machine is paired the browser's "machine authorized" screen offers **allow it to use hoot** to a site admin, which opens the same card. ticking it grants nothing by itself.
 
 ### turn it off
 
-turn the switch off in the app, or turn the machine off in the admin panel. the app's switch drops this machine's own grant on the server, so the admin panel shows it off, and removes hoot from the AI tools at once. an admin turning it off removes hoot from them within about a minute. a machine can lower its own grant this way, never raise it.
+turn the switch off in the app, or turn the machine off in the admin panel. the app's switch drops this machine's own grant on the server, so the admin panel shows it off. a machine can lower its own grant this way, never raise it. either way hoot stays in the AI tools and says it is off; untick a tool on the **hoot mcp** page to take hoot out of it. uninstalling owlette takes hoot out of the AI tools again, see [uninstall](/docs/agent/installation#uninstall-on-windows).
 
 ### how far
 
@@ -76,7 +78,9 @@ anything the signed-in user of that machine runs can use what you gave the machi
 
 the MCP server is a script that ships with the owlette agent. it talks to the client over stdio and is started by the client, so there is no port and no service to run.
 
-once the machine is allowed, the app adds hoot to the AI tools it finds for the signed-in user: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex. the **hoot mcp** page in **settings** shows how far and on which machines, with a **change in the admin panel** link, and a tickbox for each tool found; untick one to leave it out. restart a tool after a change.
+once the machine is in its site, allowed or not, the app adds hoot to the AI tools it finds for the signed-in user: Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI and Codex. the **hoot mcp** page in **settings** shows how far and on which machines, with a **change in the admin panel** link, and a tickbox for each tool found; untick one to leave hoot out of it. restart a tool after a change.
+
+on a machine that may not act yet, hoot offers the tool only `fleet_status`, and says why and what to do where an agent reads it: in what the server tells the tool when it connects, in `fleet_status`'s description and in the answer to any call. that is the machine not being allowed (with the admin panel link), not being in a site, owlette not having a session for it, or the server refusing its tools (a plan without hoot, for one). an allowed machine with no machines chosen is told that too.
 
 the app only touches an entry named `hoot` that points at owlette's `fleet_mcp.py`. a different `hoot` is reported and never overwritten, and a config file it cannot parse (VS Code's `mcp.json` with comments, for example) is left alone and reported.
 
@@ -89,7 +93,7 @@ the page has a copy command for tools the app does not know: register a stdio se
 | | Windows | macOS |
 |---|---|---|
 | command | `C:\ProgramData\Owlette\python\python.exe` | `/Library/Application Support/Owlette/runtime/python/bin/python3` |
-| arguments | `C:\ProgramData\Owlettegent\srcleet_mcp.py` | `/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py` |
+| arguments | `C:\ProgramData\Owlette\agent\src\fleet_mcp.py` | `/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py` |
 
 it needs no environment variables and no key.
 
@@ -188,7 +192,7 @@ sequenceDiagram
 
 ## troubleshooting
 
-**the client lists only `fleet_status`.** the machine has no session. run `fleet_status`: it says whether the machine is not turned on, the site's switch is off, or the server refused it. after you turn a machine on, its agent asks for a session within a minute if the machine is online; one that was offline asks within the hour, or as soon as its owlette service starts.
+**the client lists only `fleet_status`.** the machine has no session. run `fleet_status`: it says whether the machine is not turned on, the site's switch is off, or the server refused it. after you turn a machine on, its agent asks for a session within a minute if the machine is online; one that was offline asks within the hour, or as soon as its owlette service starts. a client that was open when the machine was turned on keeps its old list: restart it.
 
 **a tool that was there is gone.** the machine's **how far** setting was lowered, or the tool needs a tier it does not have. the list is cut to the setting each time the client asks.
 

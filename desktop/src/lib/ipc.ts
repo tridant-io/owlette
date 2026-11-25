@@ -154,7 +154,7 @@ export const ARG_RESTART_PROMPT = '--restart-prompt'
 /** Argument the installer passes to open this window straight on the pairing dialog. */
 export const ARG_PAIR = '--pair'
 
-/** Argument the installer adds when the person ticked "add hoot to the ai tools". */
+/** Argument the installer adds when the person ticked asking a site admin to let ai tools here act on other machines. */
 export const ARG_HOOT = '--hoot'
 
 /** True when the launch carried {@link ARG_HOOT}. */
@@ -480,22 +480,21 @@ export function setHootTool(id: string, on: boolean): Promise<void> {
   return invoke<void>('set_hoot_tool', { id, on })
 }
 
-/** Hold hoot off locally until the state file agrees, and take it out of the tools now. */
+/** Show the grant as off until the state file agrees. hoot stays in the tools. */
 export function hootHoldOff(): Promise<void> {
   return invoke<void>('hoot_hold_off')
 }
 
 export interface HootToolsSynced {
-  granted: boolean
   added: string[]
   removed: string[]
-  failed: { label: string; error: string }[]
+  failed: { label: string; action: 'add' | 'remove'; error: string }[]
 }
 
 /** `hoot_sync.rs` */
 const EVENT_HOOT_TOOLS_SYNCED = 'hoot://tools-synced'
 
-/** each time the host changed the tools' configs to match the grant */
+/** each time the host added hoot to a tool's config or took it out */
 export function onHootToolsSynced(handler: (synced: HootToolsSynced) => void): Promise<UnlistenFn> {
   return listen<HootToolsSynced>(EVENT_HOOT_TOOLS_SYNCED, (event) => handler(event.payload))
 }

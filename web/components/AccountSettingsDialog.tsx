@@ -992,8 +992,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         a site owner or admin allows it there and sets how far it may go and on which machines.
                       </li>
                       <li>
-                        within about a minute the app adds hoot to the AI tools it finds on that machine, such
-                        as Claude Code, Cursor and VS Code. restart the tool, then ask its agent to run{' '}
+                        the app adds hoot to the AI tools it finds on that machine, such as Claude Code, Cursor
+                        and VS Code. restart the tool, then ask its agent to run{' '}
                         <code className="font-mono text-foreground">fleet_status</code>: it names the site and the
                         machine, or says why it can&apos;t act.
                       </li>

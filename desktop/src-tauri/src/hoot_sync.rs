@@ -1,15 +1,22 @@
-//! Keeps the AI tools in step with this machine's hoot mcp grant.
+//! Lists hoot in the AI tools on this machine, and reads this machine's hoot mcp grant for the page.
 //!
-//! The service writes `ipc/fleet/state.json` from the server's answer; this polls it and adds hoot
-//! to (or removes it from) every tool [`ai_tools`] finds for the signed-in user. The decisions are
-//! pure functions so they are tested without the filesystem or Tauri; the thread and the commands
-//! only feed them.
+//! The service writes `ipc/fleet/state.json` from the server's answer. Once it has (the machine is
+//! paired and the service has heard from the server), hoot is added to every tool [`ai_tools`]
+//! finds for the signed-in user and the person has not unticked, allowed or not: a machine that
+//! may not act gets hoot's reason and the admin link from the server itself, so an assistant can
+//! say what to do. The decisions are pure functions so they are tested without the filesystem or
+//! Tauri; the thread and the commands only feed them.
+//!
+//! Uninstalling owlette takes hoot out again. Only this user's own app may edit their tools (an
+//! elevated uninstaller writing in a profile is open to a link swapped under it), so the
+//! uninstaller writes `ipc/fleet/uninstalling` and each running app, seeing it, removes hoot from
+//! every tool, ticked or not, and quits; the uninstaller waits for that.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -21,7 +28,14 @@ use crate::paths;
 pub const EVENT_TOOLS_SYNCED: &str = "hoot://tools-synced";
 
 const STATE_REL: &str = "ipc/fleet/state.json";
+/// the uninstaller's marker (owlette_installer.iss, and the macOS steps in installation.mdx).
+const UNINSTALL_MARKER_REL: &str = "ipc/fleet/uninstalling";
+/// how long the marker is honoured, so an uninstall that died part way does not strip hoot and
+/// quit the app at every relaunch from then on.
+const UNINSTALL_FOR: Duration = Duration::from_secs(600);
 const CHOICES_FILE: &str = "hoot_tools.json";
+/// how often the timer looks for the marker; the uninstaller waits on it.
+const WATCH: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_secs(10);
 /// tools rewrite their own config; reconciling this often puts hoot back after they do.
 const HEAL: Duration = Duration::from_secs(300);
@@ -43,7 +57,8 @@ pub struct FleetState {
   pub admin_url: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 enum Action {
   Add,
   Remove,
@@ -55,15 +70,15 @@ struct Seen<'a> {
   configured: bool,
 }
 
-/// What each found tool needs: hoot where it is granted and ticked and missing, nothing where it is
-/// already right. A tool whose entry went stale in place is healed by removing and re-adding on
-/// the next grant change, not here.
-fn plan(granted: bool, off: &[String], seen: &[Seen]) -> Vec<(usize, Action)> {
+/// What each found tool needs: hoot where it is ticked and missing, gone where it is unticked and
+/// there, nothing where it is already right. A tool whose entry went stale in place is healed by
+/// unticking and ticking it, not here.
+fn plan(off: &[String], seen: &[Seen]) -> Vec<(usize, Action)> {
   seen
     .iter()
     .enumerate()
     .filter_map(|(index, tool)| {
-      let want = granted && !off.iter().any(|id| id == tool.id);
+      let want = !off.iter().any(|id| id == tool.id);
       match (want, tool.configured) {
         (true, false) => Some((index, Action::Add)),
         (false, true) => Some((index, Action::Remove)),
@@ -73,8 +88,8 @@ fn plan(granted: bool, off: &[String], seen: &[Seen]) -> Vec<(usize, Action)> {
     .collect()
 }
 
-/// The grant after the local hold, and the hold still standing. `None` grant means no state was
-/// read and nothing is to change; a hold is an explicit off, so it answers even without a file.
+/// The grant the page shows after the local hold, and the hold still standing. `None` grant means
+/// no state was read; a hold is an explicit off, so it answers even without a file.
 fn resolve(
   file: Option<bool>,
   hold: Option<Instant>,
@@ -87,19 +102,16 @@ fn resolve(
 }
 
 struct Applied {
-  granted: bool,
   off: Vec<String>,
   at: Instant,
 }
 
-/// Whether the timer has reason to reconcile: nothing applied yet, the grant or the choices moved,
-/// or it is time to heal.
-fn due(applied: Option<&Applied>, granted: bool, off: &[String], now: Instant) -> bool {
+/// Whether the timer has reason to reconcile: nothing applied yet, the choices moved, or it is
+/// time to heal.
+fn due(applied: Option<&Applied>, off: &[String], now: Instant) -> bool {
   match applied {
     None => true,
-    Some(done) => {
-      done.granted != granted || done.off != off || now.duration_since(done.at) >= HEAL
-    }
+    Some(done) => done.off != off || now.duration_since(done.at) >= HEAL,
   }
 }
 
@@ -114,6 +126,30 @@ fn fresh_failures(last: &mut Vec<Failed>, now: Vec<Failed>) -> Vec<Failed> {
 fn read_state(root: &Path) -> Option<FleetState> {
   let bytes = fs::read(root.join(STATE_REL)).ok()?;
   serde_json::from_slice(&bytes).ok()
+}
+
+/// Whether owlette is being uninstalled: the uninstaller's marker, written within [`UNINSTALL_FOR`]
+/// and, off Windows, by root. `ipc/fleet` is group-writable there, and another account in the group
+/// must not quit this one's app; on Windows only SYSTEM and administrators can write it.
+fn uninstalling(root: &Path) -> bool {
+  fs::metadata(root.join(UNINSTALL_MARKER_REL)).is_ok_and(|meta| {
+    written_by_root(&meta) && meta.modified().is_ok_and(|at| fresh(at, SystemTime::now()))
+  })
+}
+
+fn fresh(written: SystemTime, now: SystemTime) -> bool {
+  now.duration_since(written).is_ok_and(|age| age < UNINSTALL_FOR)
+}
+
+#[cfg(unix)]
+fn written_by_root(meta: &fs::Metadata) -> bool {
+  use std::os::unix::fs::MetadataExt;
+  meta.uid() == 0
+}
+
+#[cfg(not(unix))]
+fn written_by_root(_meta: &fs::Metadata) -> bool {
+  true
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -155,13 +191,13 @@ pub struct HootTool {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct Failed {
   label: &'static str,
+  action: Action,
   error: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Synced {
-  granted: bool,
   added: Vec<&'static str>,
   removed: Vec<&'static str>,
   failed: Vec<Failed>,
@@ -206,14 +242,6 @@ impl HootSync {
     Some(state)
   }
 
-  fn effective_granted(&self) -> Option<bool> {
-    let file = read_state(&self.root).map(|state| state.granted);
-    let mut memory = self.memory();
-    let (granted, hold) = resolve(file, memory.hold, Instant::now());
-    memory.hold = hold;
-    granted
-  }
-
   /// The tools on this machine, ticked or not, for the settings page.
   pub fn tools(&self) -> Vec<HootTool> {
     let env = Env::current();
@@ -249,20 +277,43 @@ impl HootSync {
     Ok(())
   }
 
-  /// Treats the grant as off until the service says so, and removes hoot from the tools now.
-  pub fn hold_off(&self, app: &AppHandle) {
+  /// Shows the grant as off until the service says so. hoot stays in the tools, where it now says
+  /// it is off.
+  pub fn hold_off(&self) {
     self.memory().hold = Some(Instant::now());
-    self.reconcile(app, true);
+  }
+
+  /// Takes hoot out of every tool it is in, ticked or not, and quits: owlette is being uninstalled.
+  fn uninstall(&self, app: &AppHandle) {
+    {
+      let _running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+      if let Some(env) = Env::current() {
+        for target in TOOLS.iter().filter_map(|tool| ai_tools::detect(tool, &env)) {
+          if let Err(error) = ai_tools::remove(&target) {
+            log::warn!("could not remove hoot from {}: {error}", target.tool.label);
+          }
+        }
+      }
+    }
+    log::info!("owlette is being uninstalled: took hoot out of the ai tools it could, quitting");
+    app.exit(0);
   }
 
   fn reconcile(&self, app: &AppHandle, force: bool) {
     let _running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+    // a tick from the page must not put hoot back while the timer is taking it out
+    if uninstalling(&self.root) {
+      return;
+    }
     let Some(command) = agent_cli::hoot_mcp_command() else { return };
     let (Some(python), Some(script)) = (command.first(), command.get(1)) else { return };
-    let Some(granted) = self.effective_granted() else { return };
+    // no state file: the service has not heard from the server for this machine (not paired yet)
+    if read_state(&self.root).is_none() {
+      return;
+    }
     let off = self.off();
     let now = Instant::now();
-    if !force && !due(self.memory().applied.as_ref(), granted, &off, now) {
+    if !force && !due(self.memory().applied.as_ref(), &off, now) {
       return;
     }
     let Some(env) = Env::current() else { return };
@@ -278,24 +329,23 @@ impl HootSync {
     let seen: Vec<Seen> =
       found.iter().map(|(target, configured)| Seen { id: target.tool.id, configured: *configured }).collect();
 
-    let mut synced = Synced { granted, added: Vec::new(), removed: Vec::new(), failed: Vec::new() };
-    for (index, action) in plan(granted, &off, &seen) {
+    let mut synced = Synced { added: Vec::new(), removed: Vec::new(), failed: Vec::new() };
+    for (index, action) in plan(&off, &seen) {
       let target = &found[index].0;
       let label = target.tool.label;
-      match action {
-        Action::Add => match ai_tools::ensure(target, python, script) {
-          Ok(()) => synced.added.push(label),
-          Err(error) => synced.failed.push(Failed { label, error }),
-        },
-        Action::Remove => match ai_tools::remove(target) {
-          Ok(()) => synced.removed.push(label),
-          Err(error) => synced.failed.push(Failed { label, error }),
-        },
+      let done = match action {
+        Action::Add => ai_tools::ensure(target, python, script),
+        Action::Remove => ai_tools::remove(target),
+      };
+      match (done, action) {
+        (Ok(()), Action::Add) => synced.added.push(label),
+        (Ok(()), Action::Remove) => synced.removed.push(label),
+        (Err(error), _) => synced.failed.push(Failed { label, action, error }),
       }
     }
     {
       let mut memory = self.memory();
-      memory.applied = Some(Applied { granted, off, at: Instant::now() });
+      memory.applied = Some(Applied { off, at: Instant::now() });
       synced.failed = fresh_failures(&mut memory.failed, synced.failed);
     }
 
@@ -319,11 +369,22 @@ pub fn spawn(app: &AppHandle) {
   app.manage(HootSync::new(paths::data_root(), dir));
 
   let handle = app.clone();
-  let spawned = thread::Builder::new().name("hoot-sync".to_string()).spawn(move || loop {
-    if let Some(sync) = handle.try_state::<HootSync>() {
-      sync.reconcile(&handle, false);
+  let spawned = thread::Builder::new().name("hoot-sync".to_string()).spawn(move || {
+    let mut reconciled: Option<Instant> = None;
+    loop {
+      if let Some(sync) = handle.try_state::<HootSync>() {
+        // first, so an app the service relaunches during an uninstall never adds hoot back
+        if uninstalling(&sync.root) {
+          sync.uninstall(&handle);
+          return;
+        }
+        if reconciled.map_or(true, |at| at.elapsed() >= POLL) {
+          sync.reconcile(&handle, false);
+          reconciled = Some(Instant::now());
+        }
+      }
+      thread::sleep(WATCH);
     }
-    thread::sleep(POLL);
   });
   if let Err(error) = spawned {
     log::warn!("could not start the hoot tool sync: {error}");
@@ -349,26 +410,29 @@ mod tests {
   }
 
   #[test]
-  fn granted_and_ticked_adds_where_missing_and_leaves_what_is_there() {
+  fn a_ticked_tool_gets_hoot_where_missing_and_keeps_what_is_there() {
     let tools = seen(&[("cursor", false), ("codex", true)]);
-    assert_eq!(plan(true, &[], &tools), vec![(0, Action::Add)]);
+    assert_eq!(plan(&[], &tools), vec![(0, Action::Add)]);
   }
 
   #[test]
-  fn not_granted_removes_ours_everywhere_it_is() {
+  fn an_unticked_tool_loses_hoot_where_it_is_and_never_gets_it() {
     let tools = seen(&[("cursor", true), ("codex", false), ("gemini", true)]);
-    assert_eq!(plan(false, &[], &tools), vec![(0, Action::Remove), (2, Action::Remove)]);
-  }
-
-  #[test]
-  fn an_unticked_tool_is_removed_even_when_granted_and_never_added() {
-    let tools = seen(&[("cursor", true), ("codex", false)]);
-    assert_eq!(plan(true, &off(&["cursor", "codex"]), &tools), vec![(0, Action::Remove)]);
+    assert_eq!(plan(&off(&["cursor", "codex"]), &tools), vec![(0, Action::Remove)]);
   }
 
   #[test]
   fn nothing_found_plans_nothing() {
-    assert!(plan(true, &[], &[]).is_empty());
+    assert!(plan(&[], &[]).is_empty());
+  }
+
+  #[test]
+  fn a_failure_names_what_it_was_doing() {
+    let failure = Failed { label: "vs code", action: Action::Remove, error: "locked".to_string() };
+    assert_eq!(
+      serde_json::to_value(&failure).expect("serialize"),
+      serde_json::json!({ "label": "vs code", "action": "remove", "error": "locked" })
+    );
   }
 
   #[test]
@@ -411,18 +475,17 @@ mod tests {
   #[test]
   fn the_timer_reconciles_on_a_change_or_to_heal_and_otherwise_not() {
     let now = Instant::now();
-    let applied = Applied { granted: true, off: off(&["codex"]), at: now };
+    let applied = Applied { off: off(&["codex"]), at: now };
     let soon = now + Duration::from_secs(10);
-    assert!(due(None, true, &[], soon));
-    assert!(!due(Some(&applied), true, &off(&["codex"]), soon));
-    assert!(due(Some(&applied), false, &off(&["codex"]), soon));
-    assert!(due(Some(&applied), true, &[], soon));
-    assert!(due(Some(&applied), true, &off(&["codex"]), now + HEAL));
+    assert!(due(None, &[], soon));
+    assert!(!due(Some(&applied), &off(&["codex"]), soon));
+    assert!(due(Some(&applied), &[], soon));
+    assert!(due(Some(&applied), &off(&["codex"]), now + HEAL));
   }
 
   #[test]
   fn a_persistent_failure_is_reported_once() {
-    let failure = |label, error: &str| Failed { label, error: error.to_string() };
+    let failure = |label, error: &str| Failed { label, action: Action::Add, error: error.to_string() };
     let mut last = Vec::new();
     let first = fresh_failures(&mut last, vec![failure("vs code", "a")]);
     assert_eq!(first, vec![failure("vs code", "a")]);
@@ -451,6 +514,31 @@ mod tests {
     fs::write(dir.join(CHOICES_FILE), "not json").expect("write");
     assert!(read_off(&dir).is_empty());
     let _ = fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn the_uninstall_marker_counts_only_while_it_is_fresh() {
+    let now = SystemTime::now();
+    assert!(fresh(now - Duration::from_secs(5), now));
+    assert!(!fresh(now - UNINSTALL_FOR - Duration::from_secs(1), now));
+    // a clock set back since it was written: not fresh, so it cannot hold the app down for good
+    assert!(!fresh(now + Duration::from_secs(60), now));
+  }
+
+  #[test]
+  fn the_uninstall_marker_counts_once_written_and_off_windows_only_from_root() {
+    let root = temp("uninstalling");
+    assert!(!uninstalling(&root));
+    let dir = root.join("ipc").join("fleet");
+    fs::create_dir_all(&dir).expect("make the dir");
+    let marker = dir.join("uninstalling");
+    fs::write(&marker, "").expect("write");
+    let meta = fs::metadata(&marker).expect("stat");
+    // this test writes it as whoever runs it: root, or a member of the group
+    assert_eq!(uninstalling(&root), written_by_root(&meta));
+    #[cfg(windows)]
+    assert!(uninstalling(&root));
+    let _ = fs::remove_dir_all(&root);
   }
 
   #[test]

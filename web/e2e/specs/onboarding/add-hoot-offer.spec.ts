@@ -71,7 +71,7 @@ test('a machine that asked for hoot offers the site admin the allow card', async
   await stubAuthorize(page, true);
 
   await pair(page, pairPhrase);
-  await expect(page.getByText(`${MACHINE} asked to let ai tools on it use hoot.`)).toBeVisible();
+  await expect(page.getByText(`${MACHINE} asked to let ai tools on it act on other machines.`)).toBeVisible();
   await expect(page.getByRole('button', { name: 'go to dashboard' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'allow it to use hoot' }).click();

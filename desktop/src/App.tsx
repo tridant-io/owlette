@@ -189,7 +189,13 @@ function App() {
     const read = () => {
       fleetState().then(
         (state) => {
-          if (state?.granted) setHootPending(false)
+          if (!state?.granted) return
+          setHootPending(false)
+          // by id: a focus read and a timer read can both land on the grant
+          toast.success('hoot mcp is on', {
+            id: 'hoot-mcp-on',
+            description: 'restart your ai tools to load its tools.',
+          })
         },
         () => {},
       )
@@ -203,17 +209,17 @@ function App() {
     }
   }, [hootPending])
 
-  // the host adds hoot to (or takes it from) the person's ai tools as the grant
-  // changes; this is where they hear about it
+  // the host adds hoot to the person's ai tools (and takes it from one they
+  // untick); this is where they hear about it
   useEffect(() => {
     let disposed = false
     let stop: (() => void) | undefined
-    void onHootToolsSynced(({ granted, added, failed }) => {
-      if (granted && added.length) {
-        toast.success('hoot mcp is on', { description: `added to ${listOf(added)}. restart them to use it.` })
+    void onHootToolsSynced(({ added, failed }) => {
+      if (added.length) {
+        toast.success('hoot is in your ai tools', { description: `added to ${listOf(added)}. restart them to see it.` })
       }
-      for (const { label, error } of failed) {
-        toast.error(`could not ${granted ? 'add hoot to' : 'remove hoot from'} ${label}`, {
+      for (const { label, action, error } of failed) {
+        toast.error(`could not ${action === 'remove' ? 'remove hoot from' : 'add hoot to'} ${label}`, {
           description: error,
         })
       }
@@ -293,7 +299,7 @@ function App() {
   const handleTurnOffHoot = useCallback(() => {
     setConfirm({
       title: 'turn off hoot mcp?',
-      description: `ai tools on this computer lose hoot's tools, and ${host ?? 'this machine'} stops acting on other machines. a site admin can turn it back on.`,
+      description: `${host ?? 'this machine'} stops acting on other machines. ai tools on this computer keep hoot, which then says it is off. a site admin can turn it back on.`,
       confirmLabel: 'turn off',
       destructive: true,
       onConfirm: () => {

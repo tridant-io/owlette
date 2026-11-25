@@ -54,7 +54,9 @@ beforeEach(() => {
 test('a site admin is offered the allow card, and can decline it', async () => {
   render(<AddMachinePage />);
 
-  expect(await screen.findByText(/asked to let/i)).toHaveTextContent('kiosk 1 asked to let ai tools on it use hoot.');
+  expect(await screen.findByText(/asked to let/i)).toHaveTextContent(
+    'kiosk 1 asked to let ai tools on it act on other machines.',
+  );
   await userEvent.click(screen.getByRole('button', { name: 'allow it to use hoot' }));
   expect(push).toHaveBeenCalledWith('/admin/hoot?site=site%201&machine=kiosk%201');
 
