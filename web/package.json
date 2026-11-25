@@ -75,7 +75,7 @@
     "iron-session": "^8.0.4",
     "js-yaml": "^4.1.1",
     "lucide-react": "^0.577.0",
-    "mermaid": "^11.17.2",
+    "mermaid": "^12.3.0",
     "next": "^16.4.6",
     "next-themes": "^0.4.6",
     "otplib": "^12.0.1",
