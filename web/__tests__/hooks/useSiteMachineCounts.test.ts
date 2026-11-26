@@ -5,7 +5,8 @@
  * each site in the header's switcher. the header is on every page, so nothing
  * is read until the list opens. a scoped member is counted with the
  * `documentId() in` query the rules can prove, never the plain collection, an
- * empty scope is 0 with no read, and a refused count leaves its site out.
+ * empty scope is 0 with no read, and a refused count leaves its site out. on
+ * /demo the counts are the demo's, and nothing is read.
  */
 import { renderHook, waitFor } from '@testing-library/react';
 
@@ -30,7 +31,9 @@ jest.mock('firebase/firestore', () => ({
   }),
 }));
 
+import { createElement, type ContextType, type ReactNode } from 'react';
 import { getCountFromServer } from 'firebase/firestore';
+import { DemoContext } from '@/contexts/DemoContext';
 import { useSiteMachineCounts } from '@/hooks/useSiteMachineCounts';
 
 const read = getCountFromServer as unknown as jest.Mock<Promise<unknown>, [Ref]>;
@@ -84,4 +87,15 @@ it('reads again on the next open, and not on a re-render with fresh but equal ar
 
   await waitFor(() => expect(result.current).toEqual({ whole: 5 }));
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("on /demo it hands back the demo's counts and reads nothing", async () => {
+  const demo = { siteMachineCounts: { 'demo-site': 13 } } as unknown as ContextType<typeof DemoContext>;
+  const { result } = renderHook(() => useSiteMachineCounts(['demo-site'], machineScope, true), {
+    wrapper: ({ children }: { children: ReactNode }) => createElement(DemoContext.Provider, { value: demo }, children),
+  });
+
+  expect(result.current).toEqual({ 'demo-site': 13 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(read).not.toHaveBeenCalled();
 });

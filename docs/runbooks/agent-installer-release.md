@@ -80,6 +80,8 @@ Add the release section before running the installer build:
 
 This is mandatory because every installer bakes the version into its filename.
 
+In the same commit, bring `/demo` up to date with what the release changed on the dashboard, `git diff "$(git describe --tags --abbrev=0)"..HEAD -- web/app/dashboard web/components web/hooks web/contexts`: sample data in `web/lib/demo-data.ts`, props in `web/app/demo/page.tsx`. The build-system skill has the details.
+
 3. Sync version files.
 
 ```bash
@@ -311,6 +313,7 @@ If omitted, the server computes the checksum.
 - [ ] Bump granularity is patch by default, or minor/major by explicit choice.
 - [ ] `/docs/changelog.md` has `## [X.Y.Z] - YYYY-MM-DD`.
 - [ ] `/web/content/docs/changelog.mdx` has the SAME entry — this is the one customers read.
+- [ ] `/demo` shows what this release changed on the dashboard, and `e2e/specs/public/demo.spec.ts` passes.
 - [ ] Agent docs screenshots recaptured against THIS build: `node scripts/refresh-docs-screens.mjs`, and `node scripts/refresh-docs-screens.mjs --check` exits 0. NOT the bare `npm run screenshots:desktop` — that photographs whatever version is already installed.
 - [ ] Changelog is updated before `build_installer_full.bat`.
 - [ ] The build ran with `OWLETTE_SIGN=1`.

@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { toast } from '@/lib/toast';
+import { useDemoContext } from '@/contexts/DemoContext';
 
 /** the machine a phrase names, for the phrase and site it was looked up with. */
 interface Review {
@@ -24,6 +25,8 @@ interface Review {
  * access, not an existing machine, so it works on a brand-new empty site.
  */
 export function useDeviceCodeAuthorize(siteId: string) {
+  // /demo pairs nothing, so a phrase typed there is never sent
+  const demo = useDemoContext();
   const [phrase, setPhrase] = useState('');
   const [isAuthorizing, setIsAuthorizing] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -35,7 +38,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
 
   const send = useCallback(async ({ preview, replaceMachineId }: { preview?: true; replaceMachineId?: string }) => {
     const trimmed = phrase.trim();
-    if (!trimmed || !siteId) return;
+    if (demo || !trimmed || !siteId) return;
 
     setIsAuthorizing(true);
     try {
@@ -89,7 +92,7 @@ export function useDeviceCodeAuthorize(siteId: string) {
     } finally {
       setIsAuthorizing(false);
     }
-  }, [phrase, siteId]);
+  }, [phrase, siteId, demo]);
 
   const lookUp = useCallback(() => send({ preview: true }), [send]);
 

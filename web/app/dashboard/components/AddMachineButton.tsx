@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,6 +15,7 @@ import { PairingReview } from '@/components/PairingReview';
 import { toast } from '@/lib/toast';
 import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
+import { useDemoContext } from '@/contexts/DemoContext';
 import { pairingPreseedFor, serverFlagFor } from '@/lib/environment';
 
 type AddMachineTab = 'enter' | 'generate';
@@ -64,6 +66,7 @@ export function AddMachineButton({
   const [internalOpen, setInternalOpen] = useState(false);
   const [internalTab, setInternalTab] = useState<AddMachineTab>('enter');
   const { version } = useInstallerVersion();
+  const demo = useDemoContext();
 
   // Uncontrolled by default; controlled when the parent passes the props above.
   const open = controlledOpen ?? internalOpen;
@@ -120,6 +123,12 @@ export function AddMachineButton({
 
   // Generate Code: create a pre-authorized phrase for /ADD= bulk deploy
   const handleGenerate = async () => {
+    // /demo shows what a code looks like and creates none
+    if (demo) {
+      setGeneratedPhrase(demo.pairPhrase);
+      setGenerateSuccess(true);
+      return;
+    }
     if (!currentSiteId) return;
 
     setIsGenerating(true);
@@ -195,6 +204,13 @@ export function AddMachineButton({
             <DialogDescription className="text-muted-foreground">
               {currentSiteName ? `adding to "${currentSiteName}"` : 'add a machine to the current site'}
             </DialogDescription>
+            {demo && (
+              <p className="text-xs text-muted-foreground">
+                this demo pairs nothing.{' '}
+                <Link href="/register" className="hl-link text-accent-cyan">sign up</Link>
+                {' '}to add your own machines.
+              </p>
+            )}
           </DialogHeader>
 
           {/* Tab switcher */}
@@ -279,7 +295,7 @@ export function AddMachineButton({
                   ) : (
                     <Button
                       onClick={lookUp}
-                      disabled={!enterPhrase.trim() || isAuthorizing}
+                      disabled={!!demo || !enterPhrase.trim() || isAuthorizing}
                       className="w-full cursor-pointer disabled:cursor-not-allowed"
                     >
                       {isAuthorizing ? (

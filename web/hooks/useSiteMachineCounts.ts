@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { collection, documentId, getCountFromServer, query, where } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { MAX_MACHINE_SCOPE } from '@/lib/machineAccess';
+import { useDemoContext } from '@/contexts/DemoContext';
 
 type Scope = readonly string[] | null;
 
@@ -12,19 +13,21 @@ type Scope = readonly string[] | null;
  * turns true: the header is on every page, so nothing is read until its site
  * list shows. a scoped member counts the machines they reach, which is what
  * their dashboard lists; the rules refuse them a count of the rest. a site whose
- * count fails has no entry.
+ * count fails has no entry. on /demo the counts are the demo's own, and nothing
+ * is read.
  */
 export function useSiteMachineCounts(
   siteIds: readonly string[],
   machineScope: (siteId: string) => Scope,
   open: boolean,
 ): Readonly<Record<string, number>> {
+  const demo = useDemoContext();
   const [counts, setCounts] = useState<Readonly<Record<string, number>>>({});
   // the sites and their scopes as one value, so a fresh array or callback is not a new read
   const key = JSON.stringify(siteIds.map((siteId) => [siteId, machineScope(siteId)]));
 
   useEffect(() => {
-    if (!open || !db) return;
+    if (!open || !db || demo) return;
     const firestore = db;
     const sites = JSON.parse(key) as [string, Scope][];
     let live = true;
@@ -49,7 +52,7 @@ export function useSiteMachineCounts(
     return () => {
       live = false;
     };
-  }, [open, key]);
+  }, [open, key, demo]);
 
-  return counts;
+  return demo ? demo.siteMachineCounts : counts;
 }
