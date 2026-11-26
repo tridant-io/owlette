@@ -9,6 +9,7 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
+import { useDemoContext } from '@/contexts/DemoContext';
 import { db } from '@/lib/firebase';
 
 export type DeviceKind = 'cpu' | 'disk' | 'gpu' | 'nic';
@@ -35,11 +36,11 @@ export interface UseDevicePrefsResult {
 const DEFAULT_PREFS: DevicePrefs = { listView: {}, cardView: {} };
 const DEBOUNCE_MS = 300;
 
-const noop = (): void => {};
-
 export function useDevicePrefs(): UseDevicePrefsResult {
   const { user } = useAuth();
-  const uid = user?.uid ?? null;
+  // a signed-in visitor's own prefs are neither read nor written from the demo
+  const demo = useDemoContext();
+  const uid = demo ? null : user?.uid ?? null;
 
   const [prefs, setPrefs] = useState<DevicePrefs>(DEFAULT_PREFS);
   const [loading, setLoading] = useState<boolean>(true);
@@ -122,8 +123,9 @@ export function useDevicePrefs(): UseDevicePrefsResult {
     }, DEBOUNCE_MS);
   }, [flush]);
 
+  // with no uid (the demo) a pick still shows, kept in this hook's state alone: it goes
+  // when the component holding it unmounts, as card view's does on a switch to list.
   const setListPref = useCallback((kind: DeviceKind, id: string | null): void => {
-    if (!uidRef.current) return;
     // Optimistic local update so UI reflects selection immediately.
     setPrefs((prev) => {
       const next: DeviceSelection = { ...prev.listView };
@@ -131,12 +133,12 @@ export function useDevicePrefs(): UseDevicePrefsResult {
       else next[kind] = id;
       return { ...prev, listView: next };
     });
+    if (!uidRef.current) return;
     pendingRef.current.set(`listView.${kind}`, id);
     schedule();
   }, [schedule]);
 
   const setCardPref = useCallback((machineId: string, kind: DeviceKind, id: string | null): void => {
-    if (!uidRef.current) return;
     setPrefs((prev) => {
       const nextCard = { ...prev.cardView };
       const entry: DeviceSelection = { ...(nextCard[machineId] ?? {}) };
@@ -145,6 +147,7 @@ export function useDevicePrefs(): UseDevicePrefsResult {
       nextCard[machineId] = entry;
       return { ...prev, cardView: nextCard };
     });
+    if (!uidRef.current) return;
     pendingRef.current.set(`cardView.${machineId}.${kind}`, id);
     schedule();
   }, [schedule]);
@@ -160,14 +163,5 @@ export function useDevicePrefs(): UseDevicePrefsResult {
     };
   }, [flush]);
 
-  if (!uid) {
-    return {
-      prefs: DEFAULT_PREFS,
-      loading: false,
-      setListPref: noop,
-      setCardPref: noop,
-    };
-  }
-
-  return { prefs, loading, setListPref, setCardPref };
+  return { prefs, loading: uid ? loading : false, setListPref, setCardPref };
 }

@@ -124,7 +124,7 @@ The agent reads `VERSION` at runtime (`shared_utils.APP_VERSION`) and reports it
 
 ## Building installers
 
-Each platform builds on its own OS. Bump the version and add the `docs/changelog.md` entry, and commit, **before** building: every build bakes the version into the file name and the payload.
+Each platform builds on its own OS. Bump the version, add the `docs/changelog.md` entry and bring `/demo` up to date with the release's dashboard changes (`web/lib/demo-data.ts`), and commit, **before** building: every build bakes the version into the file name and the payload.
 
 ### Windows (.exe)
 

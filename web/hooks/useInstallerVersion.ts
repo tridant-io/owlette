@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { doc, onSnapshot, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { useDemoContext } from '@/contexts/DemoContext';
 import { handleError } from '@/lib/errorHandler';
 import { normalizeInstallerFiles, type InstallerFiles } from '@/lib/installerPlatform';
 
@@ -24,12 +25,14 @@ const NO_FILES: InstallerFiles = {};
  * only want that.
  */
 export function useInstallerVersion() {
+  // /demo offers its sample latest installer and reads nothing
+  const demo = useDemoContext();
   const [versionInfo, setVersionInfo] = useState<InstallerVersionInfo | null>(null);
-  const [loading, setLoading] = useState(!!db);
-  const [error, setError] = useState<string | null>(db ? null : 'Firebase is not configured');
+  const [loading, setLoading] = useState(!!db && !demo);
+  const [error, setError] = useState<string | null>(db || demo ? null : 'Firebase is not configured');
 
   useEffect(() => {
-    if (!db) return;
+    if (!db || demo) return;
 
     // No try/catch: `doc()` only throws on invalid path segments (both literal
     // here) and onSnapshot reports runtime errors through its error callback. A
@@ -63,17 +66,18 @@ export function useInstallerVersion() {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [demo]);
 
-  const files = versionInfo?.files ?? NO_FILES;
+  const latest: Partial<InstallerVersionInfo> | null = demo?.latestInstaller ?? versionInfo;
+  const files = latest?.files ?? NO_FILES;
 
   return {
-    version: versionInfo?.version,
+    version: latest?.version,
     files,
     downloadUrl: files.windows_x64?.download_url ?? null,
-    fileSize: versionInfo?.fileSize,
-    releaseDate: versionInfo?.releaseDate,
-    releaseNotes: versionInfo?.releaseNotes,
+    fileSize: latest?.fileSize,
+    releaseDate: latest?.releaseDate,
+    releaseNotes: latest?.releaseNotes,
     isLoading: loading,
     error,
   };

@@ -23,8 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
-import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Trash2, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
-import { Table, TableBody } from '@/components/ui/table';
+import { Plus, Square, Trash2, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import DownloadButton from '@/components/DownloadButton';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
 import { PairingReview } from '@/components/PairingReview';
@@ -37,10 +36,11 @@ import type { MetricType } from '@/components/charts/ChartTooltip';
 import ScheduleEditor, { ScheduleBlocksEditor } from '@/components/ScheduleEditor';
 import WeekSummaryBar from '@/components/WeekSummaryBar';
 import { MachineCardView } from './components/MachineCardView';
-import { MachineRow, MachineTableHeader, type DeviceUnion, type ShowDropdownFlags } from './components/MachineListView';
+import { MachineRow, MachineTable } from './components/MachineListView';
+import { DashboardWelcome } from './components/DashboardWelcome';
+import { MachinesHeading, type ViewType } from './components/MachinesHeading';
 import { useDevicePrefs } from '@/hooks/useDevicePrefs';
 import { useSlidePanel } from '@/hooks/useSlidePanel';
-import { unionIds } from '@/lib/deviceResolvers';
 import { nextDuplicateName } from '@/lib/processNaming';
 import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { AddMachineButton } from './components/AddMachineButton';
@@ -88,8 +88,6 @@ const LiveViewModal = dynamic(
   () => import('@/components/LiveViewModal').then((m) => ({ default: m.LiveViewModal })),
   { ssr: false, loading: () => null },
 );
-
-type ViewType = 'card' | 'list';
 
 /**
  * A callback whose identity never changes but which always runs the latest
@@ -206,18 +204,6 @@ export default function DashboardPage() {
   const { machines, loading: machinesLoading, error: machinesError, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId, scope);
   const { prefs: devicePrefs, setListPref } = useDevicePrefs();
   const listPref = devicePrefs.listView;
-  const deviceUnion = useMemo<DeviceUnion>(() => ({
-    cpus:  unionIds(machines.map(m => m.devices?.cpus?.map(c => c.id) ?? [])),
-    disks: unionIds(machines.map(m => m.devices?.disks?.map(d => d.id) ?? [])),
-    gpus:  unionIds(machines.map(m => m.devices?.gpus?.map(g => g.id) ?? [])),
-    nics:  unionIds(machines.map(m => m.devices?.nics?.map(n => n.id) ?? [])),
-  }), [machines]);
-  const showDropdown = useMemo<ShowDropdownFlags>(() => ({
-    cpu:  machines.some(m => (m.devices?.cpus?.length  ?? 0) > 1),
-    disk: machines.some(m => (m.devices?.disks?.length ?? 0) > 1),
-    gpu:  machines.some(m => (m.devices?.gpus?.length  ?? 0) > 1),
-    nic:  machines.some(m => (m.devices?.nics?.length  ?? 0) > 1),
-  }), [machines]);
   const { presets: schedulePresets, createPreset, deletePreset: deleteSchedulePreset, updatePreset: updateSchedulePreset } = useSchedulePresets(currentSiteId);
   // deployments span the site, so a scoped member opens no listener ('' reads nothing)
   const { checkMachineHasActiveDeployment } = useDeployments(scope === null ? currentSiteId : '');
@@ -993,11 +979,6 @@ export default function DashboardPage() {
     return null;
   }
 
-  const onlineMachines = machines.filter(m => m.online).length;
-  const totalProcesses = machines.reduce((acc, m) => {
-    return acc + (m.metrics?.processes ? Object.keys(m.metrics.processes).length : 0);
-  }, 0);
-
   const currentSite = sites.find(s => s.id === currentSiteId);
   const editLaunchCopy = launchCopyOf(editingMachineId);
   const pathWarning = pathCheck.warning;
@@ -1023,64 +1004,25 @@ export default function DashboardPage() {
 
       {/* Main content */}
       <main className="relative z-10 mx-auto max-w-screen-2xl p-3 md:p-4">
-        <div className="mt-3 md:mt-2 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-1 truncate">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="cursor-help">
-                      {randomWelcome.text.toLowerCase()}{user.displayName ? `, ${user.displayName.split(' ')[0]}` : ''}!
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="font-semibold">{randomWelcome.language}</p>
-                    <p className="text-xs text-foreground">{randomWelcome.translation}</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </h1>
-            <p className="text-sm md:text-base text-muted-foreground">
-              {randomJoke.toLowerCase()}
-            </p>
-          </div>
-
-          {/* Quick stats - inline with welcome. Wraps at narrow widths so the
-              two stat blocks + divider can never push the page wider than the
-              viewport. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
-            {/* Machines / Online ratio */}
-            <div className="flex items-center gap-2.5">
-              <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-success-surface text-success' : 'bg-muted text-muted-foreground'}`}>
-                <Monitor className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="flex items-baseline gap-0.5 tabular-nums">
-                  <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-success' : 'text-foreground'}`}>{onlineMachines}</span>
-                  <span className="text-xs text-muted-foreground">/ {machines.length}</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-tight">online</p>
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div className="h-8 w-px bg-border" />
-
-            {/* Processes */}
-            <div className="flex items-center gap-2.5">
-              <div className="rounded-md p-1.5 bg-muted text-muted-foreground">
-                <Cog className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="flex items-baseline gap-0.5 tabular-nums">
-                  <span className="text-xl font-bold text-foreground">{totalProcesses}</span>
-                  <span className="text-xs text-muted-foreground">managed</span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-tight">processes</p>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DashboardWelcome
+          greeting={
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help">
+                    {randomWelcome.text.toLowerCase()}{user.displayName ? `, ${user.displayName.split(' ')[0]}` : ''}!
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="font-semibold">{randomWelcome.language}</p>
+                  <p className="text-xs text-foreground">{randomWelcome.translation}</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          }
+          subtitle={randomJoke.toLowerCase()}
+          machines={machines}
+        />
 
         {/* Metrics Detail Panel — animates pixel `height` from 0 →
             measured px on open and back to 0 on close. Wrapper height
@@ -1154,61 +1096,23 @@ export default function DashboardPage() {
               onUpdateSite={updateSite}
             />
 
-            {/* Heading + controls. `flex-wrap` lets the add-machine button and
-                the segmented view toggle drop under the heading at narrow
-                widths instead of squeezing the row past the viewport. */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg md:text-xl font-bold text-foreground">machines</h2>
-
-              <div className="flex items-center gap-2">
-                {/* with plans on, deployments can be outside the plan, and the
-                    deployments page was the only way to update; every plan may
-                    update, so the dashboard offers it too. */}
-                {sitePlan.plan?.enforced && isSiteAdmin(currentSiteId) && (
-                  <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
-                )}
-                {/* Add Machine Button */}
-                <AddMachineButton
-                  currentSiteId={currentSiteId}
-                  currentSiteName={currentSite?.name}
-                />
-
-                {/* Expand/Collapse All + View Toggle */}
-                <div className="flex items-center gap-1 rounded-lg bg-card-sunken p-1 select-none">
-                  <IconButton
-                    label={allExpanded ? 'collapse all' : 'expand all'}
-                    variant="ghost"
-                    size="sm"
-                    onClick={toggleAllExpanded}
-                    className="cursor-pointer text-muted-foreground"
-                  >
-                    {allExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
-                  </IconButton>
-                  <div className="h-4 w-px bg-border" />
-                  <IconButton
-                    label="card view"
-                    aria-pressed={viewType === 'card'}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleViewChange('card')}
-                    className={`cursor-pointer ${viewType === 'card' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                  >
-                    <LayoutGrid className="h-4 w-4" />
-                  </IconButton>
-                  <IconButton
-                    label="list view"
-                    aria-pressed={viewType === 'list'}
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleViewChange('list')}
-                    data-testid="view-toggle-list"
-                    className={`cursor-pointer ${viewType === 'list' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                  >
-                    <List className="h-4 w-4" />
-                  </IconButton>
-                </div>
-              </div>
-            </div>
+            <MachinesHeading
+              allExpanded={allExpanded}
+              onToggleAll={toggleAllExpanded}
+              viewType={viewType}
+              onViewChange={handleViewChange}
+            >
+              {/* with plans on, deployments can be outside the plan, and the
+                  deployments page was the only way to update; every plan may
+                  update, so the dashboard offers it too. */}
+              {sitePlan.plan?.enforced && isSiteAdmin(currentSiteId) && (
+                <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
+              )}
+              <AddMachineButton
+                currentSiteId={currentSiteId}
+                currentSiteName={currentSite?.name}
+              />
+            </MachinesHeading>
 
             {/* Card View — only rendered when active */}
             {viewType === 'card' && (
@@ -1253,44 +1157,31 @@ export default function DashboardPage() {
 
             {/* List View — only rendered when active */}
             {viewType === 'list' && (
-              /* overflow-x-auto (not hidden) gives the fixed-layout table's own scroller
-                 somewhere to go instead of clipping; overflow-y-hidden keeps the rounded
-                 corners clipping the first/last rows. */
-              <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden">
-                <Table style={{ contain: 'layout', tableLayout: 'fixed' }}>
-                  <MachineTableHeader
-                    deviceUnion={deviceUnion}
-                    showDropdown={showDropdown}
+              <MachineTable machines={machines} listPref={listPref} setListPref={setListPref}>
+                {machines.map((machine) => (
+                  <MachineRow
+                    key={machine.machineId}
+                    {...rowHandlers.get(machine.machineId)!}
+                    machine={machine}
+                    schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
                     listPref={listPref}
-                    setListPref={setListPref}
+                    isExpanded={expandedMachineIds.has(machine.machineId)}
+                    currentSiteId={currentSiteId}
+                    siteTimezone={currentSite?.timezone || 'UTC'}
+                    siteTimeFormat={userPreferences.timeFormat || '12h'}
+                    userPreferences={temperaturePrefs}
+                    isSiteAdmin={isSiteAdmin(currentSiteId)}
+                    swoopOff={swoopOff}
+                    noSwoop={noSwoop}
+                    onSiteSettings={onSiteSettings}
+                    planLimit={sitePlan.machineLimitFor(machine.machineId)}
+                    controlLocked={sitePlan.controlLocked}
+                    swoopLocked={sitePlan.swoopLocked}
+                    hootLocked={sitePlan.hootLocked}
+                    planSite={planSite}
                   />
-                  <TableBody>
-                    {machines.map((machine) => (
-                      <MachineRow
-                        key={machine.machineId}
-                        {...rowHandlers.get(machine.machineId)!}
-                        machine={machine}
-                        schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
-                        listPref={listPref}
-                        isExpanded={expandedMachineIds.has(machine.machineId)}
-                        currentSiteId={currentSiteId}
-                        siteTimezone={currentSite?.timezone || 'UTC'}
-                        siteTimeFormat={userPreferences.timeFormat || '12h'}
-                        userPreferences={temperaturePrefs}
-                        isSiteAdmin={isSiteAdmin(currentSiteId)}
-                        swoopOff={swoopOff}
-                        noSwoop={noSwoop}
-                        onSiteSettings={onSiteSettings}
-                        planLimit={sitePlan.machineLimitFor(machine.machineId)}
-                        controlLocked={sitePlan.controlLocked}
-                        swoopLocked={sitePlan.swoopLocked}
-                        hootLocked={sitePlan.hootLocked}
-                        planSite={planSite}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                ))}
+              </MachineTable>
             )}
           </div>
         ) : notice === 'load_error' && machinesError ? (

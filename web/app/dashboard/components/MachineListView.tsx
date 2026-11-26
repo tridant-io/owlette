@@ -5,9 +5,9 @@
 
 'use client';
 
-import React, { memo, useEffect, useId, useRef, useState } from 'react';
+import React, { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useMinuteTick } from '@/hooks/useMinuteTick';
-import { TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -42,14 +42,15 @@ import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, 
 import { machineClockTooltip } from '@/lib/scheduleClockCopy';
 import { formatThroughput } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
-import { resolveDevice } from '@/lib/deviceResolvers';
+import { resolveDevice, unionIds } from '@/lib/deviceResolvers';
 import { type DeviceKind, type DeviceSelection } from '@/hooks/useDevicePrefs';
+import { useCanAdminMachine } from '@/hooks/useCanAdminMachine';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import type { Machine, Process, LaunchMode, ScheduleBlock } from '@/hooks/useFirestore';
 import type { MetricType } from '@/components/charts';
 
 /** Per-kind device id union across visible machines; populates the column-header dropdowns. */
-export interface DeviceUnion {
+interface DeviceUnion {
   cpus: string[];
   disks: string[];
   gpus: string[];
@@ -57,7 +58,7 @@ export interface DeviceUnion {
 }
 
 /** Which column headers should render a device dropdown (vs. plain label). */
-export interface ShowDropdownFlags {
+interface ShowDropdownFlags {
   cpu: boolean;
   disk: boolean;
   gpu: boolean;
@@ -116,7 +117,7 @@ function DeviceColumnHeader({
 }
 
 /**
- * COLUMN WIDTH BUDGET — keep both headers and `MachineRow`'s cells in sync.
+ * COLUMN WIDTH BUDGET — keep the header and `MachineRow`'s cells in sync.
  *
  * The table is `tableLayout: 'fixed'`, so these declared widths ARE the layout at
  * each tier's narrowest viewport; above that the surplus is distributed
@@ -140,27 +141,6 @@ function DeviceColumnHeader({
  * against the card's right border.
  */
 
-/** Plain-label header for callers (demo, dashboard) that render the table directly and
- * don't wire `deviceUnion` through. */
-export const MemoizedTableHeader = memo(function MemoizedTableHeader() {
-  return (
-    <TableHeader className="sticky top-0 z-10 bg-card-header header-lit">
-      <TableRow className="border-border/60 hover:bg-transparent">
-        <TableHead className="text-foreground w-8"></TableHead>
-        <TableHead className="text-foreground w-[130px]">hostname</TableHead>
-        <TableHead className="text-foreground w-[72px]">status</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[150px] sm:overflow-visible sm:!px-2">cpu</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 sm:w-[110px] sm:overflow-visible sm:!px-2">ram</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[150px] lg:overflow-visible lg:!px-2">disk</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 lg:w-[190px] lg:overflow-visible lg:!px-2">gpu</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 xl:w-[130px] xl:overflow-visible xl:!px-2">network</TableHead>
-        <TableHead className="text-foreground w-0 overflow-hidden !px-0 md:w-[96px] md:overflow-visible md:!px-2">last heartbeat</TableHead>
-        <TableHead className="text-foreground w-12"></TableHead>
-      </TableRow>
-    </TableHeader>
-  );
-});
-
 interface MachineTableHeaderProps {
   deviceUnion: DeviceUnion;
   showDropdown: ShowDropdownFlags;
@@ -170,7 +150,7 @@ interface MachineTableHeaderProps {
 
 // Memoized against metrics-tick flicker. Memo compares props by reference, so callers must
 // pass stable listPref/setListPref and a memoized deviceUnion/showDropdown.
-export const MachineTableHeader = memo(function MachineTableHeader({
+const MachineTableHeader = memo(function MachineTableHeader({
   deviceUnion,
   showDropdown,
   listPref,
@@ -229,6 +209,53 @@ export const MachineTableHeader = memo(function MachineTableHeader({
     </TableHeader>
   );
 });
+
+/**
+ * the list view's table: its header offers a device dropdown wherever a listed
+ * machine has more than one, and `children` are its rows (`MachineRow`). /demo
+ * renders it too, so the two cannot drift apart.
+ */
+export function MachineTable({
+  machines,
+  listPref,
+  setListPref,
+  children,
+}: {
+  machines: readonly Machine[];
+  listPref: DeviceSelection;
+  setListPref: (kind: DeviceKind, id: string | null) => void;
+  children: React.ReactNode;
+}) {
+  const deviceUnion = useMemo<DeviceUnion>(() => ({
+    cpus:  unionIds(machines.map(m => m.devices?.cpus?.map(c => c.id) ?? [])),
+    disks: unionIds(machines.map(m => m.devices?.disks?.map(d => d.id) ?? [])),
+    gpus:  unionIds(machines.map(m => m.devices?.gpus?.map(g => g.id) ?? [])),
+    nics:  unionIds(machines.map(m => m.devices?.nics?.map(n => n.id) ?? [])),
+  }), [machines]);
+  const showDropdown = useMemo<ShowDropdownFlags>(() => ({
+    cpu:  machines.some(m => (m.devices?.cpus?.length  ?? 0) > 1),
+    disk: machines.some(m => (m.devices?.disks?.length ?? 0) > 1),
+    gpu:  machines.some(m => (m.devices?.gpus?.length  ?? 0) > 1),
+    nic:  machines.some(m => (m.devices?.nics?.length  ?? 0) > 1),
+  }), [machines]);
+
+  return (
+    /* overflow-x-auto (not hidden) gives the fixed-layout table's own scroller
+       somewhere to go instead of clipping; overflow-y-hidden keeps the rounded
+       corners clipping the first/last rows. */
+    <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden">
+      <Table style={{ contain: 'layout', tableLayout: 'fixed' }}>
+        <MachineTableHeader
+          deviceUnion={deviceUnion}
+          showDropdown={showDropdown}
+          listPref={listPref}
+          setListPref={setListPref}
+        />
+        <TableBody>{children}</TableBody>
+      </Table>
+    </div>
+  );
+}
 
 interface MachineRowProps {
   machine: Machine;
@@ -365,8 +392,8 @@ export const MachineRow = memo(function MachineRow({
   const memoryTotalGb =
     resolvedMemoryTotalGb !== null ? Math.round(resolvedMemoryTotalGb * 10) / 10 : null;
   const isDemo = !!useDemoContext();
-  const { userPreferences: fullPrefs, isMachineAdmin } = useAuth();
-  const canAdminMachine = isMachineAdmin(currentSiteId, machine.machineId);
+  const { userPreferences: fullPrefs } = useAuth();
+  const canAdminMachine = useCanAdminMachine(currentSiteId)(machine.machineId);
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
   const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 

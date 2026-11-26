@@ -44,6 +44,7 @@ import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import { useDevicePrefs, type DeviceKind, type DeviceSelection } from '@/hooks/useDevicePrefs';
+import { useCanAdminMachine } from '@/hooks/useCanAdminMachine';
 import { useDisplayState } from '@/hooks/useDisplayState';
 import { DisplayCanvas } from '@/components/charts/DisplayCanvas';
 import { resolveDevice, shouldShowDeviceDropdown } from '@/lib/deviceResolvers';
@@ -1314,7 +1315,8 @@ export function MachineCardView({
   planSite,
   ...handlers
 }: MachineCardViewProps) {
-  const { userPreferences, isSiteAdmin, isMachineAdmin } = useAuth();
+  const { userPreferences, isSiteAdmin } = useAuth();
+  const canAdminMachine = useCanAdminMachine(currentSiteId);
   const canSiteAdmin = isSiteAdmin(currentSiteId);
   const { prefs, setCardPref } = useDevicePrefs();
   const temperaturePrefs = useMemo(
@@ -1346,7 +1348,7 @@ export function MachineCardView({
           siteTimeFormat={siteTimeFormat}
           userPreferences={temperaturePrefs}
           isSiteAdmin={canSiteAdmin}
-          isMachineAdmin={isMachineAdmin(currentSiteId, machine.machineId)}
+          isMachineAdmin={canAdminMachine(machine.machineId)}
           swoopOff={swoopOff}
           noSwoop={noSwoop}
           cardPref={prefs.cardView[machine.machineId] ?? NO_CARD_PREF}
