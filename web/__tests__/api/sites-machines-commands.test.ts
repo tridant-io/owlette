@@ -956,6 +956,48 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     expect(lastMergedCommand().type).toBe('capture_screenshot');
   });
 
+  it('reads the request body exactly once and never through a clone', async () => {
+    // production refused every update in a 10-machine batch with "could not
+    // read request body" (2026-11-26): the route peeked at `type` on a clone and
+    // the handler read the original again, two reads of one streamed body that
+    // fail under concurrent requests. a request that refuses to be cloned and
+    // counts its reads is the contract; the member case proves the peek still
+    // routes a view command to the MACHINE_VIEW handler.
+    mocks.userDocs.set('user-1', { role: 'member', sites: [SITE] });
+    seedMember(SITE, 'user-1', 'member');
+    mocks.get.mockReset();
+    mocks.get.mockResolvedValueOnce(docSnapshot('idem', null));
+    mocks.get.mockResolvedValueOnce(docSnapshot(MACHINE, { online: true }));
+    mocks.get.mockImplementation(() => {
+      throw new Error('unexpected extra firestore read on commands POST');
+    });
+
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'idem-read-once' },
+        body: { type: 'capture_screenshot', params: { monitor: 'primary' } },
+      },
+    );
+    let reads = 0;
+    const text = req.text.bind(req);
+    req.text = async () => {
+      reads += 1;
+      return text();
+    };
+    req.clone = () => {
+      throw new Error('cloned');
+    };
+
+    const res = await commandsPOST(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+    });
+    expect(res.status).toBe(202);
+    expect(reads).toBe(1);
+    expect(lastMergedCommand().type).toBe('capture_screenshot');
+  });
+
   it('403 — member may NOT reboot_machine (MACHINE_EXEC_COMMAND still required)', async () => {
     // The caller must be a plain MEMBER here, not the owner: the beforeEach seeds
     // an OWNER row for `user-1`, and owner carries MACHINE_EXEC_COMMAND, so
