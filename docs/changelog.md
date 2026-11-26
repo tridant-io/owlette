@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed
+
+- updating several machines at once from the dashboard no longer fails with "could not read request body".
+
 ## [4.2.7] - 2026-11-25
 
 ### fixed

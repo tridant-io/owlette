@@ -4,8 +4,7 @@
  * idempotency, api-key scope, RFC 7807 errors and the 202 envelope are all
  * unchanged public contract.
  */
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { problem, problemFromError, problemValidation, ProblemType } from '@/lib/apiErrors';
 import { commandErrorToProblem, unsupportedCommandType } from '@/lib/machineCommandProblem';
 import { applyAuthDeprecations, readAndParseJsonBody } from '../../../../../_shared';
@@ -533,16 +532,34 @@ export async function POST(
   request: NextRequest,
   routeContext: { params: Promise<RouteParams> },
 ): Promise<NextResponse> {
-  // Peek on a CLONE so the chosen handler still gets an unconsumed body.
-  // Anything not a view command — including unparseable or unknown — routes to
-  // the stricter handler, which also emits the right 400.
-  let cmdType = '';
+  // One read of the body. Peeking at `type` on a clone and letting the handler
+  // read the original again is two reads of one streamed body, which refused
+  // every update in a 10-machine batch in production ("could not read request
+  // body", 2026-11-26), as it did swoop sessions before. The bytes are read here
+  // once and handed on in a fresh request. Anything not a view command,
+  // unparseable or unknown included, routes to the stricter handler, which also
+  // emits the right 400.
+  let raw: string | null = null;
   try {
-    const peek = (await request.clone().json()) as { type?: unknown };
-    if (typeof peek?.type === 'string') cmdType = peek.type.trim();
+    raw = await request.text();
   } catch {
-    // execHandler's coreHandler emits the proper validation error.
+    // Unreadable here is unreadable there: let the handler report it.
+  }
+  let cmdType = '';
+  if (raw !== null) {
+    try {
+      const peek = JSON.parse(raw) as { type?: unknown };
+      if (typeof peek?.type === 'string') cmdType = peek.type.trim();
+    } catch {
+      // execHandler's coreHandler emits the proper validation error.
+    }
   }
   const handler = VIEW_COMMAND_TYPES.has(cmdType) ? viewHandler : execHandler;
-  return handler(request, routeContext);
+  if (raw === null) return handler(request, routeContext);
+  const replay = new NextRequest(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: raw,
+  });
+  return handler(replay, routeContext);
 }
