@@ -20,6 +20,9 @@ import type { SparklineDataPoint } from '@/components/charts';
 import type { ChartDataPoint } from '@/hooks/useHistoricalMetrics';
 import type { TimeRange } from '@/components/charts/TimeRangeSelector';
 import type { DisplayProfile, AssignedLayout, MonitorInfo } from '@/hooks/useDisplayState';
+import type { MachineOsFamily } from '@/lib/machineOs';
+import type { InstallerFile } from '@/lib/installerPlatform';
+import type { InstallerVersionInfo } from '@/hooks/useInstallerVersion';
 
 /** Seeded PRNG — demo data must be deterministic across renders. */
 function seededRandom(seed: number) {
@@ -61,36 +64,71 @@ export const DEMO_SITE = {
 
 interface GpuDef { name: string; usageBase: number; vramTotal: number; vramUsed: number }
 
+/**
+ * what each OS calls a demo machine's disks and network adapters, as its agent
+ * reports them (agent/src/hardware_profile.py): the system disk and the wired
+ * adapter first.
+ */
+const OS_DEVICES: Record<MachineOsFamily, { disks: readonly string[]; fs: string; nics: readonly string[]; arch: string }> = {
+  windows: { disks: ['C:', 'D:'], fs: 'NTFS', nics: ['Ethernet', 'Wi-Fi'], arch: 'x64' },
+  macos: { disks: ['/', '/Volumes/Media'], fs: 'apfs', nics: ['en0', 'en1'], arch: 'arm64' },
+  linux: { disks: ['/', '/mnt/media'], fs: 'ext4', nics: ['enp3s0', 'wlp4s0'], arch: 'x64' },
+};
+
 interface MachineDef {
   id: string;
+  osFamily: MachineOsFamily;
+  osVersion: string;
   online: boolean;
+  /** a mac that went to sleep: offline, but not an outage */
+  asleep?: boolean;
   rebooting?: boolean;
   rebootPending?: Machine['rebootPending'];
+  /** a restart held until the machine's active hours end (unix seconds) */
+  rebootDeferredUntil?: number;
   cpuName: string;
   cpuBase: number;
   memBase: number;
   memTotal: number;
   diskBase: number;
   diskTotal: number;
+  /** nvidia or apple only, the gpus the agent reads (shared_utils.get_gpus); an intel one reports nothing */
   gpu?: GpuDef;
   /** Additional GPUs beyond the primary — keyed GPU1, GPU2… in profile + metrics. */
   extraGpus?: GpuDef[];
   network?: { latencyMs: number; packetLoss: number; txBps: number; rxBps: number; txUtil: number; rxUtil: number; linkSpeed: number };
-  /** Number of monitors whose live config drifts from the assigned layout. */
-  displayDriftCount?: number;
   processes: Omit<Process, 'responsive' | 'last_updated' | 'index' | 'priority' | 'visibility' | 'time_delay' | 'time_to_init' | 'relaunch_attempts' | 'cwd'>[];
   agentVersion: string;
 }
 
+/** a machine's disk and adapter ids; kiosks (16 GB or less) have one of each */
+function deviceIds(def: MachineDef): { disks: readonly string[]; nics: readonly string[] } {
+  const { disks, nics } = OS_DEVICES[def.osFamily];
+  return def.memTotal <= 16 ? { disks: disks.slice(0, 1), nics: nics.slice(0, 1) } : { disks, nics };
+}
+
+const WIN_PRO = 'Windows 11 Pro 24H2';
+const WIN_KIOSK = 'Windows 11 IoT Enterprise LTSC 2024';
+const MACOS_VERSION = 'macOS 26.1';
+
+/**
+ * the release this build is: next.config.ts reads it from package.json, which
+ * sync-versions.js moves on every release. the demo's agents and its latest
+ * installer run it, so neither falls behind.
+ */
+const DEMO_RELEASE = process.env.NEXT_PUBLIC_APP_VERSION ?? '';
+
 const machineDefs: MachineDef[] = [
   {
     id: 'lobby-east-01',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'Intel Core i7-12700K',
     cpuBase: 32, memBase: 58, memTotal: 64, diskBase: 45, diskTotal: 2000,
     gpu: { name: 'NVIDIA RTX PRO 4000 (Blackwell)', usageBase: 65, vramTotal: 12, vramUsed: 8.4 },
     network: { latencyMs: 8, packetLoss: 0, txBps: 2500000, rxBps: 15000000, txUtil: 12, rxUtil: 28, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 5234, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/Derivative/TouchDesigner/bin/TouchDesigner.exe', file_path: 'C:/Projects/lobby-east.toe' },
       { id: 'p2', name: 'Chrome', status: 'RUNNING', pid: 8291, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/Google/Chrome/Application/chrome.exe', file_path: '--kiosk https://signage.horizon-museum.org' },
@@ -98,12 +136,14 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'lobby-west-02',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'Intel Core i7-12700K',
     cpuBase: 28, memBase: 52, memTotal: 64, diskBase: 43, diskTotal: 2000,
     gpu: { name: 'NVIDIA RTX PRO 4000 (Blackwell)', usageBase: 58, vramTotal: 12, vramUsed: 7.1 },
     network: { latencyMs: 9, packetLoss: 0, txBps: 1800000, rxBps: 12000000, txUtil: 10, rxUtil: 22, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 4102, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/Derivative/TouchDesigner/bin/TouchDesigner.exe', file_path: 'C:/Projects/lobby-west.toe' },
       { id: 'p2', name: 'Node.js', status: 'RUNNING', pid: 9120, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/nodejs/node.exe', file_path: 'C:/Projects/data-feed/server.js' },
@@ -111,12 +151,14 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'gallery-main',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'AMD Ryzen 9 7950X',
     cpuBase: 45, memBase: 72, memTotal: 128, diskBase: 38, diskTotal: 4000,
     gpu: { name: 'NVIDIA RTX PRO 6000 (Blackwell)', usageBase: 78, vramTotal: 24, vramUsed: 18.2 },
     network: { latencyMs: 5, packetLoss: 0, txBps: 45000000, rxBps: 28000000, txUtil: 35, rxUtil: 22, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 3310, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/Derivative/TouchDesigner/bin/TouchDesigner.exe', file_path: 'C:/Projects/gallery-immersive.toe' },
       { id: 'p2', name: 'OBS Studio', status: 'RUNNING', pid: 7654, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/obs-studio/bin/64bit/obs64.exe', file_path: '' },
@@ -124,14 +166,30 @@ const machineDefs: MachineDef[] = [
     ],
   },
   {
+    id: 'gallery-mac-mini',
+    osFamily: 'macos',
+    osVersion: MACOS_VERSION,
+    online: false,
+    asleep: true, // the gallery's mac is asleep after hours
+    cpuName: 'Apple M4 Pro',
+    cpuBase: 20, memBase: 46, memTotal: 24, diskBase: 52, diskTotal: 1000,
+    gpu: { name: 'Apple M4 Pro', usageBase: 35, vramTotal: 24, vramUsed: 6.2 },
+    network: { latencyMs: 6, packetLoss: 0, txBps: 900000, rxBps: 6000000, txUtil: 6, rxUtil: 14, linkSpeed: 1000000000 },
+    agentVersion: DEMO_RELEASE,
+    processes: [
+      { id: 'p1', name: 'Resolume Arena', status: 'RUNNING', pid: 1412, autolaunch: true, launch_mode: 'scheduled', exe_path: '/Applications/Resolume Arena/Arena.app', file_path: '' },
+    ],
+  },
+  {
     id: 'theater-projector',
+    osFamily: 'windows',
+    osVersion: 'Windows 11 Pro 23H2',
     online: true,
     cpuName: 'Intel Core i9-13900K',
     cpuBase: 55, memBase: 65, memTotal: 64, diskBase: 61, diskTotal: 2000,
     gpu: { name: 'NVIDIA RTX PRO 5000 (Blackwell)', usageBase: 82, vramTotal: 16, vramUsed: 13.8 },
     network: { latencyMs: 7, packetLoss: 0, txBps: 35000000, rxBps: 20000000, txUtil: 28, rxUtil: 16, linkSpeed: 1000000000 },
-    displayDriftCount: 1, // projector booted into a different mode than assigned
-    agentVersion: '2.4.0',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 6710, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/Derivative/TouchDesigner/bin/TouchDesigner.exe', file_path: 'C:/Projects/theater-show.toe' },
       { id: 'p2', name: 'VLC', status: 'RUNNING', pid: 1190, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/VideoLAN/VLC/vlc.exe', file_path: 'C:/Media/preshow-loop.mp4 --fullscreen --loop' },
@@ -139,6 +197,8 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'render-server-01',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'AMD Ryzen Threadripper PRO 7975WX',
     cpuBase: 62, memBase: 68, memTotal: 256, diskBase: 35, diskTotal: 8000,
@@ -147,8 +207,7 @@ const machineDefs: MachineDef[] = [
       { name: 'NVIDIA RTX PRO 6000 (Blackwell)', usageBase: 84, vramTotal: 48, vramUsed: 35.1 },
     ],
     network: { latencyMs: 4, packetLoss: 0, txBps: 80000000, rxBps: 60000000, txUtil: 65, rxUtil: 48, linkSpeed: 1000000000 },
-    displayDriftCount: 2, // headless server — 2 dummy plugs report unexpected EDIDs
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 8801, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/Derivative/TouchDesigner/bin/TouchDesigner.exe', file_path: 'D:/Projects/render-farm.toe' },
       { id: 'p2', name: 'OBS Studio', status: 'RUNNING', pid: 8802, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/obs-studio/bin/64bit/obs64.exe', file_path: '' },
@@ -157,48 +216,68 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'kiosk-entrance-1',
+    osFamily: 'windows',
+    osVersion: WIN_KIOSK,
     online: true,
     cpuName: 'Intel Core i5-12400',
     cpuBase: 18, memBase: 42, memTotal: 16, diskBase: 55, diskTotal: 512,
-    gpu: { name: 'Intel UHD Graphics 730', usageBase: 15, vramTotal: 2, vramUsed: 0.6 },
     network: { latencyMs: 12, packetLoss: 0, txBps: 500000, rxBps: 3000000, txUtil: 4, rxUtil: 8, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'Chrome', status: 'RUNNING', pid: 4450, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/Google/Chrome/Application/chrome.exe', file_path: '--kiosk https://kiosk.horizon-museum.org' },
     ],
   },
   {
     id: 'kiosk-entrance-2',
+    osFamily: 'linux',
+    osVersion: 'Ubuntu 24.04.3 LTS',
     online: true,
     cpuName: 'Intel Core i5-12400',
     cpuBase: 15, memBase: 38, memTotal: 16, diskBase: 54, diskTotal: 512,
-    gpu: { name: 'Intel UHD Graphics 730', usageBase: 12, vramTotal: 2, vramUsed: 0.5 },
     network: { latencyMs: 11, packetLoss: 0, txBps: 450000, rxBps: 2800000, txUtil: 3, rxUtil: 7, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
-      { id: 'p1', name: 'Chrome', status: 'RUNNING', pid: 3320, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/Google/Chrome/Application/chrome.exe', file_path: '--kiosk https://kiosk.horizon-museum.org' },
+      { id: 'p1', name: 'Chromium', status: 'RUNNING', pid: 3320, autolaunch: true, launch_mode: 'scheduled', exe_path: '/snap/bin/chromium', file_path: '--kiosk https://kiosk.horizon-museum.org' },
     ],
   },
   {
     id: 'kiosk-gift-shop',
+    osFamily: 'windows',
+    osVersion: WIN_KIOSK,
     online: false, // Offline machine for realism
     cpuName: 'Intel Core i5-12400',
     cpuBase: 12, memBase: 35, memTotal: 16, diskBase: 54, diskTotal: 512,
-    gpu: { name: 'Intel UHD Graphics 730', usageBase: 10, vramTotal: 2, vramUsed: 0.4 },
     network: { latencyMs: 14, packetLoss: 0, txBps: 200000, rxBps: 1500000, txUtil: 2, rxUtil: 4, linkSpeed: 1000000000 },
-    agentVersion: '2.4.0',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'Chrome', status: 'STOPPED', pid: null, autolaunch: true, launch_mode: 'scheduled', exe_path: 'C:/Program Files/Google/Chrome/Application/chrome.exe', file_path: '--kiosk https://kiosk.horizon-museum.org/gift-shop' },
     ],
   },
   {
+    id: 'media-lab-mac',
+    osFamily: 'macos',
+    osVersion: MACOS_VERSION,
+    online: true,
+    cpuName: 'Apple M4 Max',
+    cpuBase: 41, memBase: 62, memTotal: 64, diskBase: 47, diskTotal: 2000,
+    gpu: { name: 'Apple M4 Max', usageBase: 70, vramTotal: 64, vramUsed: 22.5 },
+    network: { latencyMs: 5, packetLoss: 0, txBps: 22000000, rxBps: 9000000, txUtil: 18, rxUtil: 9, linkSpeed: 1000000000 },
+    agentVersion: DEMO_RELEASE,
+    processes: [
+      { id: 'p1', name: 'TouchDesigner', status: 'RUNNING', pid: 2381, autolaunch: true, launch_mode: 'always', exe_path: '/Applications/TouchDesigner.app', file_path: '/Users/media/Projects/media-lab.toe' },
+      { id: 'p2', name: 'Node.js', status: 'RUNNING', pid: 2390, autolaunch: true, launch_mode: 'always', exe_path: '/opt/homebrew/bin/node', file_path: '/Users/media/Projects/osc-bridge/index.js' },
+    ],
+  },
+  {
     id: 'stage-left-media',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'AMD Ryzen 7 7700X',
     cpuBase: 38, memBase: 55, memTotal: 32, diskBase: 48, diskTotal: 1000,
     gpu: { name: 'NVIDIA RTX PRO 4000 (Blackwell)', usageBase: 45, vramTotal: 8, vramUsed: 4.8 },
     network: { latencyMs: 6, packetLoss: 0, txBps: 18000000, rxBps: 8000000, txUtil: 15, rxUtil: 10, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'OBS Studio', status: 'RUNNING', pid: 5501, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/obs-studio/bin/64bit/obs64.exe', file_path: '' },
       { id: 'p2', name: 'VLC', status: 'RUNNING', pid: 6602, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/VideoLAN/VLC/vlc.exe', file_path: '' },
@@ -207,13 +286,15 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'stage-right-media',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     rebooting: true, // Restarting machine for realism (field name is the wire contract)
     cpuName: 'AMD Ryzen 7 7700X',
     cpuBase: 35, memBase: 50, memTotal: 32, diskBase: 48, diskTotal: 1000,
     gpu: { name: 'NVIDIA RTX PRO 4000 (Blackwell)', usageBase: 40, vramTotal: 8, vramUsed: 4.2 },
     network: { latencyMs: 7, packetLoss: 0, txBps: 16000000, rxBps: 7000000, txUtil: 13, rxUtil: 9, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     processes: [
       { id: 'p1', name: 'OBS Studio', status: 'STOPPED', pid: null, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/obs-studio/bin/64bit/obs64.exe', file_path: '' },
       { id: 'p2', name: 'VLC', status: 'STOPPED', pid: null, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/VideoLAN/VLC/vlc.exe', file_path: '' },
@@ -221,18 +302,22 @@ const machineDefs: MachineDef[] = [
   },
   {
     id: 'admin-workstation',
+    osFamily: 'windows',
+    osVersion: WIN_PRO,
     online: true,
     cpuName: 'Intel Core i7-13700',
     cpuBase: 22, memBase: 48, memTotal: 32, diskBase: 62, diskTotal: 1000,
     gpu: { name: 'NVIDIA RTX PRO 4000 (Blackwell)', usageBase: 18, vramTotal: 12, vramUsed: 3.2 },
     network: { latencyMs: 3, packetLoss: 0, txBps: 800000, rxBps: 5000000, txUtil: 5, rxUtil: 12, linkSpeed: 1000000000 },
-    agentVersion: '2.4.1',
+    agentVersion: DEMO_RELEASE,
     rebootPending: {
       active: true,
       processName: 'Windows Update',
       reason: 'Pending system update requires restart',
       timestamp: Math.floor(Date.now() / 1000) - 3600,
     },
+    // its restart was sent inside active hours, so the machine holds it until they end
+    rebootDeferredUntil: Math.ceil(Date.now() / 1000 / 3600 + 2) * 3600,
     processes: [
       { id: 'p1', name: 'Chrome', status: 'RUNNING', pid: 9012, autolaunch: false, launch_mode: 'off', exe_path: 'C:/Program Files/Google/Chrome/Application/chrome.exe', file_path: '' },
       { id: 'p2', name: 'Node.js', status: 'RUNNING', pid: 1134, autolaunch: true, launch_mode: 'always', exe_path: 'C:/Program Files/nodejs/node.exe', file_path: 'C:/Projects/admin-panel/server.js' },
@@ -263,7 +348,8 @@ function buildProcess(def: MachineDef['processes'][number], index: number): Proc
  * the dashboard's per-device dropdowns actually appear; kiosks get one of each.
  */
 function buildProfile(def: MachineDef): HardwareProfile {
-  const isLowSpec = def.memTotal <= 16;
+  const ids = deviceIds(def);
+  const { fs } = OS_DEVICES[def.osFamily];
   const isThreadripper = def.cpuName.includes('Threadripper');
   const isHighCore = def.cpuName.includes('i9') || def.cpuName.includes('Ryzen 9');
 
@@ -275,11 +361,12 @@ function buildProfile(def: MachineDef): HardwareProfile {
     socketIndex: 0,
   }];
 
-  const disks: DiskProfile[] = isLowSpec
-    ? [{ id: 'C:', label: 'System', fs: 'NTFS', totalGb: def.diskTotal }]
+  // the system disk, then a media disk holding the larger share
+  const disks: DiskProfile[] = ids.disks.length === 1
+    ? [{ id: ids.disks[0], label: 'System', fs, totalGb: def.diskTotal }]
     : [
-        { id: 'C:', label: 'System', fs: 'NTFS', totalGb: Math.round(def.diskTotal * 0.4) },
-        { id: 'D:', label: 'Media', fs: 'NTFS', totalGb: Math.round(def.diskTotal * 0.6) },
+        { id: ids.disks[0], label: 'System', fs, totalGb: Math.round(def.diskTotal * 0.4) },
+        { id: ids.disks[1], label: 'Media', fs, totalGb: Math.round(def.diskTotal * 0.6) },
       ];
 
   const gpus: GpuProfile[] = def.gpu
@@ -300,12 +387,11 @@ function buildProfile(def: MachineDef): HardwareProfile {
       ]
     : [];
 
-  const nics: NicProfile[] = isLowSpec
-    ? [{ id: 'Ethernet', mac: '00:1A:2B:3C:4D:5E', linkSpeedMbps: 1000 }]
-    : [
-        { id: 'Ethernet', mac: '00:1A:2B:3C:4D:5E', linkSpeedMbps: 1000 },
-        { id: 'Wi-Fi', mac: '00:1A:2B:3C:4D:5F', linkSpeedMbps: 866 },
-      ];
+  // wired, then wireless
+  const nics: NicProfile[] = [
+    { id: ids.nics[0], mac: '00:1A:2B:3C:4D:5E', linkSpeedMbps: 1000 },
+    ...ids.nics.slice(1).map((id) => ({ id, mac: '00:1A:2B:3C:4D:5F', linkSpeedMbps: 866 })),
+  ];
 
   return {
     schemaVersion: 2,
@@ -361,11 +447,16 @@ function joinDevices(
   };
 }
 
+/** every key of T, required, each keeping T's type: an optional one must still be named, if only as undefined */
+type EveryField<T> = { [K in keyof Required<T>]: T[K] };
+
 function buildMachine(def: MachineDef): Machine {
   const now = Math.floor(Date.now() / 1000);
-  const heartbeatAge = def.online && !def.rebooting ? 15 + Math.floor(Math.random() * 30) : 300;
+  // an asleep mac last reported when it went to sleep, hours ago
+  const heartbeatAge = def.asleep ? 3 * 3600 : def.online && !def.rebooting ? 15 + Math.floor(Math.random() * 30) : 300;
 
   const profile = buildProfile(def);
+  const { disks: [systemDisk], nics: [wiredNic, wirelessNic] } = deviceIds(def);
 
   const cpus: Record<string, CpuMetric> = {
     CPU0: {
@@ -377,7 +468,7 @@ function buildMachine(def: MachineDef): Machine {
   const disks: Record<string, DiskMetric> = {};
   for (const d of profile.disks) {
     // System disk tracks def.diskBase; data disk runs a bit lower.
-    const pct = d.id === 'C:' ? def.diskBase : Math.max(5, def.diskBase - 12);
+    const pct = d.id === systemDisk ? def.diskBase : Math.max(5, def.diskBase - 12);
     disks[d.id] = {
       percent: pct,
       usedGb: +(d.totalGb * (pct / 100)).toFixed(0),
@@ -391,8 +482,8 @@ function buildMachine(def: MachineDef): Machine {
     // Activity scales with cpu+gpu workload.
     const activity = (def.cpuBase + (def.gpu?.usageBase ?? 0)) / 100; // 0 - ~2
     for (const d of profile.disks) {
-      // D: bulk reads (media); C: light reads + steady writes (logs, temp, swap).
-      const isMedia = d.id !== 'C:';
+      // media disk: bulk reads; system disk: light reads + steady writes (logs, temp, swap).
+      const isMedia = d.id !== systemDisk;
       const baseReadBps = isMedia ? 80_000_000 : 3_000_000;
       const baseWriteBps = isMedia ? 12_000_000 : 4_000_000;
       const readBps = Math.round(baseReadBps * activity * (0.7 + Math.random() * 0.6));
@@ -426,16 +517,16 @@ function buildMachine(def: MachineDef): Machine {
 
   const nics: Record<string, NicMetric> = {};
   if (def.network) {
-    // Primary NIC (Ethernet) carries the bulk of traffic.
-    nics['Ethernet'] = {
+    // The wired NIC carries the bulk of traffic.
+    nics[wiredNic] = {
       txBps: def.network.txBps,
       rxBps: def.network.rxBps,
       txUtil: def.network.txUtil,
       rxUtil: def.network.rxUtil,
     };
-    // Secondary Wi-Fi NIC (if profiled) carries light traffic.
-    if (profile.nics.some(n => n.id === 'Wi-Fi')) {
-      nics['Wi-Fi'] = {
+    // The wireless one (if profiled) carries light traffic.
+    if (wirelessNic) {
+      nics[wirelessNic] = {
         txBps: Math.round(def.network.txBps * 0.05),
         rxBps: Math.round(def.network.rxBps * 0.08),
         txUtil: +(def.network.txUtil * 0.1).toFixed(1),
@@ -451,9 +542,9 @@ function buildMachine(def: MachineDef): Machine {
 
   const primary: PrimaryDevices = {
     cpu: 'CPU0',
-    disk: 'C:',
+    disk: systemDisk,
     gpu: def.gpu ? 'GPU0' : null,
-    nic: def.network ? 'Ethernet' : null,
+    nic: def.network ? wiredNic : null,
   };
 
   const metrics: NonNullable<Machine['metrics']> = {
@@ -482,24 +573,75 @@ function buildMachine(def: MachineDef): Machine {
     displayDriftCount: countDemoDrift(def.id),
   };
 
-  return {
+  // every field named, so one added to Machine fails tsc here until the demo
+  // shows it or says why not. the machine menu, which most of the unset ones
+  // feed, is hidden on /demo (`useDemoContext` in the machine views).
+  const machine: EveryField<Machine> = {
     machineId: def.id,
     lastHeartbeat: now - heartbeatAge,
     online: def.online,
+    asleep: def.asleep,
     agent_version: def.agentVersion,
+    machineTimezone: DEMO_SITE.timezone,
+    osFamily: def.osFamily,
+    arch: OS_DEVICES[def.osFamily].arch,
+    osVersion: def.osVersion,
     rebooting: def.rebooting,
     rebootPending: def.rebootPending,
+    rebootDeferredUntil: def.rebootDeferredUntil,
     profile,
     metrics,
     devices: joinDevices(profile, metrics),
     processes: def.processes.map((p, i) => buildProcess(p, i)),
+    // the machine menu's: swoop, hoot, restart and its active hours guard
+    capabilities: undefined,
+    activeHours: undefined,
+    swoopViewers: undefined,
+    rebootSchedule: undefined,
+    // pages the demo does not have: hoot, the swoop picker, site settings, the screenshot and live view dialogs
+    cortexEnabled: undefined,
+    swoopSeats: undefined,
+    displayAwake: undefined,
+    lastScreenshot: undefined,
+    liveView: undefined,
+    // states the demo does not stage; stage-right-media restarts and admin-workstation holds one
+    shuttingDown: undefined,
+    rebootScheduledAt: undefined,
+    shutdownScheduledAt: undefined,
+    displayBreakerTripped: undefined,
+    // the agent's own bookkeeping, never shown
+    rebootState: undefined,
   };
+  return machine;
 }
 
 /** Rebuilt on each call so heartbeats stay fresh */
 export function getDemoMachines(): Machine[] {
   return machineDefs.map(buildMachine);
 }
+
+/** the header's site switcher counts, read by `useSiteMachineCounts` on /demo */
+export const DEMO_SITE_MACHINE_COUNTS: Readonly<Record<string, number>> = { [DEMO_SITE_ID]: machineDefs.length };
+
+/** a platform's installer through the public /download permalink, which serves the real latest one */
+function permalink(os: string): InstallerFile {
+  return {
+    download_url: `${process.env.NEXT_PUBLIC_BASE_URL ?? ''}/download?os=${os}`,
+    checksum_sha256: null,
+    file_size: null,
+    file_name: null,
+    uploaded_at: null,
+  };
+}
+
+/** the latest installer the download buttons and the add machine dialog offer on /demo */
+export const DEMO_LATEST_INSTALLER: Pick<InstallerVersionInfo, 'version' | 'files'> = {
+  version: DEMO_RELEASE,
+  files: { windows_x64: permalink('windows'), macos_arm64: permalink('macos'), linux_x64: permalink('linux') },
+};
+
+/** what generate code shows on /demo; no such code is ever created */
+export const DEMO_PAIR_PHRASE = 'silver-compass-drift';
 
 export interface DemoSparklineData {
   cpu: SparklineDataPoint[];
@@ -578,8 +720,8 @@ export function getDemoHistoricalData(
 
   // Must mirror buildProfile or historical chart keys won't line up with the
   // dropdowns sourced from `metrics.disks`/`gpus`.
-  const isLowSpec = def.memTotal <= 16;
-  const diskIds = isLowSpec ? ['C:'] : ['C:', 'D:'];
+  const { disks: diskIds, nics: [wiredNic] } = deviceIds(def);
+  const [systemDisk] = diskIds;
   const gpuDefs = def.gpu
     ? [
         { id: 'GPU0', gpu: def.gpu },
@@ -589,10 +731,7 @@ export function getDemoHistoricalData(
 
   // Bandwidth ceiling for `_io_*_pct` (mirrors the agent's hardware-class
   // estimate); system SSDs cap lower than the media NVMe.
-  const diskMaxBps: Record<string, number> = {
-    'C:': 500_000_000,    // ~500 MB/s SATA SSD
-    'D:': 3_000_000_000,  // ~3 GB/s NVMe
-  };
+  const diskMaxBps = (id: string) => (id === systemDisk ? 500_000_000 : 3_000_000_000);
 
   const data: ChartDataPoint[] = [];
   for (let i = 0; i < points; i++) {
@@ -616,7 +755,7 @@ export function getDemoHistoricalData(
 
     // Mirrors buildMachine: system disk tracks def.diskBase, media runs lower.
     for (const id of diskIds) {
-      const pct = id === 'C:' ? def.diskBase : Math.max(5, def.diskBase - 12);
+      const pct = id === systemDisk ? def.diskBase : Math.max(5, def.diskBase - 12);
       point[`${id}_pct`] = +generateMetricValue(rand, pct, 1, t, 168).toFixed(1);
     }
 
@@ -638,22 +777,22 @@ export function getDemoHistoricalData(
     if (def.network) {
       const txUtil = generateMetricValue(rand, def.network.txUtil * dailyMultiplier, 8, t, 24);
       const rxUtil = generateMetricValue(rand, def.network.rxUtil * dailyMultiplier, 6, t, 24);
-      point['Ethernet_tx_util'] = +txUtil.toFixed(1);
-      point['Ethernet_rx_util'] = +rxUtil.toFixed(1);
-      point['Ethernet_tx'] = +(def.network.txBps * (txUtil / (def.network.txUtil || 1)) * dailyMultiplier).toFixed(0);
-      point['Ethernet_rx'] = +(def.network.rxBps * (rxUtil / (def.network.rxUtil || 1)) * dailyMultiplier).toFixed(0);
+      point[`${wiredNic}_tx_util`] = +txUtil.toFixed(1);
+      point[`${wiredNic}_rx_util`] = +rxUtil.toFixed(1);
+      point[`${wiredNic}_tx`] = +(def.network.txBps * (txUtil / (def.network.txUtil || 1)) * dailyMultiplier).toFixed(0);
+      point[`${wiredNic}_rx`] = +(def.network.rxBps * (rxUtil / (def.network.rxUtil || 1)) * dailyMultiplier).toFixed(0);
     }
 
     // Both bytes and %-of-max-bandwidth (plus busy%) so the detail panel can
     // flip modes exactly as it does for live data.
     const activity = (def.cpuBase + (def.gpu?.usageBase ?? 0)) / 100; // 0 - ~2
     for (const id of diskIds) {
-      const isMedia = id !== 'C:';
+      const isMedia = id !== systemDisk;
       const baseReadBps = isMedia ? 80_000_000 : 3_000_000;
       const baseWriteBps = isMedia ? 12_000_000 : 4_000_000;
       const readBps = Math.max(0, baseReadBps * activity * dailyMultiplier * (0.6 + rand() * 0.8));
       const writeBps = Math.max(0, baseWriteBps * activity * dailyMultiplier * (0.5 + rand() * 0.8));
-      const maxBps = diskMaxBps[id] ?? 500_000_000;
+      const maxBps = diskMaxBps(id);
       point[`${id}_io_read`] = Math.round(readBps);
       point[`${id}_io_write`] = Math.round(writeBps);
       point[`${id}_io_read_pct`] = +Math.min(100, (readBps / maxBps) * 100).toFixed(2);
@@ -704,7 +843,8 @@ function makeMonitor(
  *
  * Deliberate coverage: some machines have an assigned layout and some don't, so
  * the panel demonstrates both states; `theater-projector` drifts (live 30Hz vs
- * assigned) and must stay consistent with its `displayDriftCount: 1`.
+ * assigned), which `countDemoDrift` turns into its card's drift dot. the macs and
+ * the linux kiosk have none: display layouts are windows-only.
  */
 const displayTopologies: Record<
   string,
@@ -810,17 +950,6 @@ const displayTopologies: Record<
         rotation: 90,
       }),
     ],
-  },
-  'kiosk-entrance-2': {
-    live: [
-      makeMonitor('kiosk-entrance-2', 0, {
-        friendlyName: 'entrance 2',
-        position: { x: 0, y: 0 },
-        resolution: { width: 1080, height: 1920 },
-        rotation: 90,
-      }),
-    ],
-    assigned: null,
   },
   'kiosk-gift-shop': {
     // Offline: last-known profile still shows so the card isn't empty.

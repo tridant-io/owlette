@@ -122,8 +122,16 @@ alerts that were already fixed on `dev` is what made nobody look. The
 
 **BOTH changelogs, always.** `docs/changelog.md` is internal; `web/content/docs/changelog.mdx` is the one customers actually read at `/docs/changelog`. They carry the same entries and drift the moment one is updated alone — which is what every checklist that named only the first has been causing.
 
+**/demo follows the dashboard, every release.** The public demo at `/demo` renders the dashboard's own components on sample data, so a new machine field, state or control shows there only once `web/lib/demo-data.ts` carries it. Nothing failed while it fell seven weeks behind (the switcher read 0, and Macs, Linux and the asleep state were missing). Before the `release: X.Y.Z` commit, read what the release changed since the previous tag:
+
 ```bash
-# 1. Update changelog, bump version, commit. Do not push yet (see step 6).
+git diff "$(git describe --tags --abbrev=0)"..HEAD -- web/app/dashboard web/components web/hooks web/contexts
+```
+
+For each change a visitor would see on the dashboard, make `/demo` show it in the same commit: sample data in `web/lib/demo-data.ts`, and a prop in `web/app/demo/page.tsx` where the dashboard page wires one the demo does not. A new `Machine` field already fails `tsc` in `demo-data.ts` until it is set or named as left out. Then run `e2e/specs/public/demo.spec.ts` and look at `/demo` in dark mode.
+
+```bash
+# 1. Update changelog, bring /demo up to date (above), bump version, commit. Do not push yet (see step 6).
 # Edit docs/changelog.md AND web/content/docs/changelog.mdx → add [X.Y.Z] section to both
 node scripts/sync-versions.js X.Y.Z
 # `git add -u`, not `-A`: only the tracked files the bump changed, never another

@@ -25,6 +25,7 @@ import { Switch } from '@/components/ui/switch';
 import { AlertTriangle, Loader2, Monitor, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCanAdminMachine } from '@/hooks/useCanAdminMachine';
 import {
   useDisplayState,
   computeDisplayDrift,
@@ -222,8 +223,8 @@ export function DisplayLayoutPanel({
   planSite,
   onClose,
 }: DisplayLayoutPanelProps) {
-  const { isMachineAdmin, user } = useAuth();
-  const canAdminMachine = isMachineAdmin(siteId, machineId);
+  const { user } = useAuth();
+  const canAdminMachine = useCanAdminMachine(siteId)(machineId);
   const { profile, assigned, autoRestore, remoteApplyEnabled, loading, error } = useDisplayState(siteId, machineId);
   // `applying` disables every write button so in-flight repeat-clicks are blocked.
   const actions = useDisplayActions(siteId, machineId);

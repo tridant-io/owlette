@@ -203,7 +203,7 @@ dir build\installer_package\agent\src\your_file.py
 
 The version is read from `VERSION` at build time and passed to Inno Setup, which names the output file and writes the registry version. Do not edit version strings by hand:
 
-1. Add the `[X.Y.Z]` release entry to both `docs/changelog.md` and `web/content/docs/changelog.mdx`
+1. Add the `[X.Y.Z]` release entry to both `docs/changelog.md` and `web/content/docs/changelog.mdx`, and bring `/demo` up to date with the release's dashboard changes (`web/lib/demo-data.ts`)
 2. Run `node scripts/sync-versions.js X.Y.Z` from the repo root — it updates every version file, including the desktop and host crates
 3. Commit, then do a full rebuild (Method 1)
 
