@@ -1623,6 +1623,31 @@ begin
     '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Log('Module-based kill returned: ' + IntToStr(ResultCode));
 
+  // A self-update's old agent leaves a watchdog, OwletteRecovery_<ts>: a
+  // scheduled cmd chain that sleeps 300 s and then net-starts the service if
+  // it is not running, with no check for this installer. An install that ran
+  // past 5 minutes got the service started mid-copy; owlette-host.exe was
+  // then in use, the silent Abort rolled back, and since [InstallDelete] had
+  // already emptied site-packages the agent was left without its packages
+  // (TEC-A4D, 2026-11-25). Every fielded agent leaves it. It is ended here,
+  // once the old agent is dead: the agent creates the task only after it has
+  // started this installer, so an earlier sweep could miss it, and the aborts
+  // above keep it as their only restart. The task goes, and every cmd whose
+  // command line carries its name: the watchdog's own chain, and the old
+  // service's detached cleanup, whose leftover OwletteUpdate_<ts> task the new
+  // agent sweeps. From here this installer owns the restart: install.bat at
+  // ssPostInstall, DeinitializeSetup when the install fails.
+  Log('Ending any self-update recovery watchdog...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command ' +
+    '"Get-CimInstance Win32_Process -Filter ''Name = ''''cmd.exe'''''' -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.CommandLine -like ''*OwletteRecovery_*'' } | ' +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; ' +
+    'Get-ScheduledTask -TaskName ''OwletteRecovery_*'' -ErrorAction SilentlyContinue | ' +
+    'Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue; exit 0"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Recovery watchdog cleanup returned: ' + IntToStr(ResultCode));
+
   // Retire the WinRing0 kernel services that pre-PawnIO versions registered
   // (WinTmp's bundled LHM extracted python.sys/pythonw.sys and loaded them as
   // R0python/R0pythonw). Ordering is load-bearing: the python hosts that held

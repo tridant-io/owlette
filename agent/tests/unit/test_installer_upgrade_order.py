@@ -75,3 +75,34 @@ def test_the_parked_exe_outlives_a_rolled_back_copy():
 
     settle = _routine(iss, 'procedure SettleParkedDesktopExe(')
     assert settle.index('FileExists(DesktopExePath())') < settle.index('DeleteFile(ParkedDesktopExePath())')
+
+
+# a self-update's old agent leaves OwletteRecovery_<ts>, a task that net-starts
+# the service 300 s after the update starts. on a slow install that landed
+# mid-copy, and the rolled-back install left site-packages empty (TEC-A4D,
+# 2026-11-25). the installer ends it once the old agent is dead, which is when
+# the task certainly exists, and before the copy.
+
+def test_the_recovery_watchdog_is_ended_after_the_old_agent_is_dead_and_before_the_copy():
+    setup = _routine(_iss(), 'function InitializeSetup(): Boolean;')
+    watchdog = setup.find('OwletteRecovery_*')
+    last_python_kill = setup.index("Log('Module-based kill returned: '")
+
+    assert watchdog != -1
+    # after the python kill passes: the old agent creates the task only after
+    # it has started the installer, so an earlier sweep can miss it
+    assert watchdog > last_python_kill
+    # outside the upgrade branch, whose early aborts keep the watchdog as their
+    # only restart; and ahead of the libcrypto poll, the last step before the copy
+    assert watchdog < setup.index('LibCryptoPath :=')
+
+
+def test_the_watchdog_sweep_kills_only_cmd_carrying_the_task_name():
+    setup = _routine(_iss(), 'function InitializeSetup(): Boolean;')
+    sweep = setup[setup.index("Log('Ending any self-update recovery watchdog...');"):]
+    sweep = sweep[:sweep.index('Recovery watchdog cleanup returned')]
+
+    # the name filter keeps the sweep off its own powershell and off any
+    # other process whose command line mentions the task
+    assert "Name = ''''cmd.exe''''''" in sweep
+    assert "-like ''*OwletteRecovery_*''" in sweep

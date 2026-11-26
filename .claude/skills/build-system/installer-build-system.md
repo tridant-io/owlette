@@ -102,7 +102,7 @@ import site          # Enables site.main() for pip
 
 ### Installation Steps (in order)
 
-**Before files are copied — `InitializeSetup`**: on an upgrade, first park `app\owlette-desktop.exe` as `owlette-desktop.exe.upgrading` (no service version relaunches a missing exe) and close the desktop app and owlette swoop, so a 3.2.0 app never sees the stop and asks for elevation (ADR 0005); then `net stop OwletteService` (synchronous) and a check that it reached Stopped; kill owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw (by path, then by module); stop and delete the legacy `R0python`/`R0pythonw` kernel services; poll up to 30s for `libcrypto-3.dll` to unlock. `[InstallDelete]` then wipes `{app}\python\Lib\site-packages`, the dead `gui.log`/`tray.log` files and retired shortcuts before the copy. `DeinitializeSetup` then settles the parked exe ahead of its service restart: deleted once the new exe is in place, put back when the upgrade ended before the copy. It is never in `[InstallDelete]`, which runs before the copy: a copy that aborts rolls the new exe back as a new file.
+**Before files are copied — `InitializeSetup`**: on an upgrade, first park `app\owlette-desktop.exe` as `owlette-desktop.exe.upgrading` (no service version relaunches a missing exe) and close the desktop app and owlette swoop, so a 3.2.0 app never sees the stop and asks for elevation (ADR 0005); then `net stop OwletteService` (synchronous) and a check that it reached Stopped; kill owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw (by path, then by module); end any self-update watchdog the old agent left, the `OwletteRecovery_*` task and every `cmd` whose command line carries that name. It net-starts the service 300 s after the update starts, so a slower install had the service up mid-copy, a locked `owlette-host.exe`, a silent Abort, and a rollback that left `site-packages` empty (TEC-A4D, 2026-11-25). It is ended only now, once the old agent is dead, because the agent creates it after starting the installer; the aborts before this point keep it as their only restart. Then stop and delete the legacy `R0python`/`R0pythonw` kernel services; poll up to 30s for `libcrypto-3.dll` to unlock. `[InstallDelete]` then wipes `{app}\python\Lib\site-packages`, the dead `gui.log`/`tray.log` files and retired shortcuts before the copy. `DeinitializeSetup` then settles the parked exe ahead of its service restart: deleted once the new exe is in place, put back when the upgrade ended before the copy. It is never in `[InstallDelete]`, which runs before the copy: a copy that aborts rolls the new exe back as a new file.
 
 **Defender exclusion RETRACTION** (`[Run]`, logged to `logs\defender_setup.log`):
 ```powershell
@@ -286,10 +286,12 @@ Triggered by the `update_owlette` command from the web dashboard; handled by `Ow
    - a paired machine's silent install skips pairing (ShouldConfigureSite returns false)
    - install.bat runs → owlette-host install → service starts
 5. A second SYSTEM task, OwletteRecovery_<ts>, waits 300s and runs `net start OwletteService`
-   if `sc query` does not show it RUNNING; a detached process deletes both tasks after 300s
+   if `sc query` does not show it RUNNING; a detached process deletes both tasks after 300s.
+   An installer that gets past its stop-and-kill sequence ends this task (`InitializeSetup`),
+   so it only restarts a service the update left down before that point
 ```
 
-**Safety**: If the update fails, the old installation is untouched and the service host restarts the agent from whatever is on disk.
+**Safety**: an update that fails before the copy leaves the old installation as it was, and the service restarts. One that fails during the copy rolls back, and since `[InstallDelete]` has already emptied `site-packages`, the agent is left without its packages and offline until someone reinstalls it at the machine.
 
 ---
 

@@ -292,13 +292,13 @@ Web dashboard sends update_owlette (refused without checksum_sha256)
     if the service is not RUNNING
 ```
 
-**Safety**: If the update fails, the old installation is untouched and the service host restarts the agent from whatever is on disk.
+**Safety**: an update that fails before the copy leaves the old installation as it was, and the service restarts. One that fails during the copy rolls back, and since `[InstallDelete]` has already emptied `site-packages`, the agent is left without its packages and offline until someone reinstalls it at the machine.
 
 ---
 
 ## Upgrades In Place
 
-There is no config backup/restore: `[Files]` never touches `config\config.json` or `.tokens.enc`, so they survive as they are. What makes an upgrade safe is `InitializeSetup`: parking the desktop exe and closing the desktop app and owlette swoop first (a 3.2.0 app answers a stopped service with an elevated restart, ADR 0005), then `net stop OwletteService` (synchronous) and a check that it reached Stopped, then killing owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw, removing the legacy `R0python` services, and polling up to 30s for `libcrypto-3.dll` to unlock before any file is copied. `DeinitializeSetup` settles a parked exe: deleted once the new one is in place, put back when an upgrade ends before the copy.
+There is no config backup/restore: `[Files]` never touches `config\config.json` or `.tokens.enc`, so they survive as they are. What makes an upgrade safe is `InitializeSetup`: parking the desktop exe and closing the desktop app and owlette swoop first (a 3.2.0 app answers a stopped service with an elevated restart, ADR 0005), then `net stop OwletteService` (synchronous) and a check that it reached Stopped, then killing owlette-host/nssm, owlette-swoop, owlette-desktop, owlette-swoop-viewer and the install's python/pythonw, ending any self-update watchdog the old agent left (`OwletteRecovery_*`, a task that net-starts the service 300 s after the update starts and so, on a slow install, mid-copy), removing the legacy `R0python` services, and polling up to 30s for `libcrypto-3.dll` to unlock before any file is copied. `DeinitializeSetup` settles a parked exe: deleted once the new one is in place, put back when an upgrade ends before the copy.
 
 **This is the most fragile part of the build system.** Reordering that stop/kill/unlock sequence is how upgrades end in "DeleteFile failed" mid-copy.
 

@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed
+
+- an agent update on Windows that runs past 5 minutes no longer leaves the agent broken and offline.
+
 ## [4.2.6] - 2026-11-25
 
 ### changed
