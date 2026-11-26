@@ -24,6 +24,13 @@
       "expires": "2026-12-12",
       "revisit": "When Tauri moves the gtk-rs stack to glib 0.20, drop this entry and let the bump land normally."
     },
+    "alert:dependabot:438": {
+      "reason": "ASSESSED, the same advisory as alert:dependabot:230 (GHSA-wrw7-89jp-8q8g), filed against desktop/viewer/Cargo.lock once main carried owlette swoop's viewer. glib 0.18.5 arrives only via Tauri 2.x's GTK backend, cfg(target_os = \"linux\")-gated: it is compiled into the Linux viewer alone, which the .deb ships. Checked 2026-11-25 in desktop/viewer: `cargo tree --locked --offline --target x86_64-pc-windows-msvc -i glib@0.18.5` and the same for aarch64-apple-darwin print 'nothing to print'; x86_64-unknown-linux-gnu pulls it through atk and gtk. The finding is an unsound Iterator impl on glib::VariantStrIter, an API owlette's own code never calls. No fix exists upstream: Tauri 2.x pins the whole gtk-rs 0.18 stack.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-11-25",
+      "expires": "2026-12-12",
+      "revisit": "With alert:dependabot:230: when Tauri moves the gtk-rs stack to glib 0.20, drop both entries and let the bump land."
+    },
     "alert:dependabot:376": {
       "reason": "ASSESSED. katex 0.16.47 (GHSA-238p-pmpm-9mq7) arrives only through mermaid 11.17.2, which pins ^0.16.47; the fix, 0.18.2, needs mermaid 12.2.0, the first release on katex ^0.18.The advisory needs an already-polluted Object.prototype plus attacker-controlled math. Mermaid renders only the ```mermaid fences in owlette's own committed docs (web/components/mdx/mermaid.tsx via remarkMdxMermaid in source.config.ts); hoot replies go through react-markdown, not mermaid, so no user or model text reaches katex.",
       "accepted_by": "dylan@roscover.com",

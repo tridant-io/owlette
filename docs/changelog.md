@@ -11,6 +11,22 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed
+
+- updating several machines at once from the dashboard no longer fails with "could not read request body".
+
+## [4.2.7] - 2026-11-25
+
+### fixed
+
+- an agent update on Windows that runs past 5 minutes no longer leaves the agent broken and offline.
+
+## [4.2.6] - 2026-11-25
+
+### changed
+
+- a Mac with swoop on stays awake on mains power, so swoop reaches it locked. [more](https://owlette.app/docs/dashboard/swoop#on-macos)
+
 ## [4.2.5] - 2026-11-24
 
 ### added

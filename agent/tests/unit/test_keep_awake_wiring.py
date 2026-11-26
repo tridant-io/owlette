@@ -391,3 +391,104 @@ def test_the_heartbeat_says_this_agent_keeps_screens_awake():
     assert payload['capabilities.keepAwake'] == 1
     # dotted, so the sibling capabilities survive the write.
     assert 'capabilities' not in payload
+
+
+class FakeDoorbell:
+    """The doorbell's word on whether swoop is on here."""
+
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+
+
+class TestStayReachable:
+    """A Mac with swoop on is kept from sleeping on mains power."""
+
+    @pytest.fixture
+    def reachable(self, service, monkeypatch):
+        state = {'mains': True}
+        monkeypatch.setattr(owlette_service, 'on_mains_power', lambda: state['mains'])
+        service.stay_reachable = FakeKeepAwake()
+        service.swoop_doorbell = FakeDoorbell()
+        return service, state
+
+    def test_the_hosted_service_holds_only_on_a_mac(self, monkeypatch):
+        monkeypatch.setattr(
+            owlette_service.shared_utils, 'read_config', lambda *a, **kw: {})
+        monkeypatch.setattr(
+            owlette_service.shared_utils, 'get_api_base_url',
+            lambda environment=None: 'https://example.invalid/api')
+        svc = object.__new__(owlette_service.OwletteService)
+        svc._init_state()
+
+        if sys.platform == 'darwin':
+            assert isinstance(svc.stay_reachable, KeepAwake)
+            assert svc.stay_reachable._label == 'stay reachable'
+            assert svc.stay_reachable.status()['wanted'] is False
+        else:
+            # a PC that locks only on sleep would stop locking.
+            assert svc.stay_reachable is None
+            svc.swoop_doorbell = FakeDoorbell()
+            svc.firebase_client = FakeClient()
+            svc._check_stay_reachable()
+        assert svc._stay_reachable_wanted is False
+
+    def test_the_first_tick_decides_and_then_every_thirty_seconds(self, reachable):
+        service, state = reachable
+
+        service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True]
+
+        state['mains'] = False
+        for _ in range(owlette_service.STAY_REACHABLE_CHECK_ITERATIONS - 1):
+            service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True]
+
+        service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True, False]
+        assert owlette_service.STAY_REACHABLE_CHECK_ITERATIONS * owlette_service.SLEEP_INTERVAL == 30
+
+    @pytest.mark.parametrize('missing', ['client', 'no_doorbell', 'swoop_off', 'battery'])
+    def test_each_condition_alone_withholds_it(self, reachable, missing):
+        service, state = reachable
+        if missing == 'client':
+            service.firebase_client = None
+        elif missing == 'no_doorbell':
+            service.swoop_doorbell = None
+        elif missing == 'swoop_off':
+            service.swoop_doorbell = FakeDoorbell(enabled=False)
+        else:
+            state['mains'] = False
+
+        service._check_stay_reachable()
+
+        # never asked, so never told to let go either.
+        assert service.stay_reachable.asked == []
+
+    def test_a_rebuilt_doorbell_is_the_one_asked(self, reachable):
+        service, _ = reachable
+        service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True]
+
+        # a client restart replaces the doorbell; the new one has not minted yet.
+        service.swoop_doorbell = FakeDoorbell(enabled=False)
+        service._stay_reachable_counter = owlette_service.STAY_REACHABLE_CHECK_ITERATIONS
+        service._check_stay_reachable()
+
+        assert service.stay_reachable.asked == [True, False]
+
+    def test_the_stop_lets_go_and_a_later_tick_does_not_take_it_back(self, reachable, monkeypatch):
+        service, _ = reachable
+        monkeypatch.setattr(
+            owlette_service.session_state, 'set_intent_if_none', lambda intent: None)
+        service._write_service_status = lambda running=True: None
+        service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True]
+        service.firebase_client = None
+
+        assert service.graceful_shutdown('scm_stop') is True
+
+        assert service.stay_reachable.released == 1
+        service.firebase_client = FakeClient()
+        service._stay_reachable_counter = owlette_service.STAY_REACHABLE_CHECK_ITERATIONS
+        service._check_stay_reachable()
+        assert service.stay_reachable.asked == [True]
