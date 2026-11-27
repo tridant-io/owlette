@@ -15,6 +15,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 - updating several machines at once from the dashboard no longer fails with "could not read request body".
 - the [demo](https://owlette.app/demo) shows its machine count in the site switcher, and Mac, Linux and asleep machines.
+- a machine whose agent stopped without saying so reads offline in **site settings**, the API and hoot too, not only on the dashboard; an asleep one reads asleep.
 
 ## [4.2.7] - 2026-11-25
 

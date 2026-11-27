@@ -14691,7 +14691,17 @@ components:
       properties:
         id:     { type: string }
         name:   { type: string }
-        online: { type: boolean }
+        online:
+          type: boolean
+          description: |
+            True when the agent reports the machine online and its last heartbeat
+            is under 5 minutes old, as the dashboard reads it. An agent that stopped
+            without reporting offline still reads false once its heartbeat goes stale.
+        asleep:
+          type: boolean
+          description: |
+            The agent marked the machine asleep on its way to sleep (macOS agents
+            only, so far). `online` is false meanwhile.
         lastHeartbeat:
           type: string
           format: date-time

@@ -251,7 +251,7 @@ export async function writeMachineMetrics(
     .doc(machineId)
     .set(
       {
-        // Mirrors useMachines' OFFLINE_HEARTBEAT_AGE_SEC (300s).
+        // Mirrors OFFLINE_HEARTBEAT_AGE_SEC (300s) in lib/machineOnline.
         online: heartbeatOffsetSec < 300,
         lastHeartbeat: heartbeat,
         agent_version: '3.0.0',

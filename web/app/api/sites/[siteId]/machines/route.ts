@@ -1,6 +1,7 @@
 /**
- * GET /api/sites/{siteId}/machines — every machine in the site with online status
- * and a `currentRoosts` summary: the roosts targeting it plus their
+ * GET /api/sites/{siteId}/machines — every machine in the site with `online` and
+ * `asleep` read as the dashboard reads them (`machineOnlineState`), and a
+ * `currentRoosts` summary: the roosts targeting it plus their
  * currentVersionId, so "what is this machine running" reads at a glance.
  * a scoped member gets only the machines in their machine scope, each with its
  * `currentRoosts`: a roost that targets their machine is about their machine.
@@ -13,6 +14,7 @@ import { problemFromError } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { scopeCovers } from '@/lib/machineAccess';
 import { readMove, type MoveStatus } from '@/lib/machineMoves.server';
+import { machineOnlineState } from '@/lib/machineOnline';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
@@ -73,9 +75,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const inMachineScope = machinesSnap.docs.filter((d) => scopeCovers(auth.machineIds, d.id));
     const moves = await pendingMoves(db, siteId, inMachineScope.map((d) => d.id));
+    const nowSec = Math.floor(Date.now() / 1000);
     const machines = inMachineScope.map((d, i) => {
       const data = d.data();
       const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
+      const onlineState = machineOnlineState({ online: data.online, asleep: data.asleep, lastHeartbeat }, nowSec);
       return {
         id: d.id,
         name: typeof data.name === 'string'
@@ -83,7 +87,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
           : typeof data.machine_name === 'string'
             ? data.machine_name
             : d.id,
-        online: data.online === true,
+        online: onlineState === 'online',
+        asleep: onlineState === 'asleep',
         lastHeartbeat: heartbeatToIso(lastHeartbeat),
         agentVersion:
           data.agent_version ?? data.presence?.agent_version ?? null,

@@ -221,7 +221,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | --- | --- | --- |
 | `machineId` | string | the machine ID. |
 | `siteId` | string | owning site. |
-| `online` | boolean | agent-reported online flag. the dashboard also checks heartbeat age. |
+| `online` | boolean | agent-reported online flag. the dashboard, the API, hoot and talons read a machine as online only while this is true, `asleep` is not, and `lastHeartbeat` is under 5 minutes old, so an agent that died without writing `false` still reads offline. |
 | `lastHeartbeat` | timestamp | updated with each heartbeat. |
 | `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. on owlette free, the machine with the earliest one across the owner's free sites stays live in the owner's dashboard. missing on machines paired before it existed. |
 | `agent_version` | string | agent build version. |

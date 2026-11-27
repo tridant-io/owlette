@@ -34,6 +34,7 @@ import {
   type ActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
+import { machineOnlineState } from '@/lib/machineOnline';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
 import { screenshotUrlForModel } from '@/lib/screenshotStorage.server';
 import {
@@ -589,7 +590,7 @@ export function resolveHootMaxTier(access: SiteAccessLevel): ToolTier {
   return access.isSiteAdmin ? 3 : 1;
 }
 
-/** Reads the machine's presence document. */
+/** Reads the machine's doc as the dashboard does: {@link machineOnlineState}, not the bare flag. */
 export async function isMachineOnline(
   db: FirebaseFirestore.Firestore,
   siteId: string,
@@ -604,9 +605,7 @@ export async function isMachineOnline(
 
   if (!presenceDoc.exists) return false;
 
-  const data = presenceDoc.data()!;
-  const online = data.online ?? false;
-  return !!online;
+  return machineOnlineState(presenceDoc.data()!, Math.floor(Date.now() / 1000)) === 'online';
 }
 
 /**
@@ -661,6 +660,7 @@ export async function getHootRequireTier3Approval(
 /** One machine of a site, with the facts a dispatch and its prompt turn on. */
 export interface SiteMachineSummary {
   id: string;
+  /** {@link machineOnlineState} is `online`: the flag and a fresh heartbeat, as the dashboard reads it. */
   online: boolean;
   /** `cortexEnabled !== false` — absent means on, mirroring {@link isHootEnabled}. */
   hootEnabled: boolean;
@@ -678,7 +678,7 @@ export interface SiteMachineSummary {
 function machineSummary(id: string, data: FirebaseFirestore.DocumentData): SiteMachineSummary {
   return {
     id,
-    online: !!data.online,
+    online: machineOnlineState(data, Math.floor(Date.now() / 1000)) === 'online',
     hootEnabled: data.cortexEnabled !== false,
     timezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
     activeHoursGuard: hasActiveHoursGuard(data),

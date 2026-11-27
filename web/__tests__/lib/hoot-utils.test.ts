@@ -177,18 +177,28 @@ function createProcessConfigDb(processes: unknown[]) {
 type MachineFixture = {
   id: string;
   online?: unknown;
+  asleep?: unknown;
+  lastHeartbeat?: unknown;
   cortexEnabled?: unknown;
   machine_timezone_iana?: unknown;
   capabilities?: unknown;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** a heartbeat `ageMs` old, as a Timestamp reads: only `toMillis` is used. */
+function heartbeatAgo(ageMs: number) {
+  return { toMillis: () => Date.now() - ageMs };
+}
+
 /**
  * A db whose only readable path is `sites/{siteId}/machines`, counting the
- * collection reads — resolving a set is specified to cost exactly one.
+ * collection reads — resolving a set is specified to cost exactly one. Every
+ * machine heartbeats now unless its fixture says otherwise.
  */
 function createSiteMachinesDb(machines: MachineFixture[]) {
   const machinesGet = jest.fn(async () => ({
-    docs: machines.map(({ id, ...data }) => ({ id, data: () => data })),
+    docs: machines.map(({ id, ...data }) => ({ id, data: () => ({ lastHeartbeat: heartbeatAgo(0), ...data }) })),
   }));
 
   const db = {
@@ -214,6 +224,7 @@ import {
   executeServerSideTool,
   buildExecutableTools,
   getMachineSummary,
+  isMachineOnline,
   listSiteMachines,
   resolveHootTargets,
   assertLlmKeyAvailable,
@@ -1002,10 +1013,45 @@ describe('listSiteMachines', () => {
       listSiteMachines(db, 's1', undefined as unknown as readonly string[] | null),
     ).rejects.toThrow(TypeError);
   });
+
+  // an agent that died without writing online: false leaves the flag stuck true;
+  // the dashboard reads it offline by its heartbeat, and so must a dispatch.
+  it('reads a stuck flag with a stale or absent heartbeat, and an asleep machine, as offline', async () => {
+    const { db } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true, lastHeartbeat: heartbeatAgo(18 * DAY_MS) },
+      { id: 'kiosk-02', online: true, lastHeartbeat: undefined },
+      { id: 'kiosk-03', online: true, asleep: true },
+      { id: 'kiosk-04', online: true },
+    ]);
+
+    const machines = await listSiteMachines(db, 's1', null);
+    expect(machines.map((machine) => machine.online)).toEqual([false, false, false, true]);
+  });
+});
+
+describe('isMachineOnline', () => {
+  function createMachineDb(data: Record<string, unknown> | null) {
+    const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
+    return {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({ get }) }) }) }),
+    } as unknown as FirebaseFirestore.Firestore;
+  }
+
+  it.each([
+    ['a fresh heartbeat', { online: true, lastHeartbeat: heartbeatAgo(30_000) }, true],
+    ['a flag stuck true and an 18-day-old heartbeat', { online: true, lastHeartbeat: heartbeatAgo(18 * DAY_MS) }, false],
+    ['a flag and no heartbeat', { online: true }, false],
+    ['an asleep machine', { online: true, asleep: true, lastHeartbeat: heartbeatAgo(30_000) }, false],
+    ['online: false', { online: false, lastHeartbeat: heartbeatAgo(30_000) }, false],
+    ['no doc', null, false],
+  ])('reads %s as the dashboard does', async (_label, data, expected) => {
+    await expect(isMachineOnline(createMachineDb(data), 's1', 'kiosk-01')).resolves.toBe(expected);
+  });
 });
 
 describe('getMachineSummary', () => {
-  function createMachineDb(data: Record<string, unknown> | null) {
+  function createMachineDb(fixture: Record<string, unknown> | null) {
+    const data = fixture === null ? null : { lastHeartbeat: heartbeatAgo(0), ...fixture };
     const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
     const paths: string[] = [];
     const db = {

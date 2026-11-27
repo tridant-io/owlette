@@ -2,6 +2,7 @@
 
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import { grantCovers } from '@/lib/fleet/policy.server';
+import { machineOnlineState } from '@/lib/machineOnline';
 import type { FleetServerTool } from '@/lib/fleet/context';
 
 export const LIST_MACHINES_TOOL = 'list_machines';
@@ -20,15 +21,17 @@ export const listMachinesTool: FleetServerTool = {
   async run(ctx) {
     const snap = await ctx.db.collection('sites').doc(ctx.siteId).collection('machines').get();
     const now = Date.now();
+    const nowSec = Math.floor(now / 1000);
     const machines = snap.docs
       .filter((doc) => grantCovers(ctx.grant, doc.id))
       .map((doc) => {
         const data = doc.data();
         // read as the public machines list route reads them
-        const heartbeatMs = timestampToMs(data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null);
+        const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
+        const heartbeatMs = timestampToMs(lastHeartbeat);
         return {
           id: doc.id,
-          online: data.online === true,
+          online: machineOnlineState({ online: data.online, asleep: data.asleep, lastHeartbeat }, nowSec) === 'online',
           lastHeartbeatAgeSeconds: heartbeatMs === null ? null : Math.max(0, Math.floor((now - heartbeatMs) / 1000)),
           // no agent writes `os`. an absent osFamily is a pre-3.4 agent, and those are all windows
           os: data.osFamily ?? 'windows',

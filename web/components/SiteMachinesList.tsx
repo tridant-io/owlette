@@ -122,6 +122,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
 
   const lastSeen = (m: SiteMachine) => {
     if (m.online) return 'online';
+    if (m.asleep) return 'asleep';
     if (!m.lastHeartbeat) return 'never seen';
     const parsed = Date.parse(m.lastHeartbeat);
     return Number.isNaN(parsed) ? 'unknown' : `last seen ${formatRelativeTime(parsed / 1000)}`;
@@ -138,7 +139,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
             <span className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
-                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : 'bg-danger/70'}`}
+                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : m.asleep ? 'bg-info-solid' : 'bg-danger/70'}`}
               />
               <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate text-xs text-foreground" title={m.name}>
@@ -162,7 +163,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                 </>
               )}
             </span>
-            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
+            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : m.asleep ? 'text-info' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
             </span>
             <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">

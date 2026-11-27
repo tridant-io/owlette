@@ -15,6 +15,7 @@ import {
   ProblemType,
 } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { machineOnlineState } from '@/lib/machineOnline';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
@@ -58,6 +59,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const data = machineSnap.data() ?? {};
     const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
+    const onlineState = machineOnlineState(
+      { online: data.online, asleep: data.asleep, lastHeartbeat },
+      Math.floor(Date.now() / 1000),
+    );
 
     return applyAuthDeprecations(
       NextResponse.json({
@@ -68,7 +73,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
           : typeof data.machine_name === 'string'
             ? data.machine_name
             : machineId,
-        online: data.online === true,
+        online: onlineState === 'online',
+        asleep: onlineState === 'asleep',
         lastHeartbeat: heartbeatToIso(lastHeartbeat),
         agentVersion:
           data.agent_version ?? data.presence?.agent_version ?? null,

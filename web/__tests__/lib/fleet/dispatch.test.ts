@@ -6,7 +6,7 @@
  * command the agent would pick up and the audit row it emits.
  */
 
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, type Firestore } from 'firebase-admin/firestore';
 
 // the module's imports (hoot-utils.server, executeMachineCommand.server) reach
 // the admin sdk, which initialises on import.
@@ -255,9 +255,9 @@ beforeEach(() => {
   queryError = null;
   admit.mockResolvedValue(null);
   mockRequireEntitlement.mockResolvedValue(null);
-  docs.set(machinePath(M1), { online: true });
-  docs.set(machinePath(M2), { online: true });
-  docs.set(machinePath(SENDER), { online: true });
+  docs.set(machinePath(M1), { online: true, lastHeartbeat: Timestamp.now() });
+  docs.set(machinePath(M2), { online: true, lastHeartbeat: Timestamp.now() });
+  docs.set(machinePath(SENDER), { online: true, lastHeartbeat: Timestamp.now() });
 });
 
 describe('startFleetCall: refusals, in order', () => {
@@ -316,7 +316,7 @@ describe('startFleetCall: refusals, in order', () => {
   });
 
   it('423 hoot_disabled when hoot is off on the target, as the commands route answers', async () => {
-    docs.set(machinePath(M1), { online: true, cortexEnabled: false });
+    docs.set(machinePath(M1), { online: true, lastHeartbeat: Timestamp.now(), cortexEnabled: false });
     const res = await refusedWith(
       startFleetCall(TIER2_TO_M1, { tool: 'get_system_info', params: { machine: M1 } }, admit),
       423,
@@ -437,8 +437,8 @@ describe('startFleetCall: list_machines', () => {
   beforeEach(() => {
     const now = Date.now();
     // the os fields as an agent since 3.4 writes them; SENDER below is an older agent's doc
-    docs.set(machinePath(M1), { online: true, lastHeartbeat: now - 12_000, osFamily: 'linux', osVersion: 'Ubuntu 24.04.5 LTS', agent_version: '4.1.28' });
-    docs.set(machinePath(M2), { online: false, cortexEnabled: false, osFamily: 'macos', osVersion: 'macOS 26.6', presence: { lastHeartbeat: now - 600_000, agent_version: '4.1.27' } });
+    docs.set(machinePath(M1), { online: true, lastHeartbeat: Timestamp.fromMillis(now - 12_000), osFamily: 'linux', osVersion: 'Ubuntu 24.04.5 LTS', agent_version: '4.1.28' });
+    docs.set(machinePath(M2), { online: false, cortexEnabled: false, osFamily: 'macos', osVersion: 'macOS 26.6', presence: { lastHeartbeat: Timestamp.fromMillis(now - 600_000), agent_version: '4.1.27' } });
     docs.set(machinePath(SENDER), { online: 'yes' });
   });
 
@@ -467,6 +467,18 @@ describe('startFleetCall: list_machines', () => {
     expect(machine).toMatchObject({ id: M2, online: false, os: 'macos', osVersion: 'macOS 26.6', agentVersion: '4.1.27', hootEnabled: false });
     expect(machine.lastHeartbeatAgeSeconds).toBeGreaterThanOrEqual(600);
     expect(machine.lastHeartbeatAgeSeconds).toBeLessThan(610);
+  });
+
+  // an agent that died without writing online: false leaves the flag stuck true;
+  // the dashboard reads it offline by its heartbeat, and so must the tool.
+  it.each([
+    ['a flag stuck true and an 18-day-old heartbeat', { online: true, lastHeartbeat: Timestamp.fromMillis(Date.now() - 18 * 24 * 60 * 60 * 1000) }],
+    ['a flag and no heartbeat', { online: true }],
+    ['an asleep machine', { online: true, asleep: true, lastHeartbeat: Timestamp.now() }],
+  ])('reads %s as offline', async (_label, doc) => {
+    docs.set(machinePath(M1), doc);
+    const [machine] = await listed({ maxTier: 1, machineIds: [M1] });
+    expect(machine).toMatchObject({ id: M1, online: false });
   });
 
   it('lists every machine for a whole-site grant and none for an empty one', async () => {
@@ -714,7 +726,7 @@ describe('startFleetCall: the process tools', () => {
   });
 
   it('is refused when hoot is off on the machine, with nothing written', async () => {
-    docs.set(machinePath(M1), { online: true, cortexEnabled: false });
+    docs.set(machinePath(M1), { online: true, lastHeartbeat: Timestamp.now(), cortexEnabled: false });
     await refusedWith(
       startFleetCall(TIER2_TO_M1, { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit),
       423,

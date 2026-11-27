@@ -600,9 +600,9 @@ describe('runHootStream for someone limited to some machines', () => {
   const SITE_WIDE_TOOLS = ['get_site_logs', 'deploy_software', 'create_talon', 'list_talons', 'set_talon_enabled'];
 
   const machineDocs = [
-    { id: 'm1', data: () => ({ online: true }) },
-    { id: 'm2', data: () => ({ online: true }) },
-    { id: 'm3', data: () => ({ online: false }) },
+    { id: 'm1', data: () => ({ online: true, lastHeartbeat: new Date() }) },
+    { id: 'm2', data: () => ({ online: true, lastHeartbeat: new Date() }) },
+    { id: 'm3', data: () => ({ online: false, lastHeartbeat: new Date() }) },
   ];
   /** `sites/site-a` and its machines, for the real listing. */
   const db = {
