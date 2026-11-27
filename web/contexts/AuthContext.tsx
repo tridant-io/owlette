@@ -20,6 +20,7 @@ import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { parseAlertDelivery, type AlertDelivery } from '@/lib/alerts/delivery';
 import { THEMES, type ThemeChoice } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import * as Sentry from '@sentry/nextjs';
@@ -421,6 +422,8 @@ export interface UserPreferences {
   displayAlerts: boolean; // Receive email alerts when display layout / topology events fire (drift, monitor removed, apply failed, auto-revert, etc). Default: true
   talonAlerts: boolean; // Receive email alerts when a talon (automation) fires or fails. Default: true
   apiKeyAlerts: boolean; // Receive email notices before one of your api keys expires (14 / 3 / 0 days out). Default: true
+  /** How the alert emails above arrive: each as it happens, or one digest an hour, a day (08:00 in `timezone`) or a week. Default: 'daily'. Talon and api key emails are always immediate. */
+  alertDelivery: AlertDelivery;
   displayAlertsBannerDismissed: boolean; // [B4.3] One-shot dismissal of the "new: display alerts" banner on /admin/alerts. Default: false (banner shows). The banner also auto-hides after 30 days from feature launch regardless of dismissal state.
   mutedMachines: string[]; // Machine IDs to suppress all alerts for. Default: []
   alertCcEmails: string[]; // Additional CC recipients for alert emails. Default: []
@@ -500,6 +503,12 @@ interface AuthContextType {
   /** Second factors, mirrored live from the user doc. `totp || passkeys > 0` === `mfaEnrolled`. */
   mfaFactors: MfaFactorInventory;
   userPreferences: UserPreferences; // User preferences (temperature unit, etc.)
+  /**
+   * The timezone the account holds, or null. `userPreferences.timezone` falls
+   * back to the browser's zone when none is stored; the alert digest's server
+   * falls back to UTC, so a control naming the digest's clock reads this.
+   */
+  storedTimezone: string | null;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, firstName?: string, lastName?: string, turnstileToken?: string) => Promise<void>;
   signInWithGoogle: () => Promise<GoogleSignInResult>;
@@ -533,7 +542,8 @@ const AuthContext = createContext<AuthContextType>({
   lastMachineIds: {},
   requiresMfaSetup: false,
   mfaFactors: NO_MFA_FACTORS,
-  userPreferences: { temperatureUnit: 'C', timezone: 'UTC', timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true },
+  storedTimezone: null,
+  userPreferences: { temperatureUnit: 'C', timezone: 'UTC', timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, alertDelivery: 'daily', displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true },
   signIn: async () => {},
   signUp: async () => {},
   signInWithGoogle: async () => ({ isNewUser: false }),
@@ -566,7 +576,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [legacySites, setLegacySites] = useState<string[]>([]);
   const [requiresMfaSetup, setRequiresMfaSetup] = useState(false);
   const [mfaFactors, setMfaFactors] = useState<MfaFactorInventory>(NO_MFA_FACTORS);
-  const [userPreferences, setUserPreferences] = useState<UserPreferences>({ temperatureUnit: 'C', timezone: getBrowserTimezone(), timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true });
+  const [storedTimezone, setStoredTimezone] = useState<string | null>(null);
+  const [userPreferences, setUserPreferences] = useState<UserPreferences>({ temperatureUnit: 'C', timezone: getBrowserTimezone(), timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, alertDelivery: 'daily', displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true });
   // Ref mirror so updateUserPreferences reads current prefs without listing
   // them in its deps — that caused stale closures to clobber rapid stacked
   // updates (cell-click + sparkline-toggle).
@@ -707,6 +718,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setLastMachineIds(prev => isDeepEqual(prev, newLastMachineIds) ? prev : newLastMachineIds);
 
                 const preferences = userData.preferences || {};
+                setStoredTimezone(typeof preferences.timezone === 'string' && preferences.timezone ? preferences.timezone : null);
                 // Unknown/missing timeDisplayMode falls back to 'machine'.
                 const rawTdm = preferences.timeDisplayMode;
                 const timeDisplayMode: 'user' | 'machine' | 'site' =
@@ -723,6 +735,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   displayAlerts: preferences.displayAlerts !== false, // Default: true
                   talonAlerts: preferences.talonAlerts !== false, // Default: true
                   apiKeyAlerts: preferences.apiKeyAlerts !== false, // Default: true
+                  alertDelivery: parseAlertDelivery(preferences.alertDelivery), // Default: 'daily'
                   displayAlertsBannerDismissed: preferences.displayAlertsBannerDismissed === true, // Default: false (banner shows)
                   mutedMachines: preferences.mutedMachines || [], // Default: []
                   alertCcEmails: preferences.alertCcEmails || [], // Default: []
@@ -760,6 +773,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     prev.displayAlerts === newPrefs.displayAlerts &&
                     prev.talonAlerts === newPrefs.talonAlerts &&
                     prev.apiKeyAlerts === newPrefs.apiKeyAlerts &&
+                    prev.alertDelivery === newPrefs.alertDelivery &&
                     prev.displayAlertsBannerDismissed === newPrefs.displayAlertsBannerDismissed &&
                     prev.statsExpanded === newPrefs.statsExpanded &&
                     prev.processesExpanded === newPrefs.processesExpanded &&
@@ -1389,6 +1403,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lastMachineIds,
     requiresMfaSetup,
     mfaFactors,
+    storedTimezone,
     userPreferences,
     signIn,
     signUp,
@@ -1402,7 +1417,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, isSiteMember, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, isSiteMember, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, storedTimezone, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

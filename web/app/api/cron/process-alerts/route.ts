@@ -2,15 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
-import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
+import { alertEmailDelivery, type DigestEvent } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
 
 /**
- * GET /api/cron/process-alerts — drains pending_process_alerts into batched per-site digest
- * emails. Alerts are held for ACCUMULATION_WINDOW_MS so machines crashing together share one email.
+ * GET /api/cron/process-alerts — drains pending_process_alerts into batched per-site emails,
+ * or each recipient's alert digest (lib/alerts/digest.server.ts). Alerts are held for
+ * ACCUMULATION_WINDOW_MS so machines crashing together share one email.
  *
  * Auth: X-Cron-Secret must match CRON_SECRET.
  *
@@ -104,6 +105,21 @@ function buildProcessDigestEmail(
   });
 }
 
+/** one alert's digest row, keyed on its queue doc so an overlapping drain run queues it once */
+function processDigestEvent(a: PendingAlert): DigestEvent {
+  return {
+    sourceKey: `process|${a.docId}`,
+    siteId: a.siteId,
+    machineId: a.machineId,
+    category: 'processAlerts',
+    kind: a.eventType === 'process_start_failed' ? 'process_start_failed' : 'process_crash',
+    severity: 'critical',
+    title: a.processName,
+    detail: a.errorMessage,
+    at: a.timestamp?.toMillis?.() ?? Date.now(),
+  };
+}
+
 /** Key-value row for single-alert emails; matches emailDataTable style. */
 function alertRow(label: string, value: string, alt: boolean, highlight?: string): string {
   const bg = alt ? `background:${EMAIL_COLORS.altRow};` : '';
@@ -145,20 +161,16 @@ export async function GET(request: NextRequest) {
       alertsBySite.set(alert.siteId, existing);
     }
 
-    const resendClient = getResend();
+    const delivery = alertEmailDelivery();
     const baseUrl = publicOrigin(request);
     let emailsSent = 0;
+    let digested = 0;
 
     for (const [siteId, siteAlerts] of alertsBySite) {
       try {
         const recipients = await getSiteAlertRecipients(siteId, 'processAlerts');
         if (recipients.length === 0) {
           console.warn(`[cron/process-alerts] No recipients for site ${siteId}`);
-          continue;
-        }
-
-        if (!resendClient) {
-          console.warn('[cron/process-alerts] Resend not configured — skipping');
           continue;
         }
 
@@ -172,36 +184,28 @@ export async function GET(request: NextRequest) {
             const userAlerts = siteAlerts.filter(a => recipientWantsMachine(recipient, a.machineId));
             if (userAlerts.length === 0) continue;
 
-            const unsubscribeUrl = recipient.userId !== 'fallback'
-              ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-              : undefined;
-
             const userSubject = userAlerts.length === 1
               ? `Process ${userAlerts[0].eventType === 'process_start_failed' ? 'failed to start' : 'crashed'}: ${userAlerts[0].processName} on ${userAlerts[0].machineId}`
               : `${userAlerts.length} process event(s) in ${siteLabel}`;
 
-            const html = buildProcessDigestEmail(siteLabel, userAlerts, unsubscribeUrl, tz);
-
-            const result = await resendClient.emails.send({
-              from: FROM_EMAIL,
-              to: [recipient.email],
-              ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-              subject: safeEmailSubject(userSubject),
-              html,
-            });
-
-            if (result.error) {
-              console.error(`[cron/process-alerts] Resend error for ${recipient.email}:`, result.error);
-            } else {
-              emailsSent++;
-            }
+            const outcome = await delivery.deliver(recipient, userAlerts.map(processDigestEvent), () =>
+              sendAlertEmailNow({
+                log: '[cron/process-alerts]',
+                recipient,
+                baseUrl,
+                subject: safeEmailSubject(userSubject),
+                html: (unsubscribeUrl) => buildProcessDigestEmail(siteLabel, userAlerts, unsubscribeUrl, tz),
+              }),
+            );
+            if (outcome === 'sent') emailsSent++;
+            else if (outcome === 'queued') digested++;
           } catch (emailError) {
             console.error(`[cron/process-alerts] Failed to send to ${recipient.email}:`, emailError);
           }
         }
 
         console.log(
-          `[cron/process-alerts] Digest sent for site ${siteId}: ` +
+          `[cron/process-alerts] Alerts handled for site ${siteId}: ` +
           `${siteAlerts.length} event(s), ${recipients.length} recipient(s)`
         );
       } catch (error) {
@@ -223,6 +227,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       alertsProcessed: alerts.length,
       emailsSent,
+      digested,
       sites: alertsBySite.size,
     });
   } catch (error) {

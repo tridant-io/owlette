@@ -215,6 +215,7 @@ export default function PrivacyPage() {
                 <li><strong>verified networks:</strong> a network you passed two-factor authentication from counts as verified for 7 days. the record is removed when you delete your own account.</li>
                 <li><strong>swoop step-up records:</strong> the network and shortened IP address of your most recent swoop step-up on each machine are kept with your account and are not deleted automatically, including when you delete your account. ask us to erase them (see section 9).</li>
                 <li><strong>queued machine commands:</strong> pending commands expire after 1 hour; completed command records are removed after 24 hours.</li>
+                <li><strong>queued digest items:</strong> deleted when the digest is sent, at most 14 days.</li>
                 <li><strong>machine metrics:</strong> automatically deleted 400 days after collection.</li>
                 <li><strong>event logs:</strong> automatically deleted 400 days after the logged event.</li>
                 <li><strong>sign-in records:</strong> automatically deleted 400 days after the sign-in or second-factor check.</li>

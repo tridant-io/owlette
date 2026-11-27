@@ -1,4 +1,5 @@
 import { getAdminDb } from '@/lib/firebase-admin';
+import { ALERT_DIGESTS, ALERT_DIGEST_STALE_MS, alertDigestStatusRef } from '@/lib/alerts/digest.server';
 
 export const STATUS_COMPONENTS = [
   'dashboard',
@@ -37,8 +38,8 @@ const AGENT_HEARTBEAT_WINDOW_MS = 5 * 60 * 1000;
 const WEBHOOK_WINDOW_MS = 60 * 60 * 1000;
 const WEBHOOK_SUCCESS_FLOOR = 0.95;
 const FIRESTORE_LATENCY_LIMIT_MS = 500;
-// Healthy digest queues clear in ~5min (3-min cron + 2-min accumulation);
-// older than this means a digest cron is down and alerts are piling up.
+// Healthy process and display queues clear in ~5min (3-min drain + 2-min
+// accumulation); older than this means a drain cron is down and alerts are piling up.
 const ALERT_DELIVERY_STALE_MS = 15 * 60 * 1000;
 // `/api/cron/talons` advances `nextRunAt` in the claim txn, so a still-due
 // talon means the sweep is dead. Wider than its 10-min missed-fire grace.
@@ -264,8 +265,10 @@ export async function webhookDeliveryHealth(
 }
 
 /**
- * Stalled alert-digest pipeline. If the 3-min drain crons stop, the pending_*
- * queues grow silently and nobody is paged — this makes that visible.
+ * Stalled alert pipeline. If the 3-min drain crons stop, the pending_* queues
+ * grow silently and nobody is paged; if the digest job has stopped, or never
+ * ran, while a digest is queued, that digest waits. This makes both visible.
+ * With nothing queued a missing job is fine: senders then email at once.
  */
 export async function alertDeliveryHealth(
   options: HealthCheckOptions = {},
@@ -276,27 +279,45 @@ export async function alertDeliveryHealth(
 
   try {
     const db = getAdminDb();
-    const [processSnap, displaySnap] = await Promise.all([
+    const [processSnap, displaySnap, digestStatus, digestPending] = await Promise.all([
       db.collection('pending_process_alerts').where('timestamp', '<=', cutoff).limit(10).get(),
       db.collection('pending_display_alerts').where('timestamp', '<=', cutoff).limit(10).get(),
+      alertDigestStatusRef(db).get(),
+      db.collection(ALERT_DIGESTS).where('pending', '==', true).limit(1).get(),
     ]);
     const staleProcess = processSnap.docs.length;
     const staleDisplay = displaySnap.docs.length;
-    const ok = staleProcess === 0 && staleDisplay === 0;
+    const digestLastRunMs = millisFromValue(digestStatus.data()?.lastRunAt);
+    const digestsWaiting = !digestPending.empty;
+    const digestStale = digestsWaiting && (digestLastRunMs === 0 || now - digestLastRunMs > ALERT_DIGEST_STALE_MS);
+    const queuesOk = staleProcess === 0 && staleDisplay === 0;
+    const ok = queuesOk && !digestStale;
+
+    const errors = [
+      ...(queuesOk
+        ? []
+        : [
+            `${staleProcess + staleDisplay} alert(s) undelivered for >${ALERT_DELIVERY_STALE_MS / 60_000}m ` +
+              `(process=${staleProcess}, display=${staleDisplay}) — a drain cron is likely down`,
+          ]),
+      ...(digestStale
+        ? [
+            `${digestLastRunMs > 0 ? `the alert digest job last ran over ${ALERT_DIGEST_STALE_MS / 60_000}m ago` : 'the alert digest job has never run'}` +
+              ' with digests queued — its cron is likely down or unregistered',
+          ]
+        : []),
+    ];
 
     return result('alert_delivery', started, ok, {
       metadata: {
         stale_process_alerts: staleProcess,
         stale_display_alerts: staleDisplay,
         threshold_minutes: ALERT_DELIVERY_STALE_MS / 60_000,
+        alert_digest_last_run_at: digestLastRunMs > 0 ? new Date(digestLastRunMs).toISOString() : null,
+        alert_digest_threshold_minutes: ALERT_DIGEST_STALE_MS / 60_000,
+        alert_digests_pending: digestsWaiting,
       },
-      ...(ok
-        ? {}
-        : {
-            error:
-              `${staleProcess + staleDisplay} alert(s) undelivered for >${ALERT_DELIVERY_STALE_MS / 60_000}m ` +
-              `(process=${staleProcess}, display=${staleDisplay}) — a digest cron is likely down`,
-          }),
+      ...(ok ? {} : { error: errors.join('; ') }),
     });
   } catch (error) {
     return result('alert_delivery', started, false, { error: errorMessage(error) });

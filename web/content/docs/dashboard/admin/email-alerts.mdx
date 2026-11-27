@@ -1,10 +1,10 @@
 ---
 title: "email alerts"
-description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. site owners and admins write threshold rules on admin → alerts; each person picks which emails they get in account settings."
-keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "built-in alerts", "custom rules", "sleep", "asleep", "laptop", "lid closed", "battery"]
+description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. by default they arrive as one daily digest; each person can switch to hourly, weekly or each alert as it happens, and picks which emails they get. site owners and admins write threshold rules on admin → alerts."
+keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "daily digest", "weekly digest", "hourly digest", "too many emails", "email every time", "built-in alerts", "custom rules", "sleep", "asleep", "laptop", "lid closed", "battery"]
 ---
 
-alert email goes to the people on a site, not to a fixed address. each person decides which categories they get; site owners and admins decide what counts as a threshold breach.
+alert email goes to the people on a site, not to a fixed address. each person decides which categories they get and [how they arrive](#how-they-arrive): one daily digest unless they choose otherwise. site owners and admins decide what counts as a threshold breach.
 
 ---
 
@@ -21,21 +21,47 @@ if the site has nobody who could be emailed at all, or the list could not be bui
 
 **API key expiry is the exception.** a key belongs to a person, not a site, so its notice goes to the key's owner only: no site list, no `ADMIN_EMAIL` fallback, and no machine mutes.
 
-every alert email ends with **manage alerts**, which opens `/settings/alerts`, and **unsubscribe**, which opens a page whose **turn off alert emails** button turns off all seven categories at once. opening the link alone changes nothing. turn them back on from **manage alerts** or from [account settings → alerts](/docs/dashboard/account-settings#alerts).
+every alert email ends with **manage alerts**, which opens `/settings/alerts`, and **unsubscribe**, which opens a page whose **turn off alert emails** button turns off all seven categories at once, and whose **weekly digest instead** button keeps them as one email a week. opening the link alone changes nothing. a mail client's own unsubscribe button (the `List-Unsubscribe` header) turns off all seven at once. turn them back on from **manage alerts** or from [account settings → alerts](/docs/dashboard/account-settings#alerts).
+
+---
+
+## how they arrive
+
+each person picks one of four under **alert emails arrive**:
+
+| choice | what arrives |
+|---|---|
+| **daily digest** (the default) | one email at 8:00 am in your timezone with everything that happened since the last one |
+| **hourly digest** | one email on each whole UTC hour, which is half past in a timezone half an hour off UTC |
+| **weekly digest** | one email on mondays at 8:00 am in your timezone |
+| **as it happens** | each alert as its own email, the moment it is sent, as below |
+
+a digest is sent only when something happened. it opens with the machines that are offline or asleep at the time it is sent, then lists each site and machine, with each machine's state now and one line per kind of alert: an outage that re-alerted every hour is one line, a crash loop is one line with its count and last error, and a flapping threshold rule is one line with its peak and latest value. your first digest says that alerts now arrive this way.
+
+- **your timezone** is the one in [account settings → preferences](/docs/dashboard/account-settings#preferences). an account with none, or one the browser could not name, gets its digest at 8:00 am UTC, and **alert emails arrive** says so
+- **talon and api key emails always arrive as they happen**, whatever you choose. so does the `ADMIN_EMAIL` fallback below
+- **webhooks are never delayed.** a digest changes only email
+- who may receive each alert is checked again when the digest is sent: an alert for a machine you have since muted, a category you turned off, or a site you left is dropped
+- switching to **as it happens** sends anything still queued at once, then each new alert as it happens. a queued alert is kept for at most 14 days
+- **alerts are only held while the digest job runs.** if `GET /api/cron/alert-digest` has not run in the last 45 minutes, or never has, each alert goes out as it happens instead, so nothing waits on a job that is not there
+- an alert whose site's member list could not be read is held, and tried again on the next run 15 minutes later
+- a digest copied to **additional CC recipients** carries no one-click unsubscribe header, so a colleague's mail app can't turn off your alerts. its **unsubscribe** link still opens the page that asks first
 
 ---
 
 ## categories
+
+the last column is how each is sent **as it happens**. on a digest, every category but talons and API key expiry waits for your next one.
 
 | category | sent when | switch | how it is sent |
 |---|---|---|---|
 | machine offline | a machine its agent last reported online stops sending heartbeats | **machine offline alerts** | the health-check cron, one email per site; see [offline timing](#offline-timing) |
 | machine asleep, machine awake | a Mac's agent marked it asleep on its way to sleep, then it woke | **machine offline alerts** | the health-check cron, one email per site for each; see [asleep machines](#asleep-machines) |
 | agent connection failure | the agent reports a `connection_failure` | **machine offline alerts** | at once, from `POST /api/agent/alert` |
-| process crashed or failed to start | the agent reports `process_crash` or `process_start_failed` | **process crash alerts** | queued, then sent as a digest by `GET /api/cron/process-alerts` |
+| process crashed or failed to start | the agent reports `process_crash` or `process_start_failed` | **process crash alerts** | queued, then sent as one batched email per site by `GET /api/cron/process-alerts`, or queued for each person's digest |
 | threshold | a [rule](#threshold-alert-rules) is breached | **threshold alerts** | the metrics Cloud Function calls `POST /api/alerts/trigger` |
 | hoot escalation | [autonomous hoot](/docs/dashboard/hoot#autonomous-mode) could not resolve an issue | **hoot escalation alerts** | `/api/hoot/escalation` |
-| display event | a monitor is removed, an apply fails, auto-revert fires, or sync is lost | **display events** | removal and auto-revert at once; the rest as a digest by `GET /api/cron/display-alerts` |
+| display event | a monitor is removed, an apply fails, auto-revert fires, or sync is lost | **display events** | removal and auto-revert at once; the rest as one batched email per site by `GET /api/cron/display-alerts`, or queued for each person's digest |
 | talon | a [talon](/docs/dashboard/talons#outputs) with an email output fires | **talon alerts** | by the talon run |
 | API key expiring | one of your keys is 14, 3 or 0 days from expiry | **api key expiry** | `GET /api/cron/api-key-expiry`, daily, to the key's owner |
 
@@ -136,7 +162,8 @@ each person sets these for themselves in [account settings → alerts](/docs/das
 | **display events** | `displayAlerts` |
 | **talon alerts** | `talonAlerts` |
 | **api key expiry** | `apiKeyAlerts` |
-| **additional CC recipients** | `alertCcEmails`, at most five |
+| **alert emails arrive** | `alertDelivery`: `immediate`, `hourly`, `daily` or `weekly`. absent means `daily` |
+| **additional CC recipients** | `alertCcEmails`, at most five; also copied on your digest |
 | **muted machines** | `mutedMachines`; see [muted machines](/docs/dashboard/account-settings#muted-machines) |
 
 ---
@@ -168,9 +195,10 @@ the cron routes run on an external scheduler; see [scheduled endpoints](/docs/se
 | route | schedule | header | what it does |
 |---|---|---|---|
 | `GET /api/cron/health-check` | every 5 minutes | `X-Cron-Secret: <CRON_SECRET>` | finds machines that stopped heartbeating |
-| `GET /api/cron/process-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | sends process alerts older than 2 minutes as one digest per site |
+| `GET /api/cron/process-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | drains process alerts older than 2 minutes: one batched email per site to people on **as it happens**, and a queued row for each person on a digest |
 | `GET /api/cron/display-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | the same for display alerts |
 | `GET /api/cron/api-key-expiry` | daily, `0 8 * * *` | `X-Cron-Secret: <CRON_SECRET>` | emails key owners at 14, 3 and 0 days before expiry |
+| `GET /api/cron/alert-digest` | every 15 minutes, `*/15 * * * *`, 60s timeout | `X-Cron-Secret: <CRON_SECRET>` | sends each person's digest once it is due, within a 50-second budget per run. without it, alerts go out as they happen, and anything already queued waits |
 | `GET /api/hoot/escalation` | your choice | `Authorization: Bearer <CRON_SECRET>` | sends pending hoot escalations. `/api/cortex/escalation` still works |
 
 threshold alerts have no cron route: the metrics Cloud Function calls `POST /api/alerts/trigger` itself.
@@ -185,7 +213,7 @@ threshold alerts have no cron route: the metrics Cloud Function calls `POST /api
 
 </Callout>
 
-the email page reads the configuration from `GET /api/platform/email/config` and sends a sample of any template through `POST /api/test-email`, to the configured admin address. the API also takes `to` and `cc`. the templates are `test`, `process_crash`, `process_start_failed`, `agent_alert`, `threshold_alert`, `machines_offline`, `cortex_escalation`, `api_key_expiring`, `welcome` and `user_signup`.
+the email page reads the configuration from `GET /api/platform/email/config` and sends a sample of any template through `POST /api/test-email`, to the configured admin address. the API also takes `to` and `cc`. the templates are `test`, `process_crash`, `process_start_failed`, `agent_alert`, `threshold_alert`, `machines_offline`, `cortex_escalation`, `api_key_expiring`, `alert_digest`, `issue`, `activity_finding`, `activity_digest`, `welcome` and `user_signup`.
 
 ---
 
@@ -200,6 +228,7 @@ the email page reads the configuration from `GET /api/platform/email/config` and
 | display alerts | 1 per hour per machine and event type; `display_drift` once every 4 hours |
 | threshold alerts | the rule's own cooldown, per machine |
 | API key expiry | once per rung per key, recorded on the key before the email is sent |
+| digest | one email per person per period, whatever the scheduler does: each period is claimed before it is sent and goes out under one Resend idempotency key |
 
 these limits need the deployment's Upstash Redis; without it every endpoint falls back to one flat per-process limit. see [rate limiting](/docs/setup/environment-variables#rate-limiting-required).
 
@@ -210,16 +239,18 @@ these limits need the deployment's Upstash Redis; without it every endpoint fall
 ### no emails received
 
 1. check the recipient's switch for that category in **account settings** → **alerts**. an **unsubscribe** click turns every category off
-2. check whether they muted the machine
-3. check they are still on the site's member list
-4. for a threshold alert: the rule exists and is switched on, its cooldown has passed, the machine reports that metric, and the machine is sending fresh metrics
+2. check **alert emails arrive**: on a digest, the alert is in the next one, and nothing arrives when nothing happened
+3. check whether they muted the machine
+4. check they are still on the site's member list
+5. for a threshold alert: the rule exists and is switched on, its cooldown has passed, the machine reports that metric, and the machine is sending fresh metrics
 
 if those are fine, the rest is platform-side: `RESEND_API_KEY` and the sender on the email page, a `test` send, `CRON_SECRET` or `CORTEX_INTERNAL_SECRET` for the route that should have sent it, and Resend errors in the server or function logs.
 
 ### alerts arrive late
 
+- **on a digest** (the default) an alert waits for your next one: 8:00 am daily. switch to **as it happens** for each alert at once
 - **machine offline** takes about 20 to 25 minutes by design; see [offline timing](#offline-timing). nothing fires during an announced reboot or shutdown
-- **process and display digests** wait until the event is 2 minutes old, then for the next 3-minute cron run
+- **process and display batched emails** wait until the event is 2 minutes old, then for the next 3-minute cron run
 - **a new threshold rule** can take up to 5 minutes to start firing
 
 ### duplicate alerts

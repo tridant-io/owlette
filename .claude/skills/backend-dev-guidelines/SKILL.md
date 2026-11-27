@@ -124,7 +124,7 @@ When a process crashes or fails to start, the agent sends an alert via the web A
 
 1. After each `log_event('process_crash', ...)` or `log_event('process_start_failed', ...)` call in `owlette_service.py`, a call to `firebase_client.send_process_alert()` follows
 2. `send_process_alert(process_name, error_message, event_type)` spawns a daemon thread that POSTs `{siteId, machineId, eventType, data: {process_name, error_message}, agentVersion}` to `/api/agent/alert`
-3. The web API rate-limits per `machineId:processName` (3/hr) and queues the event; a cron emails a per-site digest every 3 minutes to users with `processAlerts !== false`
+3. The web API rate-limits per `machineId:processName` (3/hr) and queues the event; a cron drains it every 3 minutes into one batched email per site for users on "as it happens", and into each other user's alert digest (`lib/alerts/digest.server.ts`), for users with `processAlerts !== false`
 4. Alert sending is non-blocking — a failed send is queued and re-sent on reconnect
 
 ### Error Handling

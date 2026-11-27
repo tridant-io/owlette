@@ -271,8 +271,9 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | endpoint | schedule | auth header | purpose |
 |--|--|--|--|
 | `/api/cron/health-check` | `*/5 * * * *` | `X-Cron-Secret` | flags machines with stale heartbeats, emails and fires webhooks and talons for machines that went offline |
-| `/api/cron/process-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_process_alerts` into digest email |
-| `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into digest email |
+| `/api/cron/process-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_process_alerts` into one email per site, or each person's alert digest |
+| `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` the same way |
+| `/api/cron/alert-digest` | `*/15 * * * *`, 60s timeout | `X-Cron-Secret` | sends each person's alert digest once it is due: 08:00 in their timezone by default |
 | `/api/cron/status-ping` | `* * * * *` | `X-Cron-Secret` | writes status pings and publishes them to Instatus |
 | `/api/cron/talons` | `* * * * *` | `X-Cron-Secret` | fires schedule-triggered and delayed talons, recovers stale runs, and fires due hoot follow-ups |
 | `/api/cron/plan-daily` | `30 23 * * *` (UTC) | `X-Cron-Secret` | records each site's active machines for the day and the plan snapshot that scheduled rollouts check, reports the billed sites' usage and saves each report, retries removing deleted sites from tridant id, checks what tridant id lets each key do, and deletes usage older than 100 days. it is the last run inside a month, and `/api/cron/plan-settle` sends that month's report again the morning after. nothing is reported until plans are enforced, which on owlette.app is not before 1 April 2027; with tridant id configured, the removal retry and the key check run anyway. see [plans](/docs/plans) |
@@ -287,7 +288,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 
 <Callout type="warning" title={"almost every failure here is silent"}>
 
-an unscheduled job does not error: the work simply never happens. alert digests let their queue grow, talons on a schedule never fire, offline machines are never reported, active machines are never counted, and `/api/cron/retention` keeps data past the window the privacy policy states.
+an unscheduled job does not error: the work simply never happens. without `/api/cron/alert-digest` nobody on a digest, which is everyone by default, gets any alert email; without the drains their queues grow, talons on a schedule never fire, offline machines are never reported, active machines are never counted, and `/api/cron/retention` keeps data past the window the privacy policy states.
 
 `/api/hoot/escalation` is the odd one out: it takes `Authorization: Bearer <CRON_SECRET>`, **not** `X-Cron-Secret`. schedules still pointing at `/api/cortex/escalation` keep working, since it is an alias for the same handler; use the `/api/hoot/` path for anything new.
 
@@ -318,15 +319,32 @@ separate the cron fields with spaces: `*/5 * * * *`. without them (`*/5****`) th
 
 </Callout>
 
-### alert digests
+### process and display alerts
 
-the agent only *queues* process and display alerts; these two routes are what email them. schedule **both, in every environment**, every 3 minutes (`*/3 * * * *`):
+the agent only *queues* process and display alerts; these two routes are what email them, or queue them for each person's digest. schedule **both, in every environment**, every 3 minutes (`*/3 * * * *`):
 
 ```text
 GET https://<your-app>/api/cron/process-alerts
 GET https://<your-app>/api/cron/display-alerts
 X-Cron-Secret: <CRON_SECRET value>
 ```
+
+### the alert digest
+
+alert emails arrive as one digest per person by default ([how they arrive](/docs/dashboard/admin/email-alerts#how-they-arrive)), and this route is what sends them. alerts are only queued while it runs: until its first run, and after 45 minutes without one, each alert is emailed as it happens instead, so a job not yet registered loses nothing, but anything already queued waits and is deleted unsent after 14 days. schedule it **in every environment**, every 15 minutes, with a timeout of at least 60 seconds:
+
+```text
+GET https://<your-app>/api/cron/alert-digest
+X-Cron-Secret: <CRON_SECRET value>
+```
+
+```json
+{"ok":true,"users":3,"due":1,"sent":1,"failed":0,"held":0,"deferred":0}
+```
+
+`users` counts people with something queued, and `due` those whose digest this run sent or tried. `held` counts people with alerts left for the next run because a site's member list could not be read, and `deferred` those left because the run's 50 seconds ran out or Resend refused the account. each digest is claimed before it is sent and goes out under one Resend idempotency key, so a duplicate schedule or a retry never sends it twice. the `alert_delivery` status component degrades when a digest is queued and the job has not run for 45 minutes, or never has.
+
+the queued alerts carry a 14-day Firestore TTL on `digest_events.deleteAt`, deployed with `firebase deploy --only firestore:indexes`.
 
 ### talons
 

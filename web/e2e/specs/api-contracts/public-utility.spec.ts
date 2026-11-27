@@ -1,5 +1,8 @@
+import crypto from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import { seedCliDeviceCode } from '../../helpers/coverageSeed';
+import { E2E_CRON_SECRET } from '../../helpers/cron';
+import { getAdminDb } from '../../helpers/emulator';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -78,6 +81,34 @@ test('unsubscribe API validates missing and invalid tokens', async ({ request })
   const invalidPost = await request.post('/api/unsubscribe', { data: { token: 'not-valid' } });
   expect(invalidPost.status()).toBe(400);
   expect(await invalidPost.json()).toMatchObject({ error: 'Invalid or expired token' });
+});
+
+test("unsubscribe takes a mail client's RFC 8058 one-click POST and turns every alert email off", async ({ request }) => {
+  // a throwaway user: the token is the uid signed with the app's CRON_SECRET, as the route mints it
+  const uid = `one-click-${crypto.randomBytes(4).toString('hex')}`;
+  const user = getAdminDb().collection('users').doc(uid);
+  await user.set({ email: `${uid}@e2e.test`, preferences: { healthAlerts: true, alertDelivery: 'daily' } });
+  const signature = crypto.createHmac('sha256', E2E_CRON_SECRET).update(uid).digest('hex');
+  const token = Buffer.from(`${uid}:${signature}`).toString('base64url');
+
+  try {
+    const res = await request.post(`/api/unsubscribe?token=${token}`, {
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      data: 'List-Unsubscribe=One-Click',
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    expect((await user.get()).get('preferences')).toMatchObject({
+      healthAlerts: false,
+      processAlerts: false,
+      thresholdAlerts: false,
+      cortexAlerts: false,
+      displayAlerts: false,
+      talonAlerts: false,
+      apiKeyAlerts: false,
+    });
+  } finally {
+    await user.delete();
+  }
 });
 
 test('CLI device-code API creates, validates, and reports pending polling state', async ({ request }) => {

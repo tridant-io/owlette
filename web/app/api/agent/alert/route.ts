@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
-import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
+import { ENV_LABEL } from '@/lib/resendClient.server';
 import {
   wrapEmailLayout,
   emailDataTable,
@@ -12,7 +12,8 @@ import {
   safeEmailSubject,
   type PendingDisplayAlert,
 } from '@/lib/emailTemplates.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
+import { alertEmailDelivery, displayDigestEvent, type DigestEvent } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import {
   checkRateLimit,
@@ -41,6 +42,23 @@ import { sanitizeForLog } from '@/lib/logSanitize';
 
 /** the `errorCode` the agent's reboot-pending check posts (`_check_and_alert_reboot_pending`). */
 const REBOOT_PENDING_NOTICE = 'reboot_pending';
+
+/** the digest row for a connection failure or a reboot-pending notice: each is posted once, so no source key */
+function agentAlertDigestEvent(siteId: string, machineId: string, errorCode: string, errorMessage: string): DigestEvent {
+  const notice = errorCode === REBOOT_PENDING_NOTICE;
+  return {
+    sourceKey: null,
+    siteId,
+    machineId,
+    category: 'healthAlerts',
+    kind: notice ? 'reboot_pending' : 'agent_error',
+    severity: notice ? 'info' : 'critical',
+    title: notice ? 'reboot pending' : 'agent error',
+    detail: errorMessage,
+    data: { errorCode },
+    at: Date.now(),
+  };
+}
 
 /** the email's wording: a pending reboot is a notice from a machine that is fine, not an agent error. */
 function alertEmailCopy(errorCode: string) {
@@ -260,9 +278,10 @@ export const POST = withRateLimit(
         // Critical-path sends inline; everything else queues to the digest cron.
         let queuedForEmail = false;
         let immediateEmailsSent = 0;
+        let digested = 0;
         if (route.email && !suppressAlert) {
           if (route.criticalPath) {
-            immediateEmailsSent = await sendCriticalDisplayEmailNow({
+            ({ sent: immediateEmailsSent, queued: digested } = await deliverCriticalDisplayEmail({
               siteId,
               machineId,
               eventType: resolvedEventType,
@@ -270,7 +289,7 @@ export const POST = withRateLimit(
               agentVersion: agentVersion || '',
               correlatedApplyId,
               baseUrl: publicOrigin(request),
-            });
+            }));
           } else {
             await db.collection('pending_display_alerts').add({
               siteId,
@@ -299,7 +318,7 @@ export const POST = withRateLimit(
 
         console.log(
           `[agent/alert] Display ${sanitizeForLog(resolvedEventType)} on ${sanitizeForLog(machineId)} (${sanitizeForLog(siteId)}): ` +
-          `email=${queuedForEmail ? 'queued' : immediateEmailsSent > 0 ? `inline:${immediateEmailsSent}` : 'no'} ` +
+          `email=${queuedForEmail ? 'queued' : immediateEmailsSent > 0 ? `inline:${immediateEmailsSent}` : digested > 0 ? `digest:${digested}` : 'no'} ` +
           `webhook=${webhookFired} suppressed=${suppressAlert}`,
         );
         return NextResponse.json({
@@ -307,6 +326,7 @@ export const POST = withRateLimit(
           emailSent: immediateEmailsSent > 0,
           emailsSent: immediateEmailsSent,
           queued: queuedForEmail,
+          digested,
           webhookFired,
           suppressed: suppressAlert,
           criticalPath: !!route.criticalPath,
@@ -430,13 +450,7 @@ export const POST = withRateLimit(
         }).catch(console.error);
       }
 
-      // Connection failures email immediately.
-      const resendClient = getResend();
-      if (!resendClient) {
-        console.warn('[agent/alert] RESEND_API_KEY not configured — alert not sent');
-        return NextResponse.json({ success: true, emailSent: false, reason: 'Resend not configured' });
-      }
-
+      // Connection failures email immediately, or queue for each recipient's digest.
       const [recipients, tz] = await Promise.all([
         getSiteAlertRecipients(siteId, 'healthAlerts'),
         getMachineTimezone(siteId, machineId),
@@ -449,39 +463,34 @@ export const POST = withRateLimit(
 
       const subject = safeEmailSubject(`${alertEmailCopy(errorCode).subject} ${machineId}`);
       const baseUrl = publicOrigin(request);
+      const digestEvent = agentAlertDigestEvent(siteId, machineId, errorCode, errorMessage || '');
+      const delivery = alertEmailDelivery();
       let emailsSent = 0;
+      let digested = 0;
 
       for (const recipient of recipients) {
         // Honor per-machine mutes and machine scope (mirrors the critical-display loop).
         if (!recipientWantsMachine(recipient, machineId)) continue;
         try {
-          const unsubscribeUrl = recipient.userId !== 'fallback'
-            ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-            : undefined;
-
-          const html = buildAlertEmail(siteId, machineId, errorCode, errorMessage || '', agentVersion, unsubscribeUrl, tz);
-
-          const result = await resendClient.emails.send({
-            from: FROM_EMAIL,
-            to: [recipient.email],
-            ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-            subject,
-            html,
-          });
-
-          if (result.error) {
-            console.error(`[agent/alert] Resend error for ${sanitizeForLog(recipient.email)}:`, result.error);
-          } else {
-            emailsSent++;
-          }
+          const outcome = await delivery.deliver(recipient, [digestEvent], () =>
+            sendAlertEmailNow({
+              log: '[agent/alert]',
+              recipient,
+              baseUrl,
+              subject,
+              html: (unsubscribeUrl) => buildAlertEmail(siteId, machineId, errorCode, errorMessage || '', agentVersion, unsubscribeUrl, tz),
+            }),
+          );
+          if (outcome === 'sent') emailsSent++;
+          else if (outcome === 'queued') digested++;
         } catch (emailError) {
           console.error(`[agent/alert] Failed to send to ${sanitizeForLog(recipient.email)}:`, emailError);
         }
       }
 
-      console.log(`[agent/alert] Alert sent for ${sanitizeForLog(machineId)} (${sanitizeForLog(siteId)}): ${sanitizeForLog(resolvedEventType)}, ${recipients.length} recipient(s)`);
+      console.log(`[agent/alert] Alert handled for ${sanitizeForLog(machineId)} (${sanitizeForLog(siteId)}): ${sanitizeForLog(resolvedEventType)}, ${emailsSent} sent, ${digested} queued of ${recipients.length} recipient(s)`);
 
-      return NextResponse.json({ success: true, emailSent: emailsSent > 0, recipients: emailsSent });
+      return NextResponse.json({ success: true, emailSent: emailsSent > 0, recipients: emailsSent, digested });
     } catch (error: unknown) {
       return apiError(error, 'agent/alert');
     }
@@ -556,13 +565,13 @@ async function triggerAutonomousHoot(
 }
 
 /**
- * Send one critical-path display alert inline, bypassing the digest cron —
- * `display_monitor_removed` / `display_auto_revert_fired` can't wait minutes.
- * Shares `buildDisplayDigestEmail` with the cron path so the layout is
- * identical, and honors mutes, machine scope and unsubscribe links the same way.
- * Returns the number of emails that actually sent.
+ * Deliver one critical-path display alert without the 3-minute drain —
+ * `display_monitor_removed` / `display_auto_revert_fired` can't wait minutes —
+ * inline to each recipient on `immediate`, into the digest for the rest. Shares
+ * `buildDisplayDigestEmail` with the cron path so the layout is identical, and
+ * honors mutes, machine scope and unsubscribe links the same way.
  */
-async function sendCriticalDisplayEmailNow(params: {
+async function deliverCriticalDisplayEmail(params: {
   siteId: string;
   machineId: string;
   eventType: string;
@@ -570,20 +579,14 @@ async function sendCriticalDisplayEmailNow(params: {
   agentVersion: string;
   correlatedApplyId: string;
   baseUrl: string;
-}): Promise<number> {
+}): Promise<{ sent: number; queued: number }> {
   const { siteId, machineId, eventType, data, agentVersion, correlatedApplyId, baseUrl } = params;
-
-  const resendClient = getResend();
-  if (!resendClient) {
-    console.warn('[agent/alert] Resend not configured — critical display alert dropped');
-    return 0;
-  }
 
   const [recipients, tz] = await Promise.all([
     getSiteAlertRecipients(siteId, 'displayAlerts'),
     getMachineTimezone(siteId, machineId),
   ]);
-  if (recipients.length === 0) return 0;
+  if (recipients.length === 0) return { sent: 0, queued: 0 };
 
   // Synthetic single-alert payload mirroring the digest path's queue-write
   // shape, so the template can't tell the two routes apart.
@@ -599,37 +602,33 @@ async function sendCriticalDisplayEmailNow(params: {
   };
 
   const siteLabel = await getSiteLabel(siteId);
-  let emailsSent = 0;
+  const digestEvent = displayDigestEvent(alert, null);
+  const subject = safeEmailSubject(`[owlette] critical display alert on ${machineId}`);
+  const delivery = alertEmailDelivery();
+  let sent = 0;
+  let queued = 0;
   for (const recipient of recipients) {
     try {
       // Critical-path bypass must not override the operator's mute or machine scope.
       if (!recipientWantsMachine(recipient, machineId)) continue;
 
-      const unsubscribeUrl = recipient.userId !== 'fallback'
-        ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-        : undefined;
-
-      const html = buildDisplayDigestEmail(siteLabel, [alert], unsubscribeUrl, tz);
-      const subject = safeEmailSubject(`[owlette] critical display alert on ${machineId}`);
-
-      const result = await resendClient.emails.send({
-        from: FROM_EMAIL,
-        to: [recipient.email],
-        ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-        subject,
-        html,
-      });
-      if (result.error) {
-        console.error(`[agent/alert] Resend error for ${sanitizeForLog(recipient.email)}:`, result.error);
-      } else {
-        emailsSent++;
-      }
+      const outcome = await delivery.deliver(recipient, [digestEvent], () =>
+        sendAlertEmailNow({
+          log: '[agent/alert]',
+          recipient,
+          baseUrl,
+          subject,
+          html: (unsubscribeUrl) => buildDisplayDigestEmail(siteLabel, [alert], unsubscribeUrl, tz),
+        }),
+      );
+      if (outcome === 'sent') sent++;
+      else if (outcome === 'queued') queued++;
     } catch (e) {
       console.error(`[agent/alert] Failed to send critical display email to ${sanitizeForLog(recipient.email)}:`, e);
     }
   }
   console.log(
-    `[agent/alert] Critical display email sent: ${eventType} on ${sanitizeForLog(machineId)} → ${emailsSent}/${recipients.length} recipients`,
+    `[agent/alert] Critical display alert: ${eventType} on ${sanitizeForLog(machineId)} → ${sent} sent, ${queued} queued of ${recipients.length} recipients`,
   );
-  return emailsSent;
+  return { sent, queued };
 }

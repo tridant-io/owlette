@@ -6,6 +6,8 @@
 
 import { ENV_LABEL, isProduction } from '@/lib/resendClient.server';
 import { issueAttachmentsSummary, issueSourceLabel } from '@/lib/issues';
+import type { AlertDelivery } from '@/lib/alerts/delivery';
+import type { DigestSeverity, DigestSummary } from '@/lib/alerts/digest.server';
 
 // Color palette (OKLCH dashboard values → email-safe hex)
 
@@ -92,6 +94,48 @@ export function emailDataTable(rows: DataRow[]): string {
     .join('');
 
   return `<table width="100%" style="border-collapse:collapse;border:1px solid ${EMAIL_COLORS.border};border-radius:6px;overflow:hidden;" cellpadding="0" cellspacing="0">${trs}</table>`;
+}
+
+/** a machine and one value beside it: the table of the offline, sleep and digest emails */
+export function emailMachineTable(valueLabel: string, rows: { machineId: string; value: string }[]): string {
+  const th = `padding:10px 14px;text-align:left;background:${EMAIL_COLORS.altRow};color:${EMAIL_COLORS.muted};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid ${EMAIL_COLORS.border};`;
+  const td = `padding:10px 14px;border-bottom:1px solid ${EMAIL_COLORS.border};font-size:13px;`;
+  const body = rows
+    .map(
+      (r) => `
+      <tr>
+        <td style="${td}color:${EMAIL_COLORS.text};">${escapeHtml(r.machineId)}</td>
+        <td style="${td}color:${EMAIL_COLORS.muted};">${escapeHtml(r.value)}</td>
+      </tr>`
+    )
+    .join('');
+  return `
+    <table width="100%" style="border-collapse:collapse;border:1px solid ${EMAIL_COLORS.border};border-radius:6px;overflow:hidden;" cellpadding="0" cellspacing="0">
+      <thead>
+        <tr>
+          <th style="${th}">machine</th>
+          <th style="${th}">${valueLabel}</th>
+        </tr>
+      </thead>
+      <tbody>${body}</tbody>
+    </table>`;
+}
+
+/**
+ * RFC 8058 one-click unsubscribe headers for an alert email with a per-user
+ * link, spread into the send payload. The link's POST turns every alert email
+ * off, like the confirm page; the admin fallback has no link and gets none. A
+ * copy with cc gets none either: a colleague's mail-client button would turn off
+ * the recipient's alerts. The link in the body stays, since its page asks first.
+ */
+export function unsubscribeHeaders(unsubscribeUrl: string | undefined, cc: readonly string[] = []): { headers?: Record<string, string> } {
+  if (!unsubscribeUrl || cc.length > 0) return {};
+  return {
+    headers: {
+      'List-Unsubscribe': `<${unsubscribeUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    },
+  };
 }
 
 interface EmailLayoutOptions {
@@ -261,15 +305,15 @@ const DISPLAY_EVENT_LABEL: Record<string, string> = {
   display_apply_succeeded: 'display apply succeeded',
 };
 
-/** Severity color for an event: critical red, warning amber, else blue. */
-function displayEventColor(eventType: string): string {
+/** An event's severity: critical for an outage or silent failure, warning for a change, else info. */
+function displayEventSeverity(eventType: string): DigestSeverity {
   if (
     eventType === 'display_monitor_removed' ||
     eventType === 'display_apply_failed' ||
     eventType === 'display_auto_revert_fired' ||
     eventType === 'display_sync_lost'
   ) {
-    return EMAIL_COLORS.red;
+    return 'critical';
   }
   if (
     eventType === 'display_drift' ||
@@ -277,9 +321,14 @@ function displayEventColor(eventType: string): string {
     eventType === 'display_mosaic_disabled' ||
     eventType === 'display_apply_refused_mosaic'
   ) {
-    return EMAIL_COLORS.amber;
+    return 'warning';
   }
-  return EMAIL_COLORS.blue;
+  return 'info';
+}
+
+/** Severity color for an event: critical red, warning amber, else blue. */
+function displayEventColor(eventType: string): string {
+  return SEVERITY_COLORS[displayEventSeverity(eventType)];
 }
 
 /**
@@ -306,6 +355,15 @@ function displayEventDetail(eventType: string, data: Record<string, unknown>): s
   const error = (data?.error ?? data?.errorMessage ?? '') as string;
   if (error) return error;
   return '';
+}
+
+/** a display event as one digest line reads it: its label, severity and the monitor and detail joined */
+export function describeDisplayEvent(eventType: string, data: Record<string, unknown>): { label: string; severity: DigestSeverity; detail: string } {
+  return {
+    label: DISPLAY_EVENT_LABEL[eventType] ?? eventType,
+    severity: displayEventSeverity(eventType),
+    detail: [monitorLabel(data), displayEventDetail(eventType, data)].filter(Boolean).join(' · '),
+  };
 }
 
 function displayAlertRow(label: string, value: string, alt: boolean, highlight?: string): string {
@@ -757,4 +815,129 @@ export function buildActivityDigestEmail(args: {
     `<p style="margin:0;font-size:12px;line-height:18px;color:${C.muted};">no digest is sent on a day with nothing to review</p>`;
 
   return { subject, html: wrapEmailLayout(content, { preheader: `${n} to review` }) };
+}
+
+// alert digest
+
+const DIGEST_TITLE: Record<AlertDelivery, string> = {
+  // the queue of someone who switched to each alert as it happens
+  immediate: 'alert digest',
+  hourly: 'hourly digest',
+  daily: 'daily digest',
+  weekly: 'weekly digest',
+};
+
+const DIGEST_LINE_COLOR: Record<DigestSeverity, string> = {
+  critical: EMAIL_COLORS.redText,
+  warning: EMAIL_COLORS.amberText,
+  info: EMAIL_COLORS.text,
+};
+
+const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
+
+// a zone id and UTC keep their case: identifiers and acronyms are not lowercased
+function digestCadence(mode: AlertDelivery, timezone: string): string {
+  const zone = escapeHtml(timezone);
+  switch (mode) {
+    case 'hourly':
+      return 'one digest an hour, on the hour (UTC).';
+    case 'daily':
+      return `one digest a day at 8:00 am ${zone}.`;
+    case 'weekly':
+      return `one digest a week, mondays at 8:00 am ${zone}.`;
+    case 'immediate':
+      return 'you get each alert as it happens now; these were queued before you switched.';
+  }
+}
+
+/**
+ * One person's alert digest: what is offline now, then per site and machine one
+ * line per kind of alert with its repeats collapsed. Sent by
+ * `GET /api/cron/alert-digest`; never sent when the period holds nothing.
+ * `introduce` adds the one-time note that alerts now arrive this way.
+ */
+export function buildAlertDigestEmail(args: {
+  mode: AlertDelivery;
+  timezone: string;
+  summary: DigestSummary;
+  introduce: boolean;
+  baseUrl: string;
+  unsubscribeUrl: string;
+}): { subject: string; html: string } {
+  const C = EMAIL_COLORS;
+  const { mode, timezone, summary: s, baseUrl } = args;
+  const title = DIGEST_TITLE[mode];
+  const offline = s.offlineNow.filter((m) => m.state === 'offline').length;
+  const counts = `${plural(s.eventCount, 'event')} in ${plural(s.siteCount, 'site')}`;
+  const subject = safeEmailSubject(
+    [`owlette ${title}`, ...(offline > 0 ? [`${plural(offline, 'machine')} offline now`] : []), counts].join(' · '),
+  );
+  const manageUrl = `${baseUrl}/settings/alerts`;
+  const link = (href: string, label: string) =>
+    `<a href="${escapeHtml(href)}" style="color:${C.cyan};text-decoration:none;font-weight:600;">${label}</a>`;
+
+  const intro =
+    args.introduce && mode !== 'immediate'
+      ? `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:0 0 20px;border-collapse:separate;"><tr><td bgcolor="${C.bodyBg}" style="padding:14px 16px;background-color:${C.bodyBg};border:1px solid ${C.cyan};border-radius:8px;font-size:13px;line-height:20px;color:${C.text};">new: your alerts now arrive as one ${title}. want each alert as it happens? switch in ${link(manageUrl, 'manage alerts')}.</td></tr></table>`
+      : '';
+
+  const more = (n: number, what: string, style: string) =>
+    n ? `<p style="${style}font-size:12px;color:${C.muted};">and ${plural(n, `more ${what}`)}</p>` : '';
+  const offlineCount = s.offlineNow.length + s.moreOffline;
+  const offlineNow = s.offlineNow.length
+    ? `<p style="margin:0 0 6px;color:${C.red};font-size:13px;font-weight:700;text-transform:lowercase;">offline now (${offlineCount})</p>` +
+      emailMachineTable(
+        'since',
+        s.offlineNow.map((m) => ({
+          machineId: `${m.machineId} · ${m.siteLabel}`,
+          value: `${m.state}${m.since ? ` since ${m.since}` : ''}`,
+        })),
+      ) +
+      more(s.moreOffline, 'machine', 'margin:8px 0 0;')
+    : '';
+
+  const sites = s.sites
+    .map((site) => {
+      const machines = site.machines
+        .map(
+          (m, i) =>
+            `<tr><td style="padding:10px 14px;${i % 2 === 1 ? `background-color:${C.altRow};` : ''}border-bottom:1px solid ${C.border};">` +
+            `<p style="margin:0;font-size:13px;line-height:20px;font-weight:600;color:${C.text};word-break:break-word;">${escapeHtml(m.machineId ?? 'site')}` +
+            (m.stateNow ? `<span style="font-weight:400;color:${C.muted};"> · ${escapeHtml(m.stateNow)}</span>` : '') +
+            `</p>` +
+            m.lines
+              .map(
+                (l) =>
+                  `<p style="margin:2px 0 0;font-size:13px;line-height:20px;color:${DIGEST_LINE_COLOR[l.severity]};word-break:break-word;">${escapeHtml(l.text)}</p>`,
+              )
+              .join('') +
+            more(m.moreLines, 'kind of alert', 'margin:2px 0 0;') +
+            `</td></tr>`,
+        )
+        .join('');
+      const moreMachines = site.moreMachines
+        ? `<tr><td style="padding:10px 14px;font-size:12px;color:${C.muted};">and ${plural(site.moreMachines, 'more machine')}</td></tr>`
+        : '';
+      return (
+        `<p style="margin:22px 0 6px;font-size:14px;font-weight:700;color:${C.text};word-break:break-word;">${escapeHtml(site.siteLabel)}</p>` +
+        `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;border:1px solid ${C.border};border-radius:6px;overflow:hidden;">${machines}${moreMachines}</table>`
+      );
+    })
+    .join('');
+  const moreSites = more(s.moreSites, 'site', 'margin:12px 0 0;');
+
+  const content =
+    `<h2 style="color:${C.cyan};margin:0 0 4px;font-size:18px;font-weight:700;text-transform:lowercase;">${title}</h2>` +
+    `<p style="margin:0 0 20px;color:${C.muted};font-size:13px;">${escapeHtml(s.from)} – ${escapeHtml(s.to)} · ${escapeHtml(timezone)}</p>` +
+    intro +
+    offlineNow +
+    sites +
+    moreSites +
+    emailCtaButton(`${baseUrl}/dashboard`, 'open dashboard') +
+    `<p style="margin:0 0 12px;font-size:13px;">${link(`${baseUrl}/logs`, 'view logs')}</p>` +
+    `<p style="margin:0;font-size:12px;line-height:18px;color:${C.muted};">${digestCadence(mode, timezone)} ` +
+    (mode === 'immediate' ? '' : `want each alert as it happens? change it in ${link(manageUrl, 'manage alerts')}. `) +
+    `nothing is sent when nothing happened.</p>`;
+
+  return { subject, html: wrapEmailLayout(content, { unsubscribeUrl: args.unsubscribeUrl, preheader: counts }) };
 }

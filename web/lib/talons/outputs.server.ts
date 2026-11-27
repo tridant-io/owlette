@@ -24,6 +24,7 @@ import {
   emailTimestamp,
   escapeHtml,
   safeEmailSubject,
+  unsubscribeHeaders,
   wrapEmailLayout,
 } from '@/lib/emailTemplates.server';
 import { dispatchAndAwait } from '@/lib/jobs/talonRunner.server';
@@ -167,12 +168,15 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
     // none, so with a screenshot it gets its own copy without it.
     const withImage = recipient.member === true && Boolean(ctx.condition?.screenshotUrl);
     const ccApart = withImage && recipient.ccEmails.length > 0;
+    const cc = recipient.ccEmails.length > 0 && !ccApart ? recipient.ccEmails : [];
 
     const failure = await sendTalonEmail(resend, {
       to: [recipient.email],
-      ...(recipient.ccEmails.length > 0 && !ccApart ? { cc: recipient.ccEmails } : {}),
+      ...(cc.length > 0 ? { cc } : {}),
       subject,
       html: buildTalonEmail(ctx, unsubscribeUrl, withImage),
+      // one-click headers only on a copy nobody else receives
+      ...unsubscribeHeaders(unsubscribeUrl, cc),
     });
     if (failure) {
       failures.push(`${recipient.email}: ${failure}`);
@@ -209,7 +213,7 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
 /** one send; the failure as text, or null when resend took it. */
 async function sendTalonEmail(
   resend: NonNullable<ReturnType<typeof getResend>>,
-  message: { to: string[]; cc?: string[]; subject: string; html: string },
+  message: { to: string[]; cc?: string[]; subject: string; html: string; headers?: Record<string, string> },
 ): Promise<string | null> {
   try {
     const result = await resend.emails.send({ from: FROM_EMAIL, ...message });

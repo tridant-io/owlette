@@ -31,11 +31,34 @@ const sitesCollection = {
     return siteDocRef;
   }),
 };
+// the digest job's last run: senders queue only while it is recent
+let mockLastRunAt: number | null = Date.now();
+// digest rows written by recipients on a digest, as `{ uid, id, data }`
+const queuedRows: { uid: string; id: string; data: Record<string, unknown> }[] = [];
+const digestState = (uid: string) => ({
+  uid,
+  collection: () => ({ doc: (id?: string) => ({ uid, id: id ?? 'auto' }) }),
+});
+
 const mockDb = {
   collection: jest.fn((name: string) => {
     if (name === 'sites') return sitesCollection;
+    if (name === 'alert_digests') return { doc: digestState };
+    if (name === 'global') {
+      return { doc: () => ({ get: async () => ({ data: () => (mockLastRunAt === null ? undefined : { lastRunAt: mockLastRunAt }) }) }) };
+    }
     throw new Error(`unexpected collection: ${name}`);
   }),
+  batch: () => {
+    const rows: { uid: string; id: string; data: Record<string, unknown> }[] = [];
+    return {
+      create: (ref: { uid: string; id: string }, data: Record<string, unknown>) => rows.push({ ...ref, data }),
+      set: jest.fn(),
+      commit: async () => {
+        queuedRows.push(...rows);
+      },
+    };
+  },
 };
 
 jest.mock('firebase-admin/firestore', () => ({
@@ -43,6 +66,7 @@ jest.mock('firebase-admin/firestore', () => ({
     serverTimestamp: jest.fn(() => ({ __op: 'serverTimestamp' })),
     delete: jest.fn(() => ({ __op: 'delete' })),
   },
+  Timestamp: { fromMillis: (ms: number) => ({ __ts: ms }) },
 }));
 
 jest.mock('@/lib/firebase-admin', () => ({
@@ -55,8 +79,9 @@ jest.mock('@/lib/adminUtils.server', () => ({
   recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 
+let mockResendClient: { emails: { send: jest.Mock } } | null = { emails: { send: emailSend } };
 jest.mock('@/lib/resendClient.server', () => ({
-  getResend: () => ({ emails: { send: emailSend } }),
+  getResend: () => mockResendClient,
   FROM_EMAIL: 'noreply@mail.owlette.app',
 }));
 
@@ -75,6 +100,7 @@ jest.mock('@/lib/talons/matcher.server', () => ({
 }));
 
 import { GET, classifyMachineHealth, sleepNotice, stalePlannedDowntime } from '@/app/api/cron/health-check/route';
+import { digestEventId } from '@/lib/alerts/digest.server';
 import type { MachineHealthSnapshot } from '@/app/api/cron/health-check/route';
 
 // Helpers
@@ -384,12 +410,15 @@ describe('GET /api/cron/health-check', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    queuedRows.length = 0;
+    mockLastRunAt = Date.now();
+    mockResendClient = { emails: { send: emailSend } };
     process.env.CRON_SECRET = 'cron-secret';
     knownSites.clear();
     knownSites.add('node-pa');
     setSite({ name: 'node-pa' });
     getSiteAlertRecipientsMock.mockResolvedValue([
-      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -454,9 +483,9 @@ describe('GET /api/cron/health-check', () => {
     });
     mockMachinesGet.mockResolvedValue({ size: 2, docs: [alertDoc('LOBBY-1'), alertDoc('STAGE-2')] });
     getSiteAlertRecipientsMock.mockResolvedValue([
-      { userId: 'whole', email: 'whole@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
-      { userId: 'scoped', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['LOBBY-1'] },
-      { userId: 'elsewhere', email: 'elsewhere@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER-9'] },
+      { userId: 'whole', email: 'whole@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
+      { userId: 'scoped', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['LOBBY-1'], delivery: 'immediate' },
+      { userId: 'elsewhere', email: 'elsewhere@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER-9'], delivery: 'immediate' },
     ]);
 
     await GET(request('cron-secret'));
@@ -470,6 +499,59 @@ describe('GET /api/cron/health-check', () => {
     expect(sent['scoped@node-pa.test'].html).toContain('LOBBY-1');
     expect(sent['scoped@node-pa.test'].html).not.toContain('STAGE-2');
     expect(sent['elsewhere@node-pa.test']).toBeUndefined();
+  });
+
+  describe('for recipients on a digest', () => {
+    it('queues one row per machine, keyed on its outage, and sends nothing, while the webhook still fires', async () => {
+      setSite({
+        name: 'node-pa',
+        health: { offlineAlert: { pendingIds: ['LOBBY-1', 'STAGE-2'], pendingUpdatedAt: ts(now - 8 * MIN) } },
+      });
+      mockMachinesGet.mockResolvedValue({ size: 2, docs: [alertDoc('LOBBY-1'), alertDoc('STAGE-2')] });
+      getSiteAlertRecipientsMock.mockResolvedValue([
+        { userId: 'daily', email: 'daily@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'daily' },
+        { userId: 'scoped', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['LOBBY-1'], delivery: 'weekly' },
+        { userId: 'now', email: 'now@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
+      ]);
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body).toMatchObject({ alertsSent: 1, alertsQueued: 2 });
+      expect(emailSend).toHaveBeenCalledTimes(1);
+      expect(emailSend.mock.calls[0][0].to).toEqual(['now@node-pa.test']);
+      expect(fireWebhooksMock).toHaveBeenCalledTimes(2);
+
+      const staleSince = alertDoc('LOBBY-1').data().health.staleSince.toMillis();
+      expect(queuedRows.map((r) => [r.uid, r.id])).toEqual([
+        ['daily', digestEventId(`offline|node-pa|LOBBY-1|${staleSince}`)],
+        ['daily', digestEventId(`offline|node-pa|STAGE-2|${staleSince}`)],
+        ['scoped', digestEventId(`offline|node-pa|LOBBY-1|${staleSince}`)],
+      ]);
+      expect(queuedRows[0].data).toMatchObject({
+        siteId: 'node-pa',
+        machineId: 'LOBBY-1',
+        category: 'healthAlerts',
+        kind: 'offline',
+        severity: 'critical',
+      });
+    });
+
+    it('queues even when Resend is not configured', async () => {
+      setSite({
+        name: 'node-pa',
+        health: { offlineAlert: { pendingIds: ['LOBBY-1'], pendingUpdatedAt: ts(now - 8 * MIN) } },
+      });
+      mockMachinesGet.mockResolvedValue({ size: 1, docs: [alertDoc('LOBBY-1')] });
+      getSiteAlertRecipientsMock.mockResolvedValue([
+        { userId: 'daily', email: 'daily@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'daily' },
+      ]);
+      mockResendClient = null;
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body.alertsQueued).toBe(1);
+      expect(queuedRows).toHaveLength(1);
+    });
   });
 
   it('taps the talon matcher once per not-responding machine (talons 2.3)', async () => {
@@ -995,10 +1077,29 @@ describe('GET /api/cron/health-check', () => {
       }
     });
 
+    it('queues an asleep row keyed on the sleep for a recipient on a digest', async () => {
+      getSiteAlertRecipientsMock.mockResolvedValue([
+        { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'daily' },
+      ]);
+      mockMachinesGet.mockResolvedValue({ size: 1, docs: [asleepDoc('TEC-MBA')] });
+
+      const body = await (await GET(request('cron-secret'))).json();
+
+      expect(body).toMatchObject({ sleepNoticesSent: 0, sleepNoticesQueued: 1 });
+      expect(emailSend).not.toHaveBeenCalled();
+      expect(queuedRows).toEqual([
+        {
+          uid: 'u1',
+          id: digestEventId(`asleep|node-pa|TEC-MBA|${now - 20 * MIN}`),
+          data: expect.objectContaining({ kind: 'asleep', severity: 'info', data: { asleepSince: now - 20 * MIN, sleptMs: 0 } }),
+        },
+      ]);
+    });
+
     it('skips a recipient whose scope leaves the machine out', async () => {
       getSiteAlertRecipientsMock.mockResolvedValue([
-        { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
-        { userId: 'u2', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER'] },
+        { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
+        { userId: 'u2', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER'], delivery: 'immediate' },
       ]);
       mockMachinesGet.mockResolvedValue({ size: 1, docs: [asleepDoc('TEC-MBA')] });
 

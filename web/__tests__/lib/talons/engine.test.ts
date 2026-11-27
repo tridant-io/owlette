@@ -1164,10 +1164,15 @@ describe('visual_check condition', () => {
       await failedRun([{ type: 'email' }]);
 
       expect(send).toHaveBeenCalledTimes(2);
-      const [own, copy] = send.mock.calls.map((call) => call[0] as { to: string[]; cc?: string[]; html: string });
+      const [own, copy] = send.mock.calls.map(
+        (call) => call[0] as { to: string[]; cc?: string[]; html: string; headers?: Record<string, string> },
+      );
       expect(own.to).toEqual(['a@example.com']);
       expect(own.cc).toBeUndefined();
       expect(own.html).toContain('https://storage.example.com/signed');
+      // one-click unsubscribe only on the copy nobody else receives: a colleague's button must not turn off the member's alerts
+      expect(own.headers).toHaveProperty('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
+      expect(copy.headers).toBeUndefined();
       expect(copy.to).toEqual(['team@example.com']);
       expect(copy.html).not.toContain('https://storage.example.com/signed');
       expect(copy.html).toContain('the wall is showing the windows desktop');
@@ -1185,6 +1190,7 @@ describe('visual_check condition', () => {
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'], cc: ['team@example.com'] });
+      expect(send.mock.calls[0][0]).not.toHaveProperty('headers');
     });
 
     it('sends a webhook the verdict and the storage path, never the signed image link', async () => {
