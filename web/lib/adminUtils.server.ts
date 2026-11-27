@@ -1,5 +1,6 @@
 /** Server-only admin utilities. Never import from a client component. */
 
+import { parseAlertDelivery, type AlertDelivery } from '@/lib/alerts/delivery';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import { parseMachineIds, scopeCovers } from '@/lib/machineAccess';
@@ -19,7 +20,24 @@ export interface SiteRecipient {
    * a site's screens are for its members (adr 0021).
    */
   member?: boolean;
+  /** each email as it happens, or queued for a digest; the ADMIN_EMAIL fallback is always immediate */
+  delivery: AlertDelivery;
 }
+
+/** a site's alert recipients, and whether the list is the whole answer or a failed read fell back */
+export interface SiteAlertAudience {
+  recipients: SiteRecipient[];
+  /** false when enumeration failed, so a person missing from `recipients` may still be one */
+  complete: boolean;
+}
+
+export type SiteAlertPreference =
+  | 'healthAlerts'
+  | 'processAlerts'
+  | 'thresholdAlerts'
+  | 'cortexAlerts'
+  | 'displayAlerts'
+  | 'talonAlerts';
 
 /** false when the recipient muted the machine or their machine scope does not reach it */
 export function recipientWantsMachine(recipient: SiteRecipient, machineId: string): boolean {
@@ -73,9 +91,22 @@ const USER_READ_CHUNK = 100;
  */
 export async function getSiteAlertRecipients(
   siteId: string,
-  filterPreference?: 'healthAlerts' | 'processAlerts' | 'thresholdAlerts' | 'cortexAlerts' | 'displayAlerts' | 'talonAlerts',
+  filterPreference?: SiteAlertPreference,
   planMemo?: PlanMemo
 ): Promise<SiteRecipient[]> {
+  return (await getSiteAlertAudience(siteId, filterPreference, planMemo)).recipients;
+}
+
+/**
+ * {@link getSiteAlertRecipients}, plus whether the list is complete. The digest
+ * job needs the difference: it drops a queued alert for someone no longer on the
+ * list, and holds it when the list came from a failed read.
+ */
+export async function getSiteAlertAudience(
+  siteId: string,
+  filterPreference?: SiteAlertPreference,
+  planMemo?: PlanMemo
+): Promise<SiteAlertAudience> {
   const db = getAdminDb();
   const recipients: SiteRecipient[] = [];
   const seenIds = new Set<string>();
@@ -98,7 +129,15 @@ export async function getSiteAlertRecipients(
     if (!email) return;
     siteHasUsers = true;
     if (filterPreference && data?.preferences?.[filterPreference] === false) return;
-    recipients.push({ userId, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [], machineIds, member });
+    recipients.push({
+      userId,
+      email,
+      ccEmails: data?.preferences?.alertCcEmails || [],
+      mutedMachines: data?.preferences?.mutedMachines || [],
+      machineIds,
+      member,
+      delivery: parseAlertDelivery(data?.preferences?.alertDelivery),
+    });
   };
 
   try {
@@ -112,7 +151,7 @@ export async function getSiteAlertRecipients(
         context: 'adminUtils',
         data: { siteId, filterPreference },
       });
-      return [];
+      return { recipients: [], complete: true };
     }
 
     const ownerId = siteData?.owner as string | undefined;
@@ -186,10 +225,11 @@ export async function getSiteAlertRecipients(
         // No Auth user (distribution list) or Auth down — deliver with no mutes.
       }
     }
-    recipients.push({ userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines, machineIds: null });
+    // no uid and no preferences: it exists to page someone, so it never waits for a digest
+    recipients.push({ userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines, machineIds: null, delivery: 'immediate' });
   }
 
-  return recipients;
+  return { recipients, complete: !enumerationFailed };
 }
 
 /**

@@ -10044,7 +10044,7 @@ paths:
                   deletedCounts:
                     type: object
                     additionalProperties: { type: integer }
-                    description: Per-path document counts (machines, deployments, logs, sites, users, memberSitesRemoved, passkeys, trustedDevices, apiKeys, apiKeyLookups, mfaPending, agentRefreshTokens, chats, chatMessages, storageObjects).
+                    description: Per-path document counts (machines, deployments, logs, sites, users, memberSitesRemoved, passkeys, trustedDevices, verifiedNetworks, apiKeys, apiKeyLookups, mfaPending, alertDigests, agentRefreshTokens, chats, chatMessages, storageObjects).
                   authRevoked: { type: boolean }
                   deletedPaths:
                     type: array

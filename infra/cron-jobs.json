@@ -198,6 +198,30 @@
       "note": "Any hour works — the ladder is measured in whole days from expiresAt, not against wall-clock time. Each rung is stamped before its email is sent, so a duplicate registration or a scheduler retry cannot re-send a rung; the accepted cost is that a send failing after the stamp loses that one notice, and the next rung down still fires."
     },
     {
+      "id": "cron-alert-digest",
+      "path": "/api/cron/alert-digest",
+      "method": "GET",
+      "authHeader": "X-Cron-Secret",
+      "authScheme": "raw",
+      "authEnvVar": "CRON_SECRET",
+      "schedule": "*/15 * * * *",
+      "cadenceLabel": "every 15 minutes",
+      "minTimeoutSeconds": 60,
+      "environments": ["dev", "prod"],
+      "urls": {
+        "dev": "https://dev.owlette.app/api/cron/alert-digest",
+        "prod": "https://owlette.app/api/cron/alert-digest"
+      },
+      "purpose": "Sends each person's alert digest once its period is due: 08:00 in their timezone daily (the default), monday 08:00 weekly, the next whole UTC hour hourly, at once for someone who switched to each alert as it happens. Reads alert_digests where pending is true, claims each due period in a transaction, checks again who may receive each queued row, renders and stores the body on the claim, sends it under the idempotency key alert-digest/<uid>/<periodKey>, then deletes the rows that went out and stamps global/alert_digest.lastRunAt.",
+      "failureMode": {
+        "silent": true,
+        "description": "Senders queue only while global/alert_digest.lastRunAt is under 45 minutes old, so a job never registered sends every alert as it happens, and a job that stops does so 45 minutes later. What was already queued is never sent: nothing errors, and the rows are deleted unsent by their 14-day TTL."
+      },
+      "detectedBy": "the alert_delivery status component (web/lib/healthChecks.server.ts) degrades when a digest is queued (alert_digests pending) and global/alert_digest.lastRunAt is over 45 minutes old or absent, and pages Sentry through /api/cron/status-ping. With nothing queued a missing job reads as ok, since senders then email at once.",
+      "sourceFile": "web/app/api/cron/alert-digest/route.ts",
+      "note": "A 50-second budget per run; whoever is left is reported as deferred and goes next run. Safe to run twice at once: a live lease blocks any other run, and a dead run's claim is resumed with the same key and body. 15 minutes catches 08:00 in +5:30 and +5:45 zones. The timeout must be at least 60s or a full run is cut off."
+    },
+    {
       "id": "cron-activity-watch",
       "path": "/api/cron/activity-watch",
       "method": "GET",

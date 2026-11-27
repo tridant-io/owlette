@@ -13,7 +13,13 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
  * because mail scanners open links on their own.
  *
  * POST /api/unsubscribe `{ token }` — what that page sends once the person
- * confirms. Turns every alert email off.
+ * confirms. Turns every alert email off. `{ token, delivery: 'weekly' }` keeps
+ * them on and moves the person to the weekly digest instead.
+ *
+ * POST /api/unsubscribe?token=... with the form field `List-Unsubscribe=One-Click`
+ * — RFC 8058 one-click, what a mail client sends from the List-Unsubscribe
+ * header, as multipart/form-data or urlencoded. Turns every alert email off,
+ * like the confirm page.
  */
 
 const ALERT_PREFERENCES = {
@@ -89,16 +95,30 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json().catch(() => null)) as { token?: unknown } | null;
-  const checked = checkToken(body?.token);
+  const contentType = request.headers.get('content-type') ?? '';
+  const oneClick = contentType.includes('multipart/form-data') || contentType.includes('application/x-www-form-urlencoded');
+  let token: unknown;
+  let weekly = false;
+  if (oneClick) {
+    const form = await request.formData().catch(() => null);
+    if (form?.get('List-Unsubscribe') !== 'One-Click') {
+      return NextResponse.json({ error: 'Not a one-click unsubscribe' }, { status: 400 });
+    }
+    token = request.nextUrl.searchParams.get('token');
+  } else {
+    const body = (await request.json().catch(() => null)) as { token?: unknown; delivery?: unknown } | null;
+    token = body?.token;
+    weekly = body?.delivery === 'weekly';
+  }
+  const checked = checkToken(token);
   if ('response' in checked) return checked.response;
 
   try {
     await getAdminDb().collection('users').doc(checked.userId).set(
-      { preferences: ALERT_PREFERENCES },
+      { preferences: weekly ? { alertDelivery: 'weekly' } : ALERT_PREFERENCES },
       { merge: true }
     );
-    return NextResponse.json({ unsubscribed: true });
+    return NextResponse.json(weekly ? { delivery: 'weekly' } : { unsubscribed: true });
   } catch (error) {
     return apiError(error, 'unsubscribe');
   }

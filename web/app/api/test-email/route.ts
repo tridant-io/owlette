@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ApiAuthError, requireAdmin } from '@/lib/apiAuth.server';
 import { getResend, FROM_EMAIL, ENV_LABEL, isProduction, trustedBaseUrl } from '@/lib/resendClient.server';
 import { apiError } from '@/lib/apiErrorResponse';
+import { summarizeDigest, type DigestRow } from '@/lib/alerts/digest.server';
 import {
   wrapEmailLayout,
   emailDataTable,
@@ -10,6 +11,7 @@ import {
   buildIssueEmail,
   buildActivityFindingEmail,
   buildActivityDigestEmail,
+  buildAlertDigestEmail,
   type ActivityEmailFinding,
   EMAIL_COLORS,
   SEVERITY_COLORS,
@@ -31,6 +33,7 @@ export const EMAIL_TEMPLATES = [
   { id: 'machines_offline', label: 'machines offline', description: 'stale heartbeat detected by health check' },
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
+  { id: 'alert_digest', label: 'alert digest', description: "one person's daily digest of their alerts" },
   { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
   { id: 'activity_finding', label: 'activity finding', description: 'superadmin notified of a high-severity finding' },
   { id: 'activity_digest', label: 'activity digest', description: 'daily superadmin digest of flagged activity' },
@@ -220,6 +223,57 @@ function buildTemplateEmail(templateId: string): { subject: string; html: string
           'America/New_York',
         ),
       };
+    }
+
+    case 'alert_digest': {
+      // the real builders, so the preview cannot drift from what the digest job sends
+      const now = Date.now();
+      const hour = 60 * 60 * 1000;
+      const row = (id: string, r: Omit<DigestRow, 'id' | 'siteId' | 'data' | 'detail'> & Partial<DigestRow>): DigestRow => ({
+        id,
+        siteId: 'downtown-gallery',
+        detail: '',
+        data: {},
+        ...r,
+      });
+      const rows: DigestRow[] = [
+        row('a', { machineId: 'LOBBY-PC-01', category: 'healthAlerts', kind: 'offline', severity: 'critical', title: 'offline', at: now - 9 * hour }),
+        row('b', { machineId: 'LOBBY-PC-01', category: 'healthAlerts', kind: 'offline', severity: 'critical', title: 'offline', at: now - 3 * hour }),
+        ...[14, 11, 6].map((h, i) =>
+          row(`p${i}`, {
+            machineId: 'KIOSK-02',
+            category: 'processAlerts',
+            kind: 'process_crash',
+            severity: 'critical',
+            title: 'TouchDesigner',
+            detail: 'Process stopped unexpectedly (PID 12408 no longer running)',
+            at: now - h * hour,
+          }),
+        ),
+        ...[91, 93, 91].map((value, i) =>
+          row(`t${i}`, {
+            machineId: 'KIOSK-02',
+            category: 'thresholdAlerts',
+            kind: 'threshold',
+            severity: 'warning',
+            title: 'low disk',
+            data: { metric: 'disk_percent', operator: '>', threshold: 85, value },
+            at: now - (8 - i) * hour,
+          }),
+        ),
+      ];
+      const states = new Map([
+        ['downtown-gallery/LOBBY-PC-01', { online: true, asleep: false, lastHeartbeatMs: now, asleepSinceMs: 0 }],
+        ['downtown-gallery/KIOSK-02', { online: false, asleep: false, lastHeartbeatMs: now - 2 * hour, asleepSinceMs: 0 }],
+      ]);
+      return buildAlertDigestEmail({
+        mode: 'daily',
+        timezone: 'America/New_York',
+        summary: summarizeDigest({ rows, states, siteLabels: new Map([['downtown-gallery', 'downtown gallery (downtown-gallery)']]), timezone: 'America/New_York', now }),
+        introduce: true,
+        baseUrl: trustedBaseUrl(),
+        unsubscribeUrl: '#unsubscribe-preview',
+      });
     }
 
     case 'issue': {

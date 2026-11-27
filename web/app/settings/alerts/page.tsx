@@ -3,9 +3,10 @@
 /**
  * /settings/alerts — self-serve alert-email preferences, and the destination of
  * the "manage alerts" link in every alert email (wrapEmailLayout). Recipients
- * toggle individual categories instead of only fully unsubscribing; each toggle
- * saves immediately (optimistic, reverting on failure). Same toggles as the
- * account-settings dialog's "alerts" section — this is the deep-linkable view.
+ * pick how alerts arrive and toggle individual categories instead of only fully
+ * unsubscribing; each saves immediately (optimistic, reverting on failure). Same
+ * control as the account-settings dialog's "alerts" section — this is the
+ * deep-linkable view.
  */
 
 import { useEffect } from 'react';
@@ -52,7 +53,7 @@ export default function ManageAlertsPage() {
           <div>
             <h1 className="text-xl font-semibold text-foreground">manage alerts</h1>
             <p className="text-sm text-muted-foreground">
-              choose which email alerts you receive. sent to{' '}
+              choose how alert emails arrive and which you get. sent to{' '}
               <span className="font-medium text-foreground">{user.email}</span>.
             </p>
           </div>

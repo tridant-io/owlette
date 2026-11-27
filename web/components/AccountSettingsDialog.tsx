@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
+import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { EyeIcon, EyeOffIcon, AlertTriangle, Shield, Check, Loader2, User, Bell, BellOff, Trash2, Key, Plus, X, Code } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { MfaFactorsSection } from '@/components/MfaFactorsSection';
@@ -62,15 +62,6 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [timezone, setTimezone] = useState('UTC');
   const [timeFormat, setTimeFormat] = useState<'12h' | '24h'>('12h');
   const [timeDisplayMode, setTimeDisplayMode] = useState<'user' | 'machine' | 'site'>('machine');
-  const [healthAlerts, setHealthAlerts] = useState(true);
-  const [processAlerts, setProcessAlerts] = useState(true);
-  const [thresholdAlerts, setThresholdAlerts] = useState(true);
-  // Firestore keeps the legacy `cortexAlerts` field (web/lib/hoot/WIRE_NAMES.md);
-  // local state uses the product name and maps at the wire boundary.
-  const [hootAlerts, setHootAlerts] = useState(true);
-  const [displayAlerts, setDisplayAlerts] = useState(true);
-  const [talonAlerts, setTalonAlerts] = useState(true);
-  const [apiKeyAlerts, setApiKeyAlerts] = useState(true);
   const [alertCcEmails, setAlertCcEmails] = useState<string[]>([]);
   const [newCcEmail, setNewCcEmail] = useState('');
   const { error: ccEmailError, fail: failCcEmail, clear: clearCcEmail, fieldProps: ccEmailFieldProps } = useFieldError('settings-cc-email-error');
@@ -138,13 +129,6 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setTimezone(userPreferences.timezone || getBrowserTimezone());
       setTimeFormat(userPreferences.timeFormat || '12h');
       setTimeDisplayMode(userPreferences.timeDisplayMode || 'machine');
-      setHealthAlerts(userPreferences.healthAlerts);
-      setProcessAlerts(userPreferences.processAlerts);
-      setThresholdAlerts(userPreferences.thresholdAlerts);
-      setHootAlerts(userPreferences.cortexAlerts);
-      setDisplayAlerts(userPreferences.displayAlerts);
-      setTalonAlerts(userPreferences.talonAlerts);
-      setApiKeyAlerts(userPreferences.apiKeyAlerts);
       setAlertCcEmails(userPreferences.alertCcEmails || []);
       setNewCcEmail('');
       clearCcEmail();
@@ -168,8 +152,6 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setTemperatureUnit('C');
       setTimezone(getBrowserTimezone());
       setTimeFormat('12h');
-      setHealthAlerts(true);
-      setProcessAlerts(true);
       setAlertCcEmails([]);
       setNewCcEmail('');
       clearCcEmail();
@@ -185,7 +167,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setActiveSection('profile');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, user?.displayName, userPreferences.temperatureUnit, userPreferences.timezone, userPreferences.timeFormat, userPreferences.timeDisplayMode, userPreferences.healthAlerts, userPreferences.processAlerts, JSON.stringify(userPreferences.alertCcEmails)]);
+  }, [open, user?.displayName, userPreferences.temperatureUnit, userPreferences.timezone, userPreferences.timeFormat, userPreferences.timeDisplayMode, JSON.stringify(userPreferences.alertCcEmails)]);
 
   const llmModelList = llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider];
   const llmChosenModel = llmModel || preselectedModel(llmProvider, llmModelList);
@@ -322,16 +304,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
         || timezone !== userPreferences.timezone
         || timeFormat !== (userPreferences.timeFormat || '12h')
         || timeDisplayMode !== (userPreferences.timeDisplayMode || 'machine')
-        || healthAlerts !== userPreferences.healthAlerts
-        || processAlerts !== userPreferences.processAlerts
-        || thresholdAlerts !== userPreferences.thresholdAlerts
-        || hootAlerts !== userPreferences.cortexAlerts
-        || displayAlerts !== userPreferences.displayAlerts
-        || talonAlerts !== userPreferences.talonAlerts
-        || apiKeyAlerts !== userPreferences.apiKeyAlerts
         || JSON.stringify(alertCcEmails) !== JSON.stringify(userPreferences.alertCcEmails || []);
+      // the alert switches and delivery are not here: AlertEmailToggles saves each as it moves
       if (prefsChanged) {
-        await updateUserPreferences({ temperatureUnit, timezone, timeFormat, timeDisplayMode, healthAlerts, processAlerts, thresholdAlerts, cortexAlerts: hootAlerts, displayAlerts, talonAlerts, apiKeyAlerts, alertCcEmails });
+        await updateUserPreferences({ temperatureUnit, timezone, timeFormat, timeDisplayMode, alertCcEmails });
       }
       if (showPasswordSection && (currentPassword || newPassword || confirmPassword)) {
         if (!validatePassword()) {
@@ -569,15 +545,14 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   <div className="space-y-2">
                     <Label htmlFor="timezone" className="text-foreground">
                       your timezone
-                      {timeDisplayMode !== 'user' && (
-                        <span className="ml-2 text-xs text-muted-foreground font-normal">(only used when display mode is &quot;my timezone&quot;)</span>
-                      )}
+                      {/* not disabled outside "my timezone": the alert digest's 8:00 am is always in this zone */}
+                      <span className="ml-2 text-xs text-muted-foreground font-normal">(your alert digest&apos;s 8:00 am, and the dashboard&apos;s clock in &quot;my timezone&quot; mode)</span>
                     </Label>
                     <TimezoneSelect
                       id="timezone"
                       value={timezone}
                       onValueChange={(value: string) => setTimezone(value)}
-                      disabled={loading || timeDisplayMode !== 'user'}
+                      disabled={loading}
                       className="border-border bg-background text-foreground hover:bg-secondary w-72 disabled:opacity-50"
                     />
                   </div>
@@ -626,96 +601,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     <p className="text-xs text-muted-foreground mt-1">configure email alerts for machine and process events</p>
                   </div>
 
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="healthAlerts" className="text-foreground">machine offline alerts</Label>
-                      <p className="text-xs text-muted-foreground">receive email alerts when machines go offline</p>
-                    </div>
-                    <Switch
-                      id="healthAlerts"
-                      checked={healthAlerts}
-                      onCheckedChange={setHealthAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="processAlerts" className="text-foreground">process crash alerts</Label>
-                      <p className="text-xs text-muted-foreground">receive email alerts when monitored processes crash or fail to start</p>
-                    </div>
-                    <Switch
-                      id="processAlerts"
-                      checked={processAlerts}
-                      onCheckedChange={setProcessAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="thresholdAlerts" className="text-foreground">threshold alerts</Label>
-                      <p className="text-xs text-muted-foreground">receive email alerts when health metrics (CPU, GPU temp, disk, etc.) exceed configured thresholds</p>
-                    </div>
-                    <Switch
-                      id="thresholdAlerts"
-                      checked={thresholdAlerts}
-                      onCheckedChange={setThresholdAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="hootAlerts" className="text-foreground">hoot escalation alerts</Label>
-                      <p className="text-xs text-muted-foreground">receive email alerts when automated diagnostics can&apos;t resolve an issue</p>
-                    </div>
-                    <Switch
-                      id="hootAlerts"
-                      checked={hootAlerts}
-                      onCheckedChange={setHootAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="displayAlerts" className="text-foreground">display events</Label>
-                      <p className="text-xs text-muted-foreground">receive email alerts when monitors are removed, layouts drift, or display apply fails</p>
-                    </div>
-                    <Switch
-                      id="displayAlerts"
-                      checked={displayAlerts}
-                      onCheckedChange={setDisplayAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="talonAlerts" className="text-foreground">talon alerts</Label>
-                      <p className="text-xs text-muted-foreground">emails when a talon fires or fails</p>
-                    </div>
-                    <Switch
-                      id="talonAlerts"
-                      checked={talonAlerts}
-                      onCheckedChange={setTalonAlerts}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="apiKeyAlerts" className="text-foreground">api key expiry</Label>
-                      <p className="text-xs text-muted-foreground">emails before an api key expires</p>
-                    </div>
-                    <Switch
-                      id="apiKeyAlerts"
-                      checked={apiKeyAlerts}
-                      onCheckedChange={setApiKeyAlerts}
-                      disabled={loading}
-                    />
-                  </div>
+                  {/* the same control as /settings/alerts and admin → alerts: each saves as it moves */}
+                  <AlertEmailToggles onChangeTimezone={() => setActiveSection('preferences')} />
 
                   <div className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                     <div className="space-y-0.5">

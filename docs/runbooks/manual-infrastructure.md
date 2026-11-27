@@ -32,6 +32,7 @@ work simply never happens. Those are the rows that bite.
 | web app (Railway) | auto on push | `git push origin main` (prod) / `git push origin dev` (dev) | yes | LOUD — Railway build log. Watch it to completion before smoke checks. |
 | Firestore composite indexes | manual | `firebase deploy --only firestore:indexes --project prod` | yes | **SILENT** at deploy, loud and late at runtime — `FAILED_PRECONDITION` 500s. Half-silent worst case: the talon janitor swallows the throw, so `staleRecovered` just stays 0 forever. |
 | Firestore TTL policy (`entries.deleteAt`, the sign-in records) | manual (the same deploy: a `"ttl": true` field override in `firestore.indexes.json`) | `firebase deploy --only firestore:indexes --project prod`, then `gcloud firestore fields ttls list --project owlette-prod-90a12` shows it `ACTIVE` | yes | **SILENT** — without it nothing deletes sign-in and second-factor rows, and the privacy policy's 400 days is untrue. It deletes only rows that carry `deleteAt` (`web/lib/authEvents.server.ts`). Prod has no rows without it; dev's from 2026-11-15 until this change landed have none and are never deleted by it. |
+| Firestore TTL policy (`digest_events.deleteAt`, queued alert digest rows) | manual (the same deploy and override file) | `firebase deploy --only firestore:indexes --project prod`, then `gcloud firestore fields ttls list --project owlette-prod-90a12` shows it `ACTIVE` | yes | **SILENT** — a backstop: rows are deleted when their digest sends. Without it, rows a stopped digest job never sent stay forever, and the privacy policy's 14 days is untrue. |
 | Firestore security rules | manual | `firebase deploy --only firestore:rules --project prod` | yes | **SILENT** — no CI job exists, the previous ruleset stays live indefinitely. Surfaces as permission-denied, or as old permissive rules still allowing what the new ones blocked. |
 | Cloud Storage rules | manual | `firebase deploy --only storage --project prod` | yes | **SILENT** — same shape. `storage.rules:19` reads `users/{uid}.role == 'superadmin'`, so it carries the same migration-before-rules constraint. |
 | Cloud Functions (all exports) | manual | `firebase deploy --only functions --project prod` | yes | **SILENT** for the fleet — old revisions keep running, new behaviour never ships. The deploy itself fails loudly if the predeploy build breaks (`firebase.json:17-19`). |
@@ -280,6 +281,7 @@ customer doc does not. Update all three in the same commit.
 | `GET /api/cron/retention` | `0 4 * * *` (or any quiet hour) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/swoop-retention` | `30 4 * * *` (or any quiet time apart from retention) | `X-Cron-Secret: <CRON_SECRET>` | default |
 | `GET /api/cron/api-key-expiry` | `0 8 * * *` (any hour) | `X-Cron-Secret: <CRON_SECRET>` | 30s+ |
+| `GET /api/cron/alert-digest` | `*/15 * * * *` (UTC; 15 minutes catches 08:00 in +5:30 and +5:45) | `X-Cron-Secret: <CRON_SECRET>` | **at least 60s** (a 50s budget per run; whoever is left goes next run) |
 | `GET /api/cron/activity-watch` | `*/5 * * * *` | `X-Cron-Secret: <CRON_SECRET>` | 60s+ recommended |
 
 `/api/cron/plan-trials` is in the registry too, but is never scheduled: it is run by hand once per
@@ -313,7 +315,8 @@ Four things to get right:
 
 cron-job.org is free-tier with no SLA. If it dies quietly, health alerts and status pings stop until
 someone notices by hand — and `/api/cron/status-ping` is the only detector for a stalled
-`process-alerts`, `display-alerts`, or `talons` job, so schedule it first and treat it as load-bearing.
+`process-alerts`, `display-alerts`, `alert-digest` (when a digest is queued) or `talons` job, so
+schedule it first and treat it as load-bearing.
 
 **11. Security-boundary audit export and Cloud Monitoring.** Both are prod-unprovisioned today. See
 the two command blocks above; neither is required for a functioning environment, and both currently

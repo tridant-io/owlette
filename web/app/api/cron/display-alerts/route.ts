@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
-import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import {
   buildDisplayDigestEmail,
   safeEmailSubject,
   type PendingDisplayAlert,
 } from '@/lib/emailTemplates.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
+import { alertEmailDelivery, displayDigestEvent } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
 
@@ -16,7 +16,8 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
  * GET /api/cron/display-alerts
  *
  * HTTP cron endpoint (cron-job.org) that drains the `pending_display_alerts` queue
- * and sends batched digest emails grouped by site.
+ * and sends batched emails grouped by site, or queues each recipient's share for
+ * their alert digest (lib/alerts/digest.server.ts).
  *
  * Alerts are held for ACCUMULATION_WINDOW_MS so a burst (a video-wall power
  * blip emits ~9 events in a minute) becomes one email per site.
@@ -68,9 +69,10 @@ export async function GET(request: NextRequest) {
       alertsBySite.set(alert.siteId, existing);
     }
 
-    const resendClient = getResend();
+    const delivery = alertEmailDelivery();
     const baseUrl = publicOrigin(request);
     let emailsSent = 0;
+    let digested = 0;
 
     for (const [siteId, siteAlerts] of alertsBySite) {
       try {
@@ -79,11 +81,6 @@ export async function GET(request: NextRequest) {
         const recipients = await getSiteAlertRecipients(siteId, 'displayAlerts');
         if (recipients.length === 0) {
           console.warn(`[cron/display-alerts] No recipients for site ${siteId}`);
-          continue;
-        }
-
-        if (!resendClient) {
-          console.warn('[cron/display-alerts] Resend not configured — skipping');
           continue;
         }
 
@@ -100,37 +97,31 @@ export async function GET(request: NextRequest) {
             );
             if (userAlerts.length === 0) continue;
 
-            const unsubscribeUrl = recipient.userId !== 'fallback'
-              ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-              : undefined;
-
+            // keyed on the queue doc, so an overlapping drain run queues each alert once
+            const events = userAlerts.map((a) => displayDigestEvent(a, `display|${a.docId}`));
             // One alert → a focused subject; otherwise count + site, for triage.
             const userSubject = userAlerts.length === 1
               ? `[owlette] display event on ${userAlerts[0].machineId}`
               : `[owlette] ${userAlerts.length} display event(s) in ${siteLabel}`;
 
-            const html = buildDisplayDigestEmail(siteLabel, userAlerts, unsubscribeUrl, tz);
-
-            const result = await resendClient.emails.send({
-              from: FROM_EMAIL,
-              to: [recipient.email],
-              ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-              subject: safeEmailSubject(userSubject),
-              html,
-            });
-
-            if (result.error) {
-              console.error(`[cron/display-alerts] Resend error for ${recipient.email}:`, result.error);
-            } else {
-              emailsSent++;
-            }
+            const outcome = await delivery.deliver(recipient, events, () =>
+              sendAlertEmailNow({
+                log: '[cron/display-alerts]',
+                recipient,
+                baseUrl,
+                subject: safeEmailSubject(userSubject),
+                html: (unsubscribeUrl) => buildDisplayDigestEmail(siteLabel, userAlerts, unsubscribeUrl, tz),
+              }),
+            );
+            if (outcome === 'sent') emailsSent++;
+            else if (outcome === 'queued') digested++;
           } catch (emailError) {
             console.error(`[cron/display-alerts] Failed to send to ${recipient.email}:`, emailError);
           }
         }
 
         console.log(
-          `[cron/display-alerts] Digest sent for site ${siteId}: ` +
+          `[cron/display-alerts] Alerts handled for site ${siteId}: ` +
           `${siteAlerts.length} event(s), ${recipients.length} recipient(s)`,
         );
       } catch (error) {
@@ -152,6 +143,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       alertsProcessed: alerts.length,
       emailsSent,
+      digested,
       sites: alertsBySite.size,
     });
   } catch (error) {

@@ -380,6 +380,12 @@
       "fieldPath": "deleteAt",
       "ttl": true,
       "indexes": []
+    },
+    {
+      "collectionGroup": "digest_events",
+      "fieldPath": "deleteAt",
+      "ttl": true,
+      "indexes": []
     }
   ]
 }

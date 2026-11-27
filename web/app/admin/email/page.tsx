@@ -40,6 +40,7 @@ const EMAIL_TEMPLATES = [
   { id: 'machines_offline', label: 'machines offline', description: 'stale heartbeat detected by health check' },
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
+  { id: 'alert_digest', label: 'alert digest', description: "one person's daily digest of their alerts" },
   { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
   { id: 'activity_finding', label: 'activity finding', description: 'superadmin notified of a high-severity finding' },
   { id: 'activity_digest', label: 'activity digest', description: 'daily superadmin digest of flagged activity' },

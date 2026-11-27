@@ -1164,6 +1164,30 @@ describe('deleteOwnAccount — edge cases', () => {
     );
   });
 
+  it("drains the person's alert digest: its queued rows, then its state and any stored body", async () => {
+    const userId = 'uid_digest';
+    const fake = buildFakeDb({
+      seedDocs: {
+        [`users/${userId}`]: { exists: true, data: { sites: [], role: 'member' } },
+        [`alert_digests/${userId}`]: { exists: true, data: { pending: true, claim: { html: '<p>queued</p>' } } },
+        [`alert_digests/${userId}/digest_events/e1`]: { exists: true, data: { siteId: 's1' } },
+        [`alert_digests/${userId}/digest_events/e2`]: { exists: true, data: { siteId: 's1' } },
+      },
+      seedCollections: {
+        [`alert_digests/${userId}/digest_events`]: ['e1', 'e2'],
+      },
+    });
+
+    const result = await deleteOwnAccount({ userId, operationId: 'op_digest', db: fake.db, auth: null, storage: null });
+
+    if (result.kind !== 'ok') throw new Error('expected ok result');
+    expect(result.deletedCounts.alertDigests).toBe(3);
+    expect(fake.batchDeleteCalls).toEqual(
+      expect.arrayContaining([`alert_digests/${userId}/digest_events/e1`, `alert_digests/${userId}/digest_events/e2`]),
+    );
+    expect(fake.deleteCalls).toContain(`alert_digests/${userId}`);
+  });
+
   it('revokes + deletes the Firebase Auth user when an Auth admin is provided', async () => {
     const userId = 'uid_auth';
     const revokeRefreshTokens = jest.fn(async () => undefined);

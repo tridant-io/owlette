@@ -7,6 +7,7 @@ import {
   buildApiKeyExpiryEmail,
   apiKeyExpiryPhrase,
   safeEmailSubject,
+  unsubscribeHeaders,
   type ExpiringApiKey,
 } from '@/lib/emailTemplates.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
@@ -232,6 +233,7 @@ export async function GET(request: NextRequest) {
           })),
           unsubscribeUrl
         ),
+        ...unsubscribeHeaders(unsubscribeUrl, recipient.ccEmails),
       });
 
       if (result.error) {
