@@ -131,7 +131,7 @@ describe('the header', () => {
     renderList();
 
     expect(screen.getByRole('heading', { level: 1, name: 'sites' })).toBeInTheDocument();
-    expect(screen.getByText("the sites you belong to. a site's gear opens its settings.")).toBeInTheDocument();
+    expect(screen.getByText("the sites you belong to. a site's name or gear opens its settings.")).toBeInTheDocument();
   });
 
   it('shows no count of sites until the filter is on', () => {
@@ -171,13 +171,19 @@ describe('the column header', () => {
 });
 
 describe('gears and roles', () => {
-  it('links a gear only on the sites the caller administers', () => {
+  it('links a gear and the name only on the sites the caller administers', () => {
     renderList();
 
     expect(screen.getByRole('link', { name: 'settings for Alpha' })).toHaveAttribute('href', '/admin/sites/site-a');
     expect(screen.getByRole('link', { name: 'settings for Charlie' })).toHaveAttribute('href', '/admin/sites/site-c');
     expect(screen.queryByRole('link', { name: 'settings for bravo' })).toBeNull();
-    expect(screen.getAllByRole('link')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'Alpha', exact: true })).toHaveAttribute('href', '/admin/sites/site-a');
+    expect(screen.getByRole('link', { name: 'Charlie', exact: true })).toHaveAttribute('href', '/admin/sites/site-c');
+    // the link look every admin text link has, resting in body text
+    expect(screen.getByRole('link', { name: 'Alpha', exact: true })).toHaveClass('hl-link', 'hl-link-plain');
+    expect(screen.queryByRole('link', { name: /bravo/i })).toBeNull();
+    expect(within(rowFor('site-b')).getByText('bravo')).toBeInTheDocument();
+    expect(screen.getAllByRole('link')).toHaveLength(4);
   });
 
   it('reads the role on each row, and a member-only row has no gear', () => {
@@ -197,7 +203,8 @@ describe('gears and roles', () => {
     const row = rowFor('site-a');
     expect(within(row).getByText('admin · 1 machine')).toBeInTheDocument();
     expect(within(row).queryByRole('link')).toBeNull();
-    expect(screen.getAllByRole('link')).toHaveLength(1);
+    // charlie's gear and name
+    expect(screen.getAllByRole('link')).toHaveLength(2);
   });
 
   it("reads a scoped member's row as member with its machine count", () => {

@@ -1,6 +1,6 @@
 /**
  * sites — the machine count at the end of each row in the header's site switcher,
- * and in owlette swoop's site list. the phone drawer's is in
+ * in owlette swoop's site list and in the admin panel's site picker. the phone drawer's is in
  * specs/mobile/menus-and-inputs.spec.ts.
  *
  * the count is read from the server when the switcher opens, so this proves
@@ -19,6 +19,7 @@ import { attachPicture } from '../../helpers/picture';
 import { signIn } from '../../helpers/plans';
 import { roleState } from '../../helpers/roles';
 import { releaseFixtureSite, seedMachine, seedMemberRow, seedSite, type TestUser } from '../../helpers/seed';
+import { sitePickerList, sitePickerTrigger } from '../../helpers/sitePicker';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const OWNER = 'someone-else';
@@ -95,5 +96,15 @@ test.describe('as a superadmin', () => {
     const list = page.getByRole('dialog', { name: 'sites', exact: true });
     await expect(list.getByRole('button', { name: `${TWO.name} 2 machines`, exact: true })).toHaveCount(1);
     await expect(list.getByRole('button', { name: `${NONE.name} 0 machines`, exact: true })).toHaveCount(1);
+  });
+
+  test("the admin panel's site picker has the same counts", async ({ page }) => {
+    await page.goto('/admin/hoot');
+    await sitePickerTrigger(page).click();
+
+    const list = sitePickerList(page);
+    await expect(list.getByRole('button', { name: `${TWO.name} 2 machines`, exact: true })).toHaveCount(1);
+    await expect(list.getByRole('button', { name: `${NONE.name} 0 machines`, exact: true })).toHaveCount(1);
+    await attachPicture(page, list, 'admin site picker counts, superadmin, dark');
   });
 });

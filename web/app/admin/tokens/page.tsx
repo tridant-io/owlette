@@ -10,6 +10,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SitePicker } from '@/components/SitePicker';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   Dialog,
@@ -315,18 +316,12 @@ export default function TokensPage() {
         title="agent tokens"
         description="view and revoke agent authentication tokens"
         toolbar={
-          <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-            <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
-              <SelectValue placeholder="select site" />
-            </SelectTrigger>
-            <SelectContent className="bg-card border-border">
-              {sites.map((site) => (
-                <SelectItem key={site.id} value={site.id} className="text-foreground">
-                  {site.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <SitePicker
+            sites={sites}
+            value={selectedSiteId}
+            onChange={handleSiteChange}
+            className="min-w-32 flex-1 sm:w-[180px] sm:flex-none"
+          />
         }
         actions={
           <>

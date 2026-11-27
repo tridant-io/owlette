@@ -6,10 +6,12 @@
  * narrows it to that site, and picking it switches the dashboard there; escape
  * clears the filter before it closes the switcher. owlette swoop's picker
  * (`/swoop`) has the same filter in its site list, where enter picks the first
- * match. keys are pressed one at a time, as a person types them: a menu takes
- * a typed key as typeahead unless the filter keeps it. the filter is a search
- * row whose x clears it; the report keeps pictures of the open switcher, dark
- * and light, and of swoop's list, because the look is the owner's to judge.
+ * match, and so does the admin panel's site picker (`/admin/hoot`, one of the
+ * pages it is on). keys are pressed one at a time, as a person types them: a
+ * menu takes a typed key as typeahead unless the filter keeps it. the filter is
+ * a search row whose x clears it; the report keeps pictures of the open
+ * switcher, dark and light, and of swoop's and the admin panel's lists, because
+ * the look is the owner's to judge.
  *
  * the sites are released after the file and the superadmin's saved site put
  * back: the suite runs one worker, so either would carry into later specs.
@@ -22,6 +24,7 @@ import { getAdminDb } from '../../helpers/emulator';
 import { attachPicture } from '../../helpers/picture';
 import { roleState } from '../../helpers/roles';
 import { releaseFixtureSite, seedSite, TEST_USERS } from '../../helpers/seed';
+import { sitePickerList, sitePickerRow, sitePickerTrigger } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
 
@@ -129,4 +132,23 @@ test("owlette swoop's picker has the same filter in its site list, and enter pic
   await expect(trigger).toContainText(LAGOON.name);
   await expect(page.getByText('no machines in this site yet')).toBeVisible();
   await expect.poll(savedSiteId).toBe(LAGOON.id);
+});
+
+test("the admin panel's site picker has the same filter, and picking a match shows that site", async ({ page }) => {
+  await page.goto('/admin/hoot');
+  await sitePickerTrigger(page).click();
+
+  const list = sitePickerList(page);
+  const filter = list.getByRole('textbox', { name: 'filter sites', exact: true });
+  await expect(filter).toBeFocused();
+  await filter.pressSequentially(`kestrel ${SUFFIX}`);
+  await expect(list.locator('[data-site-item]')).toHaveCount(1);
+  await expect(sitePickerRow(page, KESTREL.name).locator('mark')).toHaveText(`kestrel ${SUFFIX}`);
+  await attachPicture(page, list, 'admin site picker, dark');
+
+  await sitePickerRow(page, KESTREL.name).click();
+
+  await expect(list).toHaveCount(0);
+  await expect(sitePickerTrigger(page)).toContainText(KESTREL.name);
+  await expect.poll(savedSiteId).toBe(KESTREL.id);
 });

@@ -57,9 +57,21 @@ function SiteRow({
   return (
     <li className={`site-row-cv grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-x-3 gap-y-1 px-3 py-2 sm:px-4 ${SITE_COLUMNS}`}>
       <div className="col-[1] row-[1] flex min-w-0 items-center gap-2">
-        <span className="min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate">
-          {highlightMatch(site.name, query)}
-        </span>
+        {/* the name goes where the gear goes, so an administered one is a link too. a filter's
+            marks paint their own glyphs, cyan by night, which the cyan sweep would swallow, so
+            under it they take the sweep's ink as the rest of the name does */}
+        {administered ? (
+          <Link
+            href={siteSettingsPath(site.id)}
+            className="hl-link hl-link-plain min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate hover:[&_mark]:text-background focus-visible:[&_mark]:text-background"
+          >
+            {highlightMatch(site.name, query)}
+          </Link>
+        ) : (
+          <span className="min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate">
+            {highlightMatch(site.name, query)}
+          </span>
+        )}
         {/* ink by day: cyan glyphs on a cyan tint miss aa, as with the match highlight */}
         {current && (
           <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground dark:text-accent-cyan">
@@ -167,7 +179,7 @@ export function SiteList() {
         <AdminPageHeader
           className="mb-4 md:mb-6 md:flex-wrap md:gap-x-6 md:gap-y-4"
           title="sites"
-          description="the sites you belong to. a site's gear opens its settings."
+          description="the sites you belong to. a site's name or gear opens its settings."
           actions={<CompactButton icon={Plus} label="new site" onClick={() => setCreateOpen(true)} />}
           toolbar={
             // no autofocus: on a phone it would raise the keyboard

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowRightLeft, Loader2, Monitor, RotateCw, Trash2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -21,11 +21,45 @@ interface SiteMachinesListProps {
   targetSites: { id: string; name: string }[];
 }
 
+// a move ends on the machine's side, which the list hears of only by asking again
+const MOVE_POLL_MS = 5_000;
+
+/**
+ * a pending move: beside the machine's name from sm up, and on a phone one word
+ * after its status, with the site in its title, so the name keeps the first
+ * line. an online machine follows within seconds; an offline one waits until
+ * it is back. the state leads, so a narrow row cuts the site, not the state.
+ */
+function MoveTag({ machine, phone = false }: { machine: SiteMachine; phone?: boolean }) {
+  if (!machine.pendingMove) return null;
+  const target = machine.pendingMove.targetSiteName;
+  const word = machine.pendingMove.status === 'pending' && !machine.online ? 'waiting' : 'moving';
+  const text = word === 'waiting' ? `waiting to move to ${target}` : `moving to ${target}`;
+  return phone ? (
+    <span className="text-muted-foreground sm:hidden">
+      {' · '}
+      <span title={text}>{word}</span>
+    </span>
+  ) : (
+    <span className="hidden min-w-0 max-w-[50%] truncate text-xs text-muted-foreground sm:inline">{text}</span>
+  );
+}
+
 /**
  * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
  */
 export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachinesListProps) {
   const { machines, error, refresh: fetchMachines } = useSiteMachines(siteId);
+  const moving = machines?.some((m) => m.pendingMove) ?? false;
+  useEffect(() => {
+    if (!moving) return;
+    // a tab in the background asks nothing; its next tick in view catches up. in the
+    // background, so a poll that fails leaves the list, and any dialog open on it, in place
+    const id = setInterval(() => {
+      if (!document.hidden) void fetchMachines({ background: true });
+    }, MOVE_POLL_MS);
+    return () => clearInterval(id);
+  }, [moving, fetchMachines]);
   // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
@@ -92,7 +126,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
   if (error) {
     return (
       <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-        <span className="text-xs text-danger">{error}</span>
+        <span className="text-sm text-danger">{error}</span>
         <Button
           variant="ghost"
           size="sm"
@@ -107,8 +141,8 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
 
   if (machines === null) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2.5 text-xs text-muted-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <div className="flex items-center gap-2 px-3 py-2.5 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
         loading machines…
       </div>
     );
@@ -116,7 +150,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
 
   if (machines.length === 0) {
     return (
-      <p className="px-3 py-2.5 text-xs text-muted-foreground">no machines on this site</p>
+      <p className="px-3 py-2.5 text-sm text-muted-foreground">no machines on this site</p>
     );
   }
 
@@ -130,45 +164,38 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
   return (
     <>
       <ul className="divide-y divide-border/40">
+        {/* as the sites list: a phone row puts the name and the buttons on its first line and the
+            status under the name; from sm up each cell takes a column */}
         {machines.map((m) => (
           <li
             key={m.id}
-            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_88px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_88px]"
+            className="grid grid-cols-[minmax(0,1fr)_88px] items-center gap-x-3 gap-y-0.5 px-3 py-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_88px]"
           >
-            <span className="flex min-w-0 items-center gap-2">
+            <span className="col-[1] row-[1] flex min-w-0 items-center gap-2 sm:col-auto sm:row-auto">
               <span
                 aria-hidden="true"
                 className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : 'bg-danger/70'}`}
               />
-              <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate text-xs text-foreground" title={m.name}>
+              <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate text-sm font-medium text-foreground" title={m.name}>
                 {m.name}
               </span>
               {m.displayAwake?.held && (
-                <span className="shrink-0 text-[10px] text-muted-foreground">awake</span>
+                <span className="shrink-0 text-xs text-muted-foreground">awake</span>
               )}
-              {/* a phone row has room for one word beside the name, as `awake` has; the site follows from sm up */}
-              {m.pendingMove && (
-                <>
-                  <span
-                    className="shrink-0 text-[10px] text-muted-foreground sm:hidden"
-                    title={`moving to ${m.pendingMove.targetSiteName}`}
-                  >
-                    moving
-                  </span>
-                  <span className="hidden min-w-0 max-w-[50%] truncate text-[10px] text-muted-foreground sm:inline">
-                    moving to {m.pendingMove.targetSiteName}
-                  </span>
-                </>
-              )}
+              <MoveTag machine={m} />
             </span>
-            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
+            {/* pl-10 sets the phone line under the name, past the dot and the icon */}
+            <span
+              className={`col-[1] row-[2] min-w-0 truncate pl-10 text-xs sm:col-auto sm:row-auto sm:pl-0 ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}
+            >
               {lastSeen(m)}
+              <MoveTag machine={m} phone />
             </span>
-            <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
+            <span className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:block">
               {m.agentVersion ? `v${m.agentVersion}` : '—'}
             </span>
-            <span className="flex items-center justify-end gap-0.5">
+            <span className="col-[2] row-[1] flex items-center justify-end gap-0.5 sm:col-auto sm:row-auto">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -181,7 +208,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                     disabled={!m.online}
                     aria-label={`restart ${m.name}`}
                   >
-                    <RotateCw className="h-3.5 w-3.5" />
+                    <RotateCw className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
@@ -202,7 +229,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                       disabled={m.pendingMove?.status === 'switching' || moveBusy}
                       aria-label={m.pendingMove ? `cancel move of ${m.name}` : `move ${m.name}`}
                     >
-                      {m.pendingMove ? <X className="h-3.5 w-3.5" /> : <ArrowRightLeft className="h-3.5 w-3.5" />}
+                      {m.pendingMove ? <X className="h-4 w-4" /> : <ArrowRightLeft className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>
@@ -224,7 +251,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                     onClick={() => setRemoveTarget(m)}
                     aria-label={`remove ${m.name}`}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>

@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
-import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
+import { MENU_SURFACE, SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { getUserShortName } from '@/lib/userUtils';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
@@ -28,8 +28,6 @@ const CreateSiteDialog = dynamic(
   () => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })),
   { ssr: false, loading: () => null },
 );
-
-const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
 /** between the breadcrumb's parts: a straight rule, not a slash glyph. */
 const CRUMB_DIVIDER = <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-muted-foreground/60" />;

@@ -36,9 +36,14 @@ export async function expectSweepAtRest(target: Locator, what: string) {
  * background, through the element's own fill, to the gradient the sweep draws,
  * and the text colour on top. the pixels give the luminances, so no colour-space
  * maths lives here. read it once the sweep has settled at 100%.
+ *
+ * the sweep is the bottom layer, so a link whose glyph layers ride above its fill
+ * (`.hl-link`) reads right. `ink`, an element inside the target, is text that sets
+ * its own colour, as a filter's match does: its own fill and colour go on top.
  */
-export function sweptContrast(target: Locator): Promise<number> {
-  return target.evaluate((el) => {
+export async function sweptContrast(target: Locator, ink?: Locator): Promise<number> {
+  const inkHandle = ink ? await ink.elementHandle() : null;
+  return target.evaluate((el, inkEl) => {
     const ctx = Object.assign(document.createElement('canvas'), { width: 1, height: 1 }).getContext('2d', {
       willReadFrequently: true,
     })!;
@@ -62,15 +67,16 @@ export function sweptContrast(target: Locator): Promise<number> {
       if (paint([fill])[3] === 255) break;
     }
     const style = getComputedStyle(el);
-    const sweep = style.backgroundImage.match(/(?:rgba?|lab|lch|oklab|oklch|color)\([^()]*\)/)?.[0];
+    const sweep = style.backgroundImage.match(/(?:rgba?|lab|lch|oklab|oklch|color)\([^()]*\)/g)?.at(-1);
     if (!sweep) throw new Error(`no sweep layer in ${style.backgroundImage}`);
 
-    const surface = [...behind, style.backgroundColor, sweep];
+    const text = inkEl ? getComputedStyle(inkEl) : style;
+    const surface = [...behind, style.backgroundColor, sweep, ...(inkEl ? [text.backgroundColor] : [])];
     const luminance = (pixel: Uint8ClampedArray) => {
       const lin = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
       return 0.2126 * lin(pixel[0] / 255) + 0.7152 * lin(pixel[1] / 255) + 0.0722 * lin(pixel[2] / 255);
     };
-    const [hi, lo] = [luminance(paint([...surface, style.color])), luminance(paint(surface))].sort((a, b) => b - a);
+    const [hi, lo] = [luminance(paint([...surface, text.color])), luminance(paint(surface))].sort((a, b) => b - a);
     return (hi + 0.05) / (lo + 0.05);
-  });
+  }, inkHandle);
 }

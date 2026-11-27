@@ -14,6 +14,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
 
@@ -65,10 +66,7 @@ async function gotoWebhooksForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'webhooks', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox');
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(page.getByRole('combobox')).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists seeded webhooks with name, URL, and status badge', async ({ page }) => {
