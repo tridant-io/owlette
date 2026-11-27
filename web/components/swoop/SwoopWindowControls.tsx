@@ -43,6 +43,14 @@ export const TRAFFIC_LIGHTS_INSET_PX = 86;
  */
 export const dragRegion = { 'data-tauri-drag-region': 'deep' } as const;
 
+/**
+ * spread on a page's background to make it the window's drag surface while
+ * whatever sits on it keeps its presses: only a press on the element itself
+ * drags, so text in a card stays selectable (tauri's drag script cancels the
+ * press it drags with). app only, as `dragRegion`.
+ */
+export const dragBackground = { 'data-tauri-drag-region': 'true' } as const;
+
 const BUTTON =
   'inline-flex w-[46px] cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
 
