@@ -522,6 +522,9 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
       requiresMfaSetup: false,
       createdAt: FieldValue.serverTimestamp(),
     });
+    // a superadmin removes a machine only from a site they are a member of (adr 0021)
+    const superMemberRow = adminDb.collection('sites').doc(ids.siteId).collection('members').doc(superUid);
+    await superMemberRow.set({ uid: superUid, role: 'member', status: 'active' });
     const superClient = await createSignedInClient(
       adminAuth,
       projectId,
@@ -541,6 +544,7 @@ test('live dev API major control-plane flows stay server-mediated after lockdown
     } finally {
       await superClient.signOutAndDelete();
       await Promise.allSettled([
+        superMemberRow.delete(),
         adminDb.collection('users').doc(superUid).delete(),
         adminAuth.deleteUser(superUid),
       ]);

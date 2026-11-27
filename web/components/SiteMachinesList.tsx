@@ -11,6 +11,7 @@ import { useMachineMove } from '@/hooks/useMachineMove';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { MoveMachineDialog } from '@/components/admin/sites/MoveMachineDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 
@@ -67,6 +68,8 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
   const [moveTarget, setMoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
   const { cancelMove, busy: moveBusy } = useMachineMove(siteId);
+  // a superadmin without a member row restarts a machine here, and neither moves nor removes one (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const power = usePowerCommand(siteId);
 
   const handleConfirmRestart = async (options: PowerCommandOptions) => {
@@ -216,7 +219,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                 </TooltipContent>
               </Tooltip>
               {/* cancelling needs only this site, so a pending move keeps its button */}
-              {(targetSites.length > 0 || m.pendingMove) && (
+              {!memberLocked && (targetSites.length > 0 || m.pendingMove) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -243,6 +246,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                   </TooltipContent>
                 </Tooltip>
               )}
+              {!memberLocked && (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -258,6 +262,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                   <p>remove machine from site</p>
                 </TooltipContent>
               </Tooltip>
+              )}
             </span>
           </li>
         ))}

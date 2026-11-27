@@ -5,6 +5,7 @@ import type { Site } from '@/hooks/useFirestore';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SwoopSwitch } from '@/components/admin/sites/SiteSwitches';
+import { MemberLockRowHint } from '@/components/MemberLock';
 
 /** admin panel → swoop: a row per site the caller owns or administers, with its swoop switch. */
 export function SwoopSiteTable({ sites, loading }: { sites: Site[]; loading: boolean }) {
@@ -30,7 +31,10 @@ export function SwoopSiteTable({ sites, loading }: { sites: Site[]; loading: boo
             <TableBody>
               {eligible.map((site) => (
                 <TableRow key={site.id} className="border-border hover:bg-muted/50">
-                  <TableCell className="text-foreground whitespace-normal wrap-anywhere">{site.name}</TableCell>
+                  <TableCell className="text-foreground whitespace-normal wrap-anywhere">
+                    {site.name}
+                    <MemberLockRowHint siteId={site.id} />
+                  </TableCell>
                   <TableCell className="text-right">
                     <SwoopSwitch siteId={site.id} siteName={site.name} />
                   </TableCell>

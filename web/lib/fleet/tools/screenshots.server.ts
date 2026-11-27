@@ -30,7 +30,7 @@ export const listRecentScreenshotsTool: FleetServerTool = {
   target: 'machine',
   definition: {
     name: LIST_SCREENSHOTS_TOOL,
-    description: `List the screenshots already taken of a machine, newest first, each with when it was taken, its size, the monitor and a link that stays valid for one hour. The newest comes back as an image as well. Up to ${SCREENSHOTS_MAX} are kept, and nothing new is captured: use capture_screenshot to see the screen now.`,
+    description: `List the screenshots already taken of a machine, newest first, each with when it was taken, its size, the monitor and a link that stays valid for one hour. The newest comes back as an image as well. Up to ${SCREENSHOTS_MAX} are listed, and nothing new is captured: use capture_screenshot to see the screen now.`,
     tier: 1,
     parameters: {
       type: 'object',

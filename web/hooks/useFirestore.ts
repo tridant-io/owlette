@@ -426,12 +426,6 @@ export interface Machine {
     timestamp: FirestoreTs;
     sizeKB: number;
   };
-  liveView?: {
-    active: boolean;
-    interval?: number;
-    startedAt?: number;
-    expiresAt?: number;
-  };
   metrics?: {
     schemaVersion?: number;
     profileHash?: string;
@@ -1970,14 +1964,6 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
     await sendMachineCommand(machineId, 'capture_screenshot');
   };
 
-  const startLiveView = async (machineId: string, interval: number = 10, duration: number = 600) => {
-    await sendMachineCommand(machineId, 'start_live_view', { interval, duration });
-  };
-
-  const stopLiveView = async (machineId: string) => {
-    await sendMachineCommand(machineId, 'stop_live_view');
-  };
-
   /**
    * Merges into `config/{siteId}/machines/{machineId}.rebootSchedule` — the field
    * and endpoint keep the legacy "reboot" spelling because deployed agents read
@@ -2016,5 +2002,5 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
   const loading = !!db && !!siteId && !emptyScope && loadedKey !== loadKey;
   const error = !db ? 'Firebase not configured' : failure?.key === loadKey ? failure.message : null;
 
-  return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView, updateRestartSchedule };
+  return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, updateRestartSchedule };
 }

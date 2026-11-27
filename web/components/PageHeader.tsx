@@ -19,6 +19,7 @@ import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
 import { TrialBanner, planBannerKind } from '@/components/plan/TrialBanner';
+import { MemberLockBanner } from '@/components/MemberLock';
 import { usePlan } from '@/hooks/usePlan';
 import { createSite } from '@/hooks/useFirestore';
 import { useSiteMachineCounts } from '@/hooks/useSiteMachineCounts';
@@ -496,6 +497,7 @@ export function PageHeader({
     {planBannerKind(plan) !== 'unverified' && <VerifyEmailBanner />}
     {/* owlette free is a site's plan, so it shows only on a page about one site; the demo's site has none */}
     <TrialBanner siteId={disableNav ? undefined : currentSiteId} />
+    <MemberLockBanner siteId={disableNav ? undefined : currentSiteId} />
 
     {/* Mobile nav drawer — carries the site + page switchers that the `md`
         bar shows inline. Plain fixed positioning rather

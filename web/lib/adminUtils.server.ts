@@ -13,6 +13,12 @@ export interface SiteRecipient {
   mutedMachines: string[];
   /** the member row's machine scope; null is the whole site */
   machineIds: readonly string[] | null;
+  /**
+   * the site's owner, or a person with an active member row on it. absent for
+   * the fallback address and a stale `sites[]` entry, which read as not a member:
+   * a site's screens are for its members (adr 0021).
+   */
+  member?: boolean;
 }
 
 /** false when the recipient muted the machine or their machine scope does not reach it */
@@ -85,13 +91,14 @@ export async function getSiteAlertRecipients(
     userId: string,
     data: FirebaseFirestore.DocumentData | undefined,
     machineIds: readonly string[] | null,
+    member: boolean,
   ) => {
     if (typeof data?.deletedAt === 'number') return;
     const email = data?.email as string | undefined;
     if (!email) return;
     siteHasUsers = true;
     if (filterPreference && data?.preferences?.[filterPreference] === false) return;
-    recipients.push({ userId, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [], machineIds });
+    recipients.push({ userId, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [], machineIds, member });
   };
 
   try {
@@ -126,13 +133,14 @@ export async function getSiteAlertRecipients(
 
     for (const doc of usersQuery.docs) {
       seenIds.add(doc.id);
-      addUser(doc.id, doc.data(), rowByUid.get(doc.id)?.machineIds ?? null);
+      const row = rowByUid.get(doc.id);
+      addUser(doc.id, doc.data(), row?.machineIds ?? null, doc.id === ownerId || row?.active === true);
     }
 
     if (ownerId && !seenIds.has(ownerId)) {
       try {
         const ownerDoc = await db.collection('users').doc(ownerId).get();
-        addUser(ownerId, ownerDoc.data(), null);
+        addUser(ownerId, ownerDoc.data(), null, true);
       } catch {
         // Untrustworthy empty set — fall open below rather than apply mutes.
         enumerationFailed = true;
@@ -149,7 +157,8 @@ export async function getSiteAlertRecipients(
       reads.push(db.getAll(...rowOnly.slice(i, i + USER_READ_CHUNK).map((uid) => db.collection('users').doc(uid))));
     }
     for (const doc of (await Promise.all(reads)).flat()) {
-      addUser(doc.id, doc.data(), rowByUid.get(doc.id)?.machineIds ?? null);
+      // listed by an active row, so a member
+      addUser(doc.id, doc.data(), rowByUid.get(doc.id)?.machineIds ?? null, true);
     }
   } catch (error) {
     enumerationFailed = true;

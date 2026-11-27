@@ -28,7 +28,7 @@ const MACHINES = [
   { id: 'IN2', name: 'kiosk' },
 ];
 
-const MEMBER_LINE = 'views machines, takes screenshots and opens live view. no commands and no configuration.';
+const MEMBER_LINE = 'views machines and takes screenshots. no commands and no configuration.';
 const ADMIN_LINE =
   'runs the site: everything a member can, plus commands and configuration, swoop settings, deployments, roosts, talons, webhooks, alert rules, pairing machines and managing members.';
 

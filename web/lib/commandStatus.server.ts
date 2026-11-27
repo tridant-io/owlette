@@ -7,7 +7,7 @@
  * `completed` doc as non-terminal and surface as `in_progress`; only a status
  * `isTerminalCommandStatus` accepts resolves the command. a finished
  * screenshot gets a fresh 1-hour signed read url in `result.screenshot_url` on
- * every read; the url itself is never persisted. a registry read's values whose
+ * every read by a caller who may see the screen; the url itself is never persisted. a registry read's values whose
  * names look like secrets are left out, as hoot leaves them out.
  */
 import type { DocumentSnapshot, Firestore } from 'firebase-admin/firestore';
@@ -37,6 +37,8 @@ export async function lookupCommandStatus(
   siteId: string,
   machineId: string,
   commandId: string,
+  /** false for a caller who may not see the machine's screen: a screenshot then gets no signed url */
+  options: { signScreenshot?: boolean } = {},
 ): Promise<CommandStatusLookup | null> {
   const commandsCol = db
     .collection('sites')
@@ -80,7 +82,7 @@ export async function lookupCommandStatus(
               ? cmd.storage_path
               : null;
     // the agent writes this path, so only this machine's own screenshots are signed
-    if (isMachineScreenshotPath(storagePath, siteId, machineId)) {
+    if (options.signScreenshot !== false && isMachineScreenshotPath(storagePath, siteId, machineId)) {
       const signed = await issueScreenshotReadUrl(storagePath);
       if (signed) {
         result.screenshot_url = signed.url;

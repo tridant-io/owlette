@@ -5,6 +5,7 @@
  */
 import { NextResponse } from 'next/server';
 import * as Sentry from '@sentry/nextjs';
+import { MEMBERS_ONLY_CHANGE } from '@/lib/capabilities';
 
 /** Public identifiers clients switch on — keep stable across versions. */
 export const ProblemType = {
@@ -162,6 +163,14 @@ export function problemForbidden(detail = 'access denied'): NextResponse {
     status: 403,
     detail,
   });
+}
+
+/**
+ * the answer for a caller who reaches a site without a member row (a superadmin)
+ * and asks to change it (adr 0021).
+ */
+export function problemMembersOnly(): NextResponse {
+  return problem({ type: ProblemType.Forbidden, title: 'forbidden', status: 403, detail: MEMBERS_ONLY_CHANGE, code: 'members_only' });
 }
 
 /**

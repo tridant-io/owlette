@@ -47,9 +47,9 @@ import {
  * be reflected here. Shown on the role cards and inside the change-role dialog.
  */
 const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
-  member: 'read-only access to assigned sites — view machines, capture screenshots, open live view, and set their own alert preferences. no commands, no config edits.',
+  member: 'read-only access to assigned sites — view machines, capture screenshots, and set their own alert preferences. no commands, no config edits.',
   admin: 'site-scoped elevated tier — everything a member can do, plus dispatch commands and restarts, edit machine and process settings, remove machines, author talons, run deployments, and manage presets, webhooks, and members on assigned sites.',
-  superadmin: 'platform-wide god-mode — every admin power on every site, plus manage users and roles, revoke agent tokens, upload installers, and configure alerts and global settings. reserve for platform operators.',
+  superadmin: 'platform-wide — every admin power on the sites they are a member of, and on every other site read access plus updates, restarts, process control, cancelling deployments and killing or kicking swoop sessions. also manage users and roles, revoke agent tokens, upload installers, and configure alerts and global settings. reserve for platform operators.',
 };
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -198,6 +198,18 @@ export default function UserManagementPage() {
       cancelled = true;
     };
   }, []);
+
+  // the member lock's "add yourself" link (`?sites=me`) opens the viewer's own site access, once
+  const [ownAccessOpened, setOwnAccessOpened] = useState(false);
+  useEffect(() => {
+    if (ownAccessOpened || !currentUser) return;
+    if (new URLSearchParams(window.location.search).get('sites') !== 'me') return;
+    const me = users.find((u) => u.uid === currentUser.uid);
+    if (!me) return;
+    setOwnAccessOpened(true);
+    setSelectedUser({ uid: me.uid, email: me.email, role: me.role, sites: me.sites || [] });
+    setManageSiteAccessOpen(true);
+  }, [users, currentUser, ownAccessOpened]);
 
   const handleOpenManageSiteAccess = (userId: string, email: string, role: UserRole, sites: string[]) => {
     setSelectedUser({ uid: userId, email, role, sites });

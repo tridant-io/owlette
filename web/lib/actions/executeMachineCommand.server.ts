@@ -17,10 +17,13 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
-import type { Actor } from '@/lib/capabilities';
+import { isSiteMember, MEMBERS_ONLY_CHANGE, type Actor } from '@/lib/capabilities';
+import { callTier } from '@/lib/hoot/launchChange';
 import { keyedHash, toolCallHash } from '@/lib/hoot/launchAudit.server';
 import { isPublishedInstaller } from '@/lib/latestInstaller.server';
 import { PLAN_REQUIRED_DETAIL, requireEntitlement, type PlanFlag } from '@/lib/plan.server';
+import { toolTierOf } from '@/lib/mcp-tools';
+import { SCREENS_MEMBERS_ONLY } from '@/lib/screenshotStorage.server';
 import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { FieldValue } from 'firebase-admin/firestore';
 
@@ -34,8 +37,6 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'cancel_reboot',
   'dismiss_reboot_pending',
   'capture_screenshot',
-  'start_live_view',
-  'stop_live_view',
   'restart_process',
   'start_process',
   'stop_process',
@@ -64,9 +65,50 @@ const PLAN_FREE_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',
   'cancel_reboot',
   'dismiss_reboot_pending',
-  'stop_live_view',
   'cancel_mcp_tool',
 ]);
+
+/**
+ * what a person without a member row on the site (a superadmin) may queue on its
+ * machines: keep the agent current, start, stop, restart or kill a configured
+ * process (the agent acts only on one its config names), reboot or stop a reboot,
+ * and run or stop a tool call that only reads, the tier hoot gives them (adr 0021).
+ */
+const NON_MEMBER_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
+  'update_owlette',
+  'reboot_machine',
+  'cancel_reboot',
+  'dismiss_reboot_pending',
+  'restart_process',
+  'start_process',
+  'stop_process',
+  'kill_process',
+  'mcp_tool_call',
+  'cancel_mcp_tool',
+]);
+
+/**
+ * why a person without a member row on the site may not queue this command, or
+ * null when they may or are a member. a system or machine actor answers to its
+ * own grant, never to a member row.
+ */
+export function nonMemberCommandRefusal(
+  actor: Actor,
+  siteId: string,
+  cmdType: string,
+  payload: Record<string, unknown>,
+): ExecuteMachineCommandError | null {
+  if (actor.type !== 'user' || isSiteMember(actor, siteId)) return null;
+  const toolName = cmdType === 'mcp_tool_call' ? String(payload.tool_name) : null;
+  if (cmdType === 'capture_screenshot' || toolName === 'capture_screenshot') {
+    return new ExecuteMachineCommandError(403, 'members_only', SCREENS_MEMBERS_ONLY);
+  }
+  // a launch change is tier 3 whatever its tool's tier, as everywhere
+  const allowed =
+    NON_MEMBER_COMMAND_TYPES.has(cmdType) &&
+    (toolName === null || callTier(toolName, payload.tool_params ?? {}, toolTierOf(toolName)) === 1);
+  return allowed ? null : new ExecuteMachineCommandError(403, 'members_only', MEMBERS_ONLY_CHANGE);
+}
 
 /** the plan key a gated type needs: a tool call is hoot's, every other type is control. */
 function commandPlanKey(cmdType: string): PlanFlag {
@@ -101,7 +143,7 @@ export interface ExecuteMachineCommandContext {
   siteId: string;
   /** Target machine within `siteId`. */
   machineId: string;
-  /** Acting principal. Kept as a hook for per-actor branching; unread today. */
+  /** Acting principal: a person without a member row on the site queues only `nonMemberCommandRefusal`'s allowlist. */
   actor: Actor;
   /** Audit-actor descriptor: `user:<uid>`, `apiKey:<keyId>`, `system:<name>` or `machine:<machineId>`. */
   auditActor: string;
@@ -307,6 +349,8 @@ export async function executeMachineCommand(
       'field `payload` must be an object',
     );
   }
+  const nonMember = nonMemberCommandRefusal(ctx.actor, ctx.siteId, cmdType, input.payload);
+  if (nonMember) throw nonMember;
   const resolvedOverride = resolveActiveHoursOverride(input.activeHoursOverride, ctx.auditActor);
   if (!resolvedOverride.ok) {
     throw new ExecuteMachineCommandError(

@@ -62,6 +62,8 @@ function createControlHandler(verb: ControlVerb) {
     targetKind: 'process',
     targetIdParam: 'processId',
     apiKeyScope: { resource: 'machine', idParam: 'machineId', permission: 'write' },
+    // every verb on a configured process is on the allowlist for a person without a member row (adr 0021)
+    admitsNonMembers: true,
   })(async (request, ctx, routeContext) => {
     try {
       const { machineId, processId } = await routeContext.params;

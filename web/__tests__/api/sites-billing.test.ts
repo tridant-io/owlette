@@ -247,8 +247,10 @@ describe('who may change a site\'s billing', () => {
     await expectUntouched(await call(), 403, 'api_key_not_permitted');
   });
 
-  // a superadmin holds every capability, but the payer is always the owner
+  // a superadmin holds every capability, but the payer is always the owner. one
+  // without a member row is refused before that (adr 0021), so this one holds a row
   it.each(verbs)('refuses a superadmin who does not own the site on %s', async (_verb, call) => {
+    seedMember(SITE, SUPERADMIN, 'member');
     signIn(SUPERADMIN);
 
     await expectUntouched(await call(), 403, 'not_owner');

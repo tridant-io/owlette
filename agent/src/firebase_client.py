@@ -2515,34 +2515,19 @@ class FirebaseClient:
 
     # Machine Flags (reboot, shutdown, reboot pending)
 
-    def set_machine_flag(self, flag_name, value):
-        """Set a flag on the machine's presence document (e.g., rebooting, shuttingDown)."""
-        if not self.connected or not self.db:
-            return
-
-        try:
-            machine_ref = self.db.collection('sites').document(self.site_id)\
-                .collection('machines').document(self.machine_id)
-
-            machine_ref.set({flag_name: value}, merge=True)
-            self.logger.debug(f"[FLAG] Set {flag_name}={value} on machine document")
-        except Exception as e:
-            self.logger.error(f"Failed to set machine flag {flag_name}: {e}")
-
     def set_machine_flags(self, flags: dict):
         """Atomically set multiple flags on the machine document in a SINGLE write.
 
-        Use this instead of multiple set_machine_flag() calls when the dashboard
-        must observe several fields together — e.g. rebootScheduledAt + rebooting
-        + rebootCancellable for the scheduled-reboot announcement. Multiple
-        separate set_machine_flag() calls would produce multiple Firestore writes
-        and intermediate listener ticks where the dashboard sees a half-applied
-        state (e.g. rebooting=true but rebootScheduledAt still null), causing
-        the cancel-button countdown to lag or render incorrectly.
+        Use it when the dashboard must observe several fields together — e.g.
+        rebootScheduledAt + rebooting + rebootCancellable for the scheduled-reboot
+        announcement. Separate writes would produce intermediate listener ticks
+        where the dashboard sees a half-applied state (e.g. rebooting=true but
+        rebootScheduledAt still null), causing the cancel-button countdown to lag
+        or render incorrectly.
 
-        UNLIKE set_machine_flag(), this method RAISES on failure rather than
-        silently logging. Callers that depend on atomic visibility (e.g. the
-        scheduled-reboot announce path) must catch and react to the exception.
+        It RAISES on failure rather than silently logging. Callers that depend on
+        atomic visibility (e.g. the scheduled-reboot announce path) must catch and
+        react to the exception.
         """
         if not self.connected or not self.db:
             raise RuntimeError("Firebase client not connected")

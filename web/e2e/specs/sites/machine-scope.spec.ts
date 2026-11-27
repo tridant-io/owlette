@@ -25,7 +25,7 @@ import { clearSiteLogs, dedicatedUser, seedDedicatedUser, seedLogEvents } from '
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { pinDashboardContext, seedMachineWithProcesses } from '../../helpers/processConfig';
 import { roleState } from '../../helpers/roles';
-import { seedMachine, seedMemberRow, seedSite, type TestUser } from '../../helpers/seed';
+import { revokeMembership, seedMachine, seedMemberRow, seedSite, TEST_USERS, type TestUser } from '../../helpers/seed';
 import type { TalonDoc } from '@/lib/talons/types';
 
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -185,9 +185,9 @@ test('a scoped member sees only their machine, and only the pages that fit it', 
   await expect(card(page, OUT)).toHaveCount(0);
   await expect(page.getByText("machines couldn't load")).toHaveCount(0);
 
-  // set to no swoop: the menu offers live view in its place
+  // set to no swoop: the menu offers the screenshot and no swoop
   const menu = await openMenu(page, IN);
-  await expect(menu.getByTestId('machine-context-menu-live-view')).toBeVisible();
+  await expect(menu.getByTestId('machine-context-menu-screenshot')).toBeVisible();
   await expect(menu.getByTestId('machine-context-menu-swoop')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
@@ -384,6 +384,14 @@ test('an admin elsewhere reads their limited site in the sites list, without its
 test.describe('a talon the scoped admin wrote', () => {
   test.use(roleState('superadmin'));
 
+  // the superadmin re-runs a talon only on a site they are a member of (adr 0021)
+  test.beforeAll(async () => {
+    await seedMemberRow(SITE, TEST_USERS.superadmin.uid, 'admin');
+  });
+  test.afterAll(async () => {
+    await revokeMembership(SITE, TEST_USERS.superadmin.uid);
+  });
+
   test('switches off at its next run, with nothing fired', async ({ page }) => {
     const now = Timestamp.now();
     const talon: TalonDoc = {
@@ -405,7 +413,7 @@ test.describe('a talon the scoped admin wrote', () => {
     };
     await getAdminDb().doc(`sites/${SITE}/talons/${TALON}`).set(talon);
 
-    // the re-run button on /talons, which a superadmin may press on any site
+    // the re-run button on /talons, which a superadmin presses as a member of the site
     await page.goto('/dashboard');
     await expect(page.getByTestId('user-menu-trigger')).toBeVisible();
     const run = await callApi(page, 'POST', `/api/sites/${SITE}/talons/${TALON}/test`);

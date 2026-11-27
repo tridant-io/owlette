@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { assertNoHorizontalOverflow } from '../../helpers/mobile';
+import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
 import { TEST_USERS, seedMachine } from '../../helpers/seed';
 import {
@@ -51,6 +51,15 @@ test.describe('mobile superadmin shells', () => {
     await expect(page.getByRole('button', { name: /edit E2E Mobile Template/i }).first()).toBeVisible();
     // /admin/presets is not in responsive-acceptance's route list — this is the
     // only overflow assertion covering it.
+    await assertNoHorizontalOverflow(page);
+  });
+
+  // super-uid holds no member row, so every site's dashboard carries the hint (adr 0021)
+  test("the member lock's hint fits a phone", async ({ page }) => {
+    await page.goto('/dashboard');
+    const lock = page.getByTestId('member-lock');
+    await expect(lock).toContainText('add yourself to this site to change it');
+    await expectFullyWithinViewport(page, lock.getByRole('link', { name: 'add yourself' }), 'add yourself');
     await assertNoHorizontalOverflow(page);
   });
 });

@@ -2,7 +2,7 @@
 
 import { useState, useSyncExternalStore, type ComponentType } from 'react';
 import Link from 'next/link';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff } from 'lucide-react';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -28,6 +28,7 @@ import { ASK_OWNER, siteBillingPath } from '@/components/plan/UpgradeGate';
 import { cn } from '@/lib/utils';
 import { hootMachineHref } from '@/lib/hoot/machineLink';
 import { useAuth } from '@/contexts/AuthContext';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 import type { RestartSchedule } from '@/hooks/useFirestore';
@@ -72,11 +73,10 @@ interface MachineContextMenuProps {
   activeHoursGuard?: ActiveHoursGuard | null;
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
-  onLiveView?: () => void;
   /**
    * `capabilities.swoop === 1` from the heartbeat: the machine has a streamer
-   * installed. Swoop then replaces live view in the online block, unless the
-   * site has swoop off (`swoopOff`) or the viewer has none (`noSwoop`). Whether
+   * installed. Swoop then leads the online block, unless the site has swoop
+   * off (`swoopOff`) or the viewer has none (`noSwoop`). Whether
    * this user may actually get a session is still decided server-side (site
    * enablement, membersMayWatch, step-up); `swoopOff` and `noSwoop` only stop
    * the menu offering one the server refuses.
@@ -86,7 +86,7 @@ interface MachineContextMenuProps {
    * live swoop viewers, mirrored onto the machine doc by the server from the
    * session records. counted on the swoop row and on the trigger only while the
    * machine is online, swoop-capable and its site has swoop on, so a stale
-   * mirror never badges live view.
+   * mirror never badges a row that opens nothing.
    */
   swoopViewers?: number;
   onSwoop?: () => void;
@@ -119,7 +119,7 @@ interface MachineContextMenuProps {
   /**
    * the site's plan leaves out control: restart and shutdown collapse into
    * one row linking to the site's billing section (the owner) or telling the
-   * viewer to ask the owner, and live view and screenshot go.
+   * viewer to ask the owner, and screenshot goes.
    * cancelling and scheduling restarts stay, as every plan may.
    */
   controlLocked?: boolean;
@@ -188,7 +188,6 @@ export function MachineContextMenu({
   activeHoursGuard,
   onCancelRestart,
   onScreenshot,
-  onLiveView,
   swoopCapable,
   swoopViewers,
   onSwoop,
@@ -212,13 +211,17 @@ export function MachineContextMenu({
   const [isSendingCommand, setIsSendingCommand] = useState(false);
   const [showRestartScheduleDialog, setShowRestartScheduleDialog] = useState(false);
   const power = usePowerCommand(siteId);
-  const { userPreferences, updateUserPreferences } = useAuth();
+  const { userPreferences, updateUserPreferences, isSuperadmin, isSiteMember } = useAuth();
+  // a superadmin reaches every site, but a site's screenshots are for its members
+  const seesScreenshots = !isSuperadmin || isSiteMember(siteId);
+  // nor changes it, but for the allowlist: restarting, revoking the token (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const isMuted = userPreferences.mutedMachines.includes(machineId);
   const offersSwoop = swoopCapable && !noSwoop;
   const watching = isOnline && offersSwoop && !swoopOff ? (swoopViewers ?? 0) : 0;
   const showScreen = isOnline && !planLocked && (offersSwoop || !controlLocked);
   const showViewDisplays = !!onViewDisplays && !planLocked;
-  const scheduleRestartsItem = (
+  const scheduleRestartsItem = memberLocked ? null : (
     <DropdownMenuItem
       onClick={(e) => {
         e.stopPropagation();
@@ -417,6 +420,8 @@ export function MachineContextMenu({
                       <RotateCcw className="mr-2 h-4 w-4" />
                       restart machine
                     </DropdownMenuItem>
+                    {!memberLocked && (
+                    <>
                     <div aria-hidden className="my-1.5 w-px bg-border" />
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -439,24 +444,28 @@ export function MachineContextMenu({
                         <p>schedule restarts</p>
                       </TooltipContent>
                     </Tooltip>
+                    </>
+                    )}
                   </div>
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowShutdownDialog(true);
-                    }}
-                    data-testid="machine-context-menu-shutdown"
-                    className="text-accent-warm-hover focus:text-accent-warm-hover cursor-pointer"
-                  >
-                    <Power className="mr-2 h-4 w-4" />
-                    shutdown machine
-                  </DropdownMenuItem>
+                  {!memberLocked && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowShutdownDialog(true);
+                      }}
+                      data-testid="machine-context-menu-shutdown"
+                      className="text-accent-warm-hover focus:text-accent-warm-hover cursor-pointer"
+                    >
+                      <Power className="mr-2 h-4 w-4" />
+                      shutdown machine
+                    </DropdownMenuItem>
+                  )}
                 </>
               )}
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}
-          {!isOnline && isMachineAdmin && !planLocked && (
+          {!isOnline && isMachineAdmin && !planLocked && !memberLocked && (
             <>
               {/* Offline machines can still be scheduled: the restart schedule is
                   written to the config doc and the agent applies it from local
@@ -468,15 +477,14 @@ export function MachineContextMenu({
           )}
           {showScreen && (
             <>
-              {/* Swoop supersedes live view on a machine that can stream; the
-                  slideshow stays for every agent that can't, so the menu never
-                  loses its screen entry. It leads: the live picture is the
-                  entry people reach for, the still is the fallback. It alone
-                  wears the brand colour, so the eye lands on it first. With
-                  the site's swoop off, live view comes back and the swoop row
-                  says how to turn it on. A plan without swoop links to the plan
-                  page instead, since turning the switch on would not help. */}
-              {offersSwoop && swoopOff && !swoopLocked && (isSiteAdmin ? (
+              {/* Swoop leads on a machine that can stream: the live picture is
+                  the entry people reach for, the screenshot is the still. It
+                  alone wears the brand colour, so the eye lands on it first.
+                  With the site's swoop off, the swoop row says how to turn it
+                  on. A plan without swoop links to the plan page instead,
+                  since turning the switch on would not help. A machine that
+                  can't stream offers the screenshot alone. */}
+              {offersSwoop && swoopOff && !swoopLocked && (isSiteAdmin && !memberLocked ? (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
@@ -553,20 +561,8 @@ export function MachineContextMenu({
                     </>
                   )}
                 </div>
-              ) : !controlLocked && (
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onLiveView?.();
-                  }}
-                  data-testid="machine-context-menu-live-view"
-                  className="text-info focus:text-info-bright cursor-pointer"
-                >
-                  <Eye className="mr-2 h-4 w-4" />
-                  live view
-                </DropdownMenuItem>
-              )}
-              {!controlLocked && (
+              ) : null}
+              {!controlLocked && seesScreenshots && (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
@@ -649,17 +645,19 @@ export function MachineContextMenu({
               {/* No separator: revoking the token and removing the machine are
                   the same kind of act — they sever this machine from the site —
                   so they read as one destructive group. */}
-              <DropdownMenuItem
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRemoveMachine();
-                }}
-                data-testid="machine-context-menu-remove"
-                className="text-danger focus:text-danger-bright cursor-pointer"
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                remove machine
-              </DropdownMenuItem>
+              {!memberLocked && (
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveMachine();
+                  }}
+                  data-testid="machine-context-menu-remove"
+                  className="text-danger focus:text-danger-bright cursor-pointer"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  remove machine
+                </DropdownMenuItem>
+              )}
             </>
           )}
         </DropdownMenuContent>

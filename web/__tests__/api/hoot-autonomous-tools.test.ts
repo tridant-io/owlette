@@ -705,3 +705,23 @@ describe('whose key an autonomous investigation spends', () => {
     expect(mockResolveLlmConfig).toHaveBeenCalledWith(mockDb, 'owner-uid');
   });
 });
+
+// an autonomous chat is stored as the model saw it (`chats/{id}.messages`), and
+// staff may read autonomous chats. a capture's result there is the agent's own
+// record, whose url is the image route, which refuses anyone not on the site:
+// nothing here signs a storage url, so none is ever stored (adr 0021)
+describe('autonomous screenshot results', () => {
+  it('hands the model, and so the stored chat, the image-route url and never a signed one', async () => {
+    const imageRoute = `/api/sites/${SITE}/machines/${MACHINE}/screenshots/image?path=${encodeURIComponent(
+      `screenshots/${SITE}/${MACHINE}/1-aabbccdd.jpg`,
+    )}`;
+    mockDispatchToolCall.mockResolvedValueOnce({ message: 'Screenshot captured', url: imageRoute, size_kb: 12 });
+    const tools = (await buildTools()) as Record<string, ExecutableTool & { toModelOutput?: unknown }>;
+
+    expect(tools.capture_screenshot.toModelOutput).toBeUndefined();
+    const result = await tools.capture_screenshot.execute({ monitor: 0 });
+
+    expect(result).toEqual({ message: 'Screenshot captured', url: imageRoute, size_kb: 12 });
+    expect(JSON.stringify(result)).not.toMatch(/X-Goog-Signature|storage\.googleapis\.com/);
+  });
+});

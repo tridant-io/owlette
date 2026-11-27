@@ -1837,7 +1837,7 @@ test.describe('machine scope', () => {
     }
   });
 
-  test('a scoped member set to no swoop gets live view on their machine, and swoop once they may watch', async ({
+  test('a scoped member set to no swoop gets the screenshot on their machine, and swoop once they may watch', async ({
     page,
   }) => {
     // a heartbeat over five minutes old reads as offline, and an offline machine offers no screen
@@ -1848,7 +1848,7 @@ test.describe('machine scope', () => {
     await signIn(page, scopedWatcher);
 
     const none = await machineMenu(page, SCOPE_IN);
-    await expect(none.getByTestId('machine-context-menu-live-view')).toBeVisible();
+    await expect(none.getByTestId('machine-context-menu-screenshot')).toBeVisible();
     await expect(none.getByTestId('machine-context-menu-swoop')).toHaveCount(0);
     await expect(none.getByTestId('machine-context-menu-swoop-off')).toHaveCount(0);
     await page.keyboard.press('Escape');
@@ -1857,6 +1857,5 @@ test.describe('machine scope', () => {
     await memberRow(scopedWatcher.uid).set({ swoop: 'view' }, { merge: true });
     const watch = await machineMenu(page, SCOPE_IN);
     await expect(watch.getByTestId('machine-context-menu-swoop')).toBeVisible();
-    await expect(watch.getByTestId('machine-context-menu-live-view')).toHaveCount(0);
   });
 });

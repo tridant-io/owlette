@@ -6,6 +6,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import ConfirmDialog from '@/components/ConfirmDialog';
 import type { Machine } from '@/hooks/useFirestore';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { MEMBER_LOCK_HINT } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 interface HootPowerToggleProps {
   siteId: string;
@@ -16,6 +18,8 @@ export function HootPowerToggle({ siteId, machine }: HootPowerToggleProps) {
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const enabled = machine.cortexEnabled !== false;
+  // a superadmin without a member row sees the switch's state and changes it not (adr 0021)
+  const memberLocked = useMemberLock(siteId);
 
   const handleConfirm = async () => {
     if (busy) return;
@@ -41,9 +45,11 @@ export function HootPowerToggle({ siteId, machine }: HootPowerToggleProps) {
   };
 
   const label = enabled ? 'hoot active' : 'hoot inactive';
-  const tooltip = enabled
-    ? 'hoot active — click to disable tool calls on this machine'
-    : 'hoot inactive — click to re-enable tool calls on this machine';
+  const tooltip = memberLocked
+    ? `${label} — ${MEMBER_LOCK_HINT}`
+    : enabled
+      ? 'hoot active — click to disable tool calls on this machine'
+      : 'hoot inactive — click to re-enable tool calls on this machine';
 
   return (
     <>
@@ -51,12 +57,12 @@ export function HootPowerToggle({ siteId, machine }: HootPowerToggleProps) {
         <TooltipTrigger asChild>
           <button
             onClick={() => setConfirmOpen(true)}
-            disabled={busy}
+            disabled={busy || memberLocked}
             aria-label={tooltip}
             aria-pressed={!enabled}
             // the hover tint is lighter by day: the night's 20% costs the light
             // status text too much contrast.
-            className={`flex items-center justify-center gap-1.5 size-8 md:size-auto md:px-2 md:py-1 rounded border transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait ${
+            className={`flex items-center justify-center gap-1.5 size-8 md:size-auto md:px-2 md:py-1 rounded border transition-colors cursor-pointer disabled:opacity-50 ${memberLocked ? 'disabled:cursor-not-allowed' : 'disabled:cursor-wait'} ${
               enabled
                 ? 'border-success-border bg-success-surface text-success hover:bg-success-solid/10 dark:hover:bg-success-solid/20'
                 : 'border-warning-border bg-warning-surface text-warning hover:bg-warning-solid/10 dark:hover:bg-warning-solid/20'

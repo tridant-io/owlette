@@ -1,5 +1,5 @@
 /**
- * `owlette machine list | get | deployments | reboot | shutdown | screenshot | live-view`.
+ * `owlette machine list | get | deployments | reboot | shutdown | screenshot`.
  *
  * Drives:
  *   GET  /api/sites/{siteId}/machines[/{machineId}[/deployments]]
@@ -11,10 +11,7 @@
  * `Idempotency-Key`. Screenshot is queue → poll → download the signed-url bytes
  * to `--output <path>` (default `screenshot-<machineId>-<timestamp>.png`).
  * Reboot and shutdown poll too, so an agent's active-hours refusal reaches the
- * caller instead of a bare "queued".
- *
- * `live-view` is the only remaining c-tier `stubExit()` shim — remote desktop
- * ships as swoop, so the stub points at `owlette swoop`.
+ * caller instead of a bare "queued". remote desktop is `owlette swoop`.
  */
 
 import { Command } from 'commander';
@@ -31,7 +28,6 @@ import {
   unconfirmedMutationFatal,
   usageFatal,
 } from '../lib/output';
-import { stubExit } from '../lib/stubExit';
 
 interface RoostSummary {
   roostId: string;
@@ -398,22 +394,6 @@ export function registerMachineCommands(program: Command): void {
       process.stdout.write(
         `owlette: screenshot saved to ${outputPath} (${bytes.length} bytes)\n`,
       );
-    });
-
-  machine
-    .command('live-view <machineId>')
-    .description('open a live thumbnail/video stream from the machine (stub)')
-    .requiredOption('--site <siteId>', 'site id that owns the machine')
-    .action((_machineId: string, _opts, cmd) => {
-      const { apiUrl } = loadConfig({ profile: cmd.optsWithGlobals().profile });
-      stubExit({
-        noun: 'machine',
-        verb: 'live-view',
-        reason: 'remote desktop ships as swoop — run `owlette swoop <machineId> --site <siteId>`',
-        dashboardUrl: `${apiUrl}/dashboard`,
-        futurePlan: 'public-api deferred: swoop',
-        cmd,
-      });
     });
 }
 

@@ -31,6 +31,8 @@
  *   5. recursively delete `config/{siteId}` (the site's process configs, display
  *      layouts, restart schedules and presets live there, outside the site
  *      document), then the site document and every subcollection under it.
+ *      Then, last and best effort, the site's stored screenshots: the images live
+ *      in Storage, which no Firestore delete reaches.
  *
  * R2 IS NOT DELETED HERE, and the cascade makes that worse in a way worth stating.
  * The nightly chunk GC (functions/src/chunkGc.ts) enumerates sites with
@@ -58,6 +60,7 @@ import {
 import { deleteFleetCalls } from '@/lib/fleet/calls.server';
 import { revokeFleetSessions } from '@/lib/fleet/session.server';
 import { cancelMovesForSite, switchingMoveForSite } from '@/lib/machineMoves.server';
+import { deleteScreenshotsBestEffort } from '@/lib/screenshotStorage.server';
 import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
 import { removeTridantSite } from '@/lib/tridantSiteRemoval.server';
 
@@ -235,5 +238,8 @@ export async function deleteSite(
     },
   });
 
+  // the images by their folder, the records having gone with the site: last, as
+  // the delete has no bound, and a failure never keeps the site
+  await deleteScreenshotsBestEffort(input.siteId, null, 'deleteSite', db);
   return { kind: 'deleted', siteId: input.siteId };
 }

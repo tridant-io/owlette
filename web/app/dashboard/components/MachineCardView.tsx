@@ -45,6 +45,7 @@ import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import { useDevicePrefs, type DeviceKind, type DeviceSelection } from '@/hooks/useDevicePrefs';
 import { useCanAdminMachine } from '@/hooks/useCanAdminMachine';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { useDisplayState } from '@/hooks/useDisplayState';
 import { DisplayCanvas } from '@/components/charts/DisplayCanvas';
 import { resolveDevice, shouldShowDeviceDropdown } from '@/lib/deviceResolvers';
@@ -87,7 +88,6 @@ interface MachineCardViewProps {
   onCancelRestart?: (machineId: string) => Promise<void>;
   onDismissRestartPending?: (machineId: string) => Promise<void>;
   onScreenshot?: (machineId: string) => void;
-  onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
   onSwoopApp?: (machineId: string) => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
@@ -109,7 +109,7 @@ type MachineCardHandlers = Pick<
   | 'onEditProcess' | 'onDuplicateProcess' | 'onCreateProcess' | 'onKillProcess' | 'onRestartProcess'
   | 'onSetLaunchMode' | 'onConfigureSchedule' | 'onRemoveMachine' | 'onMetricClick'
   | 'onRestart' | 'onShutdown' | 'onCancelRestart' | 'onDismissRestartPending'
-  | 'onScreenshot' | 'onLiveView' | 'onSwoop' | 'onSwoopApp' | 'onSiteSettings'
+  | 'onScreenshot' | 'onSwoop' | 'onSwoopApp' | 'onSiteSettings'
 >;
 
 /** Split out of the map so it can use hooks. */
@@ -206,7 +206,6 @@ const MachineCard = memo(function MachineCard({
   onCancelRestart,
   onDismissRestartPending,
   onScreenshot,
-  onLiveView,
   onSwoop,
   onSwoopApp,
   onSiteSettings,
@@ -217,6 +216,9 @@ const MachineCard = memo(function MachineCard({
   hootLocked,
   planSite,
 }: MachineCardProps) {
+  // a superadmin without a member row runs this machine's processes but changes none of its config (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
+  const canConfigure = isMachineAdmin && !memberLocked;
   const machineId = machine.machineId;
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
@@ -472,7 +474,6 @@ const MachineCard = memo(function MachineCard({
                 activeHoursGuard={activeHoursGuard}
                 onCancelRestart={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
                 onScreenshot={onScreenshot ? () => onScreenshot(machineId) : undefined}
-                onLiveView={onLiveView ? () => onLiveView(machineId) : undefined}
                 swoopCapable={machine.capabilities?.swoop === 1}
                 swoopViewers={machine.swoopViewers}
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
@@ -1063,7 +1064,7 @@ const MachineCard = memo(function MachineCard({
                               ? 'text-info border-info-border'
                               : 'text-muted-foreground border-border/50';
                             // Non-admins: static pill, since the toggle would 403.
-                            if (!isMachineAdmin) {
+                            if (!canConfigure) {
                               return (
                                 <div className="flex items-center h-8">
                                   <span className={`flex items-center px-2.5 md:px-3 text-xs md:text-sm font-medium rounded-md border bg-card ${modeColor}`}>
@@ -1185,6 +1186,7 @@ const MachineCard = memo(function MachineCard({
                           })()}
                           {isMachineAdmin && (
                             <>
+                              {canConfigure && (
                               <IconButton
                                 label={`edit ${process.name}`}
                                 variant="ghost"
@@ -1194,7 +1196,8 @@ const MachineCard = memo(function MachineCard({
                               >
                                 <Pencil className="h-3 w-3" />
                               </IconButton>
-                              {onDuplicateProcess && (
+                              )}
+                              {canConfigure && onDuplicateProcess && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
@@ -1264,7 +1267,7 @@ const MachineCard = memo(function MachineCard({
                   ))}
                 </div>
                 {/* add process Button — admin-only write action */}
-                {isMachineAdmin && (
+                {canConfigure && (
                   <div className="flex justify-center pt-3">
                     <Button
                       variant="ghost"
@@ -1283,7 +1286,7 @@ const MachineCard = memo(function MachineCard({
       )}
 
       {/* add process button for machines with no processes — admin-only */}
-      {!planLocked && isMachineAdmin && (!machine.processes || machine.processes.length === 0) && (
+      {!planLocked && canConfigure && (!machine.processes || machine.processes.length === 0) && (
         <div className="border-t border-border/50 flex justify-center p-3">
           <Button
             variant="ghost"

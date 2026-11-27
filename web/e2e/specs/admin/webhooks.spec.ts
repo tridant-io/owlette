@@ -13,7 +13,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite } from '../../helpers/seed';
+import { grantMembership, revokeMembership, seedSite, TEST_USERS } from '../../helpers/seed';
 import { pickSite } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
@@ -36,6 +36,8 @@ async function clearWebhooks() {
 
 test.beforeEach(async () => {
   await seedSite({ id: SITE_ID, name: SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
+  // the superadmin changes a site only as its member (adr 0021)
+  await grantMembership(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
   await clearWebhooks();
 });
 
@@ -159,4 +161,8 @@ test('deleting a webhook removes the Firestore doc', async ({ page }) => {
   expect(snap.exists).toBe(true);
   expect(snap.data()!.deletedAt).toBeDefined();
   expect(snap.data()!.paused).toBe(true);
+});
+
+test.afterAll(async () => {
+  await revokeMembership(SITE_ID, TEST_USERS.superadmin.uid);
 });

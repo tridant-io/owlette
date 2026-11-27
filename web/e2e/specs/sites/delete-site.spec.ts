@@ -11,7 +11,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { releaseFixtureSite, seedSite } from '../../helpers/seed';
+import { grantMembership, releaseFixtureSite, revokeMembership, seedSite, TEST_USERS } from '../../helpers/seed';
 
 test.use(roleState('superadmin'));
 
@@ -26,11 +26,14 @@ test.beforeEach(async () => {
     owner: 'someone-else',
     timezone: 'UTC',
   });
+  // the superadmin changes a site only as its member (adr 0021)
+  await grantMembership(DELETEABLE_SITE_ID, TEST_USERS.superadmin.uid, 'admin');
 });
 
 // a superadmin's sites sort by name and this one sorts ahead of site-A, so the copy
 // the cancel test keeps would become the current site of later superadmin specs
 test.afterAll(async () => {
+  await revokeMembership(DELETEABLE_SITE_ID, TEST_USERS.superadmin.uid);
   await releaseFixtureSite(DELETEABLE_SITE_ID, 'someone-else');
 });
 

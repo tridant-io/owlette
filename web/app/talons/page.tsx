@@ -19,6 +19,7 @@ import { LoadingWord } from '@/components/LoadingWord';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { PageHeader } from '@/components/PageHeader';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
@@ -49,6 +50,8 @@ export default function TalonsPage() {
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
   const talonsGated = usePlanGated('talons', currentSiteId);
+  // a superadmin without a member row reads the talons and changes none (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
 
   const { machines } = useMachines(currentSiteId);
   const { talons, loading: talonsLoading, error } = useTalons(currentSiteId);
@@ -179,6 +182,7 @@ export default function TalonsPage() {
             </p>
           </div>
 
+          {!memberLocked && (
           <UpgradeGate flag="talons" siteId={currentSiteId} variant="inline" className="flex-shrink-0">
             <Button
               type="button"
@@ -191,6 +195,7 @@ export default function TalonsPage() {
               create talon
             </Button>
           </UpgradeGate>
+          )}
         </div>
 
         {/* Ahead of the loading branch: `loading` is derived from "the listener
@@ -217,7 +222,7 @@ export default function TalonsPage() {
               a talon watches for something — a schedule, a threshold, an event — and acts on it.
             </p>
             {/* the header already carries the upgrade note */}
-            {!talonsGated && (
+            {!talonsGated && !memberLocked && (
               <div className="mt-3 flex justify-center">
                 <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer">
                   <Plus className="mr-1 h-3.5 w-3.5" />

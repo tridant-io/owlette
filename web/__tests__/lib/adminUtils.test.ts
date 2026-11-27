@@ -203,7 +203,8 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     });
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'u1', email: 'u1@owlette.test', ccEmails: [], mutedMachines: ['OTHER-1'], machineIds: null },
+      // listed by the legacy array alone, with no member row: not a member
+      { userId: 'u1', email: 'u1@owlette.test', ccEmails: [], mutedMachines: ['OTHER-1'], machineIds: null, member: false },
     ]);
     expect(mockGetUserByEmail).not.toHaveBeenCalled();
   });
@@ -321,6 +322,34 @@ describe('getSiteAlertRecipients — machine scope', () => {
     expect(mockGetAll).not.toHaveBeenCalled();
   });
 
+  // a site's screens are for its members (adr 0021), so a talon's image reads this
+  it('marks the owner and every active member row a member, and a stale sites[] entry not', async () => {
+    mockSiteDocGet.mockResolvedValue({ data: () => ({ owner: 'owner-uid' }) });
+    mockMembersGet.mockResolvedValue({
+      docs: [
+        row('whole', { status: 'active', role: 'admin' }),
+        row('left', { status: 'removed', role: 'member' }),
+      ],
+    });
+    mockUsersWhereGet.mockResolvedValue({
+      docs: [
+        user('whole', { email: 'whole@owlette.test' }),
+        user('left', { email: 'left@owlette.test' }),
+        user('stale', { email: 'stale@owlette.test' }),
+      ],
+    });
+    mockUserDocGet.mockResolvedValue({ data: () => ({ email: 'owner@owlette.test' }) });
+
+    const recipients = await getSiteAlertRecipients('site-1', 'talonAlerts');
+
+    expect(recipients.map((r) => [r.userId, r.member])).toEqual([
+      ['whole', true],
+      ['left', false],
+      ['stale', false],
+      ['owner-uid', true],
+    ]);
+  });
+
   it('still mails a scoped member whose users doc has no legacy sites[] entry', async () => {
     mockMembersGet.mockResolvedValue({
       docs: [row('row-only', { status: 'active', role: 'member', machineIds: ['m1'] })],
@@ -330,7 +359,7 @@ describe('getSiteAlertRecipients — machine scope', () => {
     const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
 
     expect(recipients).toEqual([
-      { userId: 'row-only', email: 'row-only@owlette.test', ccEmails: [], mutedMachines: ['m9'], machineIds: ['m1'] },
+      { userId: 'row-only', email: 'row-only@owlette.test', ccEmails: [], mutedMachines: ['m9'], machineIds: ['m1'], member: true },
     ]);
     expect(mockUsersDoc).toHaveBeenCalledWith('row-only');
   });

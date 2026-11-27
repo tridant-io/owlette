@@ -245,7 +245,6 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `rebootPending` | map | `{ active, processName, reason, timestamp }`: relaunch attempts ran out. see [restart pending](/docs/dashboard/machine-monitoring#restart-pending). |
 | `rebootState` | map | last fired schedule entry plus the current reboot attempt. |
 | `lastScreenshot` | map or null | `{ url, path, timestamp, sizeKB }`, the latest screenshot. `path` is the storage object; `url` opens it, as in the history below. |
-| `liveView` | map | `{ active, interval, startedAt, expiresAt }`, unix seconds, while live view runs. |
 | `swoopViewers` | number | viewers across live swoop sessions with an unexpired lease, recomputed by the server when sessions change (not on every lease renewal, so it can lag). missing until the first session. |
 | `swoopSeats` | array | the seats `swoopViewers` counts, as `{ uid, displayName, ctl }`, written with it, so the swoop picker can name who is in the session. `displayName` is null when the account has none or is gone, and there is no email: every member whose access covers the machine reads this document. missing until a session changes on the machine. |
 | `configChangeFlag` | boolean | set by the server after process-config writes. nothing in the agent reads it. |
@@ -317,13 +316,13 @@ screenshot history, written by the server after an upload. **access**: members w
 
 | field | type | notes |
 | --- | --- | --- |
-| `url` | string | `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which redirects anyone with access to the machine to a short-lived signed link. older entries hold a storage URL. |
+| `url` | string | `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which redirects a member whose access covers the machine to a short-lived signed link, and refuses a superadmin who is not a member of the site with `403`. older entries hold a storage URL. |
 | `path` | string | the image's storage object, `screenshots/{siteId}/{machineId}/…`. |
 | `timestamp` | timestamp or number | capture time. |
 | `sizeKB` | number | image size. at most 10 MB. |
 | `monitor` | number | the monitor captured, on uploads through the current pipeline. |
 
-the history keeps the newest 20.
+the history keeps every capture, with no limit by age or count, until a site owner or admin deletes it, the machine is removed or moved to another site, or the site is deleted; each of those deletes the images under `screenshots/{siteId}/{machineId}/` too. the screenshot window lists the newest 20.
 
 ### `.../installed_software/{softwareId}`
 

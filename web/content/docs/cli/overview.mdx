@@ -152,7 +152,7 @@ global flags work before or after the command: `owlette --json machine list --si
 
 ## noun matrix
 
-every command lives under one of these top-level groups. **ready** verbs hit a public API today. a **stub** reserves the name and exits 3 with a pointer to what replaces it. **planned** means the API exists but the CLI group does not yet.
+every command lives under one of these top-level groups. **ready** verbs hit a public API today. **planned** means the API exists but the CLI group does not yet.
 
 ### top-level verbs
 
@@ -170,7 +170,6 @@ every command lives under one of these top-level groups. **ready** verbs hit a p
 |---|---|---|---|
 | [`roost`](/docs/cli/reference/roost) | ready | `push` `list` `get` `diff` `versions` `deploy` | content-addressed project distribution |
 | [`machine`](/docs/cli/reference/machine) | ready | `list` `get` `deployments` `reboot` `shutdown` `screenshot` | inspect machines on any platform and queue reboot, shutdown and screenshot commands |
-| [`machine live-view`](/docs/cli/reference/machine#live-view) | stub | — | remote desktop ships as swoop, so the stub points at `owlette swoop` |
 | [`swoop`](/docs/cli/reference/swoop) | ready | — | open the remote-desktop viewer for a machine in owlette swoop when it is installed, and in your browser otherwise |
 | [`audit-log`](/docs/cli/reference/audit-log) | ready | `list` `get` | site audit log + hash-chain verification |
 | [`quota`](/docs/cli/reference/quota) | ready | `show` `history` | site storage + bandwidth usage |
@@ -214,9 +213,8 @@ scripts can branch on these; they're stable and meaningful:
 | `0` | success | `owlette roost push ./dist --to rst_abc` |
 | `1` | generic error: network failure, API error, unexpected state, or a usage error caught before the command runs (a missing required flag or argument, an unknown command) | server unreachable; invalid response shape; `owlette roost push` with no path |
 | `2` | usage error the CLI catches: no token configured, or a flag value it rejects | `owlette machine screenshot m-1 --site site-1 --monitor all` |
-| `3` | **stub: the name exists but has no public API** | `owlette machine live-view m-1 --site site-1` |
 
-exit code `3` is deliberately distinct from `1`, so CI can tell "this will never work until the backend ships" apart from "transient failure, retry". per-command pages list their own codes.
+per-command pages list their own codes.
 
 ---
 
@@ -238,10 +236,6 @@ commands that accept `--json` write one JSON document to stdout. newer commands 
 
 when a command surfaces API problem+json details, the stable `code` values match the API's (`scope_insufficient`, `token_expired`, `idempotency_key_mismatch`, `version_stale`, `rate_limited`, `unsupported_version`).
 
-**stub (exit 3 only)**
-```json
-{ "ok": false, "stub": true, "noun": "machine", "reason": "remote desktop ships as swoop — run `owlette swoop <machineId> --site <siteId>`", "dashboard_url": "https://owlette.app/dashboard", "future_plan": "public-api deferred: swoop" }
-```
 
 ---
 

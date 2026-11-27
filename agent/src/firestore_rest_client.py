@@ -368,7 +368,7 @@ class FirestoreRestClient:
                 #
                 # CRITICAL: merge=True MUST send an updateMask. Without one,
                 # PATCH is a full document replacement and deletes every field
-                # not in the payload — set_machine_flag wiped online/
+                # not in the payload — a merged flag write once wiped online/
                 # lastHeartbeat/metrics on every call, showing as a 5s offline
                 # blip until the next _upload_metrics.
                 url = f"{self.base_url}/{path}"

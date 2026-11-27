@@ -52,6 +52,11 @@ const mockCancelMovesForSite = jest.fn();
 jest.mock('@/lib/machineMoves.server', () => ({
   cancelMovesForSite: (...a: unknown[]) => mockCancelMovesForSite(...a),
 }));
+// what the helper deletes, and that a failure is only logged, is pinned in screenshotStorage.delete.test.ts
+const mockDeleteSiteScreenshots = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  deleteScreenshotsBestEffort: (...a: unknown[]) => mockDeleteSiteScreenshots(...a),
+}));
 
 import {
   deleteOwnAccount,
@@ -456,6 +461,37 @@ describe('deleteOwnAccount — billing', () => {
     expect(mockStopBillingBeforeDelete).not.toHaveBeenCalled();
     expect(mockRemoveTridantSite).not.toHaveBeenCalled();
     expect(mockUnlinkTridantAccount).not.toHaveBeenCalled();
+  });
+});
+
+// the machine drain takes only the machine documents, and the images live in Storage
+describe('deleteOwnAccount — screenshots', () => {
+  it("deletes each sole-owner site's screenshots last, once the site is gone", async () => {
+    const userId = 'uid_alice';
+    const seedDocs = seedUser(userId, ['site-a', 'site-b']);
+    seedDocs['sites/site-b'] = { exists: true, data: { name: 'site-b', owner: 'uid_bob' } };
+    const fake = buildFakeDb({ seedDocs, seedCollections: seedSubs(['site-a'], { machines: 1, deployments: 0, logs: 0 }) });
+    let siteGone = false;
+    mockDeleteSiteScreenshots.mockImplementationOnce(async () => {
+      siteGone = fake.deleteCalls.includes('sites/site-a');
+    });
+
+    const result = await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null });
+
+    expect(result.kind).toBe('ok');
+    // the member site's screenshots are someone else's
+    expect(mockDeleteSiteScreenshots).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSiteScreenshots).toHaveBeenCalledWith('site-a', null, 'deleteOwnAccount', fake.db);
+    expect(siteGone).toBe(true);
+  });
+
+  it('deletes no screenshots on a dry run', async () => {
+    const userId = 'uid_alice';
+    const fake = buildFakeDb({ seedDocs: seedUser(userId, ['site-a']) });
+
+    await deleteOwnAccount({ userId, operationId: 'op_1', db: fake.db, auth: null, storage: null, dryRun: true });
+
+    expect(mockDeleteSiteScreenshots).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,8 @@ import {
   isSiteScopedCapability,
   MACHINE_CAPABILITIES,
   machineScopeOf,
+  isMemberRole,
+  isSiteMember,
   siteStanding,
   type Actor,
   type MachineActor,
@@ -121,8 +123,8 @@ describe('Capability enum', () => {
 
 describe('SiteRoleCapabilityMatrix', () => {
   it('member is a read-only operator: it may watch a machine and nothing else', () => {
-    // Both watch capabilities, no control one: MACHINE_VIEW is the screenshot /
-    // live-view slideshow, MACHINE_REMOTE_VIEW the swoop feed (owner ruling —
+    // Both watch capabilities, no control one: MACHINE_VIEW is the screenshot,
+    // MACHINE_REMOTE_VIEW the swoop feed (owner ruling —
     // members watch by default, gated per site by `membersMayWatch` in policy).
     expect([...SiteRoleCapabilityMatrix.member].sort()).toEqual(
       ['MACHINE_VIEW', 'MACHINE_REMOTE_VIEW'].sort()
@@ -354,8 +356,8 @@ describe('hasCapability — site-scope enforcement edge cases', () => {
   it('member is denied site-scoped WRITE capabilities even on their assigned site (but the watch capabilities are allowed)', () => {
     const actor = userActor({ role: 'member', siteRoles: { ['site_a']: 'member' } });
     for (const cap of SITE_SCOPED) {
-      // The two read-class capabilities members hold: MACHINE_VIEW (screenshot /
-      // live view) and MACHINE_REMOTE_VIEW (watching a swoop stream). Every
+      // The two read-class capabilities members hold: MACHINE_VIEW (screenshots)
+      // and MACHINE_REMOTE_VIEW (watching a swoop stream). Every
       // other site-scoped cap is a write or a control verb, and denied.
       const expected =
         cap === Capability.MACHINE_VIEW || cap === Capability.MACHINE_REMOTE_VIEW;
@@ -1197,5 +1199,37 @@ describe('FLEET_SETTINGS_MANAGE — granting machines the fleet mcp', () => {
     for (const name of Object.keys(SystemCapabilityMatrix) as SystemActorName[]) {
       expect(hasCapability(systemActor({ name, siteId: 'site_a' }), Capability.FLEET_SETTINGS_MANAGE, 'site_a')).toBe(false);
     }
+  });
+});
+
+// a site's screens are for its members (adr 0021): the member row decides, not the role
+describe('isMemberRole', () => {
+  it('is a member for any role a member row carries, and not for none', () => {
+    for (const role of ['owner', 'admin', 'member'] as const) expect(isMemberRole(role)).toBe(true);
+    expect(isMemberRole(null)).toBe(false);
+    expect(isMemberRole(undefined)).toBe(false);
+  });
+});
+
+describe('isSiteMember', () => {
+  it('is true for a person with a member row on the site, whatever its role', () => {
+    for (const role of ['owner', 'admin', 'member'] as const) {
+      expect(isSiteMember(userActor({ siteRoles: { site_a: role } }), 'site_a')).toBe(true);
+    }
+  });
+
+  it('is false for a superadmin with no member row there, who still holds every capability', () => {
+    const superadmin = userActor({ role: 'superadmin', siteRoles: {} });
+    expect(hasCapability(superadmin, Capability.MACHINE_REMOTE_VIEW, 'site_a', 'm1')).toBe(true);
+    expect(isSiteMember(superadmin, 'site_a')).toBe(false);
+  });
+
+  it('is true for a superadmin added to the site', () => {
+    expect(isSiteMember(userActor({ role: 'superadmin', siteRoles: { site_a: 'member' } }), 'site_a')).toBe(true);
+  });
+
+  it("reads only the site's own entry, never an inherited one", () => {
+    expect(isSiteMember(userActor({ siteRoles: { site_a: 'admin' } }), 'site_b')).toBe(false);
+    expect(isSiteMember(userActor({ siteRoles: {} }), 'constructor')).toBe(false);
   });
 });

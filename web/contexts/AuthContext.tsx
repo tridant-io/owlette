@@ -27,6 +27,7 @@ import * as Sentry from '@sentry/nextjs';
 // client bundle; `import type` is erased at compile time.
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
+import { isMemberRole } from '@/lib/capabilities';
 import { scopeCovers } from '@/lib/machineAccess';
 import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import { emitMembershipFallback, emitMembershipListenerError } from '@/lib/membershipMetrics';
@@ -372,9 +373,21 @@ export function computeSiteRole(
 }
 
 /**
+ * whether the caller holds a member row on `siteId`, scoped or not. a superadmin
+ * reaches every site without one, and a site's screens are for its members
+ * (adr 0021): the gate for showing them. the server still decides.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeIsSiteMember(roleMap: Map<string, SiteRole>, siteId: string): boolean {
+  return isMemberRole(roleMap.get(siteId));
+}
+
+/**
  * the caller's effective swoop mode on `siteId`, given the site's
- * `membersMayWatch`. a superadmin holds no member rows and always controls; no
- * row, or an unresolved session, is none.
+ * `membersMayWatch`. a superadmin controls where they hold a member row and has
+ * none elsewhere, since a site's screens are for its members (adr 0021); no row,
+ * or an unresolved session, is none.
  *
  * exported so it's testable without AuthProvider.
  */
@@ -385,7 +398,7 @@ export function computeSwoopMode(
   siteId: string,
   membersMayWatch: boolean
 ): SwoopMode {
-  if (role === 'superadmin') return 'control';
+  if (role === 'superadmin') return isMemberRole(roleMap.get(siteId)) ? 'control' : 'none';
   if (role === null) return 'none';
   const siteRole = roleMap.get(siteId);
   if (siteRole === undefined) return 'none';
@@ -464,6 +477,8 @@ interface AuthContextType {
   isMachineAdmin: (siteId: string, machineId: string) => boolean;
   /** the role map's value for `siteId`, scoped or not. for labels only, never a gate. */
   siteRole: (siteId: string) => SiteRole | null;
+  /** holds a member row on `siteId`: a superadmin without one sees none of its screens. */
+  isSiteMember: (siteId: string) => boolean;
   /**
    * the caller's effective swoop mode on `siteId`; `membersMayWatch` comes from
    * the site's swoop settings. the dashboard offers no swoop at none, and the
@@ -511,6 +526,7 @@ const AuthContext = createContext<AuthContextType>({
   machineScope: () => null,
   isMachineAdmin: () => false,
   siteRole: () => null,
+  isSiteMember: () => false,
   swoopMode: () => 'none',
   userSites: [],
   lastSiteId: null,
@@ -1345,6 +1361,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (siteId: string) => computeSiteRole(roleMap, siteId),
     [roleMap]
   );
+  const isSiteMember = useCallback(
+    (siteId: string) => computeIsSiteMember(roleMap, siteId),
+    [roleMap]
+  );
   const swoopMode = useCallback(
     (siteId: string, membersMayWatch: boolean) =>
       computeSwoopMode(role, roleMap, swoopMap, siteId, membersMayWatch),
@@ -1362,6 +1382,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     machineScope,
     isMachineAdmin,
     siteRole,
+    isSiteMember,
     swoopMode,
     userSites,
     lastSiteId,
@@ -1381,7 +1402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, isSiteMember, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

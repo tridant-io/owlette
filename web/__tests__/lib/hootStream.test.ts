@@ -141,6 +141,28 @@ describe('local hoot takes a conversation only from an agent that cannot change 
 
     expect(mockBuildExecutableTools).not.toHaveBeenCalled();
   });
+
+  it('a superadmin who is not a member of the site stays on the server, which offers them no screenshot', async () => {
+    // the local path runs tools in the agent, where the web server could not withhold a screenshot
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      role: 'superadmin',
+      standing: { role: null, swoopMode: null, machineIds: null },
+      isSuperadmin: true,
+      isSiteAdmin: true,
+      isSiteOwner: false,
+    });
+
+    await run({ cortexStatus, agent_version: '4.2.0', capabilities: { localHootLaunchGate: 1 } });
+
+    expect(mockBuildExecutableTools).toHaveBeenCalledTimes(1);
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ isSiteMember: false });
+  });
+
+  it('tells the tools a member of the site may see the screen', async () => {
+    await run({ cortexStatus, agent_version: '4.1.25' });
+
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ isSiteMember: true });
+  });
 });
 
 describe('conversationsToolDefs', () => {

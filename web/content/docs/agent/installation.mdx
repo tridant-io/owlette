@@ -90,7 +90,7 @@ sudo usermod -aG owlette <account>
 
 then pair from the app: click the owlette icon in the top bar, choose **open owlette**, then **join site** in the window's footer. as on macOS, the app pairs a new machine with owlette.app; use the [pairing preseed](#the-pairing-preseed-macos-and-linux) for dev.owlette.app, or for a machine nobody is standing in front of.
 
-**no screenshots on Linux yet.** the machine's menu still shows **live view** and **screenshot**, but both fail on Linux for now: the machine refuses every capture, crash screenshots included, rather than send a black frame. it cannot host swoop either — see [platform support](/docs/reference/platform-support#screens).
+**no screenshots on Linux yet.** the machine's menu still shows **screenshot**, but it fails on Linux for now: the machine refuses every capture, crash screenshots included, rather than send a black frame. it cannot host swoop either — see [platform support](/docs/reference/platform-support#screens).
 
 **Ubuntu Server, or any box without a desktop:** the service runs the same; the app's user unit is tied to the graphical session, so with no desktop it never starts and never fails. metrics, remote commands and roost work. managed processes do not start: off Windows they run as the user signed in at the desktop, and with nobody there the agent launches none. hoot works, since its tools run in the service, apart from `show_notification`, which needs the owlette app running in a desktop session; [local hoot](/docs/dashboard/hoot#local-hoot-public-conversations-api-only) runs as the signed-in user and does not start. pair with the preseed, or afterwards from a shell:
 

@@ -50,6 +50,13 @@ jest.mock('@/lib/tridantSiteRemoval.server', () => ({
   removeTridantSite: (...args: unknown[]) => mockRemoveTridantSite(...args),
 }));
 
+// the images live in Storage; what the helper deletes, and that a failure is only
+// logged, is pinned in screenshotStorage.delete.test.ts
+const mockDeleteSiteScreenshots = jest.fn(async (..._args: unknown[]) => undefined);
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  deleteScreenshotsBestEffort: (...args: unknown[]) => mockDeleteSiteScreenshots(...args),
+}));
+
 // what tridant bills for a site with no billing pointer: none, unless a test says so.
 const mockGetSiteEntitlements = jest.fn(async (_siteId: string): Promise<unknown> => ({ ok: true, billing: null }));
 jest.mock('@/lib/tridantEntitlements.server', () => ({
@@ -446,6 +453,26 @@ describe('assignSiteToUser', () => {
     expect(db.docs.get('users/alice')?.sites).toEqual(['site-a', 'site-b']);
   });
 
+  // a superadmin adding anyone, themselves included, shows in each site's own
+  // audit log, where its owner reads it, and not only in the platform's (adr 0021)
+  it("writes a member_added row to the audit log of each site it adds someone to", async () => {
+    const db = new FakeDb();
+    db.seed('users/alice', { sites: ['site-a'] });
+    db.seed('sites/site-a', { name: 'a' });
+    db.seed('sites/site-b', { name: 'b' });
+    db.seed('sites/site-a/members/alice', { uid: 'alice', role: 'member', status: 'active' });
+
+    await assignSiteToUser(ctx, { uid: 'alice', siteIds: ['site-a', 'site-b'], db: db.asFirestore() });
+
+    const siteRows = mockEmitMutation.mock.calls
+      .map((call) => call[0] as { kind: string; siteId: string; targetId?: string; attributes: Record<string, unknown> })
+      .filter((event) => event.kind === 'site_member_mutated');
+    // alice was already on site-a: only site-b gains a member
+    expect(siteRows).toEqual([
+      expect.objectContaining({ siteId: 'site-b', targetId: 'alice', attributes: expect.objectContaining({ verb: 'member_added' }) }),
+    ]);
+  });
+
   it('rejects unknown sites without mutating membership', async () => {
     const db = new FakeDb();
     db.seed('users/alice', { sites: [] });
@@ -537,6 +564,29 @@ describe('deleteUser', () => {
         attributes: expect.objectContaining({ verb: 'soft_deleted' }),
       }),
     );
+  });
+
+  // a transferred site's own audit log names who took it over, as transfer-ownership's does (adr 0021)
+  it("writes each transferred site's own audit row, naming the new owner", async () => {
+    mockDeleteCascade.mockResolvedValue({
+      kind: 'deleted',
+      deletedAt: 123,
+      transferredSites: ['site-a', 'site-b'],
+      revokedKeyIds: [],
+    });
+
+    await deleteUser(ctx, { uid: 'alice', successorUid: 'bob', db: new FakeDb().asFirestore() });
+
+    for (const siteId of ['site-a', 'site-b']) {
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'site_member_mutated',
+          siteId,
+          targetId: 'bob',
+          attributes: expect.objectContaining({ verb: 'ownership_transferred', previousOwnerUid: 'alice', newOwnerUid: 'bob' }),
+        }),
+      );
+    }
   });
 
   it('reports the authored-talon count without touching them by default', async () => {
@@ -1277,6 +1327,39 @@ describe('site CRUD actions', () => {
 
     expect(order[0]).toBe('batch-committed');
     expect(order[order.length - 1]).toBe('site-deleted');
+  });
+
+  it("deleteSite deletes the site's stored screenshots last, after the cascade", async () => {
+    // a failed cascade leaves the site, and its images, for the retry to find
+    const db = new FakeDb();
+    db.seed('sites/site-a', { name: 'a' });
+    const order: string[] = [];
+    mockDeleteSiteScreenshots.mockImplementationOnce(async () => {
+      order.push('screenshots-deleted');
+    });
+    const real = db.recursiveDelete.bind(db);
+    db.recursiveDelete = async (ref: FakeDoc) => {
+      order.push('cascade');
+      return real(ref);
+    };
+
+    await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+    expect(mockDeleteSiteScreenshots).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSiteScreenshots).toHaveBeenCalledWith('site-a', null, 'deleteSite', expect.anything());
+    expect(order[order.length - 1]).toBe('screenshots-deleted');
+    expect(order).toContain('cascade');
+  });
+
+  it('deleteSite deletes no screenshots when the cascade fails', async () => {
+    const db = new FakeDb();
+    db.seed('sites/site-a', { name: 'a' });
+    db.recursiveDelete = async () => {
+      throw new Error('cascade down');
+    };
+
+    await expect(deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() })).rejects.toThrow('cascade down');
+    expect(mockDeleteSiteScreenshots).not.toHaveBeenCalled();
   });
 
   it('deleteSite cancels every move into or out of the site, before it revokes credentials', async () => {

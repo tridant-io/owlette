@@ -29,6 +29,7 @@ import { LoadingWord } from '@/components/LoadingWord';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { useUninstall } from '@/hooks/useUninstall';
 import { describeCommandError } from '@/lib/activeHours';
 import { PRE_FLIGHT_DEPLOYMENT_STATUSES, retryableTarget } from '@/lib/deploymentStatuses';
@@ -140,6 +141,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
   onCancel,
   retrying,
   cancelling,
+  memberLocked,
   timeDisplayMode,
   userTz,
   siteTz,
@@ -157,6 +159,8 @@ const DeploymentRow = React.memo(function DeploymentRow({
   retrying: ReadonlySet<string>;
   /** in-flight cancel keys, `${deploymentId}:${machineId}`. */
   cancelling: ReadonlySet<string>;
+  /** a superadmin without a member row: cancelling only, no retry, uninstall or delete (adr 0021). */
+  memberLocked: boolean;
   timeDisplayMode: 'user' | 'machine' | 'site';
   userTz: string | undefined;
   siteTz: string | undefined;
@@ -216,6 +220,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
               <ChevronDown className={`h-4 w-4 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
             </Button>
           </CollapsibleTrigger>
+          {!memberLocked && (
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -273,6 +278,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
         </div>
       </div>
 
@@ -310,7 +316,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                           <span className="text-xs text-muted-foreground">{target.progress}%</span>
                         )}
                         {getStatusBadge(target.status)}
-                        {retryableTarget(target) && (() => {
+                        {!memberLocked && retryableTarget(target) && (() => {
                           const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
                           return (
                             <Tooltip>
@@ -380,6 +386,8 @@ export default function DeploymentsPage() {
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
   const deploymentsGated = usePlanGated('deployments', currentSiteId);
+  // a superadmin without a member row reads the deployments and cancels one, nothing else (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [initialSoftwareName, setInitialSoftwareName] = useState<string | undefined>(undefined);
@@ -687,6 +695,7 @@ export default function DeploymentsPage() {
               beside `new deployment` and the pair is wider than a phone. */}
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
             <UpdateOwletteButton siteId={currentSiteId} machines={machines} />
+            {!memberLocked && (
             <UpgradeGate flag="deployments" siteId={currentSiteId} variant="inline">
               <Button
                 onClick={() => setDeployDialogOpen(true)}
@@ -696,6 +705,7 @@ export default function DeploymentsPage() {
                 new deployment
               </Button>
             </UpgradeGate>
+            )}
           </div>
         </div>
           );
@@ -720,7 +730,7 @@ export default function DeploymentsPage() {
               <p className="text-foreground font-medium mb-1">no deployments yet</p>
               <p className="text-sm text-muted-foreground mb-4">create your first deployment to install software across your machines</p>
               {/* the header already carries the upgrade note */}
-              {!deploymentsGated && (
+              {!deploymentsGated && !memberLocked && (
                 <Button
                   onClick={() => setDeployDialogOpen(true)}
                   className="cursor-pointer"
@@ -746,6 +756,7 @@ export default function DeploymentsPage() {
                   onDelete={handleDeleteFromRow}
                   onCancel={handleCancelTarget}
                   cancelling={cancelling}
+                  memberLocked={memberLocked}
                   timeDisplayMode={userPreferences.timeDisplayMode || 'machine'}
                   userTz={userPreferences.timezone}
                   siteTz={siteTimezone}
