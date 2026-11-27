@@ -14,9 +14,11 @@
  * no streamer and no swoop on site-A here: the page refuses the session and
  * stays put with its bar, which is all the title bar needs.
  *
- * the step-up in the app goes through the browser: the app's dialog opens the
- * verify page, a signed-in browser passes a code there, and the app's poll
- * retries the session, which the server now grants without a proof. the app
+ * an account's passkey in the app goes through the browser: the app's dialog
+ * opens the verify page, a signed-in browser passes a code there, and the app's
+ * poll retries the session, which the server now grants without a proof. an
+ * account with no passkey enters its code in the app, and one with no
+ * authenticator app is never asked for an authenticator code. the app
  * is a fresh context with the app's ua, signed in through app-link as the real
  * one is; its popup only gives up the url the real app hands the system browser.
  * a second factor the browser passed under five minutes ago is itself the
@@ -25,7 +27,7 @@
  */
 
 import crypto from 'crypto';
-import { test, expect, devices, type Page } from '@playwright/test';
+import { test, expect, devices, type Browser, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { E2E_BASE_URL, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -530,7 +532,12 @@ test.describe('in a browser — signed out', () => {
   test('the two-factor screen offers a passkey, with no title bar and no toast', async ({ page }) => {
     const user = await seedDedicatedUser(dedicatedUser('member', `browser-passkey-${Date.now()}`));
     await getAdminDb().collection('users').doc(user.uid).set(
-      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: authenticator.generateSecret() },
+      {
+        mfaEnrolled: true,
+        requiresMfaSetup: false,
+        mfaSecret: authenticator.generateSecret(),
+        mfaFactors: { totp: true, passkeys: 1 },
+      },
       { merge: true },
     );
     await watchToasts(page);
@@ -588,12 +595,12 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     await getAdminDb().doc(`sites/${STEP_SITE}/settings/swoop`).set({ enabled: true }, { merge: true });
   });
 
-  /** a totp admin of the step-up site, and its secret. */
-  async function seedTotpAdmin(tag: string) {
+  /** a totp admin of the step-up site, with `passkeys` passkeys beside it, and its secret. */
+  async function seedTotpAdmin(tag: string, passkeys = 0) {
     const user = await seedDedicatedUser(dedicatedUser('member', `${tag}-${SUFFIX}`));
     const secret = authenticator.generateSecret();
     await getAdminDb().collection('users').doc(user.uid).set(
-      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys: 0 } },
+      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys } },
       { merge: true },
     );
     await grantMembership(STEP_SITE, user.uid, 'admin');
@@ -722,7 +729,8 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     page,
     browser,
   }) => {
-    const { user, secret } = await seedTotpAdmin('stepup');
+    // the browser check stands in for a passkey, so the account holds one beside its authenticator
+    const { user, secret } = await seedTotpAdmin('stepup', 1);
     const spent = await browserSignIn(page, user, secret);
 
     // the app, signed in from that browser, carrying its second factor, passed
@@ -773,6 +781,106 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       expect(grant.request().postDataJSON()).not.toHaveProperty('mfaProof');
       expect(((await grant.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
       await expect(dialog).toBeHidden();
+    } finally {
+      await app.close();
+    }
+  });
+
+  /** the app, signed in from `page`'s browser, its second factor dated past standing in for the step-up. */
+  async function openAgedApp(page: Page, browser: Browser) {
+    const code = await mintAppLink(page);
+    await getAdminDb()
+      .doc(`app_links/${crypto.createHash('sha256').update(code).digest('hex')}`)
+      .update({ mfaCompletedAt: Date.now() - 10 * 60 * 1000 });
+    const app = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
+    const appPage = await app.newPage();
+    await fakeBridge(appPage);
+    await appPage.goto(`/app-link?code=${code}&next=${encodeURIComponent(STEP_SESSION)}`);
+    await expect(appPage).toHaveURL(new RegExp(`${STEP_SESSION}$`), { timeout: 20_000 });
+    return { app, appPage };
+  }
+
+  test('an authenticator-only account enters its code in the app, with no browser check offered', async ({ page, browser }) => {
+    const { user, secret } = await seedTotpAdmin('stepup-totp');
+    const spent = await browserSignIn(page, user, secret);
+    const { app, appPage } = await openAgedApp(page, browser);
+    try {
+      const dialog = appPage.getByRole('dialog');
+      await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+      await expect(dialog.getByRole('button', { name: 'verify in your browser' })).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: 'use a passkey' })).toHaveCount(0);
+
+      const granted = appPage.waitForResponse(
+        (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 45_000 },
+      );
+      await dialog.getByLabel('authenticator code').fill(await freshTotp(appPage, secret, spent));
+      await dialog.getByRole('button', { name: 'confirm' }).click();
+      expect(((await (await granted).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+      await expect(dialog).toBeHidden();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test('a passkey-only account: the app signs in with a backup code and says how to use the passkey, and its step-up goes to the browser, never to an authenticator code', async ({
+    page,
+    browser,
+  }) => {
+    const user = await seedDedicatedUser(dedicatedUser('member', `stepup-passkey-${SUFFIX}`));
+    const hash = (code: string) => crypto.createHash('sha256').update(code).digest('hex');
+    await getAdminDb().collection('users').doc(user.uid).set(
+      {
+        mfaEnrolled: true,
+        requiresMfaSetup: false,
+        // the two sign-ins below spend two; the third is the one the dialog offers
+        mfaFactors: { totp: false, passkeys: 1, backupCodes: 3 },
+        backupCodes: [hash('ABCDEF12'), hash('BCDEF123'), hash('CDEF1234')],
+      },
+      { merge: true },
+    );
+    await grantMembership(STEP_SITE, user.uid, 'admin');
+
+    // signing in to the app by email: its two-factor screen
+    const emailApp = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
+    try {
+      const appPage = await emailApp.newPage();
+      await fakeBridge(appPage);
+      await appEmailSignIn(appPage, user);
+      await expect(appPage).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+      await expect(
+        appPage.getByText('passkeys cannot be used inside owlette swoop — sign in with your browser to use yours.'),
+      ).toBeVisible();
+      await expect(appPage.getByRole('button', { name: /passkey/ })).toHaveCount(0);
+      await expect(appPage.getByPlaceholder('000000')).toHaveCount(0);
+      await expect(appPage.getByRole('button', { name: 'use authenticator app instead' })).toHaveCount(0);
+      await appPage.getByPlaceholder('backup code').fill('ABCDEF12');
+      await appPage.getByRole('button', { name: 'verify', exact: true }).click();
+      await expect(appPage).not.toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    } finally {
+      await emailApp.close();
+    }
+
+    // signing in in the browser: the passkey, or a backup code behind its link
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await page.getByRole('button', { name: 'use a backup code instead' }).click();
+    await page.getByPlaceholder('backup code').fill('BCDEF123');
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+
+    const { app, appPage } = await openAgedApp(page, browser);
+    try {
+      const dialog = appPage.getByRole('dialog');
+      await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+      await expect(dialog.getByRole('button', { name: 'verify in your browser' })).toBeVisible();
+      await expect(dialog.getByLabel('authenticator code')).toHaveCount(0);
+      await expect(dialog.getByText('or enter a code')).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: 'use a backup code instead' })).toBeVisible();
     } finally {
       await app.close();
     }

@@ -7,12 +7,19 @@
  * `/api/auth/session` every page load), so writers keep a denormalized tally
  * instead of querying `users/{uid}/passkeys` at session time:
  *
- *   users/{uid}.mfaFactors  = { totp: boolean, passkeys: number }
+ *   users/{uid}.mfaFactors  = { totp: boolean, passkeys: number, backupCodes: number }
  *   users/{uid}.mfaEnrolled = mfaFactors.totp || mfaFactors.passkeys > 0
+ *
+ * `backupCodes` counts the unused codes, so a second-factor screen offers one
+ * only when there is one to enter. Codes are recovery material, not a factor:
+ * the count never moves `mfaEnrolled`.
  *
  * Rules:
  * - Only `applyMfaFactorChange` may write these fields; a second writer
- *   re-opens the drift this denormalization contains.
+ *   re-opens the drift this denormalization contains. The one exception is the
+ *   backup-code count, written by `backupCodeCountUpdate` in the same `update()` as
+ *   the sheet it counts, wherever a code is spent or a sheet replaced outside a
+ *   factor change: that moves no gate and must end no session.
  * - It owns `requiresMfaSetup` in BOTH directions. Re-arming on zero factors
  *   puts an account back into mandatory setup; clearing it is equally
  *   mandatory, or a passkey-only signup is bounced to `/setup-2fa` forever.
@@ -28,6 +35,44 @@ import { getAdminDb } from '@/lib/firebase-admin';
 export interface MfaFactorInventory {
   totp: boolean;
   passkeys: number;
+  /**
+   * Unused backup codes. Absent on a record written before the count existed,
+   * which reads as unknown, never as zero.
+   */
+  backupCodes?: number;
+}
+
+/** Field path of the backup-code count, for an `update()`. */
+const BACKUP_CODE_COUNT_FIELD = 'mfaFactors.backupCodes';
+
+/**
+ * The backup-code count for the sheet an `update()` leaves behind, to spread
+ * into that same update: `{ backupCodes: remaining, ...backupCodeCountUpdate(remaining) }`.
+ */
+export function backupCodeCountUpdate(sheet: readonly unknown[]): Record<string, number> {
+  return { [BACKUP_CODE_COUNT_FIELD]: sheet.length };
+}
+
+/** The stored backup-code count, or undefined when the record has none yet. */
+function storedBackupCodeCount(
+  userData: FirebaseFirestore.DocumentData | undefined,
+): number | undefined {
+  const count = (userData?.mfaFactors as Record<string, unknown> | undefined)?.backupCodes;
+  return isValidCount(count) ? count : undefined;
+}
+
+/**
+ * Where a code was refused and the sheet stays as it is: count it when the
+ * record's count is missing or wrong, so a record from before the count heals
+ * on its next try.
+ */
+export function recountBackupCodes(
+  tx: FirebaseFirestore.Transaction,
+  userRef: FirebaseFirestore.DocumentReference,
+  userData: FirebaseFirestore.DocumentData | undefined,
+  sheet: readonly unknown[],
+): void {
+  if (storedBackupCodeCount(userData) !== sheet.length) tx.update(userRef, backupCodeCountUpdate(sheet));
 }
 
 /** The inventory of an account with no second factor at all. */
@@ -74,8 +119,8 @@ export function deriveMfaEnrolled(inv: MfaFactorInventory): boolean {
   return inv.totp || inv.passkeys > 0;
 }
 
-/** A stored passkey count is only trustworthy as a non-negative integer. */
-function isValidPasskeyCount(value: unknown): value is number {
+/** A stored count (passkeys, backup codes) is only trustworthy as a non-negative integer. */
+function isValidCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
@@ -99,7 +144,7 @@ function hasWellFormedFactors(
   const stored = userData?.mfaFactors;
   if (typeof stored !== 'object' || stored === null) return false;
   const rec = stored as Record<string, unknown>;
-  return typeof rec.totp === 'boolean' && isValidPasskeyCount(rec.passkeys);
+  return typeof rec.totp === 'boolean' && isValidCount(rec.passkeys);
 }
 
 /**
@@ -124,7 +169,7 @@ export function normalizeMfaFactors(
   const totp =
     typeof rec?.totp === 'boolean' ? rec.totp : userData?.mfaEnrolled === true;
 
-  const passkeys = isValidPasskeyCount(rec?.passkeys)
+  const passkeys = isValidCount(rec?.passkeys)
     ? rec.passkeys
     : clampPasskeys(Number.isFinite(passkeyCount) ? passkeyCount : 0);
 
@@ -181,7 +226,7 @@ async function applyInTx(
   // passkeyCount=0, so a TOTP-only change writes `passkeys: 0` over real
   // credentials and the gate fails OPEN once TOTP is removed.
   const data = snap.data();
-  const storedPasskeysTrustworthy = isValidPasskeyCount(
+  const storedPasskeysTrustworthy = isValidCount(
     (data?.mfaFactors as Record<string, unknown> | undefined)?.passkeys,
   );
   const mustRecount =
@@ -209,12 +254,22 @@ async function applyInTx(
     passkeys: clampPasskeys(nextPasskeys),
   };
 
-  // (5) `extraUpdate` is spread last so a caller can pair an atomic cleanup
+  // (5) The backup-code count follows the sheet this write leaves behind: the
+  // one `extraUpdate` puts in place, else, on a record with no count yet, the
+  // stored one. A counted record keeps its count through the merge.
+  const replacement = extraUpdate?.backupCodes;
+  const sheet = Array.isArray(replacement) ? replacement : data?.backupCodes;
+  const countSheet = Array.isArray(replacement) || storedBackupCodeCount(data) === undefined;
+  const mfaFactors = countSheet
+    ? { ...next, backupCodes: Array.isArray(sheet) ? sheet.length : 0 }
+    : next;
+
+  // (6) `extraUpdate` is spread last so a caller can pair an atomic cleanup
   // (`mfaSecret`, `backupCodes`, …) — it must never carry the fields we own.
   const mfaEnrolled = deriveMfaEnrolled(next);
   const requiresMfaSetup = !mfaEnrolled;
   const payload: Record<string, unknown> = {
-    mfaFactors: next,
+    mfaFactors,
     mfaEnrolled,
     requiresMfaSetup,
     // a factor change ends every login session minted before it (lib/sessionCutoff.server.ts);
@@ -223,7 +278,7 @@ async function applyInTx(
     ...extraUpdate,
   };
 
-  // (6) The single write.
+  // (7) The single write.
   tx.set(userRef, payload, { merge: true });
 
   return { factors: next, mfaEnrolled, requiresMfaSetup };

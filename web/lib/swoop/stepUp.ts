@@ -20,6 +20,8 @@ import type {
   AuthenticationResponseJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from '@simplewebauthn/browser';
+// type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the client bundle
+import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 
 export type SwoopStepUpProof =
   | { code: string; isBackupCode?: boolean }
@@ -34,14 +36,11 @@ export const STEP_UP_WINDOW_OPEN = { kind: 'window' } as const;
 
 export type SwoopStepUpAnswer = SwoopStepUpProof | typeof STEP_UP_WINDOW_OPEN;
 
-/**
- * the step-up dialog's props, frozen at task 4.2 so later waves fill the dialog
- * without touching the page or the hook.
- */
+/** the step-up dialog's props, as the page passes them through from the hook. */
 export interface SwoopStepUpProps {
   open: boolean;
-  /** false when the account holds no second factor at all — it cannot control. */
-  enrolled: boolean;
+  /** the account's second factors; none at all means it cannot control. */
+  factors: MfaFactorInventory;
   /** resolves when the retry has been made; rejects with the reason to show. */
   onProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   onCancel: () => void;
@@ -71,15 +70,40 @@ export async function readStepUpWindow(
   return data;
 }
 
-// the ceremony's refusals in plain words; the route's own detail covers the policy ones
-const PROOF_REFUSALS: Record<string, string> = {
-  invalid_mfa_proof: "that code didn't work. try again.",
-  invalid_totp_code: 'an authenticator code is 6 digits.',
-  totp_not_enrolled: 'this account has no authenticator app. use a passkey or a backup code.',
-  challenge_not_found: 'the passkey check expired. try again.',
-  assertion_failed: "that passkey didn't check out. try again.",
-  passkey_not_found: "that passkey isn't on this account.",
-};
+const TRY_AGAIN = "that didn't go through. try again.";
+const TOO_MANY_TRIES = 'too many tries. wait a minute, then try again.';
+const PASSKEY_FAILED = "that passkey didn't check out. try again.";
+
+// every refusal of a proof (`lib/mfaProof.server.ts`), in plain words
+const PROOF_REFUSALS = new Map<string, string>([
+  ['invalid_mfa_proof', "that code didn't work. try again."],
+  ['invalid_totp_code', 'an authenticator code is 6 digits.'],
+  ['totp_not_enrolled', 'this account has no authenticator app. use a passkey or a backup code.'],
+  ['challenge_not_found', 'the passkey check expired. try again.'],
+  ['assertion_failed', PASSKEY_FAILED],
+  ['invalid_challenge_type', PASSKEY_FAILED],
+  ['challenge_user_mismatch', PASSKEY_FAILED],
+  ['passkey_not_found', "that passkey isn't on this account."],
+  ['mfa_attempts_exceeded', TOO_MANY_TRIES],
+  ['invalid_passkey_proof', TRY_AGAIN],
+  ['mfa_proof_required', TRY_AGAIN],
+  ['encryption_not_configured', TRY_AGAIN],
+  ['user_not_found', TRY_AGAIN],
+]);
+
+/**
+ * what a refused step-up says when the refusal is the ceremony's own: a proof
+ * the server would not take, too many tries, or a step-up still owed. null for
+ * any other refusal (a policy, a machine that left), which the dialog does not
+ * answer for.
+ */
+export function stepUpRefusal(status: number, body: { code?: unknown; detail?: unknown }): string | null {
+  const code = typeof body.code === 'string' ? body.code : null;
+  if (status === 429) return TOO_MANY_TRIES;
+  if (code !== null && PROOF_REFUSALS.has(code)) return PROOF_REFUSALS.get(code)!;
+  if (code === 'step_up_required') return typeof body.detail === 'string' && body.detail ? body.detail : TRY_AGAIN;
+  return null;
+}
 
 /** the browser half: post a proof, which opens the caller's window on the machine. */
 export async function submitStepUpProof(
@@ -98,10 +122,10 @@ export async function submitStepUpProof(
     throw new SwoopStepUpError("that didn't go through. check your connection and try again.");
   }
   if (res.ok) return;
-  const body = (await res.json().catch(() => ({}))) as { code?: string; detail?: string };
-  if (res.status === 429) throw new SwoopStepUpError('too many tries. wait a minute, then try again.');
-  const refusal = (body.code && PROOF_REFUSALS[body.code]) || body.detail;
-  throw new SwoopStepUpError(refusal || "that didn't go through. try again.");
+  const body = (await res.json().catch(() => ({}))) as { code?: unknown; detail?: unknown };
+  // the route's own detail covers the policy refusals
+  const detail = typeof body.detail === 'string' && body.detail ? body.detail : null;
+  throw new SwoopStepUpError(stepUpRefusal(res.status, body) ?? detail ?? TRY_AGAIN);
 }
 
 /**

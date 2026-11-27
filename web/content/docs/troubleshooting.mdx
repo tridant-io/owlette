@@ -133,7 +133,7 @@ because a reset hands the account to whoever signs in next, confirm who you're t
 
 ### "verify a factor you already have" when adding one
 
-adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. verify with your existing passkey, or take the **use a code instead** link to `/verify-2fa`, then add the new factor. renaming or removing a passkey asks the same.
+adding a second factor to an account that already holds one requires the current session to have cleared a 2FA challenge — the route answers `403` with `mfa_challenge_required` otherwise. verify with your existing passkey, or take the **use a code instead** link (**use a backup code instead** on an account with no authenticator app) to `/verify-2fa`, then add the new factor. renaming or removing a passkey asks the same.
 
 ### can't regenerate backup codes
 

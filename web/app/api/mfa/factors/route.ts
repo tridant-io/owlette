@@ -1,7 +1,7 @@
 /**
  * GET /api/mfa/factors — read-only second-factor inventory for the security panel.
  * No parameters; response:
- *   { totp: { enrolled, enrolledAt }, passkeys: PasskeyInfo[], totalFactors, mfaVerified }
+ *   { totp: { enrolled, enrolledAt }, passkeys: PasskeyInfo[], totalFactors, backupCodeCount, mfaVerified }
  *
  * Exists because the TOTP leg lives on the user document and firestore.rules
  * doesn't expose those fields to the browser, so the client could only see
@@ -18,7 +18,8 @@
  * at another account. No secrets cross the wire — `mfaSecret`, hashed
  * `backupCodes` and credential public keys are all absent, and any field added
  * later must pass the same test: could it help someone holding the response but
- * not the account?
+ * not the account? `backupCodeCount`, how many unused codes are left, passes it:
+ * it says whether to offer a code, and nothing about any code.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -71,6 +72,8 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       },
       passkeys,
       totalFactors: (factors.totp ? 1 : 0) + passkeys.length,
+      // counted off the sheet itself, as the passkeys are off their list
+      backupCodeCount: Array.isArray(userData.backupCodes) ? userData.backupCodes.length : 0,
       mfaVerified: sessionClearedMfaChallenge(session),
     });
   } catch (error) {

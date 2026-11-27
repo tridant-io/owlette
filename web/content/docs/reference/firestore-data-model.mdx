@@ -663,12 +663,12 @@ the user's profile and preferences. **access**: the user reads their own and may
 | `lastMachineIds` | map | per site, hoot's last target: `__site__`, a machine ID, or a list of IDs. |
 | `preferences` | map | the user's own settings, merged through `updateUserPreferences`. display: `temperatureUnit`, `timezone`, `timeFormat`, `timeDisplayMode` (`machine`, `user` or `site`), `theme` (`system`, `dark` or `light`; absent means `system`). alert opt-outs: `healthAlerts`, `processAlerts`, `thresholdAlerts`, `cortexAlerts`, `displayAlerts`, `talonAlerts`, `apiKeyAlerts`, plus `mutedMachines` and `alertCcEmails`. `alertDelivery` (`immediate`, `hourly`, `daily` or `weekly`; absent or unknown means `daily`) is how the alert emails arrive; the server reads it through `parseAlertDelivery`, since the client writes it. layout memory: `statsExpanded`, `processesExpanded`, `displaysExpanded`, `graphTabs`, `activeGraphPanel`, `graphTimeRange`, `displayAlertsBannerDismissed`. |
 | `mfaSecret`, `backupCodes` | string, array | encrypted TOTP secret and hashed backup codes. server only. |
-| `mfaFactors` | map | `{ totp, passkeys }`, the authoritative second-factor tally. server only. |
+| `mfaFactors` | map | `{ totp, passkeys, backupCodes }`, the authoritative second-factor tally, and how many backup codes are left. server only. |
 | `mfaEnrolled`, `requiresMfaSetup` | boolean | derived from `mfaFactors`; server only. `requiresMfaSetup` re-arms when the last factor is removed, and the proxy redirects such a session to `/setup-2fa`. |
 | `sessionsValidAfter` | number | ms, written with every second-factor change. a dashboard session started before it stops working, except the one that made the change, which is re-stamped. server only. |
 | `totpLastStep` | number | the time step of the last authenticator code accepted, so a code works once. server only. |
 
-`mfaFactors`, `mfaEnrolled` and `requiresMfaSetup` have exactly one writer, `lib/mfaFactors.server.ts`.
+`mfaFactors`, `mfaEnrolled` and `requiresMfaSetup` have exactly one writer, `lib/mfaFactors.server.ts`; the routes that spend or replace backup codes write `mfaFactors.backupCodes` beside them, through its `backupCodeCountUpdate`.
 
 ### `users/{uid}/settings/llm`
 

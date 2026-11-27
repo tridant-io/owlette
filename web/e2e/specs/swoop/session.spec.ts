@@ -30,6 +30,7 @@ import { ageSignInCeremony } from '../../helpers/signInCeremony';
 import { unspentTotp } from '../../helpers/totp';
 import { mintApiKey, revokeApiKey } from '../../helpers/apiKey';
 import { FakeSwoopHost, HOST_COLOUR, presentedPicture } from '../../helpers/swoopHost';
+import { WEBAUTHN_BASE_URL, addVirtualAuthenticator } from '../../helpers/webauthn';
 
 authenticator.options = { step: 30, window: 1 };
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -1857,5 +1858,279 @@ test.describe('machine scope', () => {
     await memberRow(scopedWatcher.uid).set({ swoop: 'view' }, { merge: true });
     const watch = await machineMenu(page, SCOPE_IN);
     await expect(watch.getByTestId('machine-context-menu-swoop')).toBeVisible();
+  });
+});
+
+/**
+ * the step-up asks only for the factors the account holds, and a refused
+ * answer is said in the dialog, which stays open for another: never a page
+ * whose only way on is back to the dashboard. each account and machine is its
+ * own, so no spec spends a code or a seat another needs.
+ */
+test.describe('the step-up asks only for what the account holds', () => {
+  const TOTP_ID = `mach-factors-totp-${SUFFIX}`;
+  const PASSKEY_ID = `mach-factors-passkey-${SUFFIX}`;
+  const BOTH_ID = `mach-factors-both-${SUFFIX}`;
+  const REAL_PASSKEY_ID = `mach-factors-real-passkey-${SUFFIX}`;
+  const NONE_ID = `mach-factors-none-${SUFFIX}`;
+  const SPENT_ID = `mach-factors-spent-${SUFFIX}`;
+  const hash = (code: string) => crypto.createHash('sha256').update(code).digest('hex');
+
+  test.beforeAll(async () => {
+    for (const id of [TOTP_ID, PASSKEY_ID, BOTH_ID, REAL_PASSKEY_ID, NONE_ID, SPENT_ID]) {
+      await seedMachine(SITE_ID, id, { displayName: `factors box ${id}` });
+    }
+  });
+
+  /** an admin of the site holding exactly these factors and backup codes, and its authenticator secret. */
+  async function seedAdmin(
+    tag: string,
+    factors: { totp: boolean; passkeys: number },
+    codes = ['ABCDEF12', 'BCDEF123'],
+  ) {
+    const user = await seedDedicatedUser(dedicatedUser('member', `swoop-factors-${tag}-${SUFFIX}`));
+    const secret = authenticator.generateSecret();
+    await getAdminDb()
+      .collection('users')
+      .doc(user.uid)
+      .set(
+        {
+          mfaEnrolled: true,
+          requiresMfaSetup: false,
+          ...(factors.totp ? { mfaSecret: secret } : {}),
+          mfaFactors: { ...factors, backupCodes: codes.length },
+          backupCodes: codes.map(hash),
+        },
+        { merge: true },
+      );
+    await grantMembership(SITE_ID, user.uid, 'admin');
+    return { user, secret };
+  }
+
+  /** the dialog's own error line. */
+  const dialogAlert = (dialog: Locator) => dialog.locator('p[role="alert"]');
+
+  test('an authenticator-only account gets its code, no passkey; a wrong code is said in the dialog and the right one still works', async ({
+    page,
+  }) => {
+    const { user, secret } = await seedAdmin('totp', { totp: true, passkeys: 0 });
+    await signIn(page, user, secret);
+    await page.goto(`/swoop/${SITE_ID}/${TOTP_ID}`);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await expect(dialog.getByLabel('authenticator code')).toBeVisible();
+    await expect(dialog.getByRole('checkbox', { name: 'use a backup code instead' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'use a passkey' })).toHaveCount(0);
+    await expect(dialog.getByText('or enter a code')).toHaveCount(0);
+
+    // a code one off the real one: the server refuses it, and the dialog says so in place
+    const real = await unspentTotp(page, secret);
+    const wrong = String((Number(real) + 1) % 1_000_000).padStart(6, '0');
+    const refused = page.waitForResponse(
+      (r) => r.url().endsWith(`/machines/${TOTP_ID}/swoop/sessions`) && r.request().method() === 'POST',
+    );
+    await dialog.getByLabel('authenticator code').fill(wrong);
+    await dialog.getByRole('button', { name: 'confirm' }).click();
+    expect((await refused).status()).toBe(400);
+    await expect(dialogAlert(dialog)).toHaveText("that code didn't work. try again.");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('authenticator code')).toHaveValue('');
+    await expect(dialog.getByLabel('authenticator code')).toBeFocused();
+    // nothing settled behind it: no notice on the stage, so no dead end to land on
+    await expect(page.locator('main p[role="alert"]')).toHaveCount(0);
+
+    const minted = page.waitForResponse(
+      (r) => r.url().endsWith(`/machines/${TOTP_ID}/swoop/sessions`) && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 45_000 },
+    );
+    await dialog.getByLabel('authenticator code').fill(real);
+    await dialog.getByRole('button', { name: 'confirm' }).click();
+    expect(((await (await minted).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: /end session/i }).click();
+  });
+
+  test('a passkey-only account is offered its passkey and a backup code, never an authenticator code, and a backup code takes control', async ({
+    page,
+  }) => {
+    const { user } = await seedAdmin('passkey', { totp: false, passkeys: 1 });
+
+    // the sign-in's second factor: the passkey, or a backup code behind its link
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await expect(page.getByPlaceholder('000000')).toHaveCount(0);
+    await page.getByRole('button', { name: 'use a backup code instead' }).click();
+    await page.getByPlaceholder('backup code').fill('ABCDEF12');
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    await ageSignInCeremony(page);
+
+    await page.goto(`/swoop/${SITE_ID}/${PASSKEY_ID}`);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await expect(dialog.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await expect(dialog.getByLabel('authenticator code')).toHaveCount(0);
+    await expect(dialog.getByText('or enter a code')).toHaveCount(0);
+
+    await dialog.getByRole('button', { name: 'use a backup code instead' }).click();
+    await dialog.getByLabel('backup code').fill('ZZZZ9999');
+    await dialog.getByRole('button', { name: 'confirm' }).click();
+    await expect(dialogAlert(dialog)).toHaveText("that code didn't work. try again.");
+    await expect(dialog).toBeVisible();
+
+    const minted = page.waitForResponse(
+      (r) => r.url().endsWith(`/machines/${PASSKEY_ID}/swoop/sessions`) && r.request().method() === 'POST' && r.status() === 201,
+      { timeout: 45_000 },
+    );
+    await dialog.getByLabel('backup code').fill('BCDEF123');
+    await dialog.getByRole('button', { name: 'confirm' }).click();
+    expect(((await (await minted).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: /end session/i }).click();
+  });
+
+  test('a passkey-only account takes control with its passkey', async ({ page }) => {
+    // the credential comes from a real ceremony, as a seeded document has no private key,
+    // and passkeys run only on WEBAUTHN_BASE_URL (helpers/webauthn.ts)
+    const user = await seedDedicatedUser(dedicatedUser('member', `swoop-factors-real-passkey-${SUFFIX}`));
+    await getAdminDb()
+      .collection('users')
+      .doc(user.uid)
+      .set({ mfaEnrolled: false, requiresMfaSetup: true, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
+    await grantMembership(SITE_ID, user.uid, 'admin');
+    // /login's autofill ceremony would answer itself from the authenticator
+    await page.addInitScript(() => {
+      const pkc = (globalThis as { PublicKeyCredential?: { isConditionalMediationAvailable?: () => Promise<boolean> } })
+        .PublicKeyCredential;
+      if (pkc) pkc.isConditionalMediationAvailable = () => Promise.resolve(false);
+    });
+    const virtual = await addVirtualAuthenticator(page);
+    try {
+      await page.goto(`${WEBAUTHN_BASE_URL}/login`);
+      await page.getByLabel(/email/i).fill(user.email);
+      await page.getByLabel(/password/i).first().fill(user.password);
+      await page.getByRole('button', { name: /sign in with email/i }).click();
+      await expect(page).toHaveURL(/\/setup-2fa/, { timeout: 20_000 });
+      await page.getByRole('button', { name: /passkey/i }).first().click();
+      await page.getByRole('button', { name: /^create passkey$/i }).click();
+      await expect(page.getByText(/passkey added/i)).toBeVisible({ timeout: 20_000 });
+      await page.getByRole('button', { name: /skip for now/i }).click();
+      await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+      await ageSignInCeremony(page, undefined, WEBAUTHN_BASE_URL);
+
+      await page.goto(`${WEBAUTHN_BASE_URL}/swoop/${SITE_ID}/${REAL_PASSKEY_ID}`);
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+      await expect(dialog.getByLabel('authenticator code')).toHaveCount(0);
+      // setup was skipped before its backup codes, so there are none to offer
+      await expect(dialog.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'use a backup code instead' })).toHaveCount(0);
+
+      const minted = page.waitForResponse(
+        (r) => r.url().endsWith(`/machines/${REAL_PASSKEY_ID}/swoop/sessions`) && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 45_000 },
+      );
+      await dialog.getByRole('button', { name: 'use a passkey' }).click();
+      const grant = await minted;
+      expect(grant.request().postDataJSON()).toHaveProperty('mfaProof.credential');
+      expect(((await grant.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+      await expect(dialog).toBeHidden();
+      await page.getByRole('button', { name: /end session/i }).click();
+    } finally {
+      await virtual.remove().catch(() => undefined);
+    }
+  });
+
+  test('an account with both gets the passkey and the code; cancelling offers the same confirmation again', async ({ page }) => {
+    const { user, secret } = await seedAdmin('both', { totp: true, passkeys: 1 });
+    await signIn(page, user, secret);
+    await page.goto(`/swoop/${SITE_ID}/${BOTH_ID}`);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await expect(dialog.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await expect(dialog.getByText('or enter a code')).toBeVisible();
+    await expect(dialog.getByLabel('authenticator code')).toBeVisible();
+
+    await dialog.getByRole('button', { name: 'cancel' }).click();
+    await expect(dialog).toBeHidden();
+    const notice = page.locator('p[role="alert"]').filter({ hasText: 'session ended' });
+    await expect(notice.getByRole('button', { name: 'try again' })).toBeVisible();
+    await notice.getByRole('button', { name: 'try again' }).click();
+    await expect(page.getByRole('dialog')).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await expect(page).toHaveURL(new RegExp(`/swoop/${SITE_ID}/${BOTH_ID}$`));
+  });
+
+  test('an authenticator account with no backup codes left is offered its code alone, at sign-in and at the step-up', async ({
+    page,
+  }) => {
+    const { user, secret } = await seedAdmin('spent', { totp: true, passkeys: 0 }, []);
+
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await expect(page.getByPlaceholder('000000')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'use backup code instead' })).toHaveCount(0);
+    await page.getByPlaceholder('000000').fill(await unspentTotp(page, secret));
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+    await ageSignInCeremony(page);
+
+    await page.goto(`/swoop/${SITE_ID}/${SPENT_ID}`);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await expect(dialog.getByLabel('authenticator code')).toBeVisible();
+    await expect(dialog.getByRole('checkbox', { name: 'use a backup code instead' })).toHaveCount(0);
+  });
+
+  test('a passkey-only account on the browser verify page gets its passkey and a backup code, never an authenticator code', async ({
+    page,
+  }) => {
+    const { user } = await seedAdmin('verify-page', { totp: false, passkeys: 1 });
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await page.getByRole('button', { name: 'use a backup code instead' }).click();
+    await page.getByPlaceholder('backup code').fill('ABCDEF12');
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+
+    await page.goto(`/swoop/${SITE_ID}/${PASSKEY_ID}/verify`);
+    await expect(page.getByRole('heading', { name: `allow control of ${PASSKEY_ID}?` })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'enter a code instead' })).toHaveCount(0);
+    await expect(page.getByLabel('authenticator code')).toHaveCount(0);
+    await page.getByRole('button', { name: 'use a backup code instead' }).click();
+    await expect(page.getByLabel('backup code')).toBeVisible();
+  });
+
+  test('an account with no second factor is sent to set one up, with nothing to enter', async ({ page }) => {
+    const user = await seedDedicatedUser(dedicatedUser('member', `swoop-factors-none-${SUFFIX}`));
+    await getAdminDb()
+      .collection('users')
+      .doc(user.uid)
+      .set(
+        { mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 } },
+        { merge: true },
+      );
+    await grantMembership(SITE_ID, user.uid, 'admin');
+    await signIn(page, user);
+
+    await page.goto(`/swoop/${SITE_ID}/${NONE_ID}`);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText('this account has none enrolled', { timeout: 20_000 });
+    await expect(dialog.getByRole('link', { name: 'security settings' })).toHaveAttribute('href', '/setup-2fa');
+    await expect(dialog.getByLabel(/code/)).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'use a passkey' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'confirm' })).toHaveCount(0);
   });
 });

@@ -9,8 +9,8 @@
  * the point — no task after this one should need to edit this file or the hook
  * to add a toolbar button, a menu or an overlay.
  *
- * the step-up dialog's props are frozen at this shape. `onProof` takes the body
- * `parseMfaProof` accepts and the hook forwards it verbatim into the
+ * the step-up dialog takes its props straight off the hook. `onProof` takes the
+ * body `parseMfaProof` accepts and the hook forwards it verbatim into the
  * session-create request; the page never inspects, stores or logs a proof.
  */
 
@@ -57,7 +57,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
+  const { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting, signedOut } =
     useSwoopSession(siteId, machineId);
   const { isSiteAdmin, isSiteOwner } = useAuth();
   // the keyboard follows the machine's system, read off this one machine's
@@ -159,6 +159,14 @@ export default function SwoopPage({
           // only the site's owner can change its billing, so only the owner is sent to upgrade it
           upgradeHref={isSiteOwner(siteId) ? siteBillingPath(siteId) : null}
           noPath={noPath}
+          // a cancelled step-up is one click from the same confirmation again
+          onTryAgain={stepUp.cancelled ? reconnect : undefined}
+          // and a lapsed sign-in comes back to this machine once signed in
+          signInHref={
+            signedOut
+              ? `/login?redirect=${encodeURIComponent(`/swoop/${encodeURIComponent(siteId)}/${encodeURIComponent(machineId)}`)}`
+              : null
+          }
           stall={stats.stall.recovery}
           stageRef={stageRef}
           videoRef={videoRef}
@@ -181,7 +189,7 @@ export default function SwoopPage({
 
       <SwoopStepUpDialog
         open={stepUp.required}
-        enrolled={stepUp.enrolled}
+        factors={stepUp.factors}
         onProof={stepUp.submitProof}
         onCancel={stepUp.cancel}
       />

@@ -163,7 +163,7 @@ describe('performUserDeleteCascade — Firebase Auth revoke side-effect', () => 
       // Zero the denormalized inventory too: a stale `{totp:true, passkeys:n}` is
       // well-formed enough for `normalizeMfaFactors` to trust, so the next
       // recompute would resurrect `mfaEnrolled: true` on a deleted account.
-      mfaFactors: { totp: false, passkeys: 0 },
+      mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 },
       mfaSecret: '__FIELD_DELETE__',
       backupCodes: [],
       mfaEnrolledAt: '__FIELD_DELETE__',
@@ -175,7 +175,7 @@ describe('performUserDeleteCascade — Firebase Auth revoke side-effect', () => 
     });
     expect(softDelete?.payload.deletedAt).toEqual(expect.any(Number));
     // toMatchObject is subset-matching, so assert the zeroed inventory exactly.
-    expect(softDelete?.payload.mfaFactors).toEqual({ totp: false, passkeys: 0 });
+    expect(softDelete?.payload.mfaFactors).toEqual({ totp: false, passkeys: 0, backupCodes: 0 });
     expect(softDelete?.payload.requiresMfaSetup).toBe(false);
   });
 

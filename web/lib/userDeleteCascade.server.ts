@@ -349,8 +349,9 @@ export async function performUserDeleteCascade(
     mfaEnrolled: false,
     // Zero the inventory too: `normalizeMfaFactors` TRUSTS a well-formed stored value, so leaving
     // `{ totp: true, passkeys: 2 }` would resurrect `mfaEnrolled: true` on the next recompute.
-    // Shape mirrors `EMPTY_MFA_FACTORS` in lib/mfaFactors.server.ts.
-    mfaFactors: { totp: false, passkeys: 0 },
+    // Shape mirrors `EMPTY_MFA_FACTORS` in lib/mfaFactors.server.ts, with the
+    // emptied sheet below counted.
+    mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 },
     mfaSecret: FieldValue.delete(),
     backupCodes: [],
     mfaEnrolledAt: FieldValue.delete(),

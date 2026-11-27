@@ -1184,15 +1184,24 @@ describe('useSwoopSession — the step-up answer', () => {
     mint = { status: 401, body: { code: 'step_up_required', detail: 'confirm your identity to take control.' } };
   });
 
+  /** answer the dialog; the answer settles once the create it rides on has answered. */
+  async function answer(proof: Parameters<UseSwoopSession['stepUp']['submitProof']>[0]) {
+    let settled!: Promise<void>;
+    act(() => {
+      settled = swoop.stepUp.submitProof(proof);
+    });
+    // handled here, since it may reject before the test's own expectation attaches
+    settled.catch(() => undefined);
+    await flush();
+    return settled;
+  }
+
   it('a proof rides on exactly one retry of the create', async () => {
     await open();
     expect(swoop.stepUp.required).toBe(true);
 
     mint = { status: 201, body: { data: GRANT } };
-    await act(async () => {
-      await swoop.stepUp.submitProof({ code: '123456' });
-    });
-    await flush();
+    await expect(answer({ code: '123456' })).resolves.toBeUndefined();
 
     expect(mints()).toHaveLength(2);
     expect(mintBody(1).mfaProof).toEqual({ code: '123456' });
@@ -1205,15 +1214,77 @@ describe('useSwoopSession — the step-up answer', () => {
     expect(swoop.stepUp.required).toBe(true);
 
     mint = { status: 201, body: { data: GRANT } };
-    await act(async () => {
-      await swoop.stepUp.submitProof(STEP_UP_WINDOW_OPEN);
-    });
-    await flush();
+    await expect(answer(STEP_UP_WINDOW_OPEN)).resolves.toBeUndefined();
 
     expect(mints()).toHaveLength(2);
     expect(mintBody(1)).not.toHaveProperty('mfaProof');
     expect(swoop.stepUp.required).toBe(false);
     expect(wired.session).not.toBeNull();
+  });
+
+  it('a refused proof rejects with what to say and keeps the step-up open, with no failure and no retry', async () => {
+    await open();
+
+    mint = { status: 400, body: { error: 'invalid verification code', code: 'invalid_mfa_proof' } };
+    await expect(answer({ code: '123456' })).rejects.toThrow("that code didn't work. try again.");
+
+    expect(swoop.stepUp.required).toBe(true);
+    expect(swoop.state).toBe('authorizing');
+    expect(swoop.error).toBeNull();
+    expect(swoop.refusal).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(2);
+
+    mint = { status: 201, body: { data: GRANT } };
+    await expect(answer({ code: '654321' })).resolves.toBeUndefined();
+    expect(mintBody(2).mfaProof).toEqual({ code: '654321' });
+    expect(swoop.stepUp.required).toBe(false);
+  });
+
+  it("a refusal that is not the ceremony's closes the step-up and is the stage's to say", async () => {
+    await open();
+
+    mint = { status: 403, body: { code: 'swoop_disabled', detail: 'swoop is not enabled for this site.' } };
+    await expect(answer({ code: '123456' })).resolves.toBeUndefined();
+
+    expect(swoop.stepUp.required).toBe(false);
+    expect(swoop.refusal).toBe('swoop_disabled');
+    expect(swoop.error).toBe('swoop is not enabled for this site.');
+  });
+
+  it('cancelling a check that hangs closes the step-up and lets its run go', async () => {
+    await open();
+
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    let settled!: Promise<void>;
+    act(() => {
+      settled = swoop.stepUp.submitProof({ code: '123456' });
+    });
+    await flush();
+    expect(swoop.stepUp.required).toBe(true);
+
+    act(() => swoop.stepUp.cancel());
+    await flush();
+
+    await expect(settled).resolves.toBeUndefined();
+    expect(swoop.stepUp.required).toBe(false);
+    expect(swoop.stepUp.cancelled).toBe(true);
+    expect(swoop.state).toBe('ended');
+    expect(mints()).toHaveLength(2);
+  });
+
+  it('cancelling ends the ask, and a reconnect asks again', async () => {
+    await open();
+
+    act(() => swoop.stepUp.cancel());
+    expect(swoop.state).toBe('ended');
+    expect(swoop.stepUp.cancelled).toBe(true);
+
+    act(() => swoop.reconnect());
+    await flush();
+    expect(swoop.stepUp.cancelled).toBe(false);
+    expect(swoop.stepUp.required).toBe(true);
+    expect(mints()).toHaveLength(2);
   });
 });
 

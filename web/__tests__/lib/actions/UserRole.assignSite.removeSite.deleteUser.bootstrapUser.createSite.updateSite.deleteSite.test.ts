@@ -717,8 +717,8 @@ describe('bootstrapUser', () => {
       mfaEnrolled: false,
       requiresMfaSetup: true,
       // Seeded at creation so a new account is never "legacy", i.e. never needs
-      // normalizeMfaFactors to backfill the inventory.
-      mfaFactors: { totp: false, passkeys: 0 },
+      // normalizeMfaFactors to backfill the inventory, and holds no backup codes.
+      mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 },
       preferences: {
         temperatureUnit: 'C',
         timezone: 'America/Los_Angeles',
