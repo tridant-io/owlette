@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useSyncExternalStore, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { doc, getDoc } from 'firebase/firestore';
@@ -12,24 +12,10 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Fingerprint } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
-import { useInAppBrowser } from '@/hooks/useInAppBrowser';
+import { startAuthentication } from '@simplewebauthn/browser';
+import { usePasskeyPrompt } from '@/hooks/usePasskeyPrompt';
 import { toast } from '@/lib/toast';
 import { safeNextPath } from '@/lib/appLink';
-
-/**
- * `browserSupportsWebAuthn()` reads `window.PublicKeyCredential`, so answering it during
- * render makes the passkey button server-absent / client-present. React recovers from that
- * hydration mismatch by discarding the SSR tree, which has swallowed clicks on these auth
- * pages before (see `canUsePasskey` in app/login/page.tsx).
- *
- * useSyncExternalStore rather than a mounted flag (matching `useInAppBrowser`): the server
- * snapshot is a real value, not an initial state to correct, so no cascading render. The
- * environment can't change within a document, so there is nothing to subscribe to.
- */
-const subscribeWebAuthnSupport = () => () => {};
-const getWebAuthnSupport = () => browserSupportsWebAuthn();
-const getWebAuthnSupportOnServer = () => false;
 
 /**
  * Leave the challenge with a document load, NOT `router.push`.
@@ -72,17 +58,9 @@ function Verify2FAContent() {
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [trustThisDevice, setTrustThisDevice] = useState(false);
   const [, setMfaReady] = useState(false);
-  const canUsePasskey = useSyncExternalStore(
-    subscribeWebAuthnSupport,
-    getWebAuthnSupport,
-    getWebAuthnSupportOnServer
-  );
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
-  const inApp = useInAppBrowser();
-  /** Also gated on the host app: in an embedded webview the ceremony can only use the HOST
-   * app's passkeys, so browserSupportsWebAuthn() is true but the prompt always fails. Safe
-   * to hide — TOTP and backup codes are always rendered. */
-  const showPasskey = canUsePasskey && !inApp.isInApp;
+  /** Safe to hide — TOTP and backup codes are always rendered. */
+  const showPasskey = usePasskeyPrompt() === true;
 
   useEffect(() => {
     if (!loading && !user) {

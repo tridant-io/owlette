@@ -2,7 +2,8 @@
  * Server-side cascade for `DELETE /api/users/me` (security-boundary-migration wave 3.10
  * + CRIT-A6). Replaces the old client-side writeBatch in AuthContext.deleteAccount.
  *
- * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs;
+ * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs
+ * and their machines' screenshots;
  * member-only sites are left intact; owned-but-shared sites refuse with `needs_successor`
  * — ownership must be transferred first (mirrors the admin cascade's `orphan_sites` guard).
  * Each deleted site's billing is stopped first and the site removed from tridant id, as
@@ -29,6 +30,7 @@ import type { Storage } from 'firebase-admin/storage';
 import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import { cancelMovesForSite } from '@/lib/machineMoves.server';
+import { deleteScreenshotsBestEffort } from '@/lib/screenshotStorage.server';
 import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
 import { removeTridantSite } from '@/lib/tridantSiteRemoval.server';
 import { unlinkTridantAccount } from '@/lib/userDeleteCascade.server';
@@ -752,6 +754,9 @@ export async function deleteOwnAccount(
         deletedAt: FieldValue.serverTimestamp(),
       });
       await siteRef.delete();
+      // last: the drain took only the machine documents, so their screenshot records
+      // are still listed, and the images live in Storage. a failure keeps nothing
+      await deleteScreenshotsBestEffort(entry.siteId, null, 'deleteOwnAccount', db);
     }
     deletedPaths.push(`site_ids/${entry.siteId}`);
     deletedPaths.push(`sites/${entry.siteId}`);

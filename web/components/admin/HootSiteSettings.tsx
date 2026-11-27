@@ -7,6 +7,7 @@ import { SettingSwitch } from '@/components/admin/SettingSwitch';
 import { FLEET_COPY, FleetSendersEditor } from '@/components/FleetSendersEditor';
 import { useFleetSettings } from '@/hooks/useFleetSettings';
 import { useSiteMachines } from '@/hooks/useSiteMachines';
+import { MemberLockSection } from '@/components/MemberLock';
 
 /**
  * one site's hoot settings: the approval its privileged tools wait for, and
@@ -32,6 +33,7 @@ export function HootSiteSettings({
   const hasRow = machineId !== undefined && Object.prototype.hasOwnProperty.call(fleet.settings.senders, machineId);
 
   return (
+    <MemberLockSection siteId={siteId}>
     <div className="space-y-4">
       {asking && machines && !fleet.loading && (!hasRow || !fleet.settings.enabled) && (
         <AllowMachineCard
@@ -66,5 +68,6 @@ export function HootSiteSettings({
         </div>
       </Panel>
     </div>
+    </MemberLockSection>
   );
 }

@@ -16,6 +16,7 @@ import {
   problem,
   problemForbidden,
   problemFromError,
+  problemMembersOnly,
   problemNotFound,
   problemPlanRequired,
   ProblemType,
@@ -171,8 +172,9 @@ export const POST = moveHandler(async (request: NextRequest, ctx, routeContext) 
           ));
         } catch (err) {
           if (!(err instanceof ApiAuthError)) throw err;
-          return err.status === 404
-            ? problemNotFound('target site not found')
+          if (err.status === 404) return problemNotFound('target site not found');
+          return err.code === 'members_only'
+            ? problemMembersOnly()
             : problemForbidden('you may not add machines to the target site.');
         }
         const targetName = typeof targetSiteData?.name === 'string' ? targetSiteData.name : targetSiteId;

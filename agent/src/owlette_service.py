@@ -1321,8 +1321,6 @@ class OwletteService:
         # Single-flight handle for the off-loop reboot-pending check.
         self._reboot_pending_future = None
         self._shutting_down = False  # Suppresses crash alerts during reboot/shutdown
-        self._live_view_active = False
-        self._live_view_stop_time = 0
         # swoop: built in main() after the Firebase client starts. The shutdown
         # event exists from here so graceful_shutdown can set it whether or not
         # swoop ever came up.
@@ -6525,12 +6523,6 @@ class OwletteService:
             elif cmd_type == 'provision_cortex_key':
                 return self._handle_provision_cortex_key(cmd_data)
 
-            elif cmd_type == 'start_live_view':
-                return self._handle_start_live_view(cmd_data)
-
-            elif cmd_type == 'stop_live_view':
-                return self._handle_stop_live_view(cmd_data)
-
             elif cmd_type == 'apply_display_topology':
                 # validate → snapshot → apply, synchronously, arming a revert
                 # watchdog before returning: without an ack_display_topology
@@ -8612,7 +8604,7 @@ class OwletteService:
 
         `budget` (max_width / quality / capture_timeout_s /
         max_upload_attempts) is forwarded to capture_and_upload, which holds the
-        on-demand defaults; the crash and live-view callers pass their own.
+        on-demand defaults; the crash caller passes its own.
         """
         fb = self.firebase_client
         site_id = getattr(fb, 'site_id', None)
@@ -8762,92 +8754,6 @@ class OwletteService:
             return {'error': f"Screenshot failed: {e}"}
         except Exception as e:
             return {'error': f"Screenshot failed: {type(e).__name__}: {e}"}
-
-    def _handle_start_live_view(self, command_data):
-        """Start periodic screenshot capture for live view."""
-        try:
-            interval = command_data.get('interval', 10)
-            interval = max(5, min(60, int(interval)))
-            duration = command_data.get('duration', 600)
-            duration = max(60, min(1800, int(duration)))
-
-            if self._live_view_active:
-                return "Live view already active"
-
-            self._live_view_active = True
-            self._live_view_stop_time = time.time() + duration
-
-            if self.firebase_client and self.firebase_client.is_connected():
-                self.firebase_client.set_machine_flag('liveView', {
-                    'active': True,
-                    'interval': interval,
-                    'startedAt': time.time(),
-                    'expiresAt': self._live_view_stop_time,
-                })
-
-            thread = threading.Thread(
-                target=self._live_view_loop,
-                args=(interval,),
-                daemon=True,
-                name='LiveViewLoop',
-            )
-            thread.start()
-
-            logging.info(f"Live view started: interval={interval}s, duration={duration}s")
-            return f"Live view started (interval: {interval}s, duration: {duration}s)"
-
-        except Exception as e:
-            self._live_view_active = False
-            return f"Error starting live view: {e}"
-
-    def _handle_stop_live_view(self, command_data):
-        """Stop the live view screenshot loop."""
-        self._live_view_active = False
-
-        if self.firebase_client and self.firebase_client.is_connected():
-            self.firebase_client.set_machine_flag('liveView', {'active': False})
-
-        logging.info("Live view stopped")
-        return "Live view stopped"
-
-    def _live_view_loop(self, interval):
-        """Background loop that captures and uploads screenshots periodically."""
-        try:
-            logging.info(f"Live view loop started (interval={interval}s)")
-
-            while self._live_view_active and time.time() < self._live_view_stop_time:
-                try:
-                    # A refreshing modal frame every 5-60s does not need the
-                    # full-resolution on-demand image, and a frame that is
-                    # slow to land is worth dropping rather than retrying:
-                    # the next one is already due.
-                    self._run_capture_pipeline(
-                        max_width=1920,
-                        quality=50,
-                        capture_timeout_s=10,
-                        request_timeout_s=10,
-                        max_upload_attempts=1,
-                    )
-                except ScreenshotCaptureError as e:
-                    logging.debug(f"Live view capture failed: {e}")
-                except Exception as e:
-                    logging.warning(f"Live view capture error: {e}")
-
-                # Sleep in small increments so we can stop promptly
-                sleep_end = time.time() + interval
-                while self._live_view_active and time.time() < sleep_end and time.time() < self._live_view_stop_time:
-                    time.sleep(1)
-
-        except Exception as e:
-            logging.error(f"Live view loop crashed: {e}")
-        finally:
-            self._live_view_active = False
-            if self.firebase_client and self.firebase_client.is_connected():
-                try:
-                    self.firebase_client.set_machine_flag('liveView', {'active': False})
-                except Exception:
-                    pass
-            logging.info("Live view loop ended")
 
     def _handle_uninstall_app_bundle(self, cmd_id, cmd_data):
         """Uninstall an application on macOS: quit it, then remove its bundle.

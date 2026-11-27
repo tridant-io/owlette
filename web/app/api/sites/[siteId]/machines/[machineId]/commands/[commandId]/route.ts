@@ -6,6 +6,7 @@
  * shared with the fleet's call reader.
  *
  * Auth: `machine=<id>:read` (api key) OR site membership (session/id-token).
+ * A superadmin without a member row gets a screenshot's result without its signed url.
  * api-sprint wave 2 — track 2A (machine-api MVP).
  */
 import type { NextRequest } from 'next/server';
@@ -39,7 +40,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const auth = await requireMachineAuthAndScope(request, siteId, machineId, 'read');
     if (!auth.ok) return auth.response;
 
-    const lookup = await lookupCommandStatus(getAdminDb(), siteId, machineId, commandId);
+    const lookup = await lookupCommandStatus(getAdminDb(), siteId, machineId, commandId, {
+      signScreenshot: auth.seesScreens,
+    });
     if (!lookup) {
       return problem({
         type: ProblemType.NotFound,

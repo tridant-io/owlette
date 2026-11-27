@@ -20,7 +20,7 @@ hoot's tools are grouped by risk:
 | **tier 2** | process and machine management with validated parameters | auto-approved, except a call that [changes what a machine launches](#changing-what-a-machine-launches) |
 | **tier 3** | privileged shell, file, deployment, reboot and shutdown actions | in-chat approval. the tools that run code always ask; for the rest it's on by default, per site |
 
-what you can use depends on who you are. site admins, owners and superadmins get the full tool set. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tools on those machines, but is never offered the tools that span the site: `get_site_logs`, `deploy_software` and the three talon tools.
+what you can use depends on who you are. site admins, owners and superadmins get the full tool set, though a superadmin who is not a member of the site gets read-only tools there and no screenshot. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tools on those machines, but is never offered the tools that span the site: `get_site_logs`, `deploy_software` and the three talon tools.
 
 ---
 

@@ -8,7 +8,7 @@ keywords: ["invite", "invite user", "add user", "team", "share site", "remove us
 
 <Callout type="info" title={"permissions"}>
 
-the section is part of a site's [settings](/docs/dashboard/admin/sites#site-settings), which open for the site's owners and admins whose access is the whole site, and for owlette's superadmins on every site. every change needs `SITE_MEMBER_MANAGE` on that site, which those owners and admins hold; an admin [limited to some machines](#machine-scope) does not.
+the section is part of a site's [settings](/docs/dashboard/admin/sites#site-settings), which open for the site's owners and admins whose access is the whole site, and for owlette's superadmins on every site, though a superadmin changes nothing on a site they are not a member of. every change needs `SITE_MEMBER_MANAGE` on that site, which those owners and admins hold; an admin [limited to some machines](#machine-scope) does not.
 
 </Callout>
 
@@ -32,7 +32,7 @@ the list is the site's active member rows whose accounts still exist and are not
 
 | role | on this site |
 |---|---|
-| **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch. no commands, no configuration |
+| **member** | read-only: view machines, capture screenshots, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch. no commands, no configuration |
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, schedule presets, enrolling machines, revoking agent tokens, and managing members |
 | **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one |
 
@@ -47,7 +47,7 @@ each person can have their own swoop mode on the site: **no swoop**, **watch** o
 | swoop | on this site's machines |
 |---|---|
 | **by role** | no swoop mode of their own: the role decides, as above |
-| **no swoop** | nothing. a machine's menu offers live view instead of swoop, and the viewer says **you can't use swoop on this site** |
+| **no swoop** | nothing. a machine's menu offers no swoop, and the viewer says **you can't use swoop on this site** |
 | **watch** | they watch, and never take control |
 | **control** | they watch, and take control after confirming a [second factor](/docs/dashboard/swoop#the-second-factor) |
 
@@ -57,7 +57,7 @@ it changes swoop and nothing else. a member set to control takes control, after 
 - nobody changes their own (`403 cannot_modify_own_membership`)
 - a member set to control cannot kill sessions or see the site's session list on [admin → swoop](/docs/dashboard/swoop#admin--swoop); an admin held to watch still can, when their access is the whole site
 - it applies only while the site has swoop on, and only on the machines their [access](#machine-scope) covers
-- a machine's menu offers swoop only to someone who gets it there: with no swoop, or as a member with no swoop mode of their own on a site that does not let members watch, it offers live view instead
+- a machine's menu offers swoop only to someone who gets it there: with no swoop, or as a member with no swoop mode of their own on a site that does not let members watch, it offers none
 
 lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once.
 
@@ -77,7 +77,7 @@ a person's access is either the **whole site** or **some machines** of it. limit
 ### what they see
 
 - **the dashboard** lists only their machines. with none of them to show, it says **no machines here for you yet** and that a site admin chooses which machines they can reach
-- **a member** views, screenshots and opens live view on their machines. **an admin** also runs commands and changes processes, displays and restart schedules there. removing a machine, revoking its agent token and **turn on swoop…** stay with owners and admins of the whole site
+- **a member** views and screenshots their machines. **an admin** also runs commands and changes processes, displays and restart schedules there. removing a machine, revoking its agent token and **turn on swoop…** stay with owners and admins of the whole site
 - **[swoop](/docs/dashboard/swoop)** follows their swoop mode on their machines. any other machine answers **machine not found or no access**, whether it exists or not
 - **[hoot](/docs/dashboard/hoot#choosing-machines)** talks to their machines only, without the tools that span the site, and the conversation list leaves out the site's autonomous investigations
 - **[logs](/docs/dashboard/activity-logs)** shows the rows for their machines, and **[alert emails](/docs/dashboard/admin/email-alerts#who-gets-them)** come for their machines only
@@ -169,4 +169,4 @@ to narrow someone's access to some of this site's machines, set their [machine s
 
 ## transferring ownership
 
-`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it, or one of owlette's superadmins. the new owner does not have to be on the site already, and gets the whole site whatever their access was; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.
+`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it, or one of owlette's superadmins who is a member of the site. the new owner does not have to be on the site already, and gets the whole site whatever their access was; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.

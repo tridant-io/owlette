@@ -204,7 +204,7 @@ owlette's remote desktop: a live, controllable view of a machine's screen in a b
 _Avoid_: remote control, KVM, VNC, live view
 
 **Live view**:
-The older screenshot slideshow that swoop replaces on machines that can stream. It is still offered where the agent cannot, or the site has swoop off.
+The older screenshot slideshow, removed for swoop. The server refuses `start_live_view` and `stop_live_view`; a machine that can't stream offers a screenshot alone.
 _Avoid_: using it as a synonym for swoop
 
 **Session**:

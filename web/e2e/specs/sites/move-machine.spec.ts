@@ -154,6 +154,8 @@ async function postMove(page: Page, machineId: string, targetSiteId: string) {
 
 test.beforeAll(async () => {
   await Promise.all([SOURCE, TARGET, LONG_TARGET].map((site) => seedSite({ ...site, owner: 'someone-else' })));
+  // the superadmin moves a machine only between sites they are a member of (adr 0021)
+  for (const site of [SOURCE, TARGET, LONG_TARGET]) await grantMembership(site.id, superadmin.uid, 'admin');
   // no monitors, so no display subdocument outlives afterAll
   await Promise.all([
     ...[READY, CLASH, BUSY, BOTH, PHONE, REFUSED, ARRIVING, OFFLINE].map((id) =>
@@ -183,10 +185,11 @@ test.afterAll(async () => {
     REFUSED_TOKEN_PATH,
   ];
   await Promise.all(paths.map((path) => db.doc(path).delete()));
-  for (const uid of [admin.uid, member.uid]) {
+  for (const uid of [admin.uid, member.uid, superadmin.uid]) {
     await revokeMembership(SOURCE.id, uid);
     await revokeMembership(TARGET.id, uid);
   }
+  await revokeMembership(LONG_TARGET.id, superadmin.uid);
   await Promise.all([SOURCE, TARGET, LONG_TARGET].map((site) => releaseFixtureSite(site.id, 'someone-else')));
 });
 

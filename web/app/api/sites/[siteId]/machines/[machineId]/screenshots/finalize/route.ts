@@ -4,15 +4,18 @@
  * Last step of the agent's `capture_screenshot` pipeline, after it PUTs bytes
  * to the signed URL from `/screenshots/upload-url`: verify the object landed
  * and its path matches this site+machine, write `machines/{id}.lastScreenshot`
- * with the path and its image-route url, append a history doc and prune to 20.
- * The object stays private.
+ * with the path and its image-route url, and append a history doc. The object
+ * stays private, and nothing here deletes an older capture: the history keeps
+ * every screenshot until a site admin deletes it, the machine is removed or
+ * moved, or the site is deleted.
  *
  * A separate step because pre-registering would flash a stub lastScreenshot,
  * and a bucket trigger would add latency and infra for a one-line action.
  *
  * Auth: only this machine's own agent ID-token; a member or api key gets 403,
  * so a capture on record always came from the machine.
- * Naturally idempotent apart from the history append, which pruning absorbs.
+ * Idempotent apart from the history append: a repeated call records the same
+ * image twice. The agent does not retry it.
  * Not separately rate limited: every call needs a storagePath minted by an already-counted
  * /screenshots/upload-url request, so billing both legs would halve the machine's screenshot
  * budget.
@@ -29,7 +32,7 @@ import {
 import { requireMachineAuthAndScope } from '../../../../../../_shared';
 import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import { sanitizeForLog } from '@/lib/logSanitize';
-import { screenshotImageUrl, screenshotRecordPath } from '@/lib/screenshotStorage.server';
+import { screenshotImageUrl } from '@/lib/screenshotStorage.server';
 import { resolveAgentPrincipal } from '@/lib/sitePolicy.server';
 
 interface RouteParams {
@@ -39,9 +42,6 @@ interface RouteParams {
 const ALLOWED_CONTENT_TYPES = new Set(['image/png', 'image/jpeg']);
 
 const NOT_THIS_AGENT = "only this machine's own agent can record its screenshots";
-
-// Screenshot history kept per machine; older entries are pruned on finalize.
-const MAX_HISTORY = 20;
 
 // Bound on the ADVISORY agent-reported size; object metadata below is
 // authoritative. Rejects bogus values before any write.
@@ -232,33 +232,13 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     );
 
     // History feed for the screenshot-dialog sidebar.
-    const screenshotsCol = machineRef.collection('screenshots');
-    await screenshotsCol.add({
+    await machineRef.collection('screenshots').add({
       url,
       path: body.storagePath,
       timestamp: FieldValue.serverTimestamp(),
       sizeKB,
       monitor,
     });
-
-    // Prune doc AND storage object — otherwise the bucket grows until the
-    // 30-day lifecycle rule sweeps it.
-    const allDocs = await screenshotsCol.orderBy('timestamp', 'asc').get();
-    if (allDocs.size > MAX_HISTORY) {
-      const toDelete = allDocs.docs.slice(0, allDocs.size - MAX_HISTORY);
-      for (const docSnap of toDelete) {
-        const oldPath = screenshotRecordPath(docSnap.data(), bucket.name);
-        if (oldPath) {
-          await bucket.file(oldPath).delete().catch(() => {
-            // Already gone (manual delete, lifecycle rule) — best-effort.
-          });
-        }
-        await docSnap.ref.delete();
-      }
-      console.log(
-        `[screenshots/finalize] pruned ${toDelete.length} old screenshots for ${sanitizeForLog(machineId)}`,
-      );
-    }
 
     console.log(
       `[screenshots/finalize] ${sanitizeForLog(machineId)} (${sizeKB}KB, monitor=${sanitizeForLog(monitor)}) → ${sanitizeForLog(body.storagePath)}`,

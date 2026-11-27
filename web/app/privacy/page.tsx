@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 export default function PrivacyPage() {
-  const lastUpdated = 'November 23, 2026';
+  const lastUpdated = 'November 26, 2026';
   const router = useRouter();
 
   return (
@@ -74,15 +74,18 @@ export default function PrivacyPage() {
               <p>
                 owlette can capture screenshots of a managed machine&apos;s desktop, either when you
                 request one from the dashboard or as part of a diagnostic workflow. these images are
-                uploaded to our cloud storage and shown to users who have access to that machine&apos;s
-                site.
+                uploaded to our cloud storage and shown to the members of the machine&apos;s site who
+                can reach that machine. owlette staff can&apos;t view your screenshots or watch your
+                machines unless one of them is added to your site, which is recorded. screenshots you
+                attach to an issue are different: you send those to owlette support (see section 6).
               </p>
               <p className="mt-4">
                 <strong>a screenshot captures whatever is on that desktop at that moment</strong>, which may
                 include content unrelated to owlette. you are responsible for ensuring that capturing
                 screenshots of your machines is lawful and appropriate in your environment &mdash; including
                 notifying anyone who uses those machines. screenshot capture is initiated by you or your
-                team, never by us.
+                team, including hoot and talons when your team turns them on. owlette staff can capture
+                one only once added to your site, as above.
               </p>
 
               <h3 className="text-lg font-medium text-foreground mt-6 mb-3">hoot (AI assistant) data</h3>
@@ -205,8 +208,8 @@ export default function PrivacyPage() {
               <h2 className="text-xl font-semibold text-foreground mb-4">6. data retention</h2>
               <p>we retain data as follows:</p>
               <ul className="list-disc pl-6 mt-2 space-y-1">
-                <li><strong>account data:</strong> for as long as your account is active. when an account is deleted we immediately revoke its API keys, transfer any owned sites to a successor, clear its pending machine commands, and mark the account deleted so it can no longer sign in or reach your data. the underlying user record is then retained in a deleted state for audit and security purposes rather than erased outright &mdash; if you want the record itself erased, ask us and we will process it as an erasure request (see section 9).</li>
-                <li><strong>screenshots:</strong> automatically deleted 30 days after capture. the agent additionally keeps only the most recent 20 captures per machine in its history.</li>
+                <li><strong>account data:</strong> for as long as your account is active. when you delete your own account, we delete your user record and your sign-in, and every site you own that has no other members, with that site&apos;s machines, deployments, logs and screenshots. a site you own that has other members must be transferred to one of them first, and sites you only belong to stay as they are. when owlette deletes an account, we immediately revoke its API keys, transfer any owned sites to a successor, clear its pending machine commands, and mark the account deleted so it can no longer sign in or reach your data. that user record is then retained in a deleted state for audit and security purposes rather than erased outright &mdash; if you want the record itself erased, ask us and we will process it as an erasure request (see section 9).</li>
+                <li><strong>screenshots:</strong> kept until a site owner or admin deletes them or removes the machine from the site, the machine is moved to another site, or the site is deleted, which deleting your account does for a site you own alone. each of these deletes the images along with their records. screenshots are not deleted after a set time or past a set number, so a machine keeps every one taken of it, including the captures talons take.</li>
                 <li><strong>issue attachments:</strong> the logs, screenshots and videos you choose to attach to an issue, from the owlette desktop app or the dashboard, are automatically deleted 30 days after upload. only owlette support staff can open them, and every download is recorded. support staff may use an AI assistant (Anthropic&apos;s Claude) to help diagnose any issue you submit, which sends the issue and its attachments to Anthropic.</li>
                 <li><strong>issues:</strong> what you write in an issue, with your email address, browser and the page you were on, or from the desktop app the machine&apos;s name, system information and the last lines of its service log, is kept until you ask us to erase it (see section 9). it is not deleted automatically, and deleting your account does not remove it. a copy goes to our support inbox.</li>
                 <li><strong>verified networks:</strong> a network you passed two-factor authentication from counts as verified for 7 days. the record is removed when you delete your own account.</li>

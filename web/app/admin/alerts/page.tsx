@@ -34,6 +34,8 @@ import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { ActivityEmailSettings } from '@/components/admin/activity/ActivityEmailSettings';
 import { CompactButton } from '@/components/admin/CompactButton';
+import { MemberLockSection } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /**
@@ -153,6 +155,8 @@ export default function AlertsPage() {
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
   // alert rules ride on control, the core flag: alerts are a core feature, not owlette free's
   const rulesGated = usePlanGated('control', selectedSiteId);
+  // a superadmin without a member row reads the site's rules and changes none (adr 0021)
+  const memberLocked = useMemberLock(selectedSiteId);
   // rules carry the site they were read or saved for: a save that lands after the
   // admin moved to another site must not show, or be saved again, under that one
   const [loaded, setLoaded] = useState<{ siteId: string; rules: AlertRule[] }>({ siteId: '', rules: [] });
@@ -404,6 +408,7 @@ export default function AlertsPage() {
               )}
 
               {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
+              {!memberLocked && (
               <UpgradeGate flag="control" siteId={selectedSiteId} feature="alert rules" variant="inline">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -425,9 +430,10 @@ export default function AlertsPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
               </UpgradeGate>
+              )}
             </>
           }
-          actions={!rulesGated && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
+          actions={!rulesGated && !memberLocked && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
         />
 
         {/* the built-in alerts are each person's own emails, the same on every site (owner, 2026-11-11) */}
@@ -449,6 +455,7 @@ export default function AlertsPage() {
         )}
 
         <h2 className="mb-3 text-sm font-medium text-foreground">custom rules</h2>
+        <MemberLockSection siteId={selectedSiteId}>
 
         {/* Empty state */}
         {rules.length === 0 && !loading && (
@@ -460,7 +467,7 @@ export default function AlertsPage() {
               GPU exceed your defined thresholds.
             </p>
             {/* the header already carries the upgrade note */}
-            {!rulesGated && (
+            {!rulesGated && !memberLocked && (
               <div className="flex flex-wrap justify-center gap-3">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -508,8 +515,8 @@ export default function AlertsPage() {
                   aria-label={`enable ${rule.name}`}
                 />
                 <div
-                  className="flex-1 min-w-0 cursor-pointer"
-                  onClick={() => openEditDialog(rule)}
+                  className={`flex-1 min-w-0 ${memberLocked ? '' : 'cursor-pointer'}`}
+                  onClick={memberLocked ? undefined : () => openEditDialog(rule)}
                 >
                   <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 mb-1">
                     <span className="min-w-0 text-foreground font-medium">{rule.name}</span>
@@ -528,6 +535,8 @@ export default function AlertsPage() {
                     cooldown {rule.cooldownMinutes}m
                   </p>
                 </div>
+                {!memberLocked && (
+                <>
                 <IconButton
                   label={`edit ${rule.name}`}
                   variant="ghost"
@@ -550,10 +559,13 @@ export default function AlertsPage() {
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </IconButton>
+                </>
+                )}
               </div>
             ))}
           </div>
         )}
+        </MemberLockSection>
       </div>
 
       {/* Create / Edit Dialog */}

@@ -49,7 +49,14 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { Capability, explicitSwoopMode, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
+import {
+  Capability,
+  explicitSwoopMode,
+  hasCapability,
+  isSiteMember,
+  type Actor,
+  type SiteRole,
+} from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
 import { networkRecord, type RequestNetwork } from '@/lib/network.server';
@@ -233,6 +240,13 @@ export function evaluateSwoopAccess(input: SwoopAccessInput): SwoopDecision {
     input.intent === 'control' ? Capability.MACHINE_REMOTE_CONTROL : Capability.MACHINE_REMOTE_VIEW;
   if (!hasCapability(input.actor, capability, input.siteId, input.machineId)) {
     return deny(403, 'capability_missing', 'you do not have permission to do this.');
+  }
+
+  // a superadmin holds both capabilities but no member row here, and a site's
+  // screens are for its members (adr 0021). a lease renewal asks this too, so a
+  // session cannot outlive it.
+  if (input.actor.type === 'user' && !isSiteMember(input.actor, input.siteId)) {
+    return deny(403, 'capability_missing', "swoop shows the machine's screen, which is for the site's members.");
   }
 
   // the site's switch is the default for members with no swoop mode of their

@@ -1438,11 +1438,13 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
     });
 
-    // a superadmin holds no site role and sees every email, as the admin list does
+    // a superadmin sees every email, as the admin list does. only one with a member
+    // row on the site can be in a session: its screen is for its members (adr 0021)
     it('gives a superadmin in it the names and every email', async () => {
       const SUPER = 'user-super';
       held.set(SUPER, mocks.userDocs.get(SUPER));
       mocks.userDocs.set(SUPER, { email: `${SUPER}@example.test`, role: 'superadmin', sites: [], displayName: 'Sam Super' });
+      mocks.memberDocs.set(`${SITE}/${SUPER}`, { uid: SUPER, role: 'member', status: 'active' });
       const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: unknown[] };
       staged.set(`${SESSIONS_PATH}${SID}`, {
         ...record,
@@ -1460,6 +1462,7 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       ]);
       for (const viewer of viewers) expect(viewer).toHaveProperty('email');
       expect(viewers.at(-1)?.email).toBe(`${SUPER}@example.test`);
+      mocks.memberDocs.delete(`${SITE}/${SUPER}`);
     });
 
     // the bar offers kick only where the kick route would say yes

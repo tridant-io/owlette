@@ -3,7 +3,7 @@ import type { SwoopMode } from '@/lib/swoopMode';
 
 export const Capability = {
   MACHINE_EXEC_COMMAND: 'MACHINE_EXEC_COMMAND',
-  // View-only machine commands (screenshot, live view). Read-class: granted to
+  // View-only machine commands (screenshot). Read-class: granted to
   // members so non-admins can observe a machine's screen without holding the
   // mutating MACHINE_EXEC_COMMAND capability. Site-scoped like the other
   // machine capabilities.
@@ -353,6 +353,40 @@ export const SystemCapabilityMatrix: Readonly<
 
 export function isSiteScopedCapability(capability: Capability): boolean {
   return SITE_SCOPED_CAPABILITIES.has(capability);
+}
+
+/**
+ * whether the site role a member row carries makes someone a member of the site.
+ * a site's screens (a screenshot, a capture, swoop's picture) and changes to it
+ * are for its members: a superadmin, who holds every capability and no member
+ * row, reads a site where they hold no row, sees none of its screens and changes
+ * only an allowlisted few things (adr 0021). not a capability: no role grants
+ * it, the row does. the one test, for a resolved standing on the server and a
+ * role map in the browser alike.
+ */
+export function isMemberRole(role: SiteRole | null | undefined): boolean {
+  return role !== null && role !== undefined;
+}
+
+/** {@link isMemberRole} for a person, read from their own entry for the site. */
+export function isSiteMember(actor: UserActor, siteId: string): boolean {
+  // own properties only, for the reason `hasCapability` gives for siteRoles
+  return Object.prototype.hasOwnProperty.call(actor.siteRoles, siteId) && isMemberRole(actor.siteRoles[siteId]);
+}
+
+/** what a caller who reaches a site without a member row is told for a change there. */
+export const MEMBERS_ONLY_CHANGE =
+  "only the site's members can change this site or its machines. add yourself to the site from the admin users page first; the site's audit log records it";
+
+const READ_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * whether a request changes a site a caller reaches without a member row. a superadmin
+ * reaches every site, and where they hold no row they read it and change only what a route
+ * admits for them (adr 0021); the gates answer every other change 403 members_only.
+ */
+export function refusesNonMemberChange(member: boolean, method: string): boolean {
+  return !member && !READ_METHODS.has(method.toUpperCase());
 }
 
 /** the person's explicit swoop mode on a site, or null when their role decides. */

@@ -34,13 +34,15 @@ import {
   executeMachineCommand,
   ExecuteMachineCommandError,
   ALLOWED_COMMAND_TYPES,
+  nonMemberCommandRefusal,
   parseActiveHoursOverride,
   resolveActiveHoursOverride,
   type ExecuteMachineCommandContext,
 } from '@/lib/actions/executeMachineCommand.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import { machineAuditActor } from '@/lib/actions/auditActor.server';
-import type { Actor } from '@/lib/capabilities';
+import { MEMBERS_ONLY_CHANGE, type Actor } from '@/lib/capabilities';
+import { SCREENS_MEMBERS_ONLY } from '@/lib/screenshotStorage.server';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 import { toolCallHash } from '@/lib/hoot/launchAudit.server';
 
@@ -291,8 +293,6 @@ describe('executeMachineCommand — allowlist', () => {
       'cancel_reboot',
       'dismiss_reboot_pending',
       'capture_screenshot',
-      'start_live_view',
-      'stop_live_view',
       'restart_process',
       'start_process',
       'stop_process',
@@ -918,7 +918,7 @@ describe('executeMachineCommand — plan gate', () => {
     epoch: 0,
   };
   const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
-  const PLAN_FREE_TYPES = ['update_owlette', 'cancel_reboot', 'dismiss_reboot_pending', 'stop_live_view', 'cancel_mcp_tool'];
+  const PLAN_FREE_TYPES = ['update_owlette', 'cancel_reboot', 'dismiss_reboot_pending', 'cancel_mcp_tool'];
 
   function enforce(): void {
     process.env.PLAN_ENFORCEMENT = 'on';
@@ -1220,5 +1220,66 @@ describe('executeMachineCommand — tool call audit', () => {
     await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
     expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('toolName');
     expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('paramsHash');
+  });
+});
+
+// a superadmin reaches every site without a member row, and queues only the allowlist there (adr 0021)
+describe('a person without a member row on the site', () => {
+  const NON_MEMBER: Actor = { type: 'user', userId: 'super-uid', role: 'superadmin', siteRoles: {} };
+  const asNonMember = () => ctxFor({ actor: NON_MEMBER, auditActor: 'user:super-uid' });
+
+  it.each([
+    ['update_owlette', PUBLISHED_UPDATE],
+    ['reboot_machine', {}],
+    ['cancel_reboot', {}],
+    ['dismiss_reboot_pending', {}],
+    ['restart_process', { process_name: 'TouchDesigner' }],
+    ['start_process', { process_name: 'TouchDesigner' }],
+    ['stop_process', { process_name: 'TouchDesigner' }],
+    ['kill_process', { process_name: 'TouchDesigner' }],
+    ['cancel_mcp_tool', { target_command_id: 'cmd_1' }],
+    ['mcp_tool_call', { tool_name: 'get_system_info', tool_params: {} }],
+  ])('queues %s', async (type, payload) => {
+    const fake = buildFakeDb();
+    await expect(executeMachineCommand(asNonMember(), { type, payload }, { db: fake.db })).resolves.toHaveProperty('commandId');
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it.each([
+    ['shutdown_machine', {}],
+    ['set_launch_mode', { process_name: 'TouchDesigner', mode: 'off' }],
+    ['apply_display_topology', {}],
+    ['mcp_tool_call', { tool_name: 'clean_disk_space', tool_params: {} }],
+    ['mcp_tool_call', { tool_name: 'run_powershell', tool_params: { script: 'whoami' } }],
+  ])('refuses %s with 403 members_only and queues nothing', async (type, payload) => {
+    const fake = buildFakeDb();
+    await expect(executeMachineCommand(asNonMember(), { type, payload }, { db: fake.db })).rejects.toMatchObject({
+      status: 403,
+      code: 'members_only',
+      detail: MEMBERS_ONLY_CHANGE,
+    });
+    expect(fake.setCalls).toHaveLength(0);
+    expect(mockedEmit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['capture_screenshot', {}],
+    ['mcp_tool_call', { tool_name: 'capture_screenshot', tool_params: {} }],
+  ])('refuses %s as a screen, which is for members', async (type, payload) => {
+    const fake = buildFakeDb();
+    await expect(executeMachineCommand(asNonMember(), { type, payload }, { db: fake.db })).rejects.toMatchObject({
+      status: 403,
+      code: 'members_only',
+      detail: SCREENS_MEMBERS_ONLY,
+    });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('holds no member, system or machine actor to it', () => {
+    const system: Actor = { type: 'system', name: 'cortex_autonomous', siteId: SITE };
+    const machine: Actor = { type: 'machine', siteId: SITE, machineId: 'x', maxTier: 3, machineIds: null };
+    for (const actor of [USER_ACTOR, system, machine]) {
+      expect(nonMemberCommandRefusal(actor, SITE, 'shutdown_machine', {})).toBeNull();
+    }
   });
 });

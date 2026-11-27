@@ -6,9 +6,9 @@
  * Two invariants:
  *   - The verdict comes from `generateObject` + zod, never parsed out of prose —
  *     a rambling model yields `verdict_error`, not a regex misreading "fail".
- *   - Persist the storage PATH, not the signed url: urls expire in ~1h (objects
- *     at 30d), so a stored url is dead by review time. The url is returned only
- *     to embed the image in the alert email sent seconds later.
+ *   - Persist the storage PATH, not the signed url: urls expire in ~1h, so a
+ *     stored url is dead by review time. The url is returned only to embed the
+ *     image in the alert email sent seconds later.
  *
  * The agent rate-limits `capture_screenshot` to one per 5s per machine
  * (COMMAND_RATE_LIMIT_SECONDS), so concurrent checks against one machine return
@@ -20,8 +20,13 @@ import { z } from 'zod';
 import { ExecuteMachineCommandError } from '@/lib/actions/executeMachineCommand.server';
 import { dispatchAndAwait } from '@/lib/jobs/talonRunner.server';
 import { createModel } from '@/lib/llm';
+import { isMemberRole } from '@/lib/capabilities';
 import logger from '@/lib/logger';
-import { isMachineScreenshotPath, issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
+import {
+  isMachineScreenshotPath,
+  issueScreenshotReadUrl,
+  SCREENS_MEMBERS_ONLY,
+} from '@/lib/screenshotStorage.server';
 import {
   TalonAuthorError,
   resolveTalonAuthor,
@@ -178,13 +183,23 @@ function readCaptureResult(entry: Record<string, unknown>): CaptureResult {
  * The author's own vision model, re-resolved every run: there is no shared site
  * key (see `resolveLlmConfig`), so the check spends the talon author's key and
  * only while they still have site access — same module as the hoot output so the
- * two AI paths can't drift on who may run unattended work.
+ * two AI paths can't drift on who may run unattended work. The check shows the
+ * screen, so an author without a member row on the site (a superadmin) stops the
+ * talon, as a removed one does.
  */
 async function resolveAuthorModel(db: Firestore, siteId: string, talon: StoredTalon) {
   try {
     const author = await resolveTalonAuthor(db, siteId, talon);
+    if (!isMemberRole(author.access.standing.role)) {
+      throw new TalonVisualCheckError(
+        'author_unavailable',
+        `Talon ${talon.id} author ${author.userId} is not a member of this site, and ${SCREENS_MEMBERS_ONLY}.`,
+        'creator_access_revoked',
+      );
+    }
     return createModel(await resolveTalonAuthorLlmConfig(db, author.userId));
   } catch (error) {
+    if (error instanceof TalonVisualCheckError) throw error;
     if (error instanceof TalonAuthorError) {
       throw new TalonVisualCheckError('author_unavailable', error.message, error.reason);
     }

@@ -100,6 +100,8 @@ async function deleteRefsInChunks(
 export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
   capability: 'AGENT_TOKEN_REVOKE',
   siteIdParam: 'path',
+  // revoking a machine's token is on the allowlist for a person without a member row (adr 0021)
+  admitsNonMembers: true,
 })(async (request: NextRequest, ctx) => {
   try {
     const body = await request.json();

@@ -101,7 +101,7 @@ describe('MoveMachineDialog', () => {
     renderDialog();
 
     expect(dialog()).toHaveAccessibleDescription(
-      "kiosk leaves lobby and joins the site you pick, within seconds while it is online. it needs no restart and nobody at the machine. its processes come with it. its command history on lobby is deleted, and members limited to it here lose it.",
+      "kiosk leaves lobby and joins the site you pick, within seconds while it is online. it needs no restart and nobody at the machine. its processes come with it. its screenshots and command history on lobby are deleted, and members limited to it here lose it.",
     );
     expect(siteSelect()).toHaveTextContent('pick a site');
     expect(useMachineMove).toHaveBeenCalledWith('elm-gate');

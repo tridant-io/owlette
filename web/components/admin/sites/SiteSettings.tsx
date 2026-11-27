@@ -17,6 +17,8 @@ import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection'
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
 import { KeepScreensAwakeSwitch } from '@/components/admin/sites/SiteSwitches';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
+import { MemberLockNotice, MemberLockSection } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { Badge } from '@/components/ui/badge';
 
 /**
@@ -34,7 +36,9 @@ export function SiteSettings({
   onSectionChange: (next: SiteSection) => void;
   onDeleted: (administersAnotherSite: boolean) => void;
 }) {
-  const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope } = useAuth();
+  const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, isSiteMember, machineScope } = useAuth();
+  // a superadmin without a member row reads the site's settings and changes none (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const { sites, loading, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
   const { plan, loading: planLoading } = usePlan();
   // only an owner is billed for a site, so nobody else's view asks for its plan
@@ -88,7 +92,7 @@ export function SiteSettings({
   }
 
   // only an owner reaches the delete that holds a site, and a superadmin's isSiteOwner is true everywhere
-  const owner = held !== null || isSiteOwner(site.id);
+  const owner = held !== null || (isSiteOwner(site.id) && !memberLocked);
   // billing is the owner's too, and only where plans are enforced or the site is billed: tridant id
   // bills it whatever the switch says, so with plans off the owner can still stop it. the plans load
   // after the page, so a link to billing (the return from checkout) waits for them instead of opening general
@@ -120,23 +124,36 @@ export function SiteSettings({
       </div>
 
       {effective === 'general' && (
-        <SiteGeneralSection key={`${site.id}:${site.name}:${site.timezone ?? ''}`} site={site} onSave={updateSite} />
+        <MemberLockSection siteId={site.id}>
+          <SiteGeneralSection key={`${site.id}:${site.name}:${site.timezone ?? ''}`} site={site} onSave={updateSite} />
+        </MemberLockSection>
       )}
       {/* the sections with dialogs are keyed on the site, so one left open never acts on the next site */}
-      {effective === 'members' && <SiteMembersSection key={site.id} siteId={site.id} />}
+      {effective === 'members' && (
+        <MemberLockSection siteId={site.id}>
+          <SiteMembersSection key={site.id} siteId={site.id} />
+        </MemberLockSection>
+      )}
+      {/* no lock fieldset here: restarting a machine is theirs to do, so the list locks its own controls */}
       {effective === 'machines' && (
+        <>
+        <MemberLockNotice siteId={site.id} className="mb-4" />
         <Panel id="site-section-machines" title="machines" description="add one from the dashboard's + button.">
           <div className="space-y-4">
             <KeepScreensAwakeSwitch siteId={site.id} />
-            {/* a superadmin's sites are every site, and isSiteAdmin is true on each */}
+            {/* a superadmin's sites are every site, and isSiteAdmin is true on each; a machine
+                moves only onto a site they are a member of, as /add pairs one (adr 0021) */}
             <SiteMachinesList
               key={site.id}
               siteId={site.id}
               siteName={site.name}
-              targetSites={sites.filter((s) => s.id !== site.id && isSiteAdmin(s.id)).map(({ id, name }) => ({ id, name }))}
+              targetSites={sites
+                .filter((s) => s.id !== site.id && isSiteAdmin(s.id) && (!isSuperadmin || isSiteMember(s.id)))
+                .map(({ id, name }) => ({ id, name }))}
             />
           </div>
         </Panel>
+        </>
       )}
       {effective === 'billing' && <SiteBillingSection key={site.id} site={site} />}
       {effective === 'danger' && (

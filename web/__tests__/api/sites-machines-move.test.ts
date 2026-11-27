@@ -210,7 +210,7 @@ function seedSite(siteId: string, name: string): void {
   docs.set(`sites/${siteId}/members/owner-uid`, { uid: 'owner-uid', role: 'owner', status: 'active' });
 }
 
-/** a user and, unless a superadmin, an active member row on each site at `role`. */
+/** a user and an active member row on each site at `role`. */
 function signIn(uid: string, globalRole: 'superadmin' | 'member', siteRoles: Record<string, string> = {}): void {
   docs.set(`users/${uid}`, { email: `${uid}@example.com`, role: globalRole });
   for (const [siteId, role] of Object.entries(siteRoles)) {
@@ -219,8 +219,14 @@ function signIn(uid: string, globalRole: 'superadmin' | 'member', siteRoles: Rec
   mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
 }
 
+/** a superadmin with a member row on both sites, which moving a machine between them takes (adr 0021). */
+function signInSuperadmin(): void {
+  signIn(SUPERADMIN, 'superadmin', { [SOURCE]: 'member', [TARGET]: 'member' });
+}
+
 function signInWithKey(uid: string): void {
   docs.set(`users/${uid}`, { email: `${uid}@example.com`, role: 'superadmin' });
+  for (const siteId of [SOURCE, TARGET]) docs.set(`sites/${siteId}/members/${uid}`, { uid, role: 'member', status: 'active' });
   mockResolveAuth.mockResolvedValue({
     userId: uid,
     keyContext: {
@@ -303,7 +309,7 @@ beforeEach(() => {
 
 describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   it('stores a pending move and queues site_move on the machine, in one write', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     docs.set(pendingPath, { cmd_restart_1: { type: 'restart_process', status: 'pending' } });
     const before = Date.now();
 
@@ -371,6 +377,17 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
     expectNothingWritten();
   });
 
+  // a superadmin reaches both sites, but moves a machine only between sites they hold a row on (adr 0021)
+  it.each([
+    ['source', { [TARGET]: 'member' }],
+    ['target', { [SOURCE]: 'member' }],
+  ])('refuses a superadmin with no row on the %s with 403 members_only', async (_, roles) => {
+    signIn(SUPERADMIN, 'superadmin', roles);
+
+    await expectRefused(await post({ targetSiteId: TARGET }), 403, 'members_only');
+    expectNothingWritten();
+  });
+
   it('refuses an api key with 403 api_key_not_permitted, even one scoped to the machine', async () => {
     signInWithKey(SUPERADMIN);
 
@@ -379,7 +396,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('requires an Idempotency-Key', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
 
     await expectRefused(await post({ targetSiteId: TARGET }, null), 400, 'idempotency_key_required');
     expectNothingWritten();
@@ -388,7 +405,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   it.each([[{}], [{ targetSiteId: 42 }], [{ targetSiteId: 'not/a/site' }]])(
     'refuses a missing or malformed targetSiteId (%j) with 400',
     async (body) => {
-      signIn(SUPERADMIN, 'superadmin');
+      signInSuperadmin();
 
       await expectRefused(await post(body), 400, 'validation_failed');
       expectNothingWritten();
@@ -396,14 +413,14 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   );
 
   it('refuses the site the machine is already on with 400 same_site', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
 
     await expectRefused(await post({ targetSiteId: SOURCE }), 400, 'same_site');
     expectNothingWritten();
   });
 
   it('answers 404 for a machine that is not on the site', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     docs.delete(`sites/${SOURCE}/machines/${MACHINE}`);
 
     await expectRefused(await post({ targetSiteId: TARGET }), 404, 'machine_not_found');
@@ -411,14 +428,14 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('answers 404 for a target site that does not exist', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
 
     await expectRefused(await post({ targetSiteId: 'site-missing' }), 404, 'not_found');
     expectNothingWritten();
   });
 
   it('refuses with 409 machine_exists when the target has a machine with this id', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     docs.set(`sites/${TARGET}/machines/${MACHINE}`, { name: 'someone else' });
 
     await expectRefused(await post({ targetSiteId: TARGET }), 409, 'machine_exists', MOVE_EXISTS('Gallery', MACHINE));
@@ -429,7 +446,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
     ['pending', `${NAME} is already moving to another site. cancel that move first.`],
     ['switching', `${NAME} is switching to another site now.`],
   ])('refuses with 409 move_pending while a move to another site is %s', async (status, detail) => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     const existing = seedMove({ targetSiteId: OTHER, status });
 
     await expectRefused(await post({ targetSiteId: TARGET }), 409, 'move_pending', detail);
@@ -438,7 +455,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('answers 200 with the move already pending to the same site, and writes nothing', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     const existing = seedMove();
     // a busy machine does not turn a repeat into a refusal
     docs.set(pendingPath, { cmd_install: { type: 'install_software' } });
@@ -458,7 +475,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('starts a new move over a pending one that lapsed', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedMove({ targetSiteId: OTHER, expiresAt: Date.now() - 1 });
 
     const res = await post({ targetSiteId: TARGET });
@@ -468,7 +485,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('replays a retried request with the same key instead of queueing it twice', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
 
     const first = await post({ targetSiteId: TARGET }, 'same-key');
     const second = await post({ targetSiteId: TARGET }, 'same-key');
@@ -492,7 +509,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
         }),
     ],
   ])('refuses with 409 machine_busy while %s', async (_, seedBusy) => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedBusy();
 
     await expectRefused(await post({ targetSiteId: TARGET }), 409, 'machine_busy', MOVE_BUSY(NAME));
@@ -500,7 +517,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('refuses with 409 agent_too_old for an agent below the minimum', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedMachine({ agent_version: '4.2.2' });
 
     await expectRefused(
@@ -513,7 +530,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('refuses with 409 agent_too_old for an agent that does not report it can follow', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedMachine({ agent_version: '4.3.0', capabilities: { keepAwake: 1 } });
 
     await expectRefused(await post({ targetSiteId: TARGET }), 409, 'agent_too_old');
@@ -521,7 +538,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it("refuses with 402 when the target's plan has no room for the machine", async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     mockMachineLimitRefusal.mockResolvedValue('owlette free covers one machine.');
 
     const { status, body } = await parseResponse(await post({ targetSiteId: TARGET }));
@@ -537,7 +554,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('writes neither the move nor its command when the write fails', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     failBatches = true;
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -552,7 +569,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
     [TARGET, 200, undefined],
     [OTHER, 409, 'move_pending'],
   ])('answers a request that loses a race to one for %s as a repeat would', async (racedTarget, status, code) => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     beforeCommit = () => {
       beforeCommit = null;
       seedMove({ targetSiteId: racedTarget });
@@ -570,7 +587,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/move', () => {
 
 describe('DELETE /api/sites/{siteId}/machines/{machineId}/move', () => {
   it('cancels a pending move and its site_move command', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedMove();
     docs.set(pendingPath, {
       cmd_site_move_1: { type: 'site_move', moveId: MOVE_ID, status: 'pending' },
@@ -587,7 +604,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('refuses with 409 move_switching once the agent is switching, and keeps the move', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     const existing = seedMove({ status: 'switching' });
 
     await expectRefused(await cancel(), 409, 'move_switching');
@@ -596,7 +613,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('answers 404 when the machine has no move', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
 
     await expectRefused(await cancel(), 404, 'not_found');
     expect(mockEmitMutation).not.toHaveBeenCalled();
@@ -612,7 +629,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/move', () => {
   });
 
   it('requires an Idempotency-Key', async () => {
-    signIn(SUPERADMIN, 'superadmin');
+    signInSuperadmin();
     seedMove();
 
     await expectRefused(await cancel(null), 400, 'idempotency_key_required');

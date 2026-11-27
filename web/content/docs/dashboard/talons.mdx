@@ -26,12 +26,14 @@ visual checks spend an LLM key — see [which key an unattended run spends](/doc
 
 a visual check needs a machine that can take a screenshot. a Mac needs Screen Recording granted to the owlette app, and a Linux machine cannot capture yet. a check that cannot capture **fails** the run — it is not skipped — and counts toward the [automatic switch-off](#runs-failures-and-audit). see [platform support](/docs/reference/platform-support#screens).
 
+the screenshot is for the site's members. a visual check whose creator is not a member of the site, one of owlette's superadmins, switches the talon off before any capture. a failed check's email shows the screenshot only to recipients who are the site's owner or members; anyone else gets the verdict and the reason without it.
+
 ## outputs
 
 a talon has one to five outputs; each is attempted and recorded independently on the run.
 
-- **email** — emails the site's users who have **talon alerts** switched on in [account settings](/docs/dashboard/account-settings#alerts), skipping anyone who muted the machine or whose access does not cover it, with per-recipient unsubscribe links. a site-wide run, which names no one machine, skips everyone limited to some machines.
-- **webhook** — a signed POST to your endpoint. the signing secret is generated server-side and is never readable from the dashboard.
+- **email** — emails the site's users who have **talon alerts** switched on in [account settings](/docs/dashboard/account-settings#alerts), skipping anyone who muted the machine or whose access does not cover it, with per-recipient unsubscribe links. a site-wide run, which names no one machine, skips everyone limited to some machines. a failed visual check's screenshot goes into the email of each member who gets one; the addresses they copy their alerts to get their own copy, without it.
+- **webhook** — a signed POST to your endpoint. the signing secret is generated server-side and is never readable from the dashboard. a visual check's `condition` carries the verdict, the reason and the screenshot's storage `screenshotPath`, never a link to the image: your endpoint is not a member of the site.
 - **hoot** — hands hoot a directive (up to 1000 characters) to carry out against the machine, in a chat you can open and read afterwards. by default the turn is **read-only** (tier-1 tools): it can look at the machine and report, not change it. arming **let hoot act** on the output raises it to tier 2 — process control, screenshots, Windows Update policy. tier 3 (raw shell, file writes) is never available to an unattended run, whatever the flag says, and neither is a change to [what a machine launches](/docs/dashboard/hoot#changing-what-a-machine-launches): those calls are refused, and `manage_scheduled_task`, `manage_windows_service` and `registry_operation` aren't offered. these two levels are the whole range — there is no per-directive tool list. on a Mac or Linux machine, hoot's Windows-only tools refuse (see [hoot tools](/docs/reference/hoot-tools#platforms)).
 - **command** — queues a process command (restart, start or stop) against the machines in scope. it is the same power class as an armed hoot output.
 

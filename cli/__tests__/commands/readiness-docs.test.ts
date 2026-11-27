@@ -54,10 +54,10 @@ describe('CLI readiness docs', () => {
     expect(readRepoFile(`${cliDocsDir}/readiness.mdx`)).toContain('owlette rollback <roostId>');
   });
 
-  it('captures the only shipped CLI stub and the planned webhook noun', () => {
+  it('says no command is a stub, and captures the planned webhook noun', () => {
     const readiness = readRepoFile(`${cliDocsDir}/readiness.mdx`);
-    expect(readiness).toContain('machine live-view');
-    expect(readiness).toContain('public-api deferred: swoop');
+    expect(readiness).toContain('no registered command is a stub');
+    expect(docs).not.toContain('machine live-view');
     expect(readiness).toContain('`owlette webhook` is not a command');
   });
 });

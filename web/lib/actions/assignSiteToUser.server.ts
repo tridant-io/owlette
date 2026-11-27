@@ -111,6 +111,22 @@ export async function assignSiteToUser(
     if (!result.ok && result.failure.kind !== 'already_member') {
       return { kind: 'assign_failed', siteId, reason: result.failure.kind };
     }
+    // in the site's own audit log too, where its owner reads who joined: the
+    // platform row below is staff-only (adr 0021)
+    if (result.ok) {
+      emitMutation({
+        kind: 'site_member_mutated',
+        siteId,
+        actor: ctx.auditActor,
+        targetId: input.uid,
+        attributes: {
+          endpoint: ctx.endpoint ?? '',
+          method: ctx.method ?? 'POST',
+          verb: 'member_added',
+          requestedRole: 'member',
+        },
+      });
+    }
   }
 
   emitMutation({

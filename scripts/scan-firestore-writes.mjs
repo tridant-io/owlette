@@ -130,7 +130,7 @@ const CONTROL_PLANE_RULES = [
   },
   {
     file: /^web\/hooks\/useFirestore\.ts$/,
-    fn: /^(killProcess|sendMachineCommand|rebootMachine|shutdownMachine|cancelReboot|dismissRebootPending|captureScreenshot|startLiveView|stopLiveView)$/,
+    fn: /^(killProcess|sendMachineCommand|rebootMachine|shutdownMachine|cancelReboot|dismissRebootPending|captureScreenshot)$/,
     capability: 'MACHINE_EXEC_COMMAND',
     route: 'POST /api/sites/{siteId}/machines/{machineId}/commands',
   },

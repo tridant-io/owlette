@@ -2,7 +2,7 @@
 /**
  * @jest-environment jsdom
  *
- * ScreenshotDialog and LiveViewModal: every icon-only control has a name, the
+ * ScreenshotDialog: every icon-only control has a name, the
  * fullscreen view is a real modal (focus moves in, Escape closes only it, focus
  * returns to the button that opened it), and the first Escape closes the dialog
  * rather than an auto-opened tooltip.
@@ -12,7 +12,6 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ScreenshotDialog } from '@/components/ScreenshotDialog';
-import { LiveViewModal } from '@/components/LiveViewModal';
 
 const IMAGE_URL = 'data:image/png;base64,iVBORw0KGgo=';
 const CAPTURED_MS = 1_700_000_000_000;
@@ -27,7 +26,7 @@ jest.mock('@/lib/toast', () => ({
 
 jest.mock('@/lib/firebase', () => ({ db: {} }));
 
-// the machine doc carries the latest capture; live view also reads its liveView block.
+// the machine doc carries the latest capture.
 // a machine missing from mockMachineDocs holds the default capture; null means a machine
 // never captured. every snapshot builds a new timestamp object, as firestore does.
 const mockMachineDocs: Record<string, { url: string } | null> = {};
@@ -83,24 +82,6 @@ function renderScreenshotDialog() {
         isOnline
         onCaptureScreenshot={() => Promise.resolve()}
         lastScreenshot={{ url: IMAGE_URL, timestamp: 1_700_000_000_000, sizeKB: 120 }}
-      />
-    </TooltipProvider>,
-  );
-  return { onOpenChange };
-}
-
-function renderLiveView() {
-  const onOpenChange = jest.fn();
-  render(
-    <TooltipProvider>
-      <LiveViewModal
-        open
-        onOpenChange={onOpenChange}
-        siteId="site-A"
-        machineId="kiosk-01"
-        machineName="kiosk-01"
-        onStartLiveView={() => Promise.resolve()}
-        onStopLiveView={() => Promise.resolve()}
       />
     </TooltipProvider>,
   );
@@ -191,53 +172,5 @@ describe('ScreenshotDialog', () => {
     heartbeat();
 
     expect(screen.getByRole('img', { name: 'screenshot of kiosk-01' })).toHaveAttribute('src', 'data:image/png;base64,b2xk');
-  });
-});
-
-describe('LiveViewModal', () => {
-  it('names every icon-only control', () => {
-    renderLiveView();
-
-    for (const name of ['close', 'fullscreen', 'download screenshot']) {
-      expect(screen.getByRole('button', { name })).toBeInTheDocument();
-    }
-  });
-
-  it('closes only the fullscreen view on Escape', async () => {
-    const { onOpenChange } = renderLiveView();
-
-    await userEvent.click(screen.getByRole('button', { name: 'fullscreen' }));
-    await screen.findByRole('dialog', { name: 'live view of kiosk-01' });
-
-    await userEvent.keyboard('{Escape}');
-
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'live view of kiosk-01' })).toBeNull());
-    expect(onOpenChange).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'fullscreen' })).toHaveFocus();
-  });
-
-  it("opened on the next machine, shows nothing of the last one's", () => {
-    mockMachineDocs['kiosk-02'] = null;
-    const modal = (machineId: string, open: boolean) => (
-      <TooltipProvider>
-        <LiveViewModal
-          open={open}
-          onOpenChange={() => {}}
-          siteId="site-A"
-          machineId={machineId}
-          machineName={machineId}
-          onStartLiveView={() => Promise.resolve()}
-          onStopLiveView={() => Promise.resolve()}
-        />
-      </TooltipProvider>
-    );
-    const { rerender } = render(modal('kiosk-01', true));
-    expect(screen.getByRole('img', { name: 'live view of kiosk-01' })).toHaveAttribute('src', IMAGE_URL);
-
-    rerender(modal('kiosk-01', false));
-    rerender(modal('kiosk-02', true));
-
-    expect(screen.queryByRole('img', { name: 'live view of kiosk-02' })).toBeNull();
-    expect(screen.getByText(/to begin a live preview of this machine/)).toBeInTheDocument();
   });
 });

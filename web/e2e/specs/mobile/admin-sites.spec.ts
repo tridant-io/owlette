@@ -45,6 +45,8 @@ test.use(roleState('superadmin'));
 test.beforeAll(async () => {
   await seedSite({ id: TAKEN_SITE_ID, name: TAKEN_SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
   await grantMembership(TAKEN_SITE_ID, ROW_USER.uid, 'member');
+  // its settings, danger zone included, open to a superadmin who is a member of it (adr 0021)
+  await grantMembership(TAKEN_SITE_ID, TEST_USERS.superadmin.uid, 'admin');
   // no monitors, so no display subdocument outlives afterAll's delete
   await seedMachine(TAKEN_SITE_ID, MACHINE_ID, { agentVersion: MACHINE_VERSION, monitorCount: 0 });
 });
@@ -53,6 +55,7 @@ test.afterAll(async () => {
   await Promise.all([
     getAdminDb().collection('sites').doc(TAKEN_SITE_ID).collection('machines').doc(MACHINE_ID).delete(),
     releaseFixtureSite(TAKEN_SITE_ID, ROW_USER.uid),
+    releaseFixtureSite(TAKEN_SITE_ID, TEST_USERS.superadmin.uid),
     ...createdSiteIds.map((id) => releaseFixtureSite(id, TEST_USERS.superadmin.uid)),
   ]);
 });

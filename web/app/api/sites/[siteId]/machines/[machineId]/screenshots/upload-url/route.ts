@@ -10,7 +10,7 @@
  * carries uid + site_id and resolves through `requireMachineAuthAndScope` like any caller.
  * Idempotency deliberately not required — every call mints a fresh single-use url and path.
  * Rate limited per machine, inside the handler once auth has resolved the machine: every
- * agent screenshot — on-demand, crash and live view — is minted here, so an agent stuck in a
+ * agent screenshot — on-demand, crash, hoot and talon — is minted here, so an agent stuck in a
  * capture loop, or a leaked machine credential, cannot drive it unbounded. Not per client ip:
  * behind Cloudflare that is the site's NAT egress address, shared by every machine at the
  * site, so a per-ip budget was a per-site one. The ceiling (`screenshotUploadRateLimit`,

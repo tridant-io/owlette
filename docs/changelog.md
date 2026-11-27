@@ -20,6 +20,18 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ### changed
 
 - a site's machines list in the admin panel is set in the panel's text size. the move dialog says an online machine moves within seconds, with no restart; the row leaves the list on its own once the machine arrives, and an offline one's row says it is waiting to move.
+- a machine keeps every screenshot taken of it, not only its newest 20, until a site owner or admin deletes them. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
+- removing a machine, moving it to another site or deleting a site deletes its screenshots.
+- owlette's superadmins don't see a site's screenshots or watch its machines through swoop unless they are a member of it, and a talon's email gives a screenshot only to the site's members. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
+- on a site they are not a member of, owlette's superadmins change only a few things: they update owlette on its machines, start, stop, restart or kill a process, reboot a machine or stop a reboot, cancel a deployment, revoke a machine's token and kill or kick a swoop session. the dashboard hides or locks the rest and says how to add yourself. everything else, pairing a machine included, waits until they add themselves to the site, which its audit log records, and hoot gives them read-only tools there. [more](https://owlette.app/docs/api/errors#members_only)
+- when owlette deletes an account and hands its sites to a successor, each site's own audit log records the new owner.
+- a talon webhook's visual check no longer carries `condition.screenshotUrl`; `screenshotPath` stays. [more](https://owlette.app/docs/dashboard/talons#outputs)
+- the privacy policy says how long screenshots are kept, when owlette staff can see them, and what deleting your own account deletes. [more](https://owlette.app/privacy)
+
+### removed
+
+- live view, the screenshot slideshow: swoop shows a machine's screen live, and the menu of a machine that can't stream offers a screenshot. [more](https://owlette.app/docs/dashboard/swoop)
+- the cli's `owlette machine live-view`, which only pointed at `owlette swoop`: use [`owlette swoop`](https://owlette.app/docs/cli/reference/swoop).
 
 ### fixed
 
@@ -28,6 +40,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 - the [demo](https://owlette.app/demo) shows its machine count in the site switcher, and Mac, Linux and asleep machines.
 - a machine whose agent stopped without saying so reads offline in **site settings**, the API and hoot too, not only on the dashboard; an asleep one reads asleep.
 - the desktop app's **join a site** and **leave site** dialogs say what happened once; no toast repeats it, and join no longer says twice that the machine will appear on your dashboard.
+- in owlette swoop, the two-factor and other sign-in screens sit mid-window with the window controls, and offer no passkey.
+- signing in no longer shows a "2FA verification required" toast.
 
 ## [4.2.7] - 2026-11-25
 

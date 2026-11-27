@@ -24,6 +24,8 @@ const deleteWrapped = authorizedSiteHandler<{ siteId: string; machineId: string 
   targetKind: 'machine',
   targetIdParam: 'machineId',
   apiKeyScope: { resource: 'machine', idParam: 'machineId', permission: 'write' },
+  // dismissing a pending reboot is on the allowlist for a person without a member row (adr 0021)
+  admitsNonMembers: true,
 })(async (request, ctx, routeContext) => {
   try {
     const { machineId } = await routeContext.params;

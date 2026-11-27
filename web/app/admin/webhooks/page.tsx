@@ -7,6 +7,8 @@ import { SitePicker } from '@/components/SitePicker';
 import { Plus } from 'lucide-react';
 import AddWebhookDialog, { WebhookList } from '@/components/WebhookSettingsDialog';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { MemberLockSection } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
@@ -32,6 +34,8 @@ export default function WebhooksPage() {
     return sites[0].id;
   }, [userSelectedSiteId, sites, lastSiteId]);
   const webhooksGated = usePlanGated('webhooks', selectedSiteId);
+  // a superadmin without a member row lists the webhooks and changes none (adr 0021)
+  const memberLocked = useMemberLock(selectedSiteId);
 
   const handleSiteChange = (siteId: string) => {
     setUserSelectedSiteId(siteId);
@@ -62,7 +66,7 @@ export default function WebhooksPage() {
             )
           }
           actions={
-            !webhooksGated && (
+            !webhooksGated && !memberLocked && (
               <CompactButton
                 icon={Plus}
                 label="add webhook"
@@ -73,7 +77,11 @@ export default function WebhooksPage() {
           }
         />
 
-        {selectedSiteId && <WebhookList siteId={selectedSiteId} />}
+        {selectedSiteId && (
+          <MemberLockSection siteId={selectedSiteId}>
+            <WebhookList siteId={selectedSiteId} />
+          </MemberLockSection>
+        )}
 
         {selectedSiteId && (
           <AddWebhookDialog

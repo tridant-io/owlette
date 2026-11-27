@@ -42,8 +42,13 @@ function pathFor(parts: string[]): string {
 }
 
 function collectionRef(parts: string[]) {
+  const live = () => {
+    const prefix = `${pathFor(parts)}/`;
+    return Array.from(store.entries()).filter(([path, data]) => data && path.startsWith(prefix) && !path.slice(prefix.length).includes('/'));
+  };
   return {
     doc: (id: string) => docRef([...parts, id]),
+    count: () => ({ get: async () => ({ data: () => ({ count: live().length }) }) }),
     get: async () => {
       const prefix = `${pathFor(parts)}/`;
       const docs = Array.from(store.entries())
@@ -108,8 +113,11 @@ jest.mock('@/lib/rateLimit', () => {
     },
   };
 });
+// the folder and record deletes themselves are pinned in screenshotStorage.delete.test.ts
+const mockDeleteMachineScreenshots = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('@/lib/screenshotStorage.server', () => ({
   ...jest.requireActual('@/lib/screenshotStorage.server'),
+  deleteMachineScreenshots: (...a: unknown[]) => mockDeleteMachineScreenshots(...a),
   issueScreenshotUploadUrl: async (siteId: string, machineId: string) => ({
     uploadUrl: `https://storage.example/${siteId}/${machineId}`,
     storagePath: `screenshots/${siteId}/${machineId}/x.png`,
@@ -163,11 +171,11 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/screenshots', () => {
     expect(deletedStoragePaths).toEqual(['screenshots/site-a/m1/shot-2.jpg']);
   });
 
-  it('clears every recorded object and the latest one', async () => {
+  // the history grows without bound, so it goes in one folder delete and one
+  // recursive delete, not record by record
+  it("clears the machine's whole history in one go and its latest screenshot", async () => {
+    store.set('sites/site-a/machines/m1', { lastScreenshot: { url: '/x', path: 'screenshots/site-a/m1/shot-4.jpg' } });
     store.set('sites/site-a/machines/m1/screenshots/shot-3', { path: 'screenshots/site-a/m1/shot-3.jpg' });
-    store.set('sites/site-a/machines/m1/screenshots/shot-4', {
-      url: 'https://storage.googleapis.com/bucket.example/screenshots/site-a/m1/shot-4.jpg?t=1',
-    });
 
     const res = await DELETE(
       new NextRequest('http://localhost/api/sites/site-a/machines/m1/screenshots', { method: 'DELETE' }),
@@ -175,11 +183,11 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}/screenshots', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(deletedStoragePaths).toEqual([
-      'screenshots/site-a/m1/shot-3.jpg',
-      'screenshots/site-a/m1/shot-4.jpg',
-      'screenshots/site-a/m1/latest.jpg',
-    ]);
+    expect((await res.json()).deleted).toBe(1);
+    expect(mockDeleteMachineScreenshots).toHaveBeenCalledTimes(1);
+    expect(mockDeleteMachineScreenshots).toHaveBeenCalledWith('site-a', 'm1', expect.anything());
+    expect(deletedStoragePaths).toEqual([]);
+    expect(store.get('sites/site-a/machines/m1')?.lastScreenshot).toBeNull();
   });
 });
 

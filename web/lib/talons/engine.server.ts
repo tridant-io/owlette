@@ -443,8 +443,8 @@ async function executeRun(
         verdict: result.verdict,
         confidence: result.confidence,
         reason: result.reason,
-        // PATH only: signed urls expire in ~1h and the object at 30 days, so a
-        // persisted url would be a dead link on a longer-lived run record.
+        // PATH only: signed urls expire in ~1h, so a persisted url would be a
+        // dead link on a longer-lived run record.
         ...(result.screenshotPath ? { screenshotPath: result.screenshotPath } : {}),
       };
       conditionForOutputs = result.screenshotUrl

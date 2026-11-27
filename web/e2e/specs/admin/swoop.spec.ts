@@ -21,7 +21,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { roleState } from '../../helpers/roles';
-import { seedMachine, seedSite, type TestUser } from '../../helpers/seed';
+import { seedMachine, seedMemberRow, seedSite, TEST_USERS, type TestUser } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const SITE_ID = `site-admin-swoop-${SUFFIX}`;
@@ -69,6 +69,7 @@ test.afterAll(async () => {
   await db.doc(`sites/${SITE_ID}/settings/swoop`).delete();
   await db.doc(`sites/${SITE_ID}/members/${SITE_OWNER}`).delete();
   await db.doc(`sites/${SITE_ID}/members/${viewer.uid}`).delete();
+  await db.doc(`sites/${SITE_ID}/members/${TEST_USERS.superadmin.uid}`).delete();
   await db.doc(`sites/${SITE_ID}`).delete();
   await db.doc(`users/${viewer.uid}`).delete();
   await getAdminAuth().deleteUser(viewer.uid);
@@ -133,9 +134,14 @@ test.describe('as a superadmin', () => {
     await expect(fleet.nth(4)).toHaveAttribute('href', '/admin/hoot');
   });
 
-  test("the swoop page lists the site, and its row's switch writes at once", async ({ page }) => {
+  // the kill above needs no member row (adr 0021); the switch changes the site's settings, which does
+  test("the swoop page lists the site, and its row's switch writes at once, once the superadmin is a member", async ({ page }) => {
     await gotoSwoopSessions(page);
+    const locked = page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true });
+    await expect(locked).toBeDisabled();
 
+    await seedMemberRow(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
+    await page.reload();
     const swoop = page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true });
     // enabled means the snapshot has answered; with no document, swoop is off. the
     // switch follows its snapshot, so the flip on screen is the document answering.

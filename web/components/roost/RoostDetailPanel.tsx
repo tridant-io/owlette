@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { RoostContentsRow } from '@/components/RoostContentsRow';
 import { RoostTargetsList } from '@/components/RoostTargetRow';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { VersionHistory } from '@/components/roost/VersionHistory';
 import type { NewVersionContext } from '@/components/ProjectDistributionDialog';
 import type { Roost } from '@/hooks/useRoosts';
@@ -62,6 +63,8 @@ export function RoostDetailPanel({
   onCopyVersionId,
   headingId,
 }: RoostDetailPanelProps) {
+  // a superadmin without a member row reads it and changes nothing (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const versionLabel =
     roost.currentVersionNumber !== null ? `v${roost.currentVersionNumber}` : null;
   const canResync = !!roost.currentVersionId && roost.targets.length > 0;
@@ -114,6 +117,8 @@ export function RoostDetailPanel({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {!memberLocked && (
+              <>
             <DropdownMenuItem
               disabled={!canResync}
               onClick={() => {
@@ -125,6 +130,8 @@ export function RoostDetailPanel({
               re-sync targets
             </DropdownMenuItem>
             <DropdownMenuSeparator />
+              </>
+            )}
             <DropdownMenuItem
               onClick={onCopyRoostId}
               className="cursor-pointer"
@@ -142,6 +149,8 @@ export function RoostDetailPanel({
               <Copy className="h-3.5 w-3.5 mr-2" />
               copy version id
             </DropdownMenuItem>
+            {!memberLocked && (
+              <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={onDelete}
@@ -150,6 +159,8 @@ export function RoostDetailPanel({
               <Trash2 className="h-3.5 w-3.5 mr-2" />
               delete roost
             </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
         <Button
@@ -212,6 +223,7 @@ export function RoostDetailPanel({
                   <span>targets ({roost.targets.length})</span>
                 </button>
               </CollapsibleTrigger>
+              {!memberLocked && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -222,6 +234,7 @@ export function RoostDetailPanel({
                 <RefreshCw className="h-3 w-3 mr-1" />
                 re-sync targets
               </Button>
+              )}
             </div>
             <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
               {/* the gap under the row is in here, so it slides in with the list */}

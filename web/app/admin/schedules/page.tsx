@@ -15,6 +15,8 @@ import { SitePicker } from '@/components/SitePicker';
 import { Plus, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { MemberLockSection } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { CompactButton } from '@/components/admin/CompactButton';
 
 export default function SchedulePresetsPage() {
@@ -36,6 +38,8 @@ export default function SchedulePresetsPage() {
     error,
     deletePreset,
   } = useSchedulePresets(selectedSiteId);
+  // a superadmin without a member row reads the presets and changes none (adr 0021)
+  const memberLocked = useMemberLock(selectedSiteId);
 
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
   const [editingPreset, setEditingPreset] = useState<SchedulePreset | null>(null);
@@ -113,10 +117,11 @@ export default function SchedulePresetsPage() {
               />
             )
           }
-          actions={<CompactButton icon={Plus} label="create preset" onClick={handleCreateNew} />}
+          actions={!memberLocked && <CompactButton icon={Plus} label="create preset" onClick={handleCreateNew} />}
         />
 
         {/* Presets list */}
+        <MemberLockSection siteId={selectedSiteId}>
         {presets.length > 0 && (
           <div className="space-y-3">
             {presets.map((preset) => (
@@ -137,6 +142,7 @@ export default function SchedulePresetsPage() {
                     {preset.description || formatScheduleSummary(preset.blocks, userPreferences.timeFormat || '12h')}
                   </p>
                 </div>
+                {!memberLocked && (
                 <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                   <IconButton
                     label={`edit ${preset.name}`}
@@ -157,11 +163,13 @@ export default function SchedulePresetsPage() {
                     </IconButton>
                   )}
                 </div>
+                )}
               </div>
             ))}
 
           </div>
         )}
+        </MemberLockSection>
       </div>
 
       {/* Create/Edit Dialog */}

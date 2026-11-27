@@ -24,7 +24,7 @@ export interface SitePlan {
   machineLimitFor: (machineId: string) => number | null;
   /**
    * the plan leaves out control: remote commands, process restart and kill,
-   * display restore, and screenshots, live view included. configuration stays.
+   * display restore and screenshots. configuration stays.
    */
   controlLocked: boolean;
   swoopLocked: boolean;

@@ -12,6 +12,7 @@ import { useFleetSettingsWrite } from '@/hooks/useFleetSettingsWrite';
 import type { SiteMachine } from '@/hooks/useSiteMachines';
 import { storedFleetGrant, type StoredFleetGrant } from '@/lib/fleet/grant';
 import { toast } from '@/lib/toast';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 type Reach = keyof typeof FLEET_COPY.reaches;
 type Tier = StoredFleetGrant['maxTier'];
@@ -36,6 +37,7 @@ export function AllowMachineCard({
   onCancel: () => void;
 }) {
   const { settings } = useFleetSettings(siteId);
+  const memberLocked = useMemberLock(siteId);
   const write = useFleetSettingsWrite(siteId);
   // a machine with a row already (its site switch is what is off) starts from it
   const stored = Object.prototype.hasOwnProperty.call(settings.senders, machine.id)
@@ -142,6 +144,7 @@ export function AllowMachineCard({
       {!settings.enabled && (
         <p className="text-xs text-muted-foreground">{FLEET_COPY.allowTurnsOn(siteName)}</p>
       )}
+      {!memberLocked && (
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={onCancel} disabled={saving}>
           {FLEET_COPY.allowCancel}
@@ -150,6 +153,7 @@ export function AllowMachineCard({
           {FLEET_COPY.allowConfirm}
         </Button>
       </div>
+      )}
     </section>
   );
 }

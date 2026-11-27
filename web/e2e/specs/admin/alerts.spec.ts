@@ -12,7 +12,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite } from '../../helpers/seed';
+import { grantMembership, revokeMembership, seedSite, TEST_USERS } from '../../helpers/seed';
 import { pickSite } from '../../helpers/sitePicker';
 import { expectSweepSize, sweptContrast } from '../../helpers/sweep';
 
@@ -64,6 +64,8 @@ async function getAlertRules(): Promise<AlertRule[]> {
 
 test.beforeEach(async () => {
   await seedSite({ id: SITE_ID, name: SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
+  // the superadmin changes a site only as its member (adr 0021)
+  await grantMembership(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
   // Reset to empty; each test seeds what it needs.
   await setAlertRules([]);
 });
@@ -182,4 +184,8 @@ test('deleting a rule removes it from the Firestore rules array', async ({ page 
 
   const rules = await getAlertRules();
   expect(rules.find((r) => r.id === SEEDED_RULE.id)).toBeUndefined();
+});
+
+test.afterAll(async () => {
+  await revokeMembership(SITE_ID, TEST_USERS.superadmin.uid);
 });

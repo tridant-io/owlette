@@ -722,9 +722,10 @@ describe('/api/sites/{siteId}', () => {
     expect(docStore['machine_moves/site-c:m1']?.data).toEqual(move);
   });
 
-  it('allows a superadmin to delete a site they do not own', async () => {
+  it('allows a superadmin who is a member to delete a site they do not own', async () => {
     authedKey('super-uid', 'superadmin', [siteScope('site-a', 'admin')]);
     seedSite('site-a', { owner: 'someone-else' });
+    docStore['sites/site-a/members/super-uid'] = { data: { uid: 'super-uid', role: 'member', status: 'active' } };
 
     const res = await siteDELETE(
       createMockRequest('http://localhost/api/sites/site-a', { method: 'DELETE' }),
@@ -733,6 +734,21 @@ describe('/api/sites/{siteId}', () => {
 
     expect(res.status).toBe(200);
     expect(docStore['sites/site-a']?.data).toBeNull();
+  });
+
+  // a superadmin without a member row changes nothing on the site (adr 0021)
+  it('refuses a superadmin who is not a member with 403 members_only', async () => {
+    authedKey('super-uid', 'superadmin', [siteScope('site-a', 'admin')]);
+    seedSite('site-a', { owner: 'someone-else' });
+
+    const res = await siteDELETE(
+      createMockRequest('http://localhost/api/sites/site-a', { method: 'DELETE' }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('members_only');
+    expect(docStore['sites/site-a']?.data).not.toBeNull();
   });
 });
 

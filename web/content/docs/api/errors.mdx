@@ -63,6 +63,7 @@ these can come from almost any route.
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
+| `members_only` | 403 | a superadmin who is not a member of the site, or their key, asked to change the site or capture its screen | add yourself to the site first, from the admin users page |
 | `mfa_challenge_required` | 403 | a session that has not passed its second factor, or an ID token for an account that holds one | pass the second factor at sign-in, or use an API key |
 | `mfa_setup_required` | 403 | the account has to set up a second factor before its dashboard session or Firebase ID token is answered | set one up at `/setup-2fa` |
 | `not_found` | 404 | absent, or hidden from this caller. a machine outside the caller's machine scope says `machine not found or no access` | check the ID and the caller's access |
@@ -111,7 +112,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 |---|---|
 | `owlette.machines` | moving a machine to a site whose plan has no room for another machine |
 | `owlette.sites` | creating a site once the caller's free site is taken, without `onPlan: true` from a signed-in session (an API key's is ignored), or at all while a further site of theirs is unpaid; or transferring a site on owlette free to an owner whose free site is taken. a create refusal carries `siteCreation` with the site to upgrade, and a blocked one points `upgradeUrl` at that site's billing section; see [adding a site](/docs/plans#adding-a-site) |
-| `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
+| `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
 | `owlette.deployments` | creating, retrying and uninstalling deployments |
 | `owlette.swoop` | starting and renewing swoop sessions |
 | `owlette.hoot` | hoot messages and hoot's tool calls (`mcp_tool_call`) |
@@ -152,6 +153,10 @@ the API key is valid but has no scope entry matching the operation. `required` n
 ### api_key_not_permitted
 
 the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, a site's billing, moving a machine to another site, and `GET /api/sites?include=machines`. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
+
+### members_only
+
+a superadmin reaches every site without being a member of it. there they read the site, machines, status, metrics, logs, deployments and settings, and change only a few things: update owlette on a machine, reboot one or cancel or dismiss a reboot, start, stop, restart or kill a configured process, cancel a deployment, revoke an agent token, kill or kick a swoop session (kill or kick), and run a read-only (tier 1) hoot tool. every other change answers `403 members_only`, including pairing or moving a machine, processes, deployments, roost, talons, presets, settings, members, webhooks and alerts, and so do capturing a screen and starting or renewing a swoop session. they see none of its screens: a stored screenshot's image answers `403 forbidden`. their API keys answer the same way. add yourself to the site first, from the admin users page; the site's audit log records it.
 
 ### mfa_challenge_required
 

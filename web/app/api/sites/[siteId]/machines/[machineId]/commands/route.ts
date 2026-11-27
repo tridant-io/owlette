@@ -23,6 +23,7 @@ import {
   ALLOWED_COMMAND_TYPES,
   executeMachineCommand,
   ExecuteMachineCommandError,
+  nonMemberCommandRefusal,
   parseActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
 
@@ -229,11 +230,6 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
   } else if (cmdType === 'dismiss_reboot_pending') {
     const error = copyOptionalString(inputParams, payload, 'process_name');
     if (error) return { ok: false, response: error };
-  } else if (cmdType === 'start_live_view') {
-    for (const key of ['interval', 'duration']) {
-      const error = copyOptionalPositiveInteger(inputParams, payload, key, 1);
-      if (error) return { ok: false, response: error };
-    }
   } else if (
     cmdType === 'restart_process' ||
     cmdType === 'start_process' ||
@@ -371,11 +367,7 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
  * behind the read-class MACHINE_VIEW (which members hold on their sites)
  * instead of MACHINE_EXEC_COMMAND. Everything else stays admin/superadmin.
  */
-const VIEW_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
-  'capture_screenshot',
-  'start_live_view',
-  'stop_live_view',
-]);
+const VIEW_COMMAND_TYPES: ReadonlySet<string> = new Set<string>(['capture_screenshot']);
 
 /**
  * Who may run this tool here. An api key runs up to its `maxToolTier`; a person
@@ -448,6 +440,10 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
         const normalized = normalizeCommandBody(body);
         if (!normalized.ok) return normalized.response;
 
+        // executeMachineCommand refuses it too; asked first so a tier-3 call is not sent to step-up for nothing
+        const nonMember = nonMemberCommandRefusal(ctx.actor, siteId, normalized.type, normalized.payload);
+        if (nonMember) return commandErrorToProblem(nonMember);
+
         if (normalized.type === 'mcp_tool_call') {
           const refusal = await toolCallRefusal(
             request,
@@ -506,6 +502,8 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
 
 const sharedHandlerOptions = {
   siteIdParam: 'path' as const,
+  // a person without a member row queues only the allowlisted types (executeMachineCommand)
+  admitsNonMembers: true,
   targetKind: 'machine' as const,
   targetIdParam: 'machineId',
   apiKeyScope: {

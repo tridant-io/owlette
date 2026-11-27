@@ -168,9 +168,21 @@ beforeEach(() => {
     auth: { userId: 'member-uid', keyContext: null },
     scopeCheck: { isLegacy: false },
     machineIds: null,
+    seesScreens: true,
   });
   process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET = BUCKET;
 });
+
+/** a full history: older records by path and, on an older record, by storage url */
+function seedHistory(count: number): void {
+  docs.set(`${HISTORY}/a-old`, {
+    url: `https://storage.googleapis.com/${BUCKET}/screenshots/${SITE}/${MACHINE}/history/1.jpg`,
+  });
+  for (let i = 1; i < count; i++) {
+    const p = `screenshots/${SITE}/${MACHINE}/${10 + i}-aaaaaaaa.jpg`;
+    docs.set(`${HISTORY}/c-${String(i).padStart(2, '0')}`, { path: p, url: imageUrl(p) });
+  }
+}
 
 describe('POST .../screenshots/finalize', () => {
   const PATH = `screenshots/${SITE}/${MACHINE}/1700000000000-aabbccdd.jpg`;
@@ -206,21 +218,14 @@ describe('POST .../screenshots/finalize', () => {
     expect(docs.size).toBe(0);
   });
 
-  it('prunes history past 20 by stored path, and by the url on an older record', async () => {
+  it('keeps every earlier capture, however many there are', async () => {
     mockVerifyIdToken.mockResolvedValue(AGENT_CLAIMS);
-    const legacy = `screenshots/${SITE}/${MACHINE}/history/1.jpg`;
-    const recorded = `screenshots/${SITE}/${MACHINE}/2-aaaaaaaa.jpg`;
-    docs.set(`${HISTORY}/a-old`, { url: `https://storage.googleapis.com/${BUCKET}/${legacy}` });
-    docs.set(`${HISTORY}/b-old`, { path: recorded, url: imageUrl(recorded) });
-    for (let i = 0; i < 19; i++) {
-      const p = `screenshots/${SITE}/${MACHINE}/${10 + i}-aaaaaaaa.jpg`;
-      docs.set(`${HISTORY}/c-${String(i).padStart(2, '0')}`, { path: p, url: imageUrl(p) });
-    }
+    seedHistory(25);
 
     expect((await finalize(PATH)).status).toBe(200);
 
-    expect(deleted).toEqual([legacy, recorded]);
-    expect(historyDocs()).toHaveLength(20);
+    expect(deleted).toEqual([]);
+    expect(historyDocs()).toHaveLength(26);
   });
 });
 
@@ -266,6 +271,24 @@ describe('GET .../screenshots/image', () => {
     expect(res.status).toBe(404);
     expect(signedReads).toEqual([]);
   });
+
+  it('refuses a superadmin who holds no member row on the site, and signs nothing', async () => {
+    mockRequireMachineAuth.mockResolvedValue({
+      ok: true,
+      userId: 'super-uid',
+      auth: { userId: 'super-uid', keyContext: null },
+      scopeCheck: { isLegacy: false },
+      machineIds: null,
+      seesScreens: false,
+    });
+
+    const res = await readImage(`?path=${encodeURIComponent(`screenshots/${SITE}/${MACHINE}/1.jpg`)}`);
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail).toBe("screenshots are visible only to the site's members");
+    expect(res.headers.get('location')).toBeNull();
+    expect(signedReads).toEqual([]);
+  });
 });
 
 describe('POST /api/agent/screenshot (agents before the signed-url upload)', () => {
@@ -291,6 +314,23 @@ describe('POST /api/agent/screenshot (agents before the signed-url upload)', () 
     expect(historyDocs()).toEqual([
       expect.objectContaining({ path: saved[1], url: imageUrl(saved[1]) }),
     ]);
+  });
+
+  it('keeps every earlier capture, however many there are', async () => {
+    mockVerifyIdToken.mockResolvedValue(AGENT_CLAIMS);
+    seedHistory(25);
+
+    const res = await legacyPOST(
+      createMockRequest('http://localhost/api/agent/screenshot', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer agent-token' },
+        body: { siteId: SITE, machineId: MACHINE, screenshot: 'aGVsbG8=' },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(deleted).toEqual([]);
+    expect(historyDocs()).toHaveLength(26);
   });
 });
 

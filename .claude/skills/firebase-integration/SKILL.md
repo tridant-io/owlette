@@ -95,7 +95,7 @@ Agent poller picks it up → executes → writes completed[cmdId] and deletes th
 Web listener sees completion → updates UI
 ```
 
-Command types the web sends: process control (`restart_process`, `start_process`, `stop_process`, `kill_process`, `set_launch_mode`), machine (`reboot_machine`, `shutdown_machine`, `cancel_reboot`, `dismiss_reboot_pending`, `capture_screenshot`, `start_live_view`, `stop_live_view`, `update_owlette`, display topology), deployments (`install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall`), roost (`sync_pull`), swoop (`swoop_*`), hoot (`mcp_tool_call`, `cancel_mcp_tool`, `provision_cortex_key`), the process editor (`check_path`, session-only, ADR 0014). The allowlist for the machine-command API is `ALLOWED_COMMAND_TYPES` in `web/lib/actions/executeMachineCommand.server.ts`.
+Command types the web sends: process control (`restart_process`, `start_process`, `stop_process`, `kill_process`, `set_launch_mode`), machine (`reboot_machine`, `shutdown_machine`, `cancel_reboot`, `dismiss_reboot_pending`, `capture_screenshot`, `update_owlette`, display topology), deployments (`install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall`), roost (`sync_pull`), swoop (`swoop_*`), hoot (`mcp_tool_call`, `cancel_mcp_tool`, `provision_cortex_key`), the process editor (`check_path`, session-only, ADR 0014). The allowlist for the machine-command API is `ALLOWED_COMMAND_TYPES` in `web/lib/actions/executeMachineCommand.server.ts`.
 
 ---
 
@@ -190,6 +190,14 @@ That query ALSO needs a single-field index exemption (`members.uid`, COLLECTION_
 in `firestore.indexes.json`. Automatic single-field indexing does NOT extend to
 collection-group scope, and neither the emulator nor the Admin SDK will tell you —
 `scripts/check-membership-read-path.mjs` is the only check that catches it.
+
+A superadmin passes every site check with no row, but where they hold none the server lets them
+read it and change only an allowlist (ADR 0021): the shared gates (`authorizedSiteHandler`,
+`requireSiteAuthAndScope`, `requireMachineAuthAndScope`, `requireRoostAuthAndScope`) answer every
+other request but GET, HEAD and OPTIONS with 403 `members_only` (`refusesNonMemberChange`), and
+`executeMachineCommand` narrows the commands they may queue (`nonMemberCommandRefusal`). A new
+write route is refused for them unless it sets `admitsNonMembers`, which
+`__tests__/api/nonMemberChanges.test.ts` pins.
 
 Server-side the same decision lives in `lib/sitePolicy.server.ts` (`resolveSiteAccess`), with
 the capability matrix in `lib/capabilities.ts` keyed on the PER-SITE role. Machine scope

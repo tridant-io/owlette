@@ -10,6 +10,9 @@
  *      gets 404 for a `params.machineId` outside their scope, and the
  *      capability step's 403 on a route with no machineId or for a site-wide
  *      capability.
+ *      in the same step, a caller without a member row (a superadmin) is
+ *      refused any change the route does not admit them for (`admitsNonMembers`,
+ *      adr 0021).
  *   4. securityConfig.read() for kill-switch state
  *   5. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
  *      against a downgraded key gaining rights while capability enforcement
@@ -53,6 +56,7 @@ import {
   problem,
   mfaChallengeProblem,
   problemForbidden,
+  problemMembersOnly,
   problemNotFound,
   problemPlanRequired,
   problemRateLimited,
@@ -69,6 +73,8 @@ import {
   type UserActor,
   hasCapability,
   isMachineCapability,
+  isSiteMember,
+  refusesNonMemberChange,
   siteStanding,
 } from '@/lib/capabilities';
 import {
@@ -148,8 +154,8 @@ export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capab
 export const PLAN_GATED_CAPABILITIES: ReadonlyMap<Capability, PlanFlag> = new Map<Capability, PlanFlag>([
   [Capability.DEPLOYMENT_MANAGE, 'owlette.deployments'],
   [Capability.ALERT_RULES_MANAGE, 'owlette.control'],
-  // only swoop's routes hold these two through this wrapper; commands, live view
-  // included, are gated in executeMachineCommand.
+  // only swoop's routes hold these two through this wrapper; commands are gated
+  // in executeMachineCommand.
   [Capability.MACHINE_REMOTE_CONTROL, 'owlette.swoop'],
   [Capability.MACHINE_REMOTE_VIEW, 'owlette.swoop'],
   [Capability.TALON_MANAGE, 'owlette.talons'],
@@ -225,6 +231,15 @@ export interface SiteHandlerOptions {
    * still be stoppable. an api key still needs `owlette.api_keys`.
    */
   planExempt?: boolean;
+  /**
+   * let a caller without a member row on the site (a superadmin) make this
+   * change. every other change they ask for answers 403 members_only (adr 0021).
+   * only the allowlist sets it: the commands route and the process verbs,
+   * which `executeMachineCommand` narrows to its non-member command types;
+   * dismissing a pending reboot; cancelling a deployment; revoking an agent
+   * token; killing or kicking a swoop session.
+   */
+  admitsNonMembers?: boolean;
 }
 
 export interface PlatformHandlerOptions {
@@ -658,6 +673,20 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         // have no membership; their capabilities short-circuit on global role.
         siteStanding([[siteId, standingOf(outcome.facts)]]),
       );
+
+      // part of site access like machine scope below, so the kill switch never reaches it
+      if (!options.admitsNonMembers && refusesNonMemberChange(isSiteMember(actor, siteId), request.method)) {
+        denyAudit(siteId, {
+          correlationId,
+          actor,
+          capability: options.capability,
+          target: { kind: targetKind, id: targetId } as AuditTarget,
+          outcome: 'deny',
+          denyReason: 'members_only',
+          metadata: { route: request.nextUrl.pathname, method: request.method },
+        });
+        return problemMembersOnly();
+      }
 
       // machine scope is part of site access, like membership: the kill switch
       // never reaches it. it reads params.machineId itself, because

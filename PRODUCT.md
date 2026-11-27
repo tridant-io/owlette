@@ -39,7 +39,7 @@ success means the installation stays up, and when it doesn't, the operator finds
 ## Capabilities and Constraints
 
 - **terminology** (feature names are always lowercase): **site**, **machine**, **process**, **roost** (content-addressed project distribution with immutable versions and one-click rollback), **hoot** (the built-in AI assistant, a feature of owlette rather than a separate product), **swoop** (remote desktop: a live, controllable view of a machine's screen), **talons** (automations: trigger, condition, outputs, with AI visual checks), **pairing phrase**.
-- **capabilities**: live CPU/memory/disk/GPU/network metrics; crash detection and auto-recovery; remote screenshots and live view; silent software deployment (NSIS, Inno Setup, MSI, custom); display topology management with auto-revert; threshold alerts, email and webhooks; activity logs; passkeys and TOTP 2FA.
+- **capabilities**: live CPU/memory/disk/GPU/network metrics; crash detection and auto-recovery; remote screenshots; silent software deployment (NSIS, Inno Setup, MSI, custom); display topology management with auto-revert; threshold alerts, email and webhooks; activity logs; passkeys and TOTP 2FA.
 - **agent platforms**: owlette.app (prod) serves only the Windows installer (3.3.7) until dev is promoted. dev serves Windows, macOS (Apple silicon, macOS 15+) and Linux (Ubuntu 24.04), and dev's `web/lib/product-facts.ts` says all three. public claims must match what each environment serves, so the macOS/Linux claim reaches owlette.app with the dev→prod promotion.
 - **architecture constraints**: there is no direct link between agent and dashboard; Firestore is the message bus. the agent connects outbound on port 443 only, with no inbound ports or VPN, and keeps recovering locally while offline.
 - **unattended by definition**: nothing on a managed machine may demand a human. no unattended UAC prompts, no dialogs that block recovery.
@@ -64,7 +64,7 @@ success means the installation stays up, and when it doesn't, the operator finds
 ## Product Principles
 
 1. **two users, one tool.** every surface has to work for the person debugging one show machine and for the team watching a hundred screens. depth must not cost scale, and scale must not cost depth.
-2. **the loop is the product.** monitor, recover, deploy, control and automate should hand off to each other: from a crash to a live view, from a metric to a hoot investigation, from a version to a rollback. no feature should be a dead end.
+2. **the loop is the product.** monitor, recover, deploy, control and automate should hand off to each other: from a crash to a swoop session on that machine, from a metric to a hoot investigation, from a version to a rollback. no feature should be a dead end.
 3. **AI acts in the open.** hoot operates real machines. what it can do is tiered, what it did is visible, and privileged actions are gated.
 4. **nobody is at the machine.** design for the operator who is somewhere else, often at night, often on a phone. everything must be doable remotely, and nothing on the machine may wait for a person.
 5. **honest claims.** beta is labelled beta, prices come from one source, platform claims match what prod serves, and proof is only what we actually have.

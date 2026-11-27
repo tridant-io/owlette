@@ -197,15 +197,15 @@ describe('POST /api/webhooks/test', () => {
     expect(mockTestWebhook).not.toHaveBeenCalled();
   });
 
-  it('lets a superadmin who is not a member of the site through', async () => {
+  it('403s a superadmin who is not a member of the site (adr 0021)', async () => {
     seedCaller('root-uid', 'superadmin', []);
-    mockTestWebhook.mockResolvedValue({ status: 204 });
 
     const res = await POST(makeRequest({ webhookId: WEBHOOK, siteId: SITE }));
     const json = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(json.success).toBe(true);
+    expect(res.status).toBe(403);
+    expect(json.code).toBe('members_only');
+    expect(mockTestWebhook).not.toHaveBeenCalled();
   });
 
   it('404s an admin of another site before reaching the webhook', async () => {
