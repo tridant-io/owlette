@@ -13,6 +13,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 import { expectSweepSize, sweptContrast } from '../../helpers/sweep';
 
 test.use(roleState('superadmin'));
@@ -74,10 +75,7 @@ async function gotoAlertsForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'alerts', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox').first();
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(siteSelect).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists a seeded rule with its severity badge and summary line', async ({ page }) => {

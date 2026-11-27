@@ -97,11 +97,11 @@ async function pick(user: ReturnType<typeof userEvent.setup>, site: string) {
 }
 
 describe('MoveMachineDialog', () => {
-  it('says what a move takes along and what it deletes, and asks for the source site', () => {
+  it('says how soon a move lands, what it takes along and what it deletes, and asks for the source site', () => {
     renderDialog();
 
     expect(dialog()).toHaveAccessibleDescription(
-      'kiosk leaves lobby and joins the site you pick. nobody needs to be at the machine, and its processes come with it. its history, screenshots and logs on lobby are deleted, and members limited to it here lose it.',
+      "kiosk leaves lobby and joins the site you pick, within seconds while it is online. it needs no restart and nobody at the machine. its processes come with it. its command history on lobby is deleted, and members limited to it here lose it.",
     );
     expect(siteSelect()).toHaveTextContent('pick a site');
     expect(useMachineMove).toHaveBeenCalledWith('elm-gate');
@@ -148,6 +148,10 @@ describe('MoveMachineDialog', () => {
     expect(screen.getByText(MOVE_OFFLINE('kiosk'))).toBeInTheDocument();
     await pick(user, 'gallery');
     expect(moveButton()).toBeEnabled();
+    await user.click(moveButton());
+    expect(toast.success).toHaveBeenCalledWith('move requested', {
+      description: 'kiosk moves to gallery when it is back online.',
+    });
   });
 
   it('says nothing about waiting for an online machine that can move', () => {
@@ -166,7 +170,7 @@ describe('MoveMachineDialog', () => {
     expect(requestMove).toHaveBeenCalledTimes(1);
     expect(requestMove).toHaveBeenCalledWith('kiosk-01', 'ash-hill');
     expect(toast.success).toHaveBeenCalledWith('move requested', {
-      description: 'kiosk joins atrium the next time it connects.',
+      description: 'kiosk moves to atrium within seconds.',
     });
     expect(toast.error).not.toHaveBeenCalled();
     expect(onMoved).toHaveBeenCalledTimes(1);

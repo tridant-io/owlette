@@ -1160,7 +1160,7 @@ export const MachineRow = memo(function MachineRow({
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                  <p className="mb-4 text-sm">No processes configured for this machine</p>
+                  <p className="mb-4 text-sm">no processes configured for this machine</p>
                   {canAdminMachine && (
                     <Button
                       variant="ghost"

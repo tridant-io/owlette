@@ -13,6 +13,10 @@ import { cn } from '@/lib/utils';
 /** past this many sites the list has a filter */
 export const SITE_FILTER_THRESHOLD = 10;
 
+/** the header's menus' panel, which the site picker's popover wears too, so every site list looks alike */
+export const MENU_SURFACE =
+  'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
+
 const FILTER_SELECTOR = '[data-site-filter]';
 const ITEM_SELECTOR = '[data-site-item]';
 

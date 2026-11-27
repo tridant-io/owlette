@@ -29,8 +29,11 @@ export interface UseSiteMachinesResult {
   /** null until the first load lands */
   machines: SiteMachine[] | null;
   error: string | null;
-  /** never rejects: a failed load lands in `error` */
-  refresh: () => Promise<void>;
+  /**
+   * never rejects: a failed load lands in `error`. a background refresh repaints in place:
+   * it leaves `error` and the last good list alone, so a poll that fails unmounts nothing
+   */
+  refresh: (options?: { background?: boolean }) => Promise<void>;
 }
 
 /**
@@ -42,15 +45,16 @@ export function useSiteMachines(siteId: string): UseSiteMachinesResult {
   const [machines, setMachines] = useState<SiteMachine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setError(null);
+  const refresh = useCallback(async (options?: { background?: boolean }) => {
+    const background = options?.background === true;
+    if (!background) setError(null);
     try {
       const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/machines`);
       if (!response.ok) throw new Error(`failed to load machines (${response.status})`);
       const body = (await response.json()) as { machines: SiteMachine[] };
       setMachines(body.machines);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'failed to load machines');
+      if (!background) setError(err instanceof Error ? err.message : 'failed to load machines');
     }
   }, [siteId]);
 

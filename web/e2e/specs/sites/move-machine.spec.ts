@@ -3,7 +3,9 @@
  * site's settings (`/admin/sites/{siteId}?section=machines`).
  *
  * a superadmin asks for a move (the row's `moving to` tag, the stored move and
- * its `site_move` command) and cancels it; an agent too old to follow, a
+ * its `site_move` command) and cancels it; the row leaves the list on its own
+ * once the machine has arrived, and an offline machine's row says it is
+ * waiting to move; an agent too old to follow, a
  * machine of the same id on the target and a busy machine are refused with
  * their copy. the agent's half is driven at its routes: the credential fetch
  * calls google's real endpoint, so the move is seeded `switching`, and the
@@ -13,8 +15,9 @@
  * both sites moves a machine; someone who administers only the source gets no
  * move button but can cancel a move already asked for, and a scoped admin of
  * the target is not offered it and is refused by the route. at 390px a row's
- * three buttons stay inside the viewport, and the tag reads `moving`, with the
- * site in its title, so it never hides the name or runs over the row.
+ * three buttons stay inside the viewport, the whole name shows on the first
+ * line, and the status takes the line under it, as the sites list's details do,
+ * followed by the tag: `moving`, with the site in its title.
  *
  * the sites and machines are the spec's own; afterAll deletes every document
  * the spec or the routes wrote, and takes back the fixtures' grants.
@@ -55,9 +58,11 @@ const CONFIRM = 'e2e-move-confirm';
 const BOTH = 'e2e-move-both';
 const PHONE = 'e2e-move-phone';
 const REFUSED = 'e2e-move-refused';
+const ARRIVING = 'e2e-move-arriving';
+const OFFLINE = 'e2e-move-offline';
 // a move doc only: the machine needs no row for the target's delete to be refused
 const SWITCHING = 'e2e-move-switching';
-const SOURCE_MACHINES = [READY, OLD, CLASH, BUSY, CONFIRM, BOTH, PHONE, REFUSED, SWITCHING];
+const SOURCE_MACHINES = [READY, OLD, CLASH, BUSY, CONFIRM, BOTH, PHONE, REFUSED, ARRIVING, OFFLINE, SWITCHING];
 
 const SOURCE_TOKEN = 'e2e-move-confirm-source-token';
 const TARGET_TOKEN = 'e2e-move-confirm-target-token';
@@ -151,7 +156,7 @@ test.beforeAll(async () => {
   await Promise.all([SOURCE, TARGET, LONG_TARGET].map((site) => seedSite({ ...site, owner: 'someone-else' })));
   // no monitors, so no display subdocument outlives afterAll
   await Promise.all([
-    ...[READY, CLASH, BUSY, BOTH, PHONE, REFUSED].map((id) =>
+    ...[READY, CLASH, BUSY, BOTH, PHONE, REFUSED, ARRIVING, OFFLINE].map((id) =>
       seedMachine(SOURCE.id, id, { siteMove: true, monitorCount: 0 }),
     ),
     seedMachine(SOURCE.id, OLD, { monitorCount: 0 }),
@@ -190,7 +195,7 @@ test('a superadmin moves a machine, and cancels the move', async ({ page }) => {
   const dialog = await moveTo(page, READY, TARGET.name);
 
   await expect(page.getByText('move requested', { exact: true })).toBeVisible();
-  await expect(page.getByText(`${READY} joins ${TARGET.name} the next time it connects.`)).toBeVisible();
+  await expect(page.getByText(`${READY} moves to ${TARGET.name} within seconds.`)).toBeVisible();
   await expect(dialog).toBeHidden();
   await expect(row(page, READY).getByText(`moving to ${TARGET.name}`, { exact: true })).toBeVisible();
 
@@ -216,6 +221,30 @@ test('a superadmin moves a machine, and cancels the move', async ({ page }) => {
 
   expect(await readDoc(movePath(READY))).toBeNull();
   expect(await siteMoveCommands(READY)).toEqual([]);
+});
+
+test('the row leaves the list on its own once the machine has arrived on the target', async ({ page }) => {
+  await seedMove(ARRIVING, TARGET.id, 'pending', superadmin.uid);
+  await openMachines(page);
+  await expect(row(page, ARRIVING).getByText(`moving to ${TARGET.name}`, { exact: true })).toBeVisible();
+
+  // what the agent's confirm leaves on the source: no move, and no machine
+  const db = getAdminDb();
+  await db.doc(movePath(ARRIVING)).delete();
+  await db.doc(machinePath(SOURCE.id, ARRIVING)).delete();
+
+  // no reload: the list asks again while a move is open
+  await expect(row(page, ARRIVING)).toHaveCount(0, { timeout: 15_000 });
+});
+
+test("an offline machine's move waits, and its row says it is waiting", async ({ page }) => {
+  await getAdminDb().doc(machinePath(SOURCE.id, OFFLINE)).update({ online: false });
+  await seedMove(OFFLINE, TARGET.id, 'pending', superadmin.uid);
+
+  await openMachines(page);
+
+  await expect(row(page, OFFLINE).getByText(`waiting to move to ${TARGET.name}`, { exact: true })).toBeVisible();
+  await expect(row(page, OFFLINE).getByText(`moving to ${TARGET.name}`, { exact: true })).toHaveCount(0);
 });
 
 test('an agent too old to follow: the dialog says so and cannot move it, and the route agrees', async ({ page }) => {
@@ -449,7 +478,7 @@ test.describe('at 390px', () => {
 
   test("a row's three buttons stay inside the viewport, with and without a move", async ({ page }) => {
     await openMachines(page);
-    // a phone row has room for one word: the site moves into the tag's title
+    // a phone line has room for one word after the status: the site moves into the tag's title
     const tag = row(page, PHONE).getByTitle(`moving to ${LONG_TARGET.name}`, { exact: true });
     await expect(tag).toBeVisible();
     await expect(tag).toHaveText('moving');
@@ -467,11 +496,17 @@ test.describe('at 390px', () => {
     }
     await assertNoHorizontalOverflow(page);
 
-    // the document check can't see overflow inside the row: measure the long tag against its neighbours
-    const nameBox = await row(page, PHONE).getByTitle(PHONE, { exact: true }).boundingBox();
+    // the document check can't see overflow inside the row: measure the tag against its neighbours.
+    // as on the sites list, the name and the buttons share the first line and the status takes the second
+    const name = row(page, PHONE).getByTitle(PHONE, { exact: true });
+    const nameBox = await name.boundingBox();
     const tagBox = await tag.boundingBox();
-    const statusBox = await row(page, PHONE).getByText('online', { exact: true }).boundingBox();
-    expect(nameBox && nameBox.width).toBeGreaterThan(30);
-    expect(tagBox && statusBox && tagBox.x + tagBox.width).toBeLessThanOrEqual((statusBox?.x ?? 0) + 1);
+    // the status line reads 'online · moving'
+    const statusBox = await row(page, PHONE).getByText(/^online/).boundingBox();
+    const restartBox = await row(page, PHONE).getByRole('button', { name: `restart ${PHONE}`, exact: true }).boundingBox();
+    // the whole name shows, not an ellipsis
+    expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    expect(tagBox && restartBox && tagBox.x + tagBox.width).toBeLessThanOrEqual((restartBox?.x ?? 0) + 1);
+    expect(nameBox && statusBox && statusBox.y).toBeGreaterThanOrEqual((nameBox?.y ?? 0) + (nameBox?.height ?? 0) - 1);
   });
 });

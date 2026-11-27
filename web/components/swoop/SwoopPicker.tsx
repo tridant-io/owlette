@@ -12,22 +12,20 @@
  * opens it in a new one, which the app turns into a swoop window.
  */
 
-import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AppWindow, ArrowLeft, ChevronDown, Eye, Loader2, Monitor, MousePointer2 } from 'lucide-react';
-import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
+import { AppWindow, ArrowLeft, Eye, Loader2, Monitor, MousePointer2 } from 'lucide-react';
+import { SitePicker } from '@/components/SitePicker';
 import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
-import { useSiteMachineCounts } from '@/hooks/useSiteMachineCounts';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { LoadingWord } from '@/components/LoadingWord';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopWindowControls, TRAFFIC_LIGHTS_INSET_PX, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
@@ -57,10 +55,6 @@ export function SwoopPicker() {
     return savedSite && sites.some((s) => s.id === savedSite) ? savedSite : sites[0].id;
   }, [sites, sitesLoading, lastSiteId]);
   const siteId = chosenSiteId && sites.some((s) => s.id === chosenSiteId) ? chosenSiteId : savedSiteId;
-  const siteName = sites.find((s) => s.id === siteId)?.name;
-  const [sitePickerOpen, setSitePickerOpen] = useState(false);
-  const machineCounts = useSiteMachineCounts(sites.map((s) => s.id), machineScope, sitePickerOpen);
-  const sitePickerId = useId();
   const [filter, setFilter] = useState('');
   const { machines, loading: machinesLoading } = useMachines(siteId, machineScope(siteId));
   const { settings: swoop, loading: swoopLoading } = useSwoopSettings(siteId);
@@ -138,49 +132,7 @@ export function SwoopPicker() {
 
   const siteControls = sites.length > 0 && (
     <>
-      {/* a popover, not a select, because a select cannot hold the site filter. modal, as the
-          select was, so a click outside closes the list and opens nothing under it */}
-      <Popover modal open={sitePickerOpen} onOpenChange={setSitePickerOpen}>
-        <PopoverTrigger asChild>
-          {/* still a combobox: a screen reader hears the site beside the "site" label, which a
-              button named "site" would hide, and down opens the list as it did */}
-          <button
-            type="button"
-            role="combobox"
-            data-testid="swoop-picker-site"
-            aria-label="site"
-            aria-expanded={sitePickerOpen}
-            aria-controls={sitePickerOpen ? sitePickerId : undefined}
-            onKeyDown={(e) => {
-              if (e.key !== 'ArrowDown') return;
-              e.preventDefault();
-              setSitePickerOpen(true);
-            }}
-            className="flex h-9 w-fit min-w-0 max-w-full items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50"
-          >
-            <span className={cn('truncate', !siteName && 'text-muted-foreground')}>{siteName ?? 'choose a site'}</span>
-            <ChevronDown aria-hidden className="size-4 shrink-0 opacity-50" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          id={sitePickerId}
-          align="start"
-          aria-label="sites"
-          className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
-          {...siteFilterHostProps}
-        >
-          <SiteSwitcherList
-            surface="popover"
-            sites={sites}
-            currentSiteId={siteId}
-            onPick={(next) => {
-              setSitePickerOpen(false);
-              if (next !== siteId) handleSiteChange(next);
-            }}
-            counts={machineCounts}
-          />
-        </PopoverContent>
-      </Popover>
+      <SitePicker data-testid="swoop-picker-site" sites={sites} value={siteId} onChange={handleSiteChange} />
       {machines.length > FILTER_MIN && (
         <Input
           value={filter}

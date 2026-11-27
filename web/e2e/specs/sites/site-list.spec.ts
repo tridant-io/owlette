@@ -2,7 +2,8 @@
  * sites — the site list at admin panel → sites, and the site switcher's entries.
  *
  * the list shows the sites you belong to, with a gear on each one you
- * administer. a superadmin sees every site, each with a gear and its owner. the
+ * administer, and that site's name links to the same settings, by click or by
+ * enter. a superadmin sees every site, each with a gear and its owner. the
  * switcher offers site settings to the current site's admins, manage sites to
  * anyone who administers a site, and new site only to someone who administers
  * none.
@@ -16,6 +17,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
+import { sweptContrast } from '../../helpers/sweep';
 import { releaseFixtureSite, TEST_SITES, TEST_USERS } from '../../helpers/seed';
 
 const SITE_A_NAME = 'Site A (Assigned)';
@@ -46,6 +48,22 @@ test.describe('admin on site-A', () => {
     await expect(gear).toHaveAttribute('href', '/admin/sites/site-A');
     await gear.click();
 
+    await expect(page).toHaveURL(/\/admin\/sites\/site-A$/);
+    await expect(page.getByRole('heading', { level: 1, name: SITE_A_NAME })).toBeVisible();
+  });
+
+  test("site-A's name opens its settings too, by click and from the keyboard", async ({ page }) => {
+    await page.goto('/admin/sites');
+    const name = page.getByRole('link', { name: SITE_A_NAME, exact: true });
+    await expect(name).toHaveAttribute('href', '/admin/sites/site-A');
+
+    await name.click();
+    await expect(page).toHaveURL(/\/admin\/sites\/site-A$/);
+    await expect(page.getByRole('heading', { level: 1, name: SITE_A_NAME })).toBeVisible();
+
+    await page.goBack();
+    await name.focus();
+    await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/\/admin\/sites\/site-A$/);
     await expect(page.getByRole('heading', { level: 1, name: SITE_A_NAME })).toBeVisible();
   });
@@ -109,6 +127,17 @@ test.describe('superadmin', () => {
     await page.goto('/admin/sites');
 
     await expect(siteRows(page).filter({ hasText: SITE_C_NAME })).toContainText(TEST_USERS.owner.email);
+  });
+
+  test("a filtered name's match stays readable under the name's hover sweep", async ({ page }) => {
+    await page.goto('/admin/sites');
+    await page.getByRole('textbox', { name: 'filter sites', exact: true }).fill('unassigned');
+    const name = page.getByRole('link', { name: SITE_B_NAME, exact: true });
+    await expect(name.locator('mark')).toHaveText('Unassigned');
+
+    await name.hover();
+
+    await expect.poll(() => sweptContrast(name, name.locator('mark')), { message: 'the match reads on the cyan sweep' }).toBeGreaterThanOrEqual(4.5);
   });
 });
 
