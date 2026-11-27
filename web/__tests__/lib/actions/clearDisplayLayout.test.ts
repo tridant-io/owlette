@@ -53,6 +53,15 @@ describe('clearDisplayLayout', () => {
     expect(opts).toEqual({ merge: true });
   });
 
+  it('turns auto-restore off in the same write, keeping its history and breaker', async () => {
+    await clearDisplayLayout(CTX, { machineId: MACHINE });
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    const [payload] = mockSet.mock.calls[0];
+    expect((payload as { displays: { autoRestore: unknown } }).displays.autoRestore).toEqual({
+      enabled: false,
+    });
+  });
+
   it('emits an audit with verb=clear', async () => {
     await clearDisplayLayout(CTX, { machineId: MACHINE });
     expect(mockEmitMutation).toHaveBeenCalledWith(

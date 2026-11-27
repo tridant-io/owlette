@@ -4,8 +4,8 @@
  * Pre-seeds `config/{siteId}/machines/{id}.displays.assigned` with a stub
  * monitors array so the clear button renders (gated on `hasAssignedLayout`),
  * then drives list view → view displays → assigned tab → clear → confirm.
- * `useDisplayActions.clearLayout` deleteField()s `displays.assigned` only;
- * sibling `displays` keys must survive.
+ * `useDisplayActions.clearLayout` deleteField()s `displays.assigned` and
+ * turns auto-restore off; the other `displays` keys must survive.
  *
  * No agent stub — clearLayout is a pure client-SDK Firestore write.
  */

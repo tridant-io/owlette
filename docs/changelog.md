@@ -46,6 +46,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 - the desktop app's **join a site** and **leave site** dialogs say what happened once; no toast repeats it, and join no longer says twice that the machine will appear on your dashboard.
 - in owlette swoop, the two-factor and other sign-in screens sit mid-window with the window controls, and offer no passkey.
 - signing in no longer shows a "2FA verification required" toast.
+- clearing a machine's stored display layout turns auto-restore off, and storing a new one leaves it off until you turn it on. the **auto-restore** switch used to read on after a clear, though nothing could be restored. [more](https://owlette.app/docs/dashboard/displays#storing-a-layout)
 
 ## [4.2.7] - 2026-11-25
 

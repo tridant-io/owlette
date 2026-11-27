@@ -16,8 +16,8 @@
  *   { "op": "reset_breaker" }
  *   { "op": "set_remote_apply", "enabled": true }
  *
- * DELETE clears the assigned layout entirely. Sibling fields under
- * `displays` (auto-restore state, etc.) survive.
+ * DELETE clears the assigned layout entirely and turns auto-restore off;
+ * the other `displays` fields survive.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
