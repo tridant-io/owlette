@@ -73,7 +73,7 @@ function fakeRun() {
 }
 
 async function open(props: Partial<Parameters<typeof JoinSiteDialog>[0]> = {}) {
-  const all = { open: true, onClose: vi.fn(), onJoined: vi.fn(), ...props }
+  const all = { open: true, onClose: vi.fn(), ...props }
   const view = render(<JoinSiteDialog {...all} />)
   await act(async () => {
     await Promise.resolve()
@@ -90,7 +90,7 @@ beforeEach(() => {
 describe('JoinSiteDialog', () => {
   it('starts the pairing helper when it opens, and not before', async () => {
     fakeRun()
-    render(<JoinSiteDialog open={false} onClose={vi.fn()} onJoined={vi.fn()} />)
+    render(<JoinSiteDialog open={false} onClose={vi.fn()} />)
     expect(startAgentRun).not.toHaveBeenCalled()
 
     await open()
@@ -138,14 +138,13 @@ describe('JoinSiteDialog', () => {
     )
   })
 
-  it('reports the site once authorization lands', async () => {
+  it('says the service is restarting once authorization lands', async () => {
     const run = fakeRun()
-    const props = await open()
+    await open()
 
     run.emit(PHRASE)
     run.emit({ event: 'authorized', value: { siteId: 'default_site', serviceRestarted: true } })
 
-    expect(props.onJoined).toHaveBeenCalledExactlyOnceWith('default_site')
     expect(screen.getByTestId('join-status').textContent).toContain('the service is restarting')
   })
 
@@ -159,9 +158,22 @@ describe('JoinSiteDialog', () => {
     // config every second main-loop iteration and reconnects on its own.
     run.emit({ event: 'authorized', value: { siteId: 'default_site', serviceRestarted: false } })
 
-    expect(screen.getByTestId('join-status').textContent).toBe(
-      'paired — this machine will appear on your dashboard shortly',
-    )
+    expect(screen.getByTestId('join-status').textContent).toBe('paired')
+  })
+
+  it('says where the machine went once, with or without a host to name', async () => {
+    for (const phrase of [PROD_PHRASE, HOSTLESS_PHRASE]) {
+      const run = fakeRun()
+      const { view } = await open()
+
+      run.emit(phrase)
+      run.emit({ event: 'authorized', value: { siteId: 'default_site', serviceRestarted: false } })
+
+      // the description and the status line both used to say it (owner, 2026-11-26)
+      const text = screen.getByTestId('join-site-dialog').textContent ?? ''
+      expect(text.match(/appear on your dashboard/g)).toHaveLength(1)
+      view.unmount()
+    }
   })
 
   it('drops the approve instruction once the machine is paired', async () => {
@@ -182,7 +194,7 @@ describe('JoinSiteDialog', () => {
     const run = fakeRun()
     const { view } = await open()
 
-    view.rerender(<JoinSiteDialog open={false} onClose={vi.fn()} onJoined={vi.fn()} />)
+    view.rerender(<JoinSiteDialog open={false} onClose={vi.fn()} />)
     await act(async () => {
       await Promise.resolve()
     })
@@ -300,7 +312,7 @@ describe('JoinSiteDialog', () => {
     const { view } = await open({ server: 'dev' })
     expect(startAgentRun).toHaveBeenCalledTimes(1)
 
-    view.rerender(<JoinSiteDialog open server="prod" onClose={vi.fn()} onJoined={vi.fn()} />)
+    view.rerender(<JoinSiteDialog open server="prod" onClose={vi.fn()} />)
     await act(async () => {
       await Promise.resolve()
     })
@@ -405,8 +417,8 @@ describe('JoinSiteDialog', () => {
     })
     expect(startAgentRun.mock.calls[1][1]).toEqual(expect.objectContaining({ server: 'dev' }))
 
-    view.rerender(<JoinSiteDialog open={false} onClose={vi.fn()} onJoined={vi.fn()} />)
-    view.rerender(<JoinSiteDialog open onClose={vi.fn()} onJoined={vi.fn()} />)
+    view.rerender(<JoinSiteDialog open={false} onClose={vi.fn()} />)
+    view.rerender(<JoinSiteDialog open onClose={vi.fn()} />)
     await act(async () => {
       await Promise.resolve()
     })

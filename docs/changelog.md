@@ -15,6 +15,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 - updating several machines at once from the dashboard no longer fails with "could not read request body".
 - the [demo](https://owlette.app/demo) shows its machine count in the site switcher, and Mac, Linux and asleep machines.
+- the desktop app's **join a site** and **leave site** dialogs say what happened once; no toast repeats it, and join no longer says twice that the machine will appear on your dashboard.
 
 ## [4.2.7] - 2026-11-25
 
