@@ -13,6 +13,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
 
@@ -58,10 +59,7 @@ async function gotoSchedulesForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'schedules', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox');
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(page.getByRole('combobox')).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists all four built-in presets with the built-in badge and no trash', async ({ page }) => {

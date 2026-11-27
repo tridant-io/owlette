@@ -301,6 +301,12 @@ describe('machine row outside the plan', () => {
     expect(screen.getByRole('button', { name: 'restart show.exe' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'kill show.exe' })).toBeInTheDocument();
   });
+
+  it('says in lowercase that a machine has no processes', () => {
+    renderRow({ machine: { ...machine('kiosk-2'), processes: [] } as Machine });
+
+    expect(screen.getByText('no processes configured for this machine')).toBeInTheDocument();
+  });
 });
 
 describe('machine scope on both views', () => {

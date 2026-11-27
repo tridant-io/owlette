@@ -8,7 +8,7 @@
  */
 
 import React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { buttonVariants } from '@/components/ui/button';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -312,16 +312,89 @@ describe('SiteMachinesList — move', () => {
     expect(listLoads()).toBe(2);
   });
 
-  it('tags a pending move beside the name: one word on a phone, with its target from sm up', async () => {
+  it('tags a pending move beside the name from sm up, and on a phone one word after the status', async () => {
     listResponds([moving('pending')]);
     renderList();
 
     const wide = await screen.findByText('moving to bravo');
-    expect(wide).toHaveClass('hidden', 'sm:inline', 'truncate', 'text-[10px]', 'text-muted-foreground');
+    expect(wide).toHaveClass('hidden', 'sm:inline', 'truncate', 'text-xs', 'text-muted-foreground');
     expect(wide.parentElement).toHaveTextContent('lobby screen');
     const phone = screen.getByTitle('moving to bravo');
     expect(phone).toHaveTextContent(/^moving$/);
-    expect(phone).toHaveClass('shrink-0', 'sm:hidden', 'text-[10px]', 'text-muted-foreground');
+    // the phone line reads "online · moving", so the name keeps the first line
+    expect(phone.parentElement).toHaveClass('sm:hidden', 'text-muted-foreground');
+    expect(phone.parentElement?.parentElement).toHaveTextContent(/^online · moving$/);
+  });
+
+  it("says an offline machine's move waits until it is online", async () => {
+    listResponds([{ ...moving('pending'), online: false }]);
+    renderList();
+
+    expect(await screen.findByText('waiting to move to bravo')).toBeInTheDocument();
+    expect(screen.getByTitle('waiting to move to bravo')).toHaveTextContent(/^waiting$/);
+    expect(screen.queryByText('moving to bravo')).toBeNull();
+  });
+
+  it('asks for the list again while a move is open, and stops once the machine has left', async () => {
+    jest.useFakeTimers();
+    try {
+      listResponds([moving('pending')]);
+      renderList();
+      expect(await screen.findByText('moving to bravo')).toBeInTheDocument();
+
+      // the machine arrived on bravo, and this site no longer lists it
+      listResponds([]);
+      await act(async () => {
+        jest.advanceTimersByTime(5_000);
+      });
+      expect(await screen.findByText('no machines on this site')).toBeInTheDocument();
+
+      const loads = listLoads();
+      await act(async () => {
+        jest.advanceTimersByTime(30_000);
+      });
+      expect(listLoads()).toBe(loads);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the list and an open dialog when a poll fails', async () => {
+    jest.useFakeTimers();
+    try {
+      listResponds([moving('pending')]);
+      renderList();
+      fireEvent.click(await screen.findByRole('button', { name: 'remove lobby screen' }));
+      expect(await screen.findByRole('dialog')).toBeInTheDocument();
+
+      fetchMock.mockResolvedValue({ ok: false, status: 503, json: async () => ({}) });
+      await act(async () => {
+        jest.advanceTimersByTime(5_000);
+      });
+
+      expect(listLoads()).toBe(2);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByText('moving to bravo')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'retry' })).toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('asks for nothing more while no move is open', async () => {
+    jest.useFakeTimers();
+    try {
+      listResponds([lobby]);
+      renderList();
+      expect(await screen.findByRole('button', { name: 'move lobby screen' })).toBeInTheDocument();
+
+      await act(async () => {
+        jest.advanceTimersByTime(30_000);
+      });
+      expect(listLoads()).toBe(1);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('cancels a pending move from the same button, then loads the list again', async () => {

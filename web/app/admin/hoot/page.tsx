@@ -4,7 +4,7 @@ import { Suspense, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites } from '@/hooks/useFirestore';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SitePicker } from '@/components/SitePicker';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { HootSiteSettings } from '@/components/admin/HootSiteSettings';
 
@@ -56,18 +56,12 @@ function HootSettings() {
           description="how far hoot may go on a site"
           toolbar={
             sites.length > 1 && (
-              <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none bg-card border-border text-foreground">
-                  <SelectValue placeholder="select site" />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  {sites.map((site) => (
-                    <SelectItem key={site.id} value={site.id} className="text-foreground">
-                      {site.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SitePicker
+                sites={sites}
+                value={selectedSiteId}
+                onChange={handleSiteChange}
+                className="min-w-32 flex-1 sm:w-[180px] sm:flex-none"
+              />
             )
           }
         />

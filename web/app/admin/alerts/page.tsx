@@ -13,6 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SitePicker } from '@/components/SitePicker';
 import {
   Dialog,
   DialogContent,
@@ -394,18 +395,12 @@ export default function AlertsPage() {
           toolbar={
             <>
               {sites.length > 1 && (
-                <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                  <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none border-border bg-card text-foreground">
-                    <SelectValue placeholder="select site" />
-                  </SelectTrigger>
-                  <SelectContent className="border-border bg-card text-foreground">
-                    {sites.map((site) => (
-                      <SelectItem key={site.id} value={site.id}>
-                        {site.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SitePicker
+                  sites={sites}
+                  value={selectedSiteId}
+                  onChange={handleSiteChange}
+                  className="min-w-32 flex-1 sm:w-[180px] sm:flex-none"
+                />
               )}
 
               {/* in the toolbar, not the actions: on a phone the actions share the title's row */}

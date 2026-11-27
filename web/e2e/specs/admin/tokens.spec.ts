@@ -15,6 +15,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedSite } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
 
@@ -75,10 +76,7 @@ async function gotoTokensForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'agent tokens', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox').first();
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(siteSelect).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists seeded tokens with machine IDs and the "Never expires" badge', async ({ page }) => {

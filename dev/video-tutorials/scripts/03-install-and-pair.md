@@ -73,7 +73,7 @@ click authorize.
 
 ## [b08] the machine appears
 **SCREEN:** cut to the dashboard; within ~30 seconds a new machine card pops in, status pill turns green, heartbeat starts. surface: web (playwright).
-**NOTE:** on the machine, the pairing dialog settles from "waiting for authorization" to "paired — this machine will appear on your dashboard shortly" at the same moment; a quick two-shot of both surfaces sells it if the capture allows. (that is the string a fresh install produces — pairing runs before the service is installed, so there is no service restart to report; agent/owlette_installer.iss:900-919, desktop/src/components/JoinSiteDialog.tsx:112-119.)
+**NOTE:** on the machine, the pairing dialog settles from "waiting for authorization" to "paired" at the same moment; a quick two-shot of both surfaces sells it if the capture allows. (that is the string a fresh install produces — pairing runs before the service is installed, so there is no service restart to report; agent/owlette_installer.iss:1199-1221, desktop/src/components/JoinSiteDialog.tsx:131-140.)
 **VOICEOVER:**
 [satisfied] and that's it. switch back to your dashboard, and within about thirty
 seconds the new machine shows up — green status, a live heartbeat, ready to go. behind

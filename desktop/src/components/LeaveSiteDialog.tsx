@@ -21,7 +21,6 @@ interface LeaveSiteDialogProps {
    */
   site: string
   onClose: () => void
-  onLeft: () => void
   /**
    * Claim the service's state for the teardown ({@link
    * import('@/hooks/useServiceHealth').ServiceHealthStore.hold}) so nothing
@@ -225,7 +224,6 @@ export function LeaveSiteDialog({
   open,
   site: siteLabel,
   onClose,
-  onLeft,
   onHold,
   serviceLeaves = false,
   onJoin,
@@ -328,11 +326,10 @@ export function LeaveSiteDialog({
 
       leaveLog('done')
       setPhase('left')
-      onLeft()
     } finally {
       release()
     }
-  }, [onHold, onLeft])
+  }, [onHold])
 
   /** The leave off windows: the service runs every step, restart included. */
   const leaveThroughService = useCallback(async () => {
@@ -363,11 +360,10 @@ export function LeaveSiteDialog({
       leaveLog('done')
       setResult({ deregistered: outcome.deregistered, serviceDown: false })
       setPhase('left')
-      onLeft()
     } finally {
       release()
     }
-  }, [onHold, onLeft])
+  }, [onHold])
 
   const confirmCopy = serviceLeaves
     ? `remove this machine from ${site}? owlette takes it off the dashboard, then restarts its service. pairing it again needs a new phrase.`
