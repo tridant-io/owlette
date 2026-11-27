@@ -262,13 +262,6 @@ function App() {
   /** Drives leave-vs-join in the menu, and the footer's `join site` button. */
   const paired = isPaired(config.config) === true
 
-  const handleJoined = useCallback(() => {
-    // The helper restarts the service and the config watcher picks the new site up,
-    // so nothing to reload. Unnamed on purpose: pairing yields an id, and the name
-    // only lands with the restarted service's first status write.
-    toast.success('this machine joined a site')
-  }, [])
-
   const handleTurnOnHoot = useCallback(async () => {
     const found = (await hootTools().catch(() => [])).filter((tool) => tool.found).map((tool) => tool.label)
     setConfirm({
@@ -312,10 +305,6 @@ function App() {
       },
     })
   }, [host])
-
-  const handleLeft = useCallback(() => {
-    toast.success('this machine left its site')
-  }, [])
 
   const processes = useMemo(
     () => (config.config ? processesOf(config.config) : []),
@@ -811,13 +800,11 @@ function App() {
             setMenuDialog(null)
             pairLaunch.dismiss()
           }}
-          onJoined={handleJoined}
         />
         <LeaveSiteDialog
           open={menuDialog === 'leave'}
           site={siteLabel}
           onClose={() => setMenuDialog(null)}
-          onLeft={handleLeft}
           onHold={health.hold}
           serviceLeaves={IS_MAC || IS_LINUX}
           onJoin={() => setMenuDialog('join')}

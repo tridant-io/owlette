@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '@/App'
 import type { PathStatus } from '@/lib/ipc'
@@ -22,6 +23,7 @@ const host = vi.hoisted(() => ({
   externalUrl: vi.fn(),
   agentCli: vi.fn(),
   synced: [] as ((event: { payload: unknown }) => void)[],
+  agentLines: [] as ((event: { payload: unknown }) => void)[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -78,6 +80,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: async (event: string, handler: (event: { payload: unknown }) => void) => {
     if (event === 'owlette://file-changed') host.fileChanged.push(handler)
     if (event === 'hoot://tools-synced') host.synced.push(handler)
+    if (event === 'owlette://agent-cli') host.agentLines.push(handler)
     return () => {}
   },
 }))
@@ -156,6 +159,7 @@ beforeEach(() => {
   host.externalUrl.mockReset().mockResolvedValue(null)
   host.agentCli.mockReset().mockResolvedValue('run-1')
   host.synced = []
+  host.agentLines = []
 })
 
 /** the settings window, opened from the menu with the keyboard: jsdom has no PointerEvent. */
@@ -344,6 +348,66 @@ describe('hoot mcp in settings', () => {
     })
 
     expect(await screen.findByText('could not remove hoot from codex')).toBeTruthy()
+  })
+})
+
+describe('joining and leaving a site', () => {
+  // sonner keeps undismissed toasts in a module-level store and replays them to
+  // every new toaster, so an earlier test's toast would otherwise show up here.
+  beforeEach(() => {
+    toast.dismiss()
+  })
+
+  /** one line from the agent run the dialog started; `null` is its exit. */
+  function say(event: unknown) {
+    const payload =
+      event === null
+        ? { run: 'run-1', stream: 'exit', line: null, code: 0 }
+        : { run: 'run-1', stream: 'stdout', line: JSON.stringify(event), code: null }
+    act(() => {
+      for (const handler of host.agentLines) handler({ payload })
+    })
+  }
+
+  async function openMenuItem(testId: string) {
+    fireEvent.keyDown(await screen.findByTestId('app-menu-trigger'), { key: 'Enter' })
+    fireEvent.click(await screen.findByTestId(testId))
+  }
+
+  it('lets the join dialog alone say the machine is paired, with no toast beside it', async () => {
+    render(<App />)
+    await openMenuItem('menu-join-site')
+    await waitFor(() => expect(host.agentCli).toHaveBeenCalledWith('join'))
+
+    say({
+      event: 'phrase',
+      value: {
+        pairPhrase: 'silver-compass-drift',
+        pairingUrl: 'https://owlette.app/add?code=silver-compass-drift',
+        verificationUri: 'https://owlette.app/add',
+        expiresIn: 600,
+      },
+    })
+    say({ event: 'authorized', value: { siteId: 'default_site', serviceRestarted: false } })
+
+    expect((await screen.findByTestId('join-status')).textContent).toBe('paired')
+    await act(async () => {})
+    expect(document.querySelector('[data-sonner-toast]')).toBeNull()
+  })
+
+  it('lets the leave dialog alone say the machine left, with no toast beside it', async () => {
+    host.config = { processes: [PLAYER], firebase: { enabled: true, site_id: 'lab' } }
+    render(<App />)
+    await openMenuItem('menu-leave-site')
+    fireEvent.click(await screen.findByRole('button', { name: 'leave site' }))
+    await waitFor(() => expect(host.agentCli).toHaveBeenCalledWith('leave'))
+
+    say({ event: 'done', value: { siteId: 'lab', deregistered: true } })
+    say(null)
+
+    expect(await screen.findByText(/has left lab and is no longer monitored/)).toBeTruthy()
+    await act(async () => {})
+    expect(document.querySelector('[data-sonner-toast]')).toBeNull()
   })
 })
 
