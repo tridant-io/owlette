@@ -43,7 +43,7 @@ everyone on the site sees the tabs. the buttons below are for site owners and ad
 
 - **store**, on the live tab, asks "store current arrangement?" and replaces the stored layout, saved edits included, with the live arrangement
 - an empty stored tab offers **store current**, the same thing, and **start from live**, which opens the editor on a copy of the live arrangement and saves nothing until you store it
-- **clear**, on the stored tab, asks "clear assigned layout?" and removes it. drift, restore and auto-restore go quiet until a layout is stored again
+- **clear**, on the stored tab, asks "clear assigned layout?" and removes it. drift and restore go quiet until a layout is stored again, and auto-restore turns off: storing a new layout leaves it off until you turn it on
 
 storing changes nothing on the machine. positions are saved with the primary monitor at 0,0, as Windows places it.
 
@@ -87,7 +87,7 @@ then the panel shows **keep this layout? auto-revert in Ns** with **keep**. pres
 
 ## auto-restore
 
-auto-restore is the unattended version: the agent notices drift and applies the stored layout itself. it is **off** by default and set per machine with the **auto-restore** switch in the panel's header. the switch stays disabled until a layout is stored and restore is enabled, and while Mosaic is active; its tooltip says which.
+auto-restore is the unattended version: the agent notices drift and applies the stored layout itself. it is **off** by default and set per machine with the **auto-restore** switch in the panel's header. the switch stays disabled until a layout is stored and restore is enabled, and while Mosaic is active; its tooltip says which. with no layout stored it reads off, and clearing the layout turns it off.
 
 the agent checks displays every 30 seconds and acts only when all of these hold:
 

@@ -747,6 +747,9 @@ export function DisplayLayoutPanel({
     }
   };
 
+  // a layout cleared before clear turned auto-restore off left the flag on, and the agent has
+  // nothing to restore to, so without a layout auto-restore is off whatever the flag says
+  const autoRestoreOn = autoRestore.enabled && hasAssignedLayout;
   const autoRestoreDisabled =
     !hasAssignedLayout || !!profile?.mosaicActive || !remoteApplyEnabled || actions.applying;
   const autoRestoreDisabledReason = !hasAssignedLayout
@@ -755,7 +758,7 @@ export function DisplayLayoutPanel({
       ? "auto-restore can't run while nvidia mosaic is active"
       : !remoteApplyEnabled
         ? 'enable restore before enabling automatic restore'
-        : autoRestore.enabled
+        : autoRestoreOn
           ? 'automatically reapplies the stored layout when this machine reports display drift'
           : 'turn on automatic restore so the agent reapplies the stored layout when display drift is detected';
   const breakerTripped = autoRestore.circuitBreaker.tripped;
@@ -1107,7 +1110,7 @@ export function DisplayLayoutPanel({
                     auto-restore
                   </span>
                   <Switch
-                    checked={autoRestore.enabled}
+                    checked={autoRestoreOn}
                     onCheckedChange={handleAutoRestoreToggle}
                     disabled={autoRestoreDisabled}
                     data-testid="display-auto-restore-toggle"
@@ -1231,7 +1234,7 @@ export function DisplayLayoutPanel({
                   </TooltipContent>
                 </Tooltip>
               )}
-              {autoRestore.enabled ? (
+              {autoRestoreOn ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span

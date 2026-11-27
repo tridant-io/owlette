@@ -8242,7 +8242,8 @@ paths:
       description: |
         Machine-level display configuration surface. This stores the
         assigned layout, toggles auto-restore, resets its circuit breaker,
-        or toggles the remote-apply kill switch. Requires
+        or toggles the remote-apply kill switch. Storing a layout when none
+        was stored turns auto-restore off. Requires
         `machine=<machineId>:write` and an idempotency key.
       security:
         - apiKey: []
@@ -8305,8 +8306,8 @@ paths:
       tags: [Machines]
       summary: clear the assigned display layout
       description: |
-        Clears `displays.assigned` while preserving sibling display
-        settings such as auto-restore and remote-apply. Requires
+        Clears `displays.assigned` and turns auto-restore off, keeping
+        remote-apply and the other display settings. Requires
         `machine=<machineId>:write` and an idempotency key.
       security:
         - apiKey: []
