@@ -1,0 +1,20 @@
+{
+  // the live-dev specs in e2e/specs/security-boundary: the main tsconfig leaves e2e out, so
+  // `npm run typecheck` checks them through this one, and playwright resolves their imports with it
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "paths": {
+      "@/*": ["./*"],
+      // one spec runs server modules in-process, and next's marker package exists only inside a next build
+      "server-only": ["./e2e/specs/security-boundary/server-only.ts"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "e2e/specs/security-boundary/**/*.ts",
+    "__tests__/securityBoundaryCleanup.test.ts"
+  ],
+  "exclude": ["node_modules"]
+}

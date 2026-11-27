@@ -1,14 +1,14 @@
 import { type Auth } from 'firebase-admin/auth';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { expect, test, type APIRequestContext } from '@playwright/test';
+import { cleanupRun, makeRunIds, runSiteMark, sweepStaleRuns } from './cleanup';
 import {
   assertDevProject,
-  createAdminApp,
   createSignedInClient,
-  errorMessage,
   loadLocalEnv,
-  makeRunIds,
+  openAdmin,
   pushCheck,
+  pushCleanup,
   resolveBaseUrl,
   resolveProjectId,
   type CheckResult,
@@ -112,6 +112,7 @@ async function seedAccountDeletionData(
   await db.collection('sites').doc(siteId).set({
     name: 'W8 Account Delete Site',
     owner: uid,
+    ...runSiteMark(siteId),
     timezone: 'UTC',
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -133,13 +134,15 @@ test('live dev account deletion dry-run and replay stay server-mediated', async 
   assertDevProject(projectId);
   const baseUrl = resolveBaseUrl();
   const ids = makeRunIds('w8-account');
-  const adminApp = createAdminApp(projectId, `security-boundary-account-admin-${ids.runId}`);
-  const adminAuth = adminApp.auth();
-  const adminDb = adminApp.firestore();
+  const admin = openAdmin(projectId, `security-boundary-account-admin-${ids.runId}`);
+  const adminAuth = admin.auth;
+  const adminDb = admin.db;
   let client: Awaited<ReturnType<typeof createSignedInClient>> | undefined;
   const checks: CheckResult[] = [];
+  const leftovers: string[] = [];
 
   try {
+    leftovers.push(...(await sweepStaleRuns(adminDb, adminAuth, projectId)));
     await seedAccountDeletionData(adminDb, adminAuth, ids.uid, ids.email, ids.siteId);
     client = await createSignedInClient(
       adminAuth,
@@ -223,6 +226,9 @@ test('live dev account deletion dry-run and replay stay server-mediated', async 
       JSON.stringify(replayBody),
     );
   } finally {
+    leftovers.push(...(await cleanupRun(adminDb, adminAuth, ids, [ids.uid])));
+    pushCleanup(checks, leftovers);
+
     writeReport(
       'account-deletion',
       'W8.1 Account Deletion',
@@ -236,18 +242,8 @@ test('live dev account deletion dry-run and replay stay server-mediated', async 
       checks,
     );
 
-    await Promise.allSettled([
-      client?.signOutAndDelete(),
-      adminDb.recursiveDelete(adminDb.collection('sites').doc(ids.siteId)),
-      adminDb.recursiveDelete(adminDb.collection('users').doc(ids.uid)),
-      adminAuth.deleteUser(ids.uid),
-    ]).catch((err: unknown) => {
-      pushCheck(checks, {
-        name: 'account deletion cleanup',
-        ok: false,
-        message: errorMessage(err),
-      });
-    });
-    await adminApp.delete();
+    await Promise.allSettled([client?.signOutAndDelete()]);
+    await admin.close();
+    expect.soft(leftovers, 'left on the live project').toEqual([]);
   }
 });
