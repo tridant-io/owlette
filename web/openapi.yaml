@@ -4894,6 +4894,12 @@ paths:
 
         This endpoint is unpaginated.
 
+        `include=machines` adds each site's `machines`, read as
+        `GET /api/sites/{siteId}/machines` reads them, for the dashboard's
+        site list. Each site's machines follow the caller's access to that
+        site: a member limited to some machines gets only those, and a listed
+        site the caller has no access to gets `machines: null`.
+
         ### Authentication and scopes
 
         Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
@@ -4903,10 +4909,25 @@ paths:
         sees the owning user's sites narrowed to the ids in its `site` scopes
         (any permission); a `site=*` entry removes the narrowing, and a key
         with no `site` scope gets an empty list.
+
+        `include=machines` is for sessions and Firebase ID tokens only: an API
+        key gets `403` with `code: api_key_not_permitted`, and lists a site's
+        machines with `GET /api/sites/{siteId}/machines`, which checks its
+        `site=<siteId>:read` scope.
       security:
         - apiKey: []
         - bearerApiKey: []
         - firebaseIdToken: []
+      parameters:
+        - name: include
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [machines]
+          description: |
+            `machines` adds each site's machines. Any other value is refused
+            (400). Not available to an API key.
       responses:
         '200':
           description: Accessible sites.
@@ -4918,7 +4939,20 @@ paths:
                 properties:
                   sites:
                     type: array
-                    items: { $ref: '#/components/schemas/SiteSummary' }
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/SiteSummary'
+                        - type: object
+                          properties:
+                            machines:
+                              type: array
+                              nullable: true
+                              description: |
+                                Only with `include=machines`. The site's machines
+                                the caller can reach, sorted by name; `null` when
+                                the caller has no access to the site's machines.
+                              items: { $ref: '#/components/schemas/MachineStatus' }
+        '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -14711,13 +14745,47 @@ components:
               nullable: true
 
     # machines
+    MachineStatus:
+      description: |
+        A machine's state, as `GET /api/sites?include=machines` lists it. The
+        fields are `MachineSummary`'s and mean the same.
+      type: object
+      required: [id, name, online, asleep]
+      properties:
+        id:     { type: string }
+        name:   { type: string }
+        online:
+          type: boolean
+          description: |
+            True when the agent reports the machine online and its last heartbeat
+            is under 5 minutes old, as the dashboard reads it.
+        asleep:
+          type: boolean
+          description: The agent marked the machine asleep on its way to sleep. `online` is false meanwhile.
+        lastHeartbeat:
+          type: string
+          format: date-time
+          nullable: true
+        agentVersion:
+          type: string
+          nullable: true
     MachineSummary:
       type: object
       required: [id, name, online]
       properties:
         id:     { type: string }
         name:   { type: string }
-        online: { type: boolean }
+        online:
+          type: boolean
+          description: |
+            True when the agent reports the machine online and its last heartbeat
+            is under 5 minutes old, as the dashboard reads it. An agent that stopped
+            without reporting offline still reads false once its heartbeat goes stale.
+        asleep:
+          type: boolean
+          description: |
+            The agent marked the machine asleep on its way to sleep (macOS agents
+            only, so far). `online` is false meanwhile.
         lastHeartbeat:
           type: string
           format: date-time

@@ -152,7 +152,7 @@ the API key is valid but has no scope entry matching the operation. `required` n
 
 ### api_key_not_permitted
 
-the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, a site's billing, and moving a machine to another site. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
+the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, display settings, [hoot mcp](/docs/agent/hoot-mcp)'s fleet settings, member candidates, a site's billing, moving a machine to another site, and `GET /api/sites?include=machines`. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
 
 ### members_only
 

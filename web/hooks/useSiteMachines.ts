@@ -6,7 +6,10 @@ import { useCallback, useEffect, useState } from 'react';
 export interface SiteMachine {
   id: string;
   name: string;
+  /** the agent's flag and a fresh heartbeat, as the dashboard reads it */
   online: boolean;
+  /** the agent marked it asleep; `online` is false meanwhile */
+  asleep: boolean;
   lastHeartbeat: string | null;
   agentVersion: string | null;
   /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */

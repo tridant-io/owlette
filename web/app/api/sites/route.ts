@@ -5,6 +5,11 @@
  * List and create sites. Scoped API keys only see sites covered by explicit
  * `site` scopes; wildcard / legacy keys and session auth keep the underlying
  * user's account view.
+ *
+ * `GET ?include=machines` (sessions only) adds each site's machines, read as
+ * `GET /api/sites/{siteId}/machines` reads them, in one request for the admin
+ * panel's site list. the listing is a candidate set, so each site's machines
+ * come from the decision core: a site the caller cannot reach gets `null`.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -26,12 +31,15 @@ import {
   ApiAuthError,
   applyAuthDeprecations,
   assertActiveUser,
+  assertUserHasSiteAccess,
   requireScope,
   resolveAuth,
   type ResolvedAuth,
   type ScopeCheckResult,
 } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { MAX_MACHINE_SCOPE, scopeCovers } from '@/lib/machineAccess';
+import { MACHINE_STATUS_FIELDS, machineStatus, type MachineStatus } from '@/lib/machineStatus.server';
 import { withIdempotency } from '@/lib/idempotency';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { createSite } from '@/lib/actions/createSite.server';
@@ -72,6 +80,26 @@ export async function GET(request: NextRequest) {
         return problemUnauthorized();
       }
       throw err;
+    }
+
+    const include = new URL(request.url).searchParams.get('include');
+    if (include !== null && include !== 'machines') {
+      return problemValidation('include takes one value, machines', {
+        'query.include': ['must be "machines"'],
+      });
+    }
+    const withMachines = include === 'machines';
+    // a key's machine reads go through the per-site route, which holds its
+    // `site=<id>:read` scope, the `owlette.api_keys` plan gate and the key-use audit
+    if (withMachines && auth.keyContext) {
+      return problem({
+        type: ProblemType.Forbidden,
+        title: 'forbidden',
+        status: 403,
+        code: 'api_key_not_permitted',
+        detail:
+          'include=machines is not available to an api key; list a site\'s machines with GET /api/sites/{siteId}/machines.',
+      });
     }
 
     const db = getAdminDb();
@@ -122,6 +150,19 @@ export async function GET(request: NextRequest) {
     const sites = siteDocs.map((d) => summariseSite(d));
     sites.sort((a, b) => a.name.localeCompare(b.name));
 
+    if (withMachines) {
+      const siteIds = sites.map((s) => s.id);
+      // the decision core refuses an inactive user before it honours superadmin
+      const machines = !isSuperadmin
+        ? await reachableMachines(db, auth.userId, siteIds)
+        : typeof userData?.deletedAt === 'number'
+          ? new Map<string, MachineStatus[]>()
+          : await everySitesMachines(db, siteIds);
+      return NextResponse.json({
+        sites: sites.map((s) => ({ ...s, machines: machines.get(s.id) ?? null })),
+      });
+    }
+
     return applyAuthDeprecations(
       NextResponse.json({ sites }),
       { isLegacy: auth.keyContext?.isLegacy === true },
@@ -129,6 +170,68 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     return problemFromError(err, 'v2/sites:GET');
   }
+}
+
+function byName(a: MachineStatus, b: MachineStatus): number {
+  return a.name.localeCompare(b.name);
+}
+
+/**
+ * a superadmin's machines on the listed sites, from one collection-group read
+ * (their machine scope is always the whole site). the group also holds
+ * `config/{siteId}/machines`, so only `sites/{id}/machines` counts.
+ */
+async function everySitesMachines(
+  db: FirebaseFirestore.Firestore,
+  siteIds: string[],
+): Promise<Map<string, MachineStatus[]>> {
+  const snap = await db.collectionGroup('machines').select(...MACHINE_STATUS_FIELDS).get();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const bySite = new Map<string, MachineStatus[]>(siteIds.map((id) => [id, []]));
+  for (const doc of snap.docs) {
+    const site = doc.ref.parent.parent;
+    if (!site || site.parent.path !== 'sites') continue;
+    bySite.get(site.id)?.push(machineStatus(doc.id, doc.data(), nowSec));
+  }
+  for (const list of bySite.values()) list.sort(byName);
+  return bySite;
+}
+
+/**
+ * each listed site's machines as the caller's member row reaches them; a site
+ * the decision core refuses has no entry. the scope stops at MAX_MACHINE_SCOPE,
+ * as the dashboard and the site switcher's count do.
+ */
+async function reachableMachines(
+  db: FirebaseFirestore.Firestore,
+  userId: string,
+  siteIds: string[],
+): Promise<Map<string, MachineStatus[]>> {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const entries = await Promise.all(
+    siteIds.map(async (siteId): Promise<[string, MachineStatus[]] | null> => {
+      let scope: readonly string[] | null;
+      try {
+        scope = (await assertUserHasSiteAccess(userId, siteId)).machineIds;
+      } catch (err) {
+        if (err instanceof ApiAuthError) return null;
+        throw err;
+      }
+      const reached = scope === null ? null : scope.slice(0, MAX_MACHINE_SCOPE);
+      const snap = await db
+        .collection('sites')
+        .doc(siteId)
+        .collection('machines')
+        .select(...MACHINE_STATUS_FIELDS)
+        .get();
+      const machines = snap.docs
+        .filter((d) => scopeCovers(reached, d.id))
+        .map((d) => machineStatus(d.id, d.data(), nowSec))
+        .sort(byName);
+      return [siteId, machines];
+    }),
+  );
+  return new Map(entries.filter((e): e is [string, MachineStatus[]] => e !== null));
 }
 
 // Site creation is self-serve onboarding, NOT superadmin-only: any active

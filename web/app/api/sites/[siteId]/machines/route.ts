@@ -1,6 +1,7 @@
 /**
- * GET /api/sites/{siteId}/machines — every machine in the site with online status
- * and a `currentRoosts` summary: the roosts targeting it plus their
+ * GET /api/sites/{siteId}/machines — every machine in the site with `online` and
+ * `asleep` read as the dashboard reads them (`machineOnlineState`), and a
+ * `currentRoosts` summary: the roosts targeting it plus their
  * currentVersionId, so "what is this machine running" reads at a glance.
  * a scoped member gets only the machines in their machine scope, each with its
  * `currentRoosts`: a roost that targets their machine is about their machine.
@@ -8,11 +9,12 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { Timestamp, type Firestore } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
 import { problemFromError } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { scopeCovers } from '@/lib/machineAccess';
 import { readMove, type MoveStatus } from '@/lib/machineMoves.server';
+import { machineStatus } from '@/lib/machineStatus.server';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
@@ -73,20 +75,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const inMachineScope = machinesSnap.docs.filter((d) => scopeCovers(auth.machineIds, d.id));
     const moves = await pendingMoves(db, siteId, inMachineScope.map((d) => d.id));
+    const nowSec = Math.floor(Date.now() / 1000);
     const machines = inMachineScope.map((d, i) => {
       const data = d.data();
-      const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
       return {
-        id: d.id,
-        name: typeof data.name === 'string'
-          ? data.name
-          : typeof data.machine_name === 'string'
-            ? data.machine_name
-            : d.id,
-        online: data.online === true,
-        lastHeartbeat: heartbeatToIso(lastHeartbeat),
-        agentVersion:
-          data.agent_version ?? data.presence?.agent_version ?? null,
+        ...machineStatus(d.id, data, nowSec),
         os: data.os ?? data.presence?.os ?? null,
         // what the agent writes on every heartbeat (firebase_client._os_identity):
         // 'windows' | 'macos' | 'linux', 'x64' | 'arm64', and the version string.
@@ -146,18 +139,4 @@ async function pendingMoves(db: Firestore, siteId: string, machineIds: string[])
         }
       : null,
   );
-}
-
-function heartbeatToIso(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  if (v instanceof Timestamp) return v.toDate().toISOString();
-  if (typeof v === 'number') return new Date(v).toISOString();
-  if (typeof v === 'string') {
-    const parsed = Date.parse(v);
-    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
-  }
-  if (v && typeof v === 'object' && 'toDate' in v && typeof (v as { toDate: () => Date }).toDate === 'function') {
-    return (v as { toDate: () => Date }).toDate().toISOString();
-  }
-  return null;
 }

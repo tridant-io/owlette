@@ -294,7 +294,7 @@ beforeEach(() => {
 
   store[`sites/${SITE_ID}`] = { name: 's' };
   for (const machine of [M1, M2]) {
-    store[`sites/${SITE_ID}/machines/${machine}`] = { online: true, cortexEnabled: true };
+    store[`sites/${SITE_ID}/machines/${machine}`] = { online: true, lastHeartbeat: Timestamp.now(), cortexEnabled: true };
   }
   for (const [uid, role] of [['admin-a', 'admin'], ['member-c', 'member']]) {
     store[`users/${uid}`] = { role: 'user', sites: [SITE_ID] };

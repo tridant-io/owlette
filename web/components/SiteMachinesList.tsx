@@ -5,7 +5,7 @@ import { ArrowRightLeft, Loader2, Monitor, RotateCw, Trash2, X } from 'lucide-re
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
-import { formatRelativeTime } from '@/lib/timeUtils';
+import { listedMachineState, machineLastSeen, MACHINE_STATE_DOT, MACHINE_STATE_TEXT } from '@/lib/machineStateLabel';
 import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineMove } from '@/hooks/useMachineMove';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
@@ -157,13 +157,6 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
     );
   }
 
-  const lastSeen = (m: SiteMachine) => {
-    if (m.online) return 'online';
-    if (!m.lastHeartbeat) return 'never seen';
-    const parsed = Date.parse(m.lastHeartbeat);
-    return Number.isNaN(parsed) ? 'unknown' : `last seen ${formatRelativeTime(parsed / 1000)}`;
-  };
-
   return (
     <>
       <ul className="divide-y divide-border/40">
@@ -177,7 +170,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
             <span className="col-[1] row-[1] flex min-w-0 items-center gap-2 sm:col-auto sm:row-auto">
               <span
                 aria-hidden="true"
-                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : 'bg-danger/70'}`}
+                className={`h-2 w-2 shrink-0 rounded-full ${MACHINE_STATE_DOT[listedMachineState(m)]}`}
               />
               <Monitor className="h-4 w-4 shrink-0 text-muted-foreground" />
               <span className="truncate text-sm font-medium text-foreground" title={m.name}>
@@ -190,9 +183,9 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
             </span>
             {/* pl-10 sets the phone line under the name, past the dot and the icon */}
             <span
-              className={`col-[1] row-[2] min-w-0 truncate pl-10 text-xs sm:col-auto sm:row-auto sm:pl-0 ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}
+              className={`col-[1] row-[2] min-w-0 truncate pl-10 text-xs sm:col-auto sm:row-auto sm:pl-0 ${MACHINE_STATE_TEXT[listedMachineState(m)]}`}
             >
-              {lastSeen(m)}
+              {machineLastSeen(m)}
               <MoveTag machine={m} phone />
             </span>
             <span className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground sm:block">

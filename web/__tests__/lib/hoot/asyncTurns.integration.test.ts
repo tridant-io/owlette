@@ -463,7 +463,7 @@ beforeEach(() => {
 
   // The machines the runner re-checks its target against at turn start.
   for (const machineId of [MACHINE_ID, 'machine-appr', 'machine-fu']) {
-    store[`sites/${SITE_ID}/machines/${machineId}`] = { online: true, cortexEnabled: true };
+    store[`sites/${SITE_ID}/machines/${machineId}`] = { online: true, lastHeartbeat: Timestamp.now(), cortexEnabled: true };
   }
 
   // resolveLlmConfig (real) reads the turn owner's own key — the only scope there is.

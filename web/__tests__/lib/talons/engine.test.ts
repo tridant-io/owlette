@@ -296,8 +296,13 @@ function seedTalon(id: string, overrides: Partial<TalonDoc> = {}): StoredTalon {
   return { id, ...doc };
 }
 
+/** a heartbeat `ageMs` before NOW, as a Timestamp reads: only `toMillis` is used. */
+function heartbeatAgo(ageMs: number) {
+  return { toMillis: () => NOW.getTime() - ageMs };
+}
+
 function seedMachine(id: string, online: boolean, name = id): void {
-  fake.docs.set(`${MACHINES_PATH}/${id}`, { name, online });
+  fake.docs.set(`${MACHINES_PATH}/${id}`, { name, online, lastHeartbeat: heartbeatAgo(30_000) });
 }
 
 function seedRun(id: string, overrides: Partial<TalonRunDoc>): void {
@@ -1211,6 +1216,23 @@ describe('visual_check condition', () => {
     expect(logDocs()[0].action).toBe('talon_skipped');
   });
 
+  // an agent that died without writing online: false leaves the flag stuck true.
+  // a capture of it can only fail, and ten of those would switch the talon off.
+  it.each([
+    ['a flag stuck true and an 18-day-old heartbeat, named in the scope', ['m1'], { online: true, lastHeartbeat: heartbeatAgo(18 * 24 * 60 * 60 * 1000) }],
+    ['a flag stuck true and an 18-day-old heartbeat, on a whole-site scope', null, { online: true, lastHeartbeat: heartbeatAgo(18 * 24 * 60 * 60 * 1000) }],
+    ['an asleep machine', ['m1'], { online: true, asleep: true, lastHeartbeat: heartbeatAgo(30_000) }],
+  ])('skips %s as offline', async (_label, machineIds, doc) => {
+    const talon = visualTalon({ scope: { machineIds } });
+    fake.docs.set(`${MACHINES_PATH}/m1`, { name: 'm1', ...doc });
+
+    const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+    expect(summaries[0]).toMatchObject({ status: 'skipped', error: 'machine_offline' });
+    expect(mockEvaluateVisualCheck).not.toHaveBeenCalled();
+    expect(talonDoc('t1').consecutiveFailures).toBe(0);
+  });
+
   it('treats a machine with nobody logged in as a skip, not a failure', async () => {
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -1382,7 +1404,7 @@ describe('unrecoverable author problems', () => {
       condition: { type: 'visual_check', expectation: 'the loop is playing' },
       scope: { machineIds: ['m1'] },
     });
-    fake.docs.set(`${MACHINES_PATH}/m1`, { name: 'LOBBY-01', online: true });
+    seedMachine('m1', true, 'LOBBY-01');
     mockEvaluateVisualCheck.mockRejectedValue(
       new TalonVisualCheckError(
         'author_unavailable',

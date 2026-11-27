@@ -187,6 +187,32 @@ describe('SiteMachinesList — loading', () => {
   });
 });
 
+// the api reads `online` and `asleep` as the dashboard does, so the row says what the pill says
+describe('SiteMachinesList — status', () => {
+  it('says asleep for a machine its agent marked asleep, and when an offline one was last seen', async () => {
+    listResponds([
+      { ...base, id: 'kiosk-1', name: 'lobby screen', asleep: false },
+      { ...base, id: 'kiosk-2', name: 'bar screen', online: false, asleep: true },
+      {
+        ...base,
+        id: 'kiosk-3',
+        name: 'door screen',
+        online: false,
+        asleep: false,
+        lastHeartbeat: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ]);
+    renderList();
+
+    expect(await screen.findByText('lobby screen')).toBeInTheDocument();
+    expect(screen.getByText('online')).toBeInTheDocument();
+    expect(screen.getByText('asleep')).toBeInTheDocument();
+    expect(screen.getByText('last seen 18d ago')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'restart bar screen' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'restart door screen' })).toBeDisabled();
+  });
+});
+
 describe('SiteMachinesList — remove', () => {
   const lobby = { ...base, id: 'kiosk-1', name: 'lobby screen' };
 

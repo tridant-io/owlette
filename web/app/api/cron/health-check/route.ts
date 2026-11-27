@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { OFFLINE_HEARTBEAT_AGE_SEC } from '@/lib/machineOnline';
 import { getSiteAlertRecipients, getSiteLabel, recipientWantsMachine, type SiteRecipient } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
@@ -25,9 +26,9 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
  *   Header: X-Cron-Secret: <that environment's CRON_SECRET>
  */
 
-// Clear of the agent's 120s idle heartbeat cadence so two missed beats don't trip
-// it — at 3 minutes one slow tick marked healthy machines stale.
-const OFFLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+// The heartbeat age at which every other reader calls a machine offline (5
+// minutes), so pill and alerts agree.
+const OFFLINE_THRESHOLD_MS = OFFLINE_HEARTBEAT_AGE_SEC * 1000;
 
 // Don't re-alert for the same machine within this window
 const ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour

@@ -13,6 +13,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ### added
 
+- **admin** → **sites** has a machines column: each site's count, what is offline or asleep, and its machines on hover.
 - the admin panel's site selector, on alerts, hoot, schedules, agent tokens and webhooks, shows how many machines you can reach on each site and, past ten sites, has the header switcher's filter. it opens on the same panel as the header's site switcher, and so does owlette swoop's site picker.
 - in admin panel → sites, a site's name opens its settings, as its gear does.
 
@@ -37,6 +38,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 - updating several machines at once from the dashboard no longer fails with "could not read request body".
 - the dashboard's list view says "no processes configured for this machine" in lowercase, as the rest of the dashboard does.
 - the [demo](https://owlette.app/demo) shows its machine count in the site switcher, and Mac, Linux and asleep machines.
+- a machine whose agent stopped without saying so reads offline in **site settings**, the API and hoot too, not only on the dashboard; an asleep one reads asleep.
 - the desktop app's **join a site** and **leave site** dialogs say what happened once; no toast repeats it, and join no longer says twice that the machine will appear on your dashboard.
 - in owlette swoop, the two-factor and other sign-in screens sit mid-window with the window controls, and offer no passkey.
 - signing in no longer shows a "2FA verification required" toast.
