@@ -15,7 +15,7 @@ Two placement constraints drive the design:
     silently degraded uploads to uncapped multi-MB PNGs.
 
 Finalize is what writes `machine.lastScreenshot` (the field ScreenshotDialog
-listens to), appends the history doc, and prunes to the newest 20.
+listens to) and appends the history doc.
 
 Every network/schema failure raises ScreenshotCaptureError tagged with the step;
 other exceptions bubble to command_router. Runs on `_slow_command_worker` — the
@@ -369,8 +369,8 @@ def capture_and_upload(
     url finalize also wrote to machine.lastScreenshot.
 
     The budget arguments default to the on-demand settings; a caller that runs
-    somewhere it cannot afford them — the crash path is inline on the monitor
-    loop, live view repeats every few seconds — passes its own.
+    somewhere it cannot afford them, the crash path inline on the monitor
+    loop, passes its own.
     `request_timeout_s` caps each of the three round-trips, which is the only
     way to bound the pipeline's total wall time: left unset they keep their
     individual defaults and the worst case is 15 + 30 + 15 seconds.

@@ -24,6 +24,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { removeMachineData } from '@/lib/actions/removeMachine.server';
+import { deleteScreenshotsBestEffort } from '@/lib/screenshotStorage.server';
 import { agentClaims } from '@/lib/agentAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { problem, problemUnauthorized, problemValidation, ProblemType } from '@/lib/apiErrors';
@@ -116,6 +117,9 @@ export const POST = withRateLimit(
           attributes: { verb, ...attributes },
         });
       }
+      // its screenshots stay with the site it left. last, as that delete has no bound,
+      // and awaited, so the answer means they are gone
+      await deleteScreenshotsBestEffort(move.sourceSiteId, machineId, 'moveConfirm', db);
 
       return NextResponse.json({
         moveId: move.moveId,

@@ -161,7 +161,7 @@ function mockPlatformRole(role: 'superadmin' | 'admin' | 'member' | null): void 
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: null });
+  mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: null, member: true });
   mockPlatformRole('superadmin');
 });
 
@@ -675,7 +675,7 @@ describe('requireAgentOrSiteAuthAndScope — operator fallthrough', () => {
 describe('machine scope: a key owned by a member scoped to m1', () => {
   function scopedKey(scopes: ApiKeyScope[]): void {
     mockedResolveAuth.mockResolvedValue(authFromScopes(scopes));
-    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: ['m1'] });
+    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: ['m1'], member: true });
   }
 
   async function expectRefusal(
@@ -692,7 +692,7 @@ describe('machine scope: a key owned by a member scoped to m1', () => {
 
   it('requireSiteAuthAndScope refuses an access answer with no machineIds, not reading it as the whole site', async () => {
     mockedResolveAuth.mockResolvedValue(sessionAuth());
-    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {} } as never);
+    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, member: true } as never);
     await expectRefusal(
       await requireSiteAuthAndScope(makeRequest(), SITE_ID, 'read'),
       403,

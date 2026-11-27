@@ -153,7 +153,13 @@ beforeEach(() => {
   mockCreateModel.mockReturnValue({ modelId: 'fake-model' });
   mockResolveTalonAuthor.mockResolvedValue({
     userId: 'admin-uid',
-    access: { role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: false },
+    access: {
+      role: 'admin',
+      standing: { role: 'admin', swoopMode: null, machineIds: null },
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: false,
+    },
   });
   mockResolveTalonAuthorLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'sk-test' });
 });
@@ -426,6 +432,29 @@ describe('the author pre-flight', () => {
     expect(error.disabledReason).toBe(reason);
     // Never asks the machine — an unpayable check must not cost a 45s capture.
     expect(mockDispatchAndAwait).not.toHaveBeenCalled();
+    expect(mockGenerateObject).not.toHaveBeenCalled();
+  });
+
+  it('stops a talon whose author reaches the site without a member row, before any capture', async () => {
+    mockResolveTalonAuthor.mockResolvedValue({
+      userId: 'super-uid',
+      access: {
+        role: 'superadmin',
+        standing: { role: null, swoopMode: null, machineIds: null },
+        isSuperadmin: true,
+        isSiteAdmin: true,
+        isSiteOwner: false,
+      },
+    });
+
+    const error = await expectVisualCheckError(
+      evaluateVisualCheck(db, SITE, MACHINE, TALON, condition(), CORRELATION),
+      'author_unavailable',
+    );
+    expect(error.disabledReason).toBe('creator_access_revoked');
+    expect(error.message).toContain("screenshots are visible only to the site's members");
+    expect(mockDispatchAndAwait).not.toHaveBeenCalled();
+    expect(mockIssueScreenshotReadUrl).not.toHaveBeenCalled();
     expect(mockGenerateObject).not.toHaveBeenCalled();
   });
 

@@ -552,9 +552,14 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/deployments', () => {
 });
 
 describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
+  // a superadmin removes a machine only from a site they hold a member row on (adr 0021)
+  const superadminRow = () =>
+    putDoc(`sites/${SITE}/members/admin-uid`, { uid: 'admin-uid', role: 'member', status: 'active' });
+
   it('removes the machine, config, and command maps for a superadmin caller', async () => {
     seedSite();
     authedSession();
+    superadminRow();
     seedMachine();
     putDoc(`config/${SITE}/machines/${MACHINE}`, { machineId: MACHINE });
     putDoc(`sites/${SITE}/machines/${MACHINE}/commands/pending`, { cmd_a: {} });
@@ -586,6 +591,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
   it('requires Idempotency-Key for machine removal', async () => {
     seedSite();
     authedSession();
+    superadminRow();
     seedMachine();
 
     const res = await machineDELETE(
@@ -621,6 +627,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
   it('rejects API keys without machine write scope', async () => {
     seedSite();
     authedKey([machineScope('read')]);
+    superadminRow();
     seedMachine();
 
     const res = await machineDELETE(

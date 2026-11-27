@@ -55,6 +55,12 @@ jest.mock('@/lib/fleet/cleanup.server', () => ({
   pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
 }));
 
+// what the helper deletes, and that a failure is only logged, is pinned in screenshotStorage.delete.test.ts
+const mockDeleteScreenshots = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  deleteScreenshotsBestEffort: (...a: unknown[]) => mockDeleteScreenshots(...a),
+}));
+
 import { removeMachine, removeMachineData } from '@/lib/actions/removeMachine.server';
 
 const AUDIT_ACTOR = 'user:admin-uid';
@@ -738,5 +744,53 @@ describe('removeMachine — the fleet grant', () => {
       expect.stringContaining('fleet prune'),
       expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1', err: 'settings transaction down' }) }),
     );
+  });
+});
+
+/**
+ * a machine's screenshots belong to the site: they go when it is removed, and
+ * removeMachineData is also how a move cleans the site it left.
+ */
+describe('removeMachine — its stored screenshots', () => {
+  it("deletes the machine's screenshots on this site, through the same db", async () => {
+    const fake = buildFakeDb();
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(mockDeleteScreenshots).toHaveBeenCalledTimes(1);
+    expect(mockDeleteScreenshots).toHaveBeenCalledWith('site-a', 'm1', 'removeMachine', fake.db);
+  });
+
+  it('leaves them to the caller in removeMachineData, which a move runs before it records the target', async () => {
+    const fake = buildFakeDb();
+
+    await removeMachineData({ siteId: 'old-site', machineId: 'm1', actor: ACTOR, db: fake.db });
+
+    expect(mockDeleteScreenshots).not.toHaveBeenCalled();
+  });
+
+  // the delete has no bound, so nothing the removal needs waits on it
+  it('deletes them last, after the tokens and the audit row', async () => {
+    const fake = buildFakeDb([{ id: 'tok-1', siteId: 'site-a', machineId: 'm1' }]);
+    const order: string[] = [];
+    mockEmitMutation.mockImplementationOnce(() => order.push('audited'));
+    mockDeleteScreenshots.mockImplementationOnce(async () => {
+      order.push(`screenshots-deleted after ${fake.batchCommitCount} commits`);
+    });
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(order).toEqual(['audited', 'screenshots-deleted after 2 commits']);
+  });
+
+  it('deletes nothing when the removal itself fails', async () => {
+    const fake = buildFakeDb();
+    fake.setBatchCommitFailure(new Error('batch_blew_up'));
+
+    await expect(
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
+    ).rejects.toThrow('batch_blew_up');
+
+    expect(mockDeleteScreenshots).not.toHaveBeenCalled();
   });
 });

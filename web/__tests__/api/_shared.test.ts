@@ -170,7 +170,7 @@ describe('_shared.ts (v2 route helpers)', () => {
 
   describe('requireSiteScope', () => {
     it('returns null when the user has access', async () => {
-      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null, machineIds: null });
+      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null, machineIds: null, member: true });
       const result = await requireSiteScope('user-1', 'site_abc');
       expect(result).toBeNull();
     });
@@ -334,9 +334,9 @@ describe('_shared.ts (v2 route helpers)', () => {
   describe('machine scope', () => {
     const SITE = 'site_abc';
 
-    function asCaller(machineIds: readonly string[] | null) {
+    function asCaller(machineIds: readonly string[] | null, member = true) {
       mockedResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-      mockedAssertSite.mockResolvedValue({ siteId: SITE, siteData: null, machineIds });
+      mockedAssertSite.mockResolvedValue({ siteId: SITE, siteData: null, machineIds, member });
     }
 
     async function refusal(result: { ok: boolean; response?: Response }) {
@@ -413,7 +413,21 @@ describe('_shared.ts (v2 route helpers)', () => {
           'write',
         );
         expect(result.ok && result.machineIds).toBeNull();
+        expect(result.ok && result.seesScreens).toBe(true);
         expect(mockedAssertSite).not.toHaveBeenCalled();
+      });
+
+      it("says a member may see the machine's screen", async () => {
+        asCaller(null);
+        const result = await requireMachineAuthAndScope(makeRequest(), SITE, 'm1', 'read');
+        expect(result.ok && result.seesScreens).toBe(true);
+      });
+
+      it("admits a superadmin who holds no member row, but not to the machine's screen", async () => {
+        asCaller(null, false);
+        const result = await requireMachineAuthAndScope(makeRequest(), SITE, 'm1', 'read');
+        expect(result.ok).toBe(true);
+        expect(result.ok && result.seesScreens).toBe(false);
       });
 
       // a mac paired before its id dropped `.local` keeps the dotted hostname
@@ -444,6 +458,50 @@ describe('_shared.ts (v2 route helpers)', () => {
         );
         expect(status).toBe(400);
         expect(body.detail).toBe('invalid machineId format');
+      });
+    });
+
+    // a superadmin reaches every site; where they hold no member row they read and change
+    // nothing (adr 0021). every shared gate refuses them every method but a read
+    describe('the shared gates for a superadmin who is not a member of the site', () => {
+      beforeEach(() => {
+        asCaller(null, false);
+        mockDocs['users/user-1'] = { role: 'superadmin' };
+        mockDocs[`sites/${SITE}`] = { owner: 'someone-else' };
+      });
+      afterEach(() => {
+        delete mockDocs['users/user-1'];
+        delete mockDocs[`sites/${SITE}`];
+      });
+
+      const gates = {
+        site: (method: string) => requireSiteAuthAndScope(makeRequest({ method }), SITE, method === 'GET' ? 'read' : 'write'),
+        machine: (method: string) => requireMachineAuthAndScope(makeRequest({ method }), SITE, 'm1', method === 'GET' ? 'read' : 'write'),
+        roost: (method: string) => requireRoostAuthAndScope(makeRequest({ method }), SITE, 'roost-0001', method === 'GET' ? 'read' : 'write'),
+      };
+
+      it.each(Object.keys(gates).flatMap((gate) => ['POST', 'PUT', 'PATCH', 'DELETE'].map((method) => [gate, method] as const)))(
+        'the %s gate refuses a %s with 403 members_only',
+        async (gate, method) => {
+          const { status, body } = await refusal(await gates[gate as keyof typeof gates](method));
+          expect(status).toBe(403);
+          expect(body.code).toBe('members_only');
+        },
+      );
+
+      it.each(Object.keys(gates))('the %s gate lets them read', async (gate) => {
+        expect((await gates[gate as keyof typeof gates]('GET')).ok).toBe(true);
+      });
+
+      it("the machine gate leaves a machine's own agent alone", async () => {
+        mockVerifyIdToken.mockResolvedValueOnce({ uid: 'agent-uid', role: 'agent', site_id: SITE, machine_id: 'm1' });
+        const agent = await requireMachineAuthAndScope(
+          makeRequest({ method: 'POST', headers: { authorization: 'Bearer agent-id-token' } }),
+          SITE,
+          'm1',
+          'write',
+        );
+        expect(agent.ok).toBe(true);
       });
     });
 

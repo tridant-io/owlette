@@ -4,15 +4,11 @@
  *
  * MachineContextMenu — the swoop entry point (dev/active/swoop, wave 5 task 5.3).
  *
- * The contract is exclusivity: an online machine shows swoop OR live view, never
- * both and never neither. `capabilities.swoop === 1` from the heartbeat is the
- * only gate — no version check, and no site/permission check, because site
- * enablement, membersMayWatch and step-up are decided by the session-create
- * route, not by this menu.
- *
- * Today every fielded agent reports 0 (no streamer is installed anywhere yet),
- * so the live-view branch is the one that actually renders — it is asserted
- * first, and for a missing `capabilities` map as well as an explicit 0.
+ * An online machine whose agent reports `capabilities.swoop === 1` offers swoop;
+ * one that does not offers the screenshot alone, as live view is gone. The
+ * heartbeat is the only gate here, with no version check and no site or
+ * permission check: site enablement, membersMayWatch and step-up are decided
+ * by the session-create route, not by this menu.
  */
 
 import React from 'react';
@@ -39,12 +35,18 @@ window.HTMLElement.prototype.hasPointerCapture = jest.fn();
 window.HTMLElement.prototype.setPointerCapture = jest.fn();
 window.HTMLElement.prototype.releasePointerCapture = jest.fn();
 
+// who is looking: a member of site-A unless a test says otherwise
+let mockViewer: { isSuperadmin: boolean; isSiteMember: (siteId: string) => boolean; role?: string; userSites?: string[] } = {
+  isSuperadmin: false,
+  isSiteMember: () => true,
+};
 jest.mock('@/contexts/AuthContext', () => ({
   // the real one: the swoop mode cases below derive noSwoop as the dashboard does
   computeSwoopMode: jest.requireActual('@/contexts/AuthContext').computeSwoopMode,
   useAuth: () => ({
     userPreferences: { mutedMachines: [] },
     updateUserPreferences: jest.fn(),
+    ...mockViewer,
   }),
 }));
 
@@ -76,7 +78,6 @@ async function openMenu(props: {
   swoopViewers?: number;
   onSwoop?: () => void;
   onSwoopApp?: () => void;
-  onLiveView?: () => void;
   onViewDisplays?: () => void;
   planLocked?: boolean;
   controlLocked?: boolean;
@@ -110,25 +111,21 @@ async function openMenu(props: {
 }
 
 describe('MachineContextMenu — swoop entry', () => {
-  it('shows live view and no swoop item when the agent reports no streamer', async () => {
-    await openMenu({ swoopCapable: false });
+  it.each([
+    ['reports no streamer', { swoopCapable: false }],
+    ['reports no capabilities at all', {}],
+  ])('offers the screenshot alone on a machine whose agent %s, and no live view', async (_label, props) => {
+    await openMenu(props);
 
-    expect(screen.getByTestId('machine-context-menu-live-view')).toHaveTextContent('live view');
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+    expect(screen.queryByText('live view')).not.toBeInTheDocument();
   });
 
-  it('shows live view when the capability is absent entirely', async () => {
-    await openMenu({});
-
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
-    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
-  });
-
-  it('shows swoop and no live-view item when capabilities.swoop === 1', async () => {
+  it('shows swoop when capabilities.swoop === 1', async () => {
     await openMenu({ swoopCapable: true });
 
     expect(screen.getByTestId('machine-context-menu-swoop')).toHaveTextContent('swoop');
-    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
   });
 
   it('invokes onSwoop when the swoop item is clicked', async () => {
@@ -198,14 +195,13 @@ describe('MachineContextMenu — the owlette swoop desktop app half', () => {
 });
 
 // with the site's swoop off the server refuses every session, so the menu takes
-// an admin to the switch and tells a member who can flip it, with live view back.
+// an admin to the switch and tells a member who can flip it.
 describe('MachineContextMenu — swoop off for the site', () => {
   it('takes an admin to the switch', async () => {
     const onSiteSettings = jest.fn();
     const user = await openMenu({ swoopCapable: true, swoopOff: true, ...ADMIN, onSiteSettings });
 
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
     await user.click(screen.getByTestId('machine-context-menu-swoop-off'));
 
     expect(onSiteSettings).toHaveBeenCalledTimes(1);
@@ -217,7 +213,6 @@ describe('MachineContextMenu — swoop off for the site', () => {
     const item = screen.getByTestId('machine-context-menu-swoop-off');
     expect(item).toHaveAttribute('aria-disabled', 'true');
     expect(item).toHaveTextContent('ask a site owner or admin to turn it on');
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
   });
 
   it('says nothing on a machine without a streamer', async () => {
@@ -245,44 +240,44 @@ describe('MachineContextMenu — swoop mode', () => {
     ['a member set to watch', 'member', MEMBER, 'view', true],
     ['a member set to watch, where members may not watch by default', 'member', MEMBER, 'view', false],
     ['a member with no mode, where members may watch', 'member', MEMBER, null, true],
-    ['a superadmin on a site where they hold no row', 'superadmin', NO_ROWS, null, false],
+    ['a superadmin who is a member of the site', 'superadmin', MEMBER, null, false],
   ])('keeps swoop for %s', async (_label, role, roleMap, mode, membersMayWatch) => {
     await openMenu({ swoopCapable: true, swoopViewers: 2, noSwoop: noSwoopFor(role, roleMap, mode, membersMayWatch) });
 
     expect(screen.getByTestId('machine-context-menu-swoop')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-swoop-pill')).toHaveTextContent('2');
-    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
   });
 
-  it.each<[string, SwoopMode | null, boolean]>([
-    ['a member set to none', 'none', true],
-    ['a member with no mode, where members may not watch', null, false],
-  ])('offers %s no swoop, with live view as on a machine without a streamer', async (_label, mode, membersMayWatch) => {
+  it.each<[string, UserRole, Map<string, SiteRole>, SwoopMode | null, boolean]>([
+    ['a member set to none', 'member', MEMBER, 'none', true],
+    ['a member with no mode, where members may not watch', 'member', MEMBER, null, false],
+    // a site's screens are for its members, swoop's picture included (adr 0021)
+    ['a superadmin on a site where they hold no row', 'superadmin', NO_ROWS, null, true],
+  ])('offers %s no swoop', async (_label, role, roleMap, mode, membersMayWatch) => {
     await openMenu({
       swoopCapable: true,
       swoopViewers: 2,
       onSwoopApp: jest.fn(),
-      noSwoop: noSwoopFor('member', MEMBER, mode, membersMayWatch),
+      noSwoop: noSwoopFor(role, roleMap, mode, membersMayWatch),
     });
 
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-app')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
   });
 
   it('drops the swoop-is-off row too, since turning the switch on would not help', async () => {
     await openMenu({ swoopCapable: true, noSwoop: true, swoopOff: true });
 
     expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
   });
 
   it("drops the plan's swoop row too, since an upgrade would not help", async () => {
     await openMenu({ swoopCapable: true, noSwoop: true, swoopLocked: true });
 
     expect(screen.queryByTestId('machine-context-menu-swoop-upgrade')).not.toBeInTheDocument();
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
   });
 });
 
@@ -314,7 +309,7 @@ describe('MachineContextMenu — the machine this browser is on', () => {
 });
 
 // the count is the server's mirror of live viewers; it shows only where swoop
-// itself shows, so a stale count never lands on live view or an offline machine.
+// itself shows, so a stale count never lands on a machine without it or an offline one.
 describe('MachineContextMenu — swoop viewer count', () => {
   it('counts viewers on the swoop row and on the trigger', async () => {
     await openMenu({ swoopCapable: true, swoopViewers: 2 });
@@ -336,10 +331,10 @@ describe('MachineContextMenu — swoop viewer count', () => {
     expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
   });
 
-  it('shows no count on the live-view branch', async () => {
+  it('shows no count on a machine without a streamer', async () => {
     await openMenu({ swoopViewers: 2 });
 
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-count')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
   });
@@ -396,10 +391,9 @@ describe('MachineContextMenu — plan', () => {
     expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
   });
 
-  it('drops live view and screenshot when control is out of the plan', async () => {
+  it('drops the screenshot when control is out of the plan', async () => {
     await openMenu({ controlLocked: true, onViewDisplays: jest.fn() });
 
-    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
   });
@@ -460,7 +454,6 @@ describe('MachineContextMenu — plan', () => {
     expect(screen.getByTestId('machine-context-menu-reboot')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-shutdown')).toBeInTheDocument();
     expect(screen.queryByTestId('machine-context-menu-control-upgrade')).not.toBeInTheDocument();
-    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
   });
@@ -603,7 +596,6 @@ describe('MachineContextMenu — machine scope', () => {
       '',
       'shutdown machine',
       'swoop is offask a site owner or admin to turn it on',
-      'live view',
       'screenshot',
       'hoot',
       'mute alerts',
@@ -664,5 +656,60 @@ describe('MachineContextMenu — hoot', () => {
     await openMenu({ isOnline: false });
 
     expect(screen.getByTestId('machine-context-menu-hoot')).toHaveTextContent('hoot');
+  });
+});
+
+// a superadmin reaches every site, but a site's screenshots are for its members
+describe('MachineContextMenu — screenshot', () => {
+  afterEach(() => {
+    mockViewer = { isSuperadmin: false, isSiteMember: () => true };
+  });
+
+  it('offers a screenshot to a member of the site', async () => {
+    await openMenu({});
+
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toHaveTextContent('screenshot');
+  });
+
+  it('offers a superadmin who is a member of the site a screenshot', async () => {
+    mockViewer = { isSuperadmin: true, isSiteMember: (siteId) => siteId === 'site-A' };
+    await openMenu({});
+
+    expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
+  });
+
+  it('offers a superadmin who is not a member of the site no screenshot, and keeps the rest', async () => {
+    mockViewer = { isSuperadmin: true, isSiteMember: () => false };
+    await openMenu({ ...ADMIN });
+
+    expect(screen.queryByTestId('machine-context-menu-screenshot')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-hoot')).toBeInTheDocument();
+  });
+});
+
+// a superadmin without a member row restarts a machine and revokes its token, and changes nothing else (adr 0021)
+describe('MachineContextMenu — a superadmin who is not a member', () => {
+  afterEach(() => {
+    mockViewer = { isSuperadmin: false, isSiteMember: () => true };
+  });
+
+  it('keeps restart and revoke token, and drops shutdown, schedule restarts and remove machine', async () => {
+    mockViewer = { isSuperadmin: true, role: 'superadmin', userSites: [], isSiteMember: () => false };
+    await openMenu({ ...ADMIN });
+
+    expect(screen.getByTestId('machine-context-menu-reboot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-revoke-token')).toBeInTheDocument();
+    for (const testId of ['machine-context-menu-shutdown', 'machine-context-menu-schedule-restarts-gear', 'machine-context-menu-remove']) {
+      expect(screen.queryByTestId(testId)).not.toBeInTheDocument();
+    }
+  });
+
+  it('offers a superadmin who is a member all of them', async () => {
+    mockViewer = { isSuperadmin: true, role: 'superadmin', userSites: ['site-A'], isSiteMember: () => true };
+    await openMenu({ ...ADMIN });
+
+    for (const testId of ['machine-context-menu-shutdown', 'machine-context-menu-schedule-restarts-gear', 'machine-context-menu-remove']) {
+      expect(screen.getByTestId(testId)).toBeInTheDocument();
+    }
   });
 });

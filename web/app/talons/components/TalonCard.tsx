@@ -41,6 +41,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import type { Machine } from '@/hooks/useFirestore';
 import { useTalonRuns } from '@/hooks/useTalonRuns';
 import { toast } from '@/lib/toast';
@@ -290,6 +291,8 @@ export function TalonCard({
   onSaveAsTemplate,
 }: TalonCardProps) {
   const { userPreferences } = useAuth();
+  // a superadmin without a member row reads a talon and its runs, and changes neither (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const use24h = (userPreferences.timeFormat || '12h') === '24h';
   const [expanded, setExpanded] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -530,6 +533,8 @@ export function TalonCard({
 
           {/* (g) actions. below `md` one menu with a label per action, pinned to the
               corner so the lines under the name keep the full width */}
+          {!memberLocked && (
+          <>
           <div className="absolute right-2 top-1.5 md:hidden">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -683,6 +688,8 @@ export function TalonCard({
               <TooltipContent>delete</TooltipContent>
             </Tooltip>
           </div>
+          </>
+          )}
         </div>
 
         {/* Sibling of the grid row, not a cell: keeping the grid single-row is

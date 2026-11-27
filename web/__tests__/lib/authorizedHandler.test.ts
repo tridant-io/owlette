@@ -619,13 +619,13 @@ describe.each([
   async function call(
     capability: Capability,
     machineId: string | null,
-    extra: { apiKeyScope?: { resource: 'machine'; idParam: string } } = {},
+    { method, ...extra }: { apiKeyScope?: { resource: 'machine'; idParam: string }; method?: string } = {},
   ) {
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
     const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path', ...extra })(handler);
     const res = machineId === null
-      ? await wrapped(makeRequest(), pathParamsFor('site-a'))
-      : await wrapped(makeRequest(`http://localhost/api/sites/site-a/machines/${machineId}/test`), machineParamsFor(machineId));
+      ? await wrapped(makeRequest(undefined, method), pathParamsFor('site-a'))
+      : await wrapped(makeRequest(`http://localhost/api/sites/site-a/machines/${machineId}/test`, method), machineParamsFor(machineId));
     return { res, handler };
   }
 
@@ -754,13 +754,19 @@ describe.each([
     expect(deny()?.denyReason).toBe('capability_missing');
   });
 
-  it('a superadmin with no row runs on m2', async () => {
+  // no machine scope holds them, and no member row: they read, and change nothing (adr 0021)
+  it('a superadmin with no row reads m2, and is refused a change there with 403 members_only', async () => {
     userDoc = { exists: true, data: () => ({ role: 'superadmin', sites: [] }) };
     memberDoc = { exists: false, data: () => undefined };
-    const { res, handler } = await call('MACHINE_EXEC_COMMAND', 'm2');
+    const read = await call('MACHINE_VIEW', 'm2', { method: 'GET' });
+    const change = await call('MACHINE_EXEC_COMMAND', 'm2');
 
-    expect(res.status).toBe(200);
-    expect(handler).toHaveBeenCalledTimes(1);
+    expect(read.res.status).toBe(200);
+    expect(read.handler).toHaveBeenCalledTimes(1);
+    expect(change.res.status).toBe(403);
+    expect((await change.res.json()).code).toBe('members_only');
+    expect(change.handler).not.toHaveBeenCalled();
+    expect(deny()?.denyReason).toBe('members_only');
   });
 
   it('a whole-site admin is unchanged: MACHINE_REMOVE on m2 and SITE_MEMBER_MANAGE with no machineId run', async () => {

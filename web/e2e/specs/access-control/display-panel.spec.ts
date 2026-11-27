@@ -14,7 +14,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
-import { seedMachine } from '../../helpers/seed';
+import { revokeMembership, seedMachine, seedMemberRow, TEST_USERS } from '../../helpers/seed';
 
 const SITE_ID = 'site-A';
 const MACHINE_ID = 'e2e-display-machine';
@@ -84,6 +84,14 @@ test.describe('display panel — admin on site-A', () => {
 
 test.describe('display panel — superadmin', () => {
   test.use(roleState('superadmin'));
+
+  // the menu, panel or page offers a superadmin its changes only on a site they are a member of (adr 0021)
+  test.beforeAll(async () => {
+    await seedMemberRow(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
+  });
+  test.afterAll(async () => {
+    await revokeMembership(SITE_ID, TEST_USERS.superadmin.uid);
+  });
 
   test('sees store + restore buttons on the live tab', async ({ page }) => {
     await openDisplayPanel(page);

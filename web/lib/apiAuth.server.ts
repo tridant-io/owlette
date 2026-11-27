@@ -12,7 +12,7 @@ import {
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import { sessionRevoked, tokensRevokedAt } from '@/lib/sessionCutoff.server';
 import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
-import { type Actor, type Capability, hasCapability, siteStanding } from '@/lib/capabilities';
+import { type Actor, type Capability, hasCapability, isMemberRole, MEMBERS_ONLY_CHANGE, siteStanding } from '@/lib/capabilities';
 import {
   type ApiKeyEnvironment,
   type ApiKeyLookup,
@@ -530,6 +530,8 @@ export async function assertUserHasSiteAccess(
   siteData: Record<string, unknown> | null;
   /** the caller's machine scope on the site; null for the whole site */
   machineIds: readonly string[] | null;
+  /** the caller holds a member row; false for a superadmin who reaches the site without one */
+  member: boolean;
 }> {
   const outcome = await resolveSiteAccess(userId, siteId);
 
@@ -546,7 +548,12 @@ export async function assertUserHasSiteAccess(
     }
   }
 
-  return { siteId, siteData: outcome.facts.siteData, machineIds: outcome.facts.machineIds };
+  return {
+    siteId,
+    siteData: outcome.facts.siteData,
+    machineIds: outcome.facts.machineIds,
+    member: isMemberRole(outcome.facts.membershipRole),
+  };
 }
 
 /**
@@ -558,6 +565,10 @@ export async function assertUserHasSiteAccess(
  * silently became a grant to a read-only tier. Reuses the same decision core and
  * the same capability matrix as the wrappers, so there is one answer to
  * "may this user do this here", not two.
+ *
+ * both callers make a change (pairing a machine, moving one in), so a caller
+ * without a member row on the site (a superadmin) is refused, as at every
+ * other change there (adr 0021).
  */
 export async function assertUserHasSiteCapability(
   userId: string,
@@ -565,6 +576,7 @@ export async function assertUserHasSiteCapability(
   capability: Capability,
 ): Promise<{ siteId: string; siteData: Record<string, unknown> | null }> {
   const result = await assertUserHasSiteAccess(userId, siteId);
+  if (!result.member) throw new ApiAuthError(403, MEMBERS_ONLY_CHANGE, { code: 'members_only' });
   const outcome = await resolveSiteAccess(userId, siteId);
   const actor: Actor = {
     type: 'user',

@@ -77,8 +77,8 @@ export function MoveMachineDialog({
           <DialogDescription className="text-muted-foreground">
             <span className="font-mono text-foreground">{machine.name}</span> leaves {sourceSite.name} and joins the
             site you pick, within seconds while it is online. it needs no restart and nobody at the machine. its
-            processes come with it. its command history on {sourceSite.name} is deleted, and members limited to it
-            here lose it.
+            processes come with it. its screenshots and command history on {sourceSite.name} are deleted, and members
+            limited to it here lose it.
           </DialogDescription>
         </DialogHeader>
 

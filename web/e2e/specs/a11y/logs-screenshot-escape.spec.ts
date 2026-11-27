@@ -7,8 +7,18 @@
 import { test, expect } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { seedLogEvents } from '../../helpers/coverageSeed';
+import { revokeMembership, seedMemberRow, TEST_USERS } from '../../helpers/seed';
 
 test.use(roleState('superadmin'));
+
+// a site's crash screenshots are for its members (adr 0021)
+test.beforeAll(async () => {
+  await seedMemberRow('site-A', TEST_USERS.superadmin.uid, 'admin');
+});
+
+test.afterAll(async () => {
+  await revokeMembership('site-A', TEST_USERS.superadmin.uid);
+});
 
 test.beforeEach(async () => {
   await seedLogEvents('site-A');

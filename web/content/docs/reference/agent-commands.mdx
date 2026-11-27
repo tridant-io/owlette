@@ -79,7 +79,7 @@ these come back `completed` although the command did not do its job, so check `r
 - `Unknown command type: <type>`. this is also what a router-handled type returns when its handler module failed to load at service start (see [where the handlers live](#where-the-handlers-live))
 - `Process <name> not found in configuration`, from every process command
 - `Cancel timed out (the OS cancel hung)` from `cancel_reboot`. a reboot or shutdown the OS refuses is failed, as `Error: reboot failed: …` or `Error: shutdown failed: …`
-- `Error starting live view: …`, `Failed to dismiss reboot pending: …`, `Failed to refresh software inventory: …`
+- `Failed to dismiss reboot pending: …`, `Failed to refresh software inventory: …`
 - `Cancellation failed: …` from `cancel_uninstall`
 - `Update already in progress (started …)` from `update_owlette`
 - `sync_pull skipped: roost kill-switch engaged for site …`, and a `sync_pull` that was cancelled: its target state says `cancelled`, its command entry `completed`
@@ -186,8 +186,6 @@ the agent keeps at most one held reboot, in its local `reboot_state.json`, so it
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
 | `capture_screenshot` | `monitor` | captures, asks the server for a signed upload URL, uploads and finalizes, which writes the machine's `lastScreenshot`. the result is an object: `storage_path`, `url`, `size_kb`, `monitor`, `monitor_count`. Windows captures in the console user's session: `0` is every monitor combined, `n` the nth, and an index past the last falls back to `0`. anything but a number reads as `0`, so the API's `"primary"` captures every monitor too | macOS: the owlette app captures and needs Screen Recording; refused with `screen_recording_not_granted` when the app reported the grant missing, `desktop_not_running` when it is not running. there `0` captures the main display only and `1` the second display, one off from the Windows numbering. Linux: not available yet, though the dashboard menu still offers it. a Wayland session is refused with `unsupported_on_platform`, and on X11 the app answers `unsupported_job` |
-| `start_live_view` | `interval` (5-60, default 10), `duration` (60-1800, default 600) | sets the machine's `liveView` flag and uploads a frame, at most 1920 px wide, every `interval` seconds until `duration` runs out or `stop_live_view` arrives. answers `Live view already active` when one is running | the same capture rules. on Linux the loop starts and every frame fails |
-| `stop_live_view` | none | stops the loop and clears `liveView` | same |
 
 ---
 
@@ -290,7 +288,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 `POST /api/sites/{siteId}/machines/{machineId}/commands` takes `type`, an optional `params` object and an optional `timeout_seconds`, and answers `202` with `commandId` and `status: "pending"`.
 
 - **an `Idempotency-Key` header is required**: without one the request is refused with `400`. the same key and body within 24 hours replays the first response; the same key with another body is `422`. see [idempotency](/docs/api/idempotency)
-- **capability**: `capture_screenshot`, `start_live_view` and `stop_live_view` need `MACHINE_VIEW`, which site members hold. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
+- **capability**: `capture_screenshot` needs `MACHINE_VIEW`, which site members hold, and answers `403` to a superadmin who is not a member of the site. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
 - **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`. an `update_owlette` that names no published installer gets `403 installer_not_published`. a `reboot_machine` with `when: "after_active_hours"` gets `409 held_restart_unsupported` on a machine without `capabilities.activeHoursGuard: 1` and an `agent_version` of 4.1.21 or later (an older agent, one rolled back below 4.1.21, macOS or Linux), whose agent would restart at once; nothing is queued
 - **`timeout_seconds`** (default 60, max 600) is stamped into every payload. only `restart_process` reads it at the agent, capped at 30, so an API restart waits the full 30 seconds for a graceful exit unless the body sends less. a `timeout_seconds` inside `params` is dropped
 - **active hours**: Windows always has active hours, 8 to 17 when nobody set any, so a daytime script's reboot or shutdown is refused by a guarded agent unless it sends `active_hours_override`. the request still answers `202`; the command then ends `failed` with the [active-hours refusal](#active-hours). to wait instead, send a reboot with `when: "after_active_hours"`
@@ -301,8 +299,7 @@ the route copies only these `params` into the command:
 |------|---------------|
 | `reboot_machine`, `shutdown_machine` | `delay_seconds`, a non-negative integer, which the agent ignores. `active_hours_override`: exactly `{ reason }`, 1 to 500 characters once trimmed, written onto the command as `activeHoursOverride` with the caller (`user:<uid>` or `apiKey:<keyId>`) as `approvedBy`. `reboot_machine` also takes `when`, `now` or `after_active_hours`. a malformed override, an override on any other type, `when` on a shutdown, or an override with `when: "after_active_hours"` is `400` |
 | `capture_screenshot` | `monitor`: `"all"`, `"primary"` or a non-negative integer |
-| `start_live_view` | `interval`, `duration`, integers of at least 1 |
-| `stop_live_view`, `cancel_reboot`, `enumerate_display_modes`, `test_display_apply` | none |
+| `cancel_reboot`, `enumerate_display_modes`, `test_display_apply` | none |
 | `dismiss_reboot_pending` | `process_name` |
 | `restart_process`, `start_process`, `stop_process`, `kill_process` | `process_name` and `process_id`, one of them required. `processId` is dropped |
 | `set_launch_mode` | `process_name` and `mode`, both required; `schedules`, an array; `schedulePresetId`, which the agent does not read |

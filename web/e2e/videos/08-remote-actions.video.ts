@@ -1,9 +1,9 @@
 /**
- * Scene — episode 8, "remote actions: restart, screenshot, live view".
+ * Scene — episode 8, "remote actions: restart and screenshot".
  *
  * Rendered VO (voiceover/out/08-remote-actions/, ffprobe):
  *   b01 12.0s the actions menu · b02 15.5s take a screenshot
- *   b03 16.2s live view · b04 20.0s restart
+ *   b04 20.0s restart (b03, the old slideshow beat, is gone: swoop replaced it)
  *   b05 20.5s shutdown + restarts on a timer · b06 12.9s mute alerts
  *   b07 26.4s who can do what · b08 15.2s when an action doesn't go through
  * b04, b05 and b07 were revoiced for the v2 series.
@@ -21,12 +21,12 @@
  *    it and an unforced click times out after 15s. There is no exception to this
  *    in the file — a single unforced press is what used to contradict the
  *    scene's own comment.
- * 2. The screenshot and live-view overlays are closed by their own X, never by
- *    Escape (they ignore it — see `closeOverlayDialog`). Escape is still the way
+ * 2. The screenshot overlay is closed by its own X, never by Escape (it
+ *    ignores it — see `closeOverlayDialog`). Escape is still the way
  *    out of the restart/shutdown/revoke dialogs and of the menu itself.
  *
  * Fixture `dashboard-mixed-states`. Target card `media-server-stage` is online,
- * which is what gates screenshot / live view / restart / shutdown.
+ * which is what gates screenshot / restart / shutdown.
  *
  * Run:  cd web && npm run videos -- --grep "episode 8"
  * Out:  dev/video-tutorials/footage/web/08-remote-actions.mp4
@@ -73,7 +73,7 @@ async function openMachineMenu(page: Page, trigger: Locator): Promise<void> {
  * animation plus focus restore ends around 700ms, and reopening earlier leaves
  * the menu DOM transitional and the next lookup times out.
  *
- * NOT usable after the screenshot or live-view overlay — see
+ * NOT usable after the screenshot overlay — see
  * `closeOverlayDialog`.
  */
 async function reopenMachineMenu(page: Page, trigger: Locator): Promise<void> {
@@ -83,9 +83,9 @@ async function reopenMachineMenu(page: Page, trigger: Locator): Promise<void> {
 }
 
 /**
- * The two full-bleed overlays this scene opens, `ScreenshotDialog` and
- * `LiveViewModal`, suppress the shared close button (`showCloseButton={false}`)
- * and render their own named "close" button in the title. Escape closes them now
+ * The full-bleed overlay this scene opens, `ScreenshotDialog`, suppresses the
+ * shared close button (`showCloseButton={false}`) and renders its own named
+ * "close" button in the title. Escape closes them now
  * too, but the click is what the episode shows. Assert the overlay is gone before
  * touching the card underneath, or the next failure surfaces on an unrelated
  * locator.
@@ -100,7 +100,7 @@ async function closeOverlayDialog(page: Page, name: RegExp): Promise<void> {
   await page.waitForTimeout(900);
 }
 
-test('episode 8 — remote actions: restart, screenshot, live view', async ({ browser }) => {
+test('episode 8 — remote actions: restart and screenshot', async ({ browser }) => {
   const ctx = await seedScreenshotFixtures('dashboard-mixed-states');
   try {
     const db = getAdminDb();
@@ -137,25 +137,12 @@ test('episode 8 — remote actions: restart, screenshot, live view', async ({ br
         await slowPush(page, { scale: 1.0, seconds: 3.0 });
         await narrate(page, 'b02 screenshot dialog — settle', 2.5);
 
-        // [b03] live view (~16.2s). No `exact: true`: the item renders
-        // `<Eye/>\n live view`, so its accessible name carries leading space.
-        await closeOverlayDialog(page, /screenshot — media-server-stage/i);
-        await openMachineMenu(page, menuTrigger);
-        const liveViewItem = page.getByRole('menuitem', { name: 'live view' });
-        await clickWithCursor(page, liveViewItem);
-        await page.waitForTimeout(900);
-        await narrate(page, 'b03 live view modal', 2.5);
-        await slowPush(page, { scale: 1.05, originXPct: 50, originYPct: 50, seconds: 4.5 });
-        await narrate(page, 'b03 live view modal — close', 4.5);
-        await slowPush(page, { scale: 1.0, seconds: 3.0 });
-        await narrate(page, 'b03 live view modal — settle', 2.5);
-
         // [b04] restart (~20.0s). RestartDialog with the 30s countdown copy. Not
         // confirmed on camera: the countdown only starts after confirm, and the
         // pill's cancel affordance hides in the final 5 seconds (Windows
         // `shutdown /a` is unreliable that late), so a real cancel take needs
         // time on the clock and belongs to a separate pass.
-        await closeOverlayDialog(page, /live view — media-server-stage/i);
+        await closeOverlayDialog(page, /screenshot — media-server-stage/i);
         await openMachineMenu(page, menuTrigger);
         const rebootItem = page.getByTestId('machine-context-menu-reboot');
         await clickWithCursor(page, rebootItem);
@@ -212,7 +199,6 @@ test('episode 8 — remote actions: restart, screenshot, live view', async ({ br
         // route still demanded a superadmin capability; do NOT reinstate the old
         // "superadmin only" framing.
         await highlight(page, screenshotItem, 2200);
-        await highlight(page, liveViewItem, 2200);
         await highlight(page, page.getByTestId('machine-context-menu-view-displays'), 2200);
         await narrate(page, 'b07 perms — any member on the site', 9);
         await highlight(page, rebootItem, 2000);
@@ -236,7 +222,7 @@ test('episode 8 — remote actions: restart, screenshot, live view', async ({ br
     );
 
     // ── b08, second clip: the same menu as a MEMBER sees it (~15.2s) ──────────
-    // Members get screenshot / live view / view displays / mute alerts and
+    // Members get screenshot / view displays / mute alerts and
     // nothing else; the admin block is absent rather than disabled. The beat's
     // closing dissolve to the owlette desktop app is a NATIVE insert, filmed by
     // the desktop-screenshots video sibling.

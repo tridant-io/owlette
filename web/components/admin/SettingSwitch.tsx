@@ -14,6 +14,8 @@ interface ImmediateSwitchProps {
   /** PATCHed with `{ [field]: next }` the moment the switch moves. */
   url: string;
   field: string;
+  /** shown but not moved: a superadmin without a member row on its site (adr 0021). */
+  locked?: boolean;
 }
 
 /**
@@ -21,7 +23,7 @@ interface ImmediateSwitchProps {
  * online machines, which a cancel could not take back. the switch follows its
  * snapshot hook, so only a failure needs saying.
  */
-export function ImmediateSwitch({ id, label, checked, loading, url, field }: ImmediateSwitchProps) {
+export function ImmediateSwitch({ id, label, checked, loading, url, field, locked = false }: ImmediateSwitchProps) {
   const [busy, setBusy] = useState(false);
 
   const save = async (next: boolean) => {
@@ -53,7 +55,7 @@ export function ImmediateSwitch({ id, label, checked, loading, url, field }: Imm
       aria-label={label}
       checked={checked}
       onCheckedChange={(next) => void save(next)}
-      disabled={busy || loading}
+      disabled={busy || loading || locked}
     />
   );
 }

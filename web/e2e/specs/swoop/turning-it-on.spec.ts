@@ -2,7 +2,7 @@
  * swoop — finding the switch. while a site has swoop off, a machine that can
  * stream sends an admin from its menu to swoop settings
  * (`/admin/swoop`), and tells a member who can turn swoop
- * on, with live view in the meantime. the site switcher opens the current site's
+ * on. the site switcher opens the current site's
  * settings in one click, and `/admin/sites/<siteId>?section=swoop`, the link the
  * swoop picker and the viewer gave an admin before swoop had its own section,
  * still lands on the switch.
@@ -58,7 +58,7 @@ test.describe('admin on site-A', () => {
   test('the machine menu leads to the swoop switch', async ({ page }) => {
     const menu = await openMachineMenu(page);
     await expect(menu.getByTestId('machine-context-menu-swoop')).toHaveCount(0);
-    await expect(menu.getByTestId('machine-context-menu-live-view')).toBeVisible();
+    await expect(menu.getByTestId('machine-context-menu-screenshot')).toBeVisible();
 
     await menu.getByTestId('machine-context-menu-swoop-off').click();
 
@@ -90,6 +90,6 @@ test.describe('member on site-A', () => {
     await expect(menu.getByTestId('machine-context-menu-swoop-off')).toContainText(
       'ask a site owner or admin to turn it on',
     );
-    await expect(menu.getByTestId('machine-context-menu-live-view')).toBeVisible();
+    await expect(menu.getByTestId('machine-context-menu-screenshot')).toBeVisible();
   });
 });

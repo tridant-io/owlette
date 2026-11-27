@@ -598,12 +598,11 @@ function buildMachine(def: MachineDef): Machine {
     activeHours: undefined,
     swoopViewers: undefined,
     rebootSchedule: undefined,
-    // pages the demo does not have: hoot, the swoop picker, site settings, the screenshot and live view dialogs
+    // pages the demo does not have: hoot, the swoop picker, site settings, the screenshot dialog
     cortexEnabled: undefined,
     swoopSeats: undefined,
     displayAwake: undefined,
     lastScreenshot: undefined,
-    liveView: undefined,
     // states the demo does not stage; stage-right-media restarts and admin-workstation holds one
     shuttingDown: undefined,
     rebootScheduledAt: undefined,

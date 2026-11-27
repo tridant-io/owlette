@@ -61,7 +61,7 @@ the largest surviving-asset episode needs no migration.
 | 5 | keep a process alive | 6:00 | web | `control-process-restarting` | add a process and have it auto-restart on crash |
 | 6 | run apps on a schedule | 6:00 | web + CDP b-roll | `automate-schedule-editor` | launch/stop apps on a days+times schedule — from the dashboard or the machine |
 | 7 | reading machine health | 5:00 | web | `dashboard-mixed-states` + `monitor-single-machine` | read metrics, sparklines, thresholds, temps |
-| 8 | remote actions: restart, screenshot, live view | 6:00 | web | `dashboard-mixed-states` | restart/shutdown, capture screenshots, watch live, schedule restarts |
+| 8 | remote actions: screenshot, restart, shutdown | 6:00 | web | `dashboard-mixed-states` | restart/shutdown, capture screenshots, schedule restarts |
 | 9 | the owlette app on the machine | 6:00 | CDP + tray (pywinauto) | installed desktop app | manage processes, schedules, and the tray from the machine itself |
 
 ## Batch 2 — power features

@@ -9,6 +9,7 @@
  */
 
 import React, { useState } from 'react';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { CheckCircle2, CircleDashed, Download, FileCog, Loader2, XCircle, Ban, AlertTriangle } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useTargetStates, type TargetState, type TargetStatus } from '@/hooks/useTargetStates';
@@ -290,6 +291,8 @@ export function RoostTargetsList({
   targets,
   machines,
 }: RoostTargetsListProps) {
+  // a superadmin without a member row reads it and changes nothing (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const { states } = useTargetStates(siteId, roostId);
   // O(1) row lookup; rebuilt on snapshot change, not on every parent render.
   const byMachine = React.useMemo(() => {
@@ -413,7 +416,7 @@ export function RoostTargetsList({
             isTarget={isTarget}
             currentVersionId={currentVersionId}
             state={byMachine.get(m.machineId)}
-            disabled={busy}
+            disabled={busy || memberLocked}
             onToggle={() => toggle(m.machineId)}
           />
         );

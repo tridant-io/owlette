@@ -159,30 +159,33 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
       continue;
     }
 
-    try {
-      const unsubscribeUrl =
-        recipient.userId !== 'fallback'
-          ? `${ctx.baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-          : undefined;
+    const unsubscribeUrl =
+      recipient.userId !== 'fallback'
+        ? `${ctx.baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
+        : undefined;
+    // the screenshot goes only to the site's members (adr 0021). a cc address is
+    // none, so with a screenshot it gets its own copy without it.
+    const withImage = recipient.member === true && Boolean(ctx.condition?.screenshotUrl);
+    const ccApart = withImage && recipient.ccEmails.length > 0;
 
-      const result = await resend.emails.send({
-        from: FROM_EMAIL,
-        to: [recipient.email],
-        ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
+    const failure = await sendTalonEmail(resend, {
+      to: [recipient.email],
+      ...(recipient.ccEmails.length > 0 && !ccApart ? { cc: recipient.ccEmails } : {}),
+      subject,
+      html: buildTalonEmail(ctx, unsubscribeUrl, withImage),
+    });
+    if (failure) {
+      failures.push(`${recipient.email}: ${failure}`);
+    } else {
+      sent += 1;
+    }
+    if (ccApart) {
+      const ccFailure = await sendTalonEmail(resend, {
+        to: recipient.ccEmails,
         subject,
-        html: buildTalonEmail(ctx, unsubscribeUrl),
+        html: buildTalonEmail(ctx, unsubscribeUrl, false),
       });
-
-      // Resend reports delivery refusals in-band rather than by throwing.
-      if (result.error) {
-        failures.push(`${recipient.email}: ${result.error.message ?? 'resend error'}`);
-      } else {
-        sent += 1;
-      }
-    } catch (error) {
-      failures.push(
-        `${recipient.email}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      if (ccFailure) failures.push(`${recipient.ccEmails.join(', ')}: ${ccFailure}`);
     }
   }
 
@@ -203,8 +206,22 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
   return { type: 'email', status: 'skipped', detail: 'no_recipients' };
 }
 
+/** one send; the failure as text, or null when resend took it. */
+async function sendTalonEmail(
+  resend: NonNullable<ReturnType<typeof getResend>>,
+  message: { to: string[]; cc?: string[]; subject: string; html: string },
+): Promise<string | null> {
+  try {
+    const result = await resend.emails.send({ from: FROM_EMAIL, ...message });
+    // Resend reports delivery refusals in-band rather than by throwing.
+    return result.error ? (result.error.message ?? 'resend error') : null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** Lowercase-first-person alert body, matching the rest of the alert emails. */
-function buildTalonEmail(ctx: TalonOutputContext, unsubscribeUrl?: string): string {
+function buildTalonEmail(ctx: TalonOutputContext, unsubscribeUrl: string | undefined, withImage: boolean): string {
   const condition = ctx.condition;
   const accent = condition?.verdict === 'fail' ? EMAIL_COLORS.amber : EMAIL_COLORS.cyan;
 
@@ -229,7 +246,7 @@ function buildTalonEmail(ctx: TalonOutputContext, unsubscribeUrl?: string): stri
   // The capture url is a short-lived signed link, embedded because this email is
   // sent seconds after the capture. The durable reference is the storage path on
   // the run doc, not this.
-  const screenshotHtml = condition?.screenshotUrl
+  const screenshotHtml = withImage && condition?.screenshotUrl
     ? `<p style="margin:20px 0 6px;color:${EMAIL_COLORS.muted};font-size:13px;">what the display looked like:</p>
        <a href="${escapeHtml(condition.screenshotUrl)}"><img src="${escapeHtml(condition.screenshotUrl)}" alt="screenshot" width="536" style="display:block;width:100%;max-width:536px;border-radius:6px;border:1px solid ${EMAIL_COLORS.border};"></a>
        <p style="margin:6px 0 0;color:${EMAIL_COLORS.border};font-size:11px;">this image link expires in about an hour.</p>`
@@ -282,6 +299,10 @@ async function executeWebhookOutput(
     };
   }
 
+  // a webhook's endpoint is not a member of the site, so it gets the verdict and
+  // the storage path but never the signed image link (adr 0021)
+  const { screenshotUrl: _image, ...condition } = ctx.condition ?? {};
+
   const payload: WebhookPayload = {
     event: TALON_WEBHOOK_EVENT,
     timestamp: ctx.now.toISOString(),
@@ -293,7 +314,7 @@ async function executeWebhookOutput(
       ...(ctx.machineId
         ? { machine: { id: ctx.machineId, name: ctx.machineName ?? ctx.machineId } }
         : {}),
-      ...(ctx.condition ? { condition: ctx.condition } : {}),
+      ...(ctx.condition ? { condition } : {}),
       // `extractFields` in webhookSender reads this for the Slack/Discord body.
       details: ctx.condition?.reason ?? ctx.triggerSummary,
     },

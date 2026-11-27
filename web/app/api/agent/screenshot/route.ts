@@ -3,15 +3,15 @@ import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
-import { screenshotImageUrl, screenshotRecordPath } from '@/lib/screenshotStorage.server';
+import { screenshotImageUrl } from '@/lib/screenshotStorage.server';
 
 /**
  * POST /api/agent/screenshot — agent uploads a base64 JPEG (Bearer agent id
  * token; body: siteId, machineId, screenshot, agentVersion). Agents before the
- * signed-url upload still send their crash, hoot and live-view captures here.
+ * signed-url upload still send their crash and hoot captures here.
  *
  * Storage:  screenshots/{siteId}/{machineId}/latest.jpg (overwritten)
- *           .../history/{timestamp}.jpg (max 20 kept), both private
+ *           .../history/{timestamp}.jpg (every capture kept), both private
  * Firestore: machines/{machineId}.lastScreenshot and its screenshots/ subcollection,
  *           each recording the path and its image-route url.
  */
@@ -120,29 +120,12 @@ export const POST = withRateLimit(
         },
       });
 
-      const screenshotsCol = machineRef.collection('screenshots');
-      await screenshotsCol.add({
+      await machineRef.collection('screenshots').add({
         url: screenshotImageUrl(siteId, machineId, historyPath),
         path: historyPath,
         timestamp: FieldValue.serverTimestamp(),
         sizeKB,
       });
-
-      const MAX_HISTORY = 20;
-      const allDocs = await screenshotsCol.orderBy('timestamp', 'asc').get();
-      if (allDocs.size > MAX_HISTORY) {
-        const toDelete = allDocs.docs.slice(0, allDocs.size - MAX_HISTORY);
-        for (const docSnap of toDelete) {
-          try {
-            const oldPath = screenshotRecordPath(docSnap.data(), bucket.name);
-            if (oldPath) await bucket.file(oldPath).delete();
-          } catch {
-            // Already gone.
-          }
-          await docSnap.ref.delete();
-        }
-        console.log(`[agent/screenshot] Pruned ${toDelete.length} old screenshots for ${machineId}`);
-      }
 
       console.log(`[agent/screenshot] Screenshot uploaded for ${machineId} (${sizeKB}KB) → Storage + history`);
 

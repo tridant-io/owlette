@@ -64,7 +64,7 @@ function disableRoostForSite() {
 
 function authed() {
   mockResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null, member: true });
 }
 
 beforeEach(() => {

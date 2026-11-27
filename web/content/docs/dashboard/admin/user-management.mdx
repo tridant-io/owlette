@@ -34,7 +34,7 @@ what someone may do on a site comes from their **role on that site**, held in `s
 |---|---|
 | **member** | its own preferences, and deleting its own account. nothing on any site by itself |
 | **admin** | exactly the same as member. it is left over from before per-site roles |
-| **superadmin** | every capability on every site, and the internal pages |
+| **superadmin** | every capability on the sites they are a member of, read access and [a short list of changes](/docs/dashboard/admin#roles) on every other site, and the internal pages |
 
 so the only account-role change with an effect is to or from **superadmin**. to make someone an admin of a site, change their role on that site: [changing a role](/docs/dashboard/admin/member-management#changing-a-role), or `PATCH /api/sites/{siteId}/members/{uid}`.
 

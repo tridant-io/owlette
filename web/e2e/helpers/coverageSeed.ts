@@ -132,28 +132,6 @@ export async function seedScreenshotFixture(
   });
 }
 
-export async function seedLiveViewFixture(
-  siteId = 'site-A',
-  machineId = 'e2e-live-machine',
-): Promise<void> {
-  await seedScreenshotFixture(siteId, machineId);
-  await getAdminDb()
-    .collection('sites')
-    .doc(siteId)
-    .collection('machines')
-    .doc(machineId)
-    .set(
-      {
-        liveView: {
-          active: true,
-          intervalSeconds: 10,
-          expiresAt: Math.floor(Date.now() / 1000) + 600,
-        },
-      },
-      { merge: true },
-    );
-}
-
 /** The online machine `seedHootFixture` seeds; the single-machine affordances render for it. */
 export const HOOT_FIXTURE_MACHINE_ID = 'e2e-cortex-machine';
 

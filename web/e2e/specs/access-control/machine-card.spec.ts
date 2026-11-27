@@ -21,7 +21,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
-import { seedMachine } from '../../helpers/seed';
+import { revokeMembership, seedMachine, seedMemberRow, TEST_USERS } from '../../helpers/seed';
 
 const SITE_ID = 'site-A';
 const BASELINE_MACHINE_ID = 'e2e-machine-baseline';
@@ -253,6 +253,14 @@ test.describe('machine card — admin on site-A', () => {
 
 test.describe('machine card — superadmin', () => {
   test.use(roleState('superadmin'));
+
+  // the menu, panel or page offers a superadmin its changes only on a site they are a member of (adr 0021)
+  test.beforeAll(async () => {
+    await seedMemberRow('site-A', TEST_USERS.superadmin.uid, 'admin');
+  });
+  test.afterAll(async () => {
+    await revokeMembership('site-A', TEST_USERS.superadmin.uid);
+  });
 
   test('context menu shows reboot + shutdown + remove items', async ({ page }) => {
     const card = await cardFor(page, BASELINE_MACHINE_ID);

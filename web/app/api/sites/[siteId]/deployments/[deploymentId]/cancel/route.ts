@@ -31,6 +31,8 @@ export const POST = authorizedSiteHandler<RouteParams>({
   siteIdParam: 'path',
   // a deployment already running can always be stopped, whatever the plan
   planExempt: true,
+  // so can a person without a member row on the site (adr 0021)
+  admitsNonMembers: true,
   // Opted in: enforced through the inner _shared gate until now, so without
   // this, removing that gate would drop the 400 on an unsupported
   // Roost-Version.

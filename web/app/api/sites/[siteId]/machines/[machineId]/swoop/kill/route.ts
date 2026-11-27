@@ -185,4 +185,6 @@ export const POST = authorizedSiteHandler<SwoopRouteParams>({
   targetIdParam: 'machineId',
   apiKeyScope: { resource: 'machine', idParam: 'machineId', permission: 'write' },
   planExempt: true,
+  // ending a session is on the allowlist for a person without a member row (adr 0021)
+  admitsNonMembers: true,
 })(killHandler);

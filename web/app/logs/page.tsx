@@ -28,6 +28,7 @@ import { DatePicker } from '@/components/ui/date-picker';
 import { DATE_PRESETS, fromYMD, getDateRange, toYMD, type DatePreset } from '@/lib/dateRange';
 import { formatSiteScopedTimestamp, getDisplayTimezone, zonedTimeToUtcMs } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 interface LogEvent {
   id: string;
@@ -393,7 +394,7 @@ const LogRow = React.memo(function LogRow({
 
 export default function LogsPage() {
   const router = useRouter();
-  const { user, loading, userPreferences, isSiteAdmin, machineScope } = useAuth();
+  const { user, loading, userPreferences, isSiteAdmin, machineScope, isSuperadmin, isSiteMember } = useAuth();
   const {
     sites,
     sitesLoading,
@@ -408,7 +409,11 @@ export default function LogsPage() {
   // their own sites, superadmins anywhere. Same predicate the server evaluates, so a
   // member never sees a control that would 403. Hidden, not disabled, matching the
   // dashboard's write-action gating.
-  const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId);
+  // a superadmin who isn't a member of the site reads its logs and clears none (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
+  const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId) && !memberLocked;
+  // nor sees its crash screenshots: the image route would refuse each one
+  const seesScreenshots = !isSuperadmin || isSiteMember(currentSiteId);
   const scope = currentSiteId ? machineScope(currentSiteId) : null;
   // crash screenshots are part of control.
   const { controlLocked } = useSitePlan(currentSiteId);
@@ -1151,7 +1156,7 @@ export default function LogsPage() {
                   userTz={userPreferences.timezone}
                   siteTz={siteTimezone}
                   timeFormat={userPreferences.timeFormat || '12h'}
-                  hideScreenshot={controlLocked}
+                  hideScreenshot={controlLocked || !seesScreenshots}
                 />
               ))
             )}

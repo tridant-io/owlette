@@ -30,7 +30,7 @@ import { requireSession } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
-import { Capability, hasCapability, siteStanding, type Actor } from '@/lib/capabilities';
+import { Capability, hasCapability, isMemberRole, MEMBERS_ONLY_CHANGE, siteStanding, type Actor } from '@/lib/capabilities';
 import { scopeCovers } from '@/lib/machineAccess';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
@@ -79,6 +79,10 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const access = await verifyUserSiteAccess(db, userId, siteId);
     if (!scopeCovers(access.standing.machineIds, machineId)) {
       return NextResponse.json({ error: 'machine not found or no access' }, { status: 404 });
+    }
+    // writes a command past the shared gates, so it refuses a caller without a member row itself (adr 0021)
+    if (!isMemberRole(access.standing.role)) {
+      return NextResponse.json({ error: MEMBERS_ONLY_CHANGE, code: 'members_only' }, { status: 403 });
     }
     const actor: Actor = {
       type: 'user',

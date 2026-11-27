@@ -35,6 +35,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 interface WebhookData {
   id: string;
@@ -149,6 +150,8 @@ function useWebhooks(siteId: string) {
 
 export function WebhookList({ siteId }: { siteId: string }) {
   const { webhooks, loading } = useWebhooks(siteId);
+  // a superadmin without a member row lists the webhooks and changes none (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -346,6 +349,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
           </div>
 
           {/* Right: actions */}
+          {!memberLocked && (
           <div className="flex items-center gap-1 flex-shrink-0 ml-auto sm:ml-0">
             <Button
               variant="ghost"
@@ -401,6 +405,7 @@ export function WebhookList({ siteId }: { siteId: string }) {
               </IconButton>
             )}
           </div>
+          )}
         </div>
       ))}
 

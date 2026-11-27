@@ -12,6 +12,7 @@ import {
   problemUnauthorized,
   mfaChallengeProblem,
   problemForbidden,
+  problemMembersOnly,
   problemNotFound,
   problemScopeInsufficient,
   problemTokenExpired,
@@ -32,6 +33,7 @@ import type { ApiKeyPermission, ApiKeyResource } from '@/lib/apiKeyTypes';
 import {
   Capability,
   hasCapability,
+  refusesNonMemberChange,
   siteStanding,
   type UserActor,
 } from '@/lib/capabilities';
@@ -327,6 +329,19 @@ export type ScopedAuthResult =
   | ScopedAuthSuccess
   | { ok: false; response: NextResponse };
 
+export interface MachineScopedAuthSuccess extends ScopedAuthSuccess {
+  /**
+   * the caller may see what is on the machine's screen: this machine's agent, or
+   * a person (or their api key) holding a member row on the site. false for a
+   * superadmin who reaches the site without one.
+   */
+  seesScreens: boolean;
+}
+
+export type MachineScopedAuthResult =
+  | MachineScopedAuthSuccess
+  | { ok: false; response: NextResponse };
+
 export function auditActorIdentifier(auth: ResolvedAuth): string {
   return auth.keyContext ? `apiKey:${auth.keyContext.keyId}` : `user:${auth.userId}`;
 }
@@ -510,12 +525,17 @@ async function assertSiteAccessOrProblem(
   userId: string,
   siteId: string,
 ): Promise<
-  | { ok: true; siteData: Record<string, unknown> | null; machineIds: readonly string[] | null }
+  | {
+      ok: true;
+      siteData: Record<string, unknown> | null;
+      machineIds: readonly string[] | null;
+      member: boolean;
+    }
   | { ok: false; response: NextResponse }
 > {
   try {
     const access = await assertUserHasSiteAccess(userId, siteId);
-    return { ok: true, siteData: access.siteData, machineIds: access.machineIds };
+    return { ok: true, siteData: access.siteData, machineIds: access.machineIds, member: access.member };
   } catch (err) {
     if (err instanceof ApiAuthError) {
       // An INACTIVE caller is 403, not the collapsed 404 (Wave 1 task 1.3).
@@ -577,6 +597,9 @@ export async function requireSiteAuthAndScope(
   const access = await assertSiteAccessOrProblem(authResult.auth.userId, siteId);
   if (!access.ok) return access;
 
+  // a caller without a member row reads here and changes nothing (adr 0021)
+  if (refusesNonMemberChange(access.member, req.method)) return { ok: false, response: problemMembersOnly() };
+
   if (access.machineIds !== null && options.machineScope !== 'admit') {
     return { ok: false, response: problemForbidden('capability not granted') };
   }
@@ -629,6 +652,8 @@ export async function requireSiteMachineAuthAndScope(
  * - a scoped member: a machine outside their machine scope answers 404, as one
  *   that is not there. the check runs after the agent short-circuit, which it
  *   leaves alone.
+ * - `seesScreens` says whether the caller may see the machine's screen; a route
+ *   that serves screenshots refuses or withholds them on false.
  *
  * machineId is checked against MACHINE_ID_RE (1-128 of [A-Za-z0-9_.-]) because
  * machine ids have several historical shapes (`mach_*`, hostnames, uuids, a
@@ -642,7 +667,7 @@ export async function requireMachineAuthAndScope(
   siteId: string,
   machineId: string,
   permission: ApiKeyPermission,
-): Promise<ScopedAuthResult> {
+): Promise<MachineScopedAuthResult> {
   if (!SITE_ID_RE.test(siteId)) {
     return {
       ok: false,
@@ -680,6 +705,7 @@ export async function requireMachineAuthAndScope(
           auth: { userId: decoded.uid, keyContext: null },
           scopeCheck: { isLegacy: false },
           machineIds: null,
+          seesScreens: true,
         };
       }
     } catch {
@@ -697,6 +723,9 @@ export async function requireMachineAuthAndScope(
     return { ok: false, response: problemNotFound('machine not found or no access') };
   }
 
+  // the agent returned above; a person without a member row reads here and changes nothing (adr 0021)
+  if (refusesNonMemberChange(access.member, req.method)) return { ok: false, response: problemMembersOnly() };
+
   const scopeResult = runScopeCheck(authResult.auth, 'machine', machineId, permission);
   if (!scopeResult.ok) return scopeResult;
 
@@ -711,6 +740,7 @@ export async function requireMachineAuthAndScope(
     auth: authResult.auth,
     scopeCheck: scopeResult.scopeCheck,
     machineIds: access.machineIds,
+    seesScreens: access.member,
   };
 }
 
@@ -751,6 +781,9 @@ export async function requireRoostAuthAndScope(
   if (access.machineIds !== null) {
     return { ok: false, response: problemForbidden('capability not granted') };
   }
+
+  // a caller without a member row reads a roost and changes nothing (adr 0021)
+  if (refusesNonMemberChange(access.member, req.method)) return { ok: false, response: problemMembersOnly() };
 
   if (isMutationPermission(permission)) {
     const capabilityError = await requireSiteCapability(

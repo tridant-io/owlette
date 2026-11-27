@@ -1,12 +1,12 @@
 ---
 title: "machine"
-description: "manage machines from the CLI: list them, inspect health and per-roost deployment state, and send reboot, shutdown and screenshot commands. it works the same for Windows, macOS and Linux machines. every verb is site-scoped and requires --site. six verbs are tier A, ready against the public API today; live-view is a tier C stub that points at owlette swoop."
+description: "manage machines from the CLI: list them, inspect health and per-roost deployment state, and send reboot, shutdown and screenshot commands. it works the same for Windows, macOS and Linux machines. every verb is site-scoped and requires --site. all six verbs are tier A, ready against the public API today."
 keywords: ["reboot", "restart a machine", "shutdown", "screenshot", "machine list", "machine status", "remote desktop", "active hours", "reboot refused", "restart after hours", "override active hours"]
 ---
 
 cross-reference: `owlette machine deployments` shows the per-roost intended-versus-reported state from the **machine's** side. `owlette roost get` shows the same data from the **roost's** side: one source of truth, two lenses.
 
-for remote desktop, use [`owlette swoop`](/docs/cli/reference/swoop), not `machine live-view`.
+for remote desktop, use [`owlette swoop`](/docs/cli/reference/swoop).
 
 ---
 
@@ -165,43 +165,11 @@ owlette machine screenshot m_abc123 --site site-1 --monitor 1 --json
 
 ---
 
-## live-view
-
-> **stub.** remote desktop ships as swoop, so this verb does nothing but point at [`owlette swoop`](/docs/cli/reference/swoop). it exits 3, the code reserved for stubs, so a script can tell it apart from an error.
-
-**synopsis**: `owlette machine live-view <machineId> --site <siteId>`
-
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site ID that owns the machine |
-
-human mode writes the stub notice to stderr. `--json` prints the stub envelope on stdout:
-
-```bash
-owlette --json machine live-view m_abc123 --site site-1
-# → exit 3
-# {
-#   "ok": false,
-#   "stub": true,
-#   "noun": "machine",
-#   "reason": "remote desktop ships as swoop — run `owlette swoop <machineId> --site <siteId>`",
-#   "dashboard_url": "https://owlette.app/dashboard",
-#   "future_plan": "public-api deferred: swoop"
-# }
-```
-
-`dashboard_url` follows the active profile's API URL.
-
-**backing endpoint**: none.
-
----
-
 ## exit codes
 
 - `0`: success
 - `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, the agent refusing a reboot or shutdown inside active hours, `--after-active-hours` on an agent without the active-hours guard (or the API's `409 held_restart_unsupported`), or a missing `--site` (a usage error)
 - `2`: usage error: no token configured, a bad `--monitor` value, a negative `--delay-seconds`, `--override-active-hours` without `--reason`, `--reason` without it, or it together with `--after-active-hours`
-- `3`: stub (`machine live-view` only)
 
 API errors print their problem code, with a hint for `machine_offline`, `unsupported_command_type` and `scope_insufficient`.
 
@@ -211,7 +179,7 @@ API errors print their problem code, with a hint for `machine_offline`, `unsuppo
 
 - **scope**: site-scoped. the mutating verbs need an API key with `machine=<id>:write` (or `machine=*:write`); `screenshot` needs `machine=<id>:read` as well. `reboot` and `shutdown` read their outcome, and `--after-active-hours` the machine, with `read` too; without it they warn on stderr and still send the command. permissions are exact: `write` does not imply `read`
 - **active hours**: Windows always has active hours, so a daytime `reboot` or `shutdown` from a script is refused by a guarded agent unless it passes `--override-active-hours --reason`, or `--after-active-hours` for a reboot. an agent from before the guard reboots or shuts down at once with or without an override, and the API refuses `--after-active-hours` for it
-- **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`; C stub for `live-view`
+- **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`
 - **idempotency**: every mutation sends an `Idempotency-Key`, so retrying a failed `reboot`, `shutdown` or `screenshot` will not fire it twice. a request that never got a confirmed response prints its key and the flag to retry with
 - **screenshot TTL**: the server signs a fresh read URL, valid for an hour, each time the command is read; the CLI downloads it at once, so you never handle the expiry
 - see [overview](/docs/cli/overview) for the global flags (`--profile`, `--json`, `--api-url`) and config precedence

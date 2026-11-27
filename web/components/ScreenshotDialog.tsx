@@ -541,7 +541,8 @@ export function ScreenshotDialog({
         <DialogHeader>
           <DialogTitle>clear screenshot history?</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            this will permanently delete {historyScreenshots.length} screenshot{historyScreenshots.length === 1 ? '' : 's'} from storage.
+            {/* the history lists the newest 20, and clearing deletes every one the machine has */}
+            this will permanently delete every screenshot of {machineName} from storage.
             this action cannot be undone.
           </DialogDescription>
         </DialogHeader>

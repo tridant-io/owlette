@@ -1095,7 +1095,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null, member: true },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -1113,6 +1113,91 @@ describe('visual_check condition', () => {
     const html = send.mock.calls[0][0].html as string;
     expect(html).toContain('https://storage.example.com/signed');
     expect(html).toContain('the wall is showing the windows desktop');
+  });
+
+  // a site's screens are for its members (adr 0021): the signed image goes only into
+  // a member's own email; everyone else gets the verdict and the reason without it
+  describe('who gets the capture', () => {
+    const FAILED = {
+      verdict: 'fail' as const,
+      confidence: 0.81,
+      reason: 'the wall is showing the windows desktop',
+      screenshotPath: 'screenshots/site-a/m1/shot.png',
+      screenshotUrl: 'https://storage.example.com/signed',
+    };
+
+    function failedRun(outputs: Array<Record<string, unknown>>) {
+      const talon = visualTalon({ scope: { machineIds: ['m1'] }, outputs });
+      seedMachine('m1', true);
+      mockEvaluateVisualCheck.mockResolvedValue(FAILED);
+      return runTalon(db, talon, { siteId: SITE, now: NOW });
+    }
+
+    it('sends a recipient who is not a member, such as the fallback address, the verdict without the image', async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'fallback', email: 'staff@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      ]);
+
+      const summaries = await failedRun([{ type: 'email' }]);
+
+      expect(outputByType(summaries[0].outputs, 'email').status).toBe('sent');
+      const html = send.mock.calls[0][0].html as string;
+      expect(html).not.toContain('https://storage.example.com/signed');
+      expect(html).not.toContain('what the display looked like');
+      expect(html).toContain('the wall is showing the windows desktop');
+    });
+
+    it("gives a member's cc addresses their own copy, without the image", async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'u1', email: 'a@example.com', ccEmails: ['team@example.com'], mutedMachines: [], machineIds: null, member: true },
+      ]);
+
+      await failedRun([{ type: 'email' }]);
+
+      expect(send).toHaveBeenCalledTimes(2);
+      const [own, copy] = send.mock.calls.map((call) => call[0] as { to: string[]; cc?: string[]; html: string });
+      expect(own.to).toEqual(['a@example.com']);
+      expect(own.cc).toBeUndefined();
+      expect(own.html).toContain('https://storage.example.com/signed');
+      expect(copy.to).toEqual(['team@example.com']);
+      expect(copy.html).not.toContain('https://storage.example.com/signed');
+      expect(copy.html).toContain('the wall is showing the windows desktop');
+    });
+
+    it('keeps a cc on the one email when there is no image to keep from it', async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'u1', email: 'a@example.com', ccEmails: ['team@example.com'], mutedMachines: [], machineIds: null, member: true },
+      ]);
+      const talon = seedTalon('t1', { outputs: [{ type: 'email' }] });
+
+      await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'], cc: ['team@example.com'] });
+    });
+
+    it('sends a webhook the verdict and the storage path, never the signed image link', async () => {
+      fake.docs.set(`sites/${SITE}/talon_secrets/t1`, { talonId: 't1', secret: 'whsec_x' });
+
+      await failedRun([{ type: 'webhook', url: 'https://hooks.example.com/t' }]);
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = init.body as string;
+      expect(body).not.toContain('https://storage.example.com/signed');
+      expect(JSON.parse(body).data.condition).toEqual({
+        type: 'visual_check',
+        verdict: 'fail',
+        confidence: 0.81,
+        reason: 'the wall is showing the windows desktop',
+        screenshotPath: 'screenshots/site-a/m1/shot.png',
+      });
+    });
   });
 
   it('skips an offline machine without attempting a capture', async () => {

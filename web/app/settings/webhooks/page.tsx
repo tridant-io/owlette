@@ -21,6 +21,8 @@ import { CopyButton } from '@/components/CopyButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { CreateWebhookDialog } from './CreateWebhookDialog';
 import { WebhookCard, type WebhookListItem } from './WebhookCard';
+import { MemberLockNotice } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 interface WebhooksResponse {
   webhooks: WebhookListItem[];
@@ -60,6 +62,8 @@ export default function WebhooksSettingsPage() {
   const canManage =
     !!selectedSite && (isSiteAdmin(selectedSite) || (!!user && site?.owner === user.uid));
   const webhooksGated = usePlanGated('webhooks', selectedSite);
+  // a superadmin without a member row lists the site's webhooks and changes none (adr 0021)
+  const memberLocked = useMemberLock(selectedSite);
   const [webhooks, setWebhooks] = useState<WebhookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -166,7 +170,8 @@ export default function WebhooksSettingsPage() {
                   </SelectContent>
                 </Select>
               )}
-              {canManage && (
+              <MemberLockNotice siteId={selectedSite} />
+              {canManage && !memberLocked && (
                 <UpgradeGate flag="webhooks" siteId={selectedSite} variant="inline">
                   <Button
                     type="button"
