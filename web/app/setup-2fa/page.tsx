@@ -2,14 +2,12 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  browserSupportsWebAuthn,
-  startAuthentication,
-  startRegistration,
-} from '@simplewebauthn/browser';
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { Fingerprint, Smartphone } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
+import { usePasskeyPrompt } from '@/hooks/usePasskeyPrompt';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -39,6 +37,7 @@ export default function Setup2FAPage() {
   const { user, loading, requiresMfaSetup, signOut } = useAuth();
   const router = useRouter();
   const inApp = useInAppBrowser();
+  const viewerApp = useViewerAppPlatform() !== null;
 
   const [secret, setSecret] = useState('');
   const [qrCodeUrl, setQrCodeUrl] = useState('');
@@ -55,22 +54,12 @@ export default function Setup2FAPage() {
    */
   const [passkeyCreated, setPasskeyCreated] = useState(false);
   /**
-   * Client-only detection (`window.PublicKeyCredential`), so it starts
-   * 'unknown' to match the server render. The third state separates "not
-   * checked yet" (say nothing) from "unsupported" (explain the missing option).
+   * null until the client has checked, which separates "not checked yet" (say
+   * nothing) from "cannot" (explain the missing option). TOTP carries the whole
+   * flow when it cannot.
    */
-  const [passkeySupport, setPasskeySupport] = useState<'unknown' | 'yes' | 'no'>('unknown');
-
-  /**
-   * Embedded webviews expose the API but can only use credentials for the HOST
-   * app's associated domain, never owlette.app — so hide the button rather than
-   * offer a guaranteed failure. TOTP carries the whole flow when false.
-   */
-  const showPasskey = passkeySupport === 'yes' && !inApp.isInApp;
-
-  useEffect(() => {
-    setPasskeySupport(browserSupportsWebAuthn() ? 'yes' : 'no');
-  }, []);
+  const passkeyPrompt = usePasskeyPrompt();
+  const showPasskey = passkeyPrompt === true;
 
   /**
    * Turn an enrollment refusal into something actionable. Only
@@ -451,11 +440,13 @@ export default function Setup2FAPage() {
               supported" during the pre-hydration render would be a guess,
               and this is the sentence that stops a user hunting for an
               option that was never going to appear. */}
-          {passkeySupport !== 'unknown' && !showPasskey && (
+          {passkeyPrompt === false && (
             <p className="text-xs text-muted-foreground">
-              {inApp.isInApp
-                ? `passkeys cannot be created inside ${inApp.appName ?? 'this app'}'s in-app browser — open owlette in your browser if you want one.`
-                : 'this browser cannot create passkeys, so an authenticator app is the way in here.'}
+              {viewerApp
+                ? 'passkeys cannot be created inside owlette swoop — open owlette in your browser if you want one.'
+                : inApp.isInApp
+                  ? `passkeys cannot be created inside ${inApp.appName ?? 'this app'}'s in-app browser — open owlette in your browser if you want one.`
+                  : 'this browser cannot create passkeys, so an authenticator app is the way in here.'}
             </p>
           )}
         </div>

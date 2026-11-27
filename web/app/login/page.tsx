@@ -7,7 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/components/auth/AuthShell';
-import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { Fingerprint, Globe } from 'lucide-react';
 import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
@@ -26,7 +25,6 @@ import { signInWithCustomToken } from 'firebase/auth';
 import { auth as firebaseAuth } from '@/lib/firebase';
 import {
   WebAuthnAbortService,
-  browserSupportsWebAuthn,
   browserSupportsWebAuthnAutofill,
   startAuthentication,
 } from '@simplewebauthn/browser';
@@ -34,6 +32,7 @@ import { FormError } from '@/components/ui/form-error';
 import { InAppBrowserNotice } from '@/components/InAppBrowserNotice';
 import { useFieldError } from '@/hooks/useFieldError';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
+import { usePasskeyPrompt } from '@/hooks/usePasskeyPrompt';
 import { useRedirectIfAuthenticated } from '@/hooks/useRedirectIfAuthenticated';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import type { ViewerAppPlatform } from '@/lib/swoop/viewerApp';
@@ -146,13 +145,10 @@ function LoginForm() {
   /** Field-targeted validation — see hooks/useFieldError.ts. */
   const { error: formError, fail, clear: clearError, fieldProps } = useFieldError('login-form-error');
   const [redirectUrl, setRedirectUrl] = useState('/dashboard');
-  // Detected client-side only (browserSupportsWebAuthn reads window.PublicKeyCredential). Deciding
-  // during render is a hydration mismatch (React #418) — recoverable, but it discards the SSR tree,
-  // and in E2E the in-flight re-render drops the login click and the suite hangs on /login.
-  const [canUsePasskey, setCanUsePasskey] = useState(false);
   /**
    * Can the browser offer passkeys in its own autofill dropdown (conditional UI)? Separate and
-   * async from WebAuthn support; resolved off-render for the same hydration reason as canUsePasskey.
+   * async from WebAuthn support; resolved off-render for the same hydration reason as
+   * usePasskeyPrompt.
    */
   const [canAutofillPasskey, setCanAutofillPasskey] = useState(false);
   /**
@@ -193,11 +189,9 @@ function LoginForm() {
   const googleUnavailable = inApp.isInApp || popupBlocked;
   /**
    * Gated on the host app, NOT `googleUnavailable` — a blocked popup in Safari says nothing about
-   * WebAuthn. Inside an embedded webview the ceremony can only use the HOST app's associated
-   * domain, so browserSupportsWebAuthn() is true while the ceremony always fails.
-   * https://passkeys.dev/docs/reference/ios/
+   * WebAuthn. https://passkeys.dev/docs/reference/ios/
    */
-  const showPasskey = canUsePasskey && !inApp.isInApp && !viewerApp;
+  const showPasskey = usePasskeyPrompt() === true;
   /** "or" only earns its place while a non-email option is still on screen. */
   const showDivider = !googleUnavailable || showPasskey;
   /**
@@ -205,10 +199,6 @@ function LoginForm() {
    * gesture. Applies even when passkey survives — it may not be enrolled on this account.
    */
   const emailExpanded = emailFormOpen || googleUnavailable;
-
-  useEffect(() => {
-    setCanUsePasskey(browserSupportsWebAuthn());
-  }, []);
 
   useEffect(() => {
     let active = true;
@@ -262,9 +252,8 @@ function LoginForm() {
       // Settles for the session cookie, then polls — see lib/postSignIn.
       const redirectPath = await checkMfaAndRedirect();
 
-      if (redirectPath.includes('/verify-2fa')) {
-        toast.info('2FA verification required');
-      } else {
+      // the challenge page's own title says what it wants; a toast would only repeat it
+      if (!redirectPath.includes('/verify-2fa')) {
         toast.success('logged in successfully!');
       }
 
@@ -289,9 +278,8 @@ function LoginForm() {
       // Settles for the session cookie, then polls — see lib/postSignIn.
       const redirectPath = await checkMfaAndRedirect();
 
-      if (redirectPath.includes('/verify-2fa')) {
-        toast.info('2FA verification required');
-      } else {
+      // as on the email path: no toast to repeat the challenge page's title
+      if (!redirectPath.includes('/verify-2fa')) {
         toast.success('logged in with Google!');
       }
 
@@ -715,18 +703,11 @@ function LoginForm() {
 
 export default function LoginPage() {
   const viewerPlatform = useViewerAppPlatform();
-  const inViewerApp = viewerPlatform !== null;
   return (
-    // in owlette swoop the whole page is the window's drag surface: a press on
-    // anything that is not a control moves the window
-    <div {...(inViewerApp ? dragRegion : {})}>
-      {/* owlette swoop's window has no frame: its controls, and nothing in a browser */}
-      <SwoopWindowStrip />
-      {/* Same shell as the loaded form, so the card doesn't change shape when the
-          suspense boundary resolves. */}
-      <Suspense fallback={<AuthShell loading {...(viewerPlatform ? swoopShell(viewerPlatform) : {})} />}>
-        <LoginForm />
-      </Suspense>
-    </div>
+    // Same shell as the loaded form, so the card doesn't change shape when the
+    // suspense boundary resolves.
+    <Suspense fallback={<AuthShell loading {...(viewerPlatform ? swoopShell(viewerPlatform) : {})} />}>
+      <LoginForm />
+    </Suspense>
   );
 }

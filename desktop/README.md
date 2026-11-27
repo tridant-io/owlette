@@ -207,7 +207,7 @@ corner radius), placed by `traffic_light_position` to centre on the page's
 48 px bar; that is safe here because no toolbar shares the title-bar container
 tao resizes. owlette.app draws the rest
 (`web/components/swoop/SwoopWindowControls.tsx`): the session bar on top, the
-picker's header and a strip on the login page carry minimize, maximize/restore
+picker's header and a strip on every sign-in page carry minimize, maximize/restore
 and close at the right on Windows and Linux, or leave the traffic lights 86 px
 on macOS, and are the window's drag surface (`data-tauri-drag-region="deep"`:
 a press on anything in them that is not a control drags, a double press
@@ -215,8 +215,8 @@ maximizes). When the session bar runs down a side, the controls move to a slim
 strip across the top of the window holding nothing else: the controls and a
 160 px drag handle beside them at the right (on macOS only the traffic lights'
 room), with presses everywhere else going through to the picture. Fullscreen
-hides all of it. The login page is the app's own: the whole page is the drag
-surface, under owlette swoop's small eye and its name (for screen readers only
+hides all of it. On every sign-in page the background around the card is the drag surface (`data-tauri-drag-region="true"`, the element itself only), so the card's text still selects. The
+login page is the app's own: owlette swoop's small eye and its name (for screen readers only
 on macOS, where the menu bar names the app) with no tagline, one "sign in with
 your browser" button, and the email form behind an "or use your email and
 password" link. The site footer (docs, privacy, terms) shows on no page in the
@@ -302,9 +302,9 @@ until native key capture lands. There is no pointer lock on macOS:
 asks its UI delegate for pointer lock only through private API; no public
 `WKUIDelegate` method exists for it (macOS 26.6 SDK) and wry 0.57's delegate
 implements none, and the app uses no private API. Cmd+Tab cannot reach the
-machine from macOS (above). Google sign-in needs the browser handoff. Only the
-picker, a session and the login page draw window controls: the second-factor
-page, `/app-link` and any other owlette.app page a link leads to have none yet.
+machine from macOS (above). Google sign-in needs the browser handoff, and no sign-in page offers a passkey. Only the
+picker, a session and the sign-in pages (`AuthShell`) draw window controls: any
+other owlette.app page a link leads to has none yet.
 The frameless Linux windows are unbuilt until CI.
 
 ## Layout
