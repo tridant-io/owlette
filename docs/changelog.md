@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added
+
+- **admin** → **sites** has a machines column: each site's count, what is offline or asleep, and its machines on hover.
+
 ### fixed
 
 - updating several machines at once from the dashboard no longer fails with "could not read request body".

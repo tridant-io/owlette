@@ -5,7 +5,8 @@
  * admin panel → sites: the caller's sites with a gear on each one they
  * administer, the owner column for superadmins, the current site first, the
  * filter, "new site" (which opens the new site's settings and leaves the
- * dashboard's site alone) and each row's site ID button.
+ * dashboard's site alone), each row's site ID button, and the machines column
+ * with its card.
  */
 
 import React from 'react';
@@ -13,8 +14,19 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { createSite, type Site } from '@/hooks/useFirestore';
+import type { ListedMachine, UseMachinesBySiteResult } from '@/hooks/useMachinesBySite';
 import { SiteList } from '@/components/admin/sites/SiteList';
 import SitesPage from '@/app/admin/sites/page';
+
+// loading by default, so the rest of the list reads as it did before the column
+let mockMachines: UseMachinesBySiteResult = { machinesBySite: null, loading: true, failed: false };
+const mockUseMachinesBySite = jest.fn();
+jest.mock('@/hooks/useMachinesBySite', () => ({
+  useMachinesBySite: (siteIds: readonly string[]) => {
+    mockUseMachinesBySite(siteIds);
+    return mockMachines;
+  },
+}));
 
 let mockAuth: {
   isSuperadmin: boolean;
@@ -97,6 +109,7 @@ beforeEach(() => {
   mockSites = { sites: [CHARLIE, BRAVO, ALPHA], sitesLoading: false, sitesError: null, currentSiteId: 'site-b' };
   mockUsers = [{ uid: 'owner-1', email: 'owner@example.com' }];
   mockDialog = undefined;
+  mockMachines = { machinesBySite: null, loading: true, failed: false };
 });
 
 function renderList() {
@@ -159,7 +172,13 @@ describe('the column header', () => {
   it('names each column, the last one your role for anyone but a superadmin', () => {
     renderList();
 
-    expect([...header().children].map((cell) => cell.textContent)).toEqual(['site', 'id', 'timezone', 'your role']);
+    expect([...header().children].map((cell) => cell.textContent)).toEqual([
+      'site',
+      'id',
+      'timezone',
+      'machines',
+      'your role',
+    ]);
   });
 
   it('names the last column owner for a superadmin', () => {
@@ -431,5 +450,229 @@ describe('states', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('site site-x: permission denied');
     expect(rows()).toHaveLength(3);
+  });
+});
+
+describe('the machines column', () => {
+  // radix measures its popover with a ResizeObserver and drives pointers with
+  // pointer capture; jsdom has neither.
+  beforeAll(() => {
+    global.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    window.HTMLElement.prototype.hasPointerCapture = jest.fn();
+    window.HTMLElement.prototype.releasePointerCapture = jest.fn();
+  });
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  function machine(name: string, state: 'online' | 'asleep' | 'offline', extra: Partial<ListedMachine> = {}): ListedMachine {
+    return {
+      id: `id-${name}`,
+      name,
+      online: state === 'online',
+      asleep: state === 'asleep',
+      lastHeartbeat: state === 'offline' ? new Date(Date.now() - 18 * DAY_MS).toISOString() : new Date().toISOString(),
+      agentVersion: '4.2.7',
+      ...extra,
+    };
+  }
+
+  function answer(bySite: Record<string, ListedMachine[] | null>, extra: Partial<UseMachinesBySiteResult> = {}) {
+    mockMachines = { machinesBySite: new Map(Object.entries(bySite)), loading: false, failed: false, ...extra };
+  }
+
+  const cellOf = (siteId: string) => within(rowFor(siteId)).getByRole('button', { name: /^\d+ machines?[,:]/ });
+  // the phone line's count, which jsdom renders beside the md-up cell (whose 0 says it to a screen reader)
+  const phoneCount = (siteId: string) =>
+    within(rowFor(siteId)).getByText(/^(\d+ machines?|no machines)$/, { ignore: '.sr-only, script, style' });
+
+  const MIXED = [
+    machine('MEDIA-SRV', 'online'),
+    machine('GALLERY-WALL-02', 'online'),
+    machine('TD-RENDER-1', 'offline', { agentVersion: '4.1.28' }),
+    machine('KIOSK-ENTRY', 'asleep'),
+    machine('GALLERY-WALL-01', 'online', { agentVersion: null }),
+  ];
+
+  it("asks for every listed site's machines", () => {
+    renderList();
+
+    expect(mockUseMachinesBySite).toHaveBeenLastCalledWith(['site-c', 'site-b', 'site-a']);
+  });
+
+  it('shows a skeleton while they load, on both shapes of the row', () => {
+    renderList();
+
+    expect(within(rowFor('site-a')).getAllByRole('img', { name: 'loading machines' })).toHaveLength(2);
+  });
+
+  it('says — when nothing has loaded, and leaves them off the phone line', () => {
+    mockMachines = { machinesBySite: null, loading: false, failed: true };
+    renderList();
+
+    const row = rowFor('site-a');
+    expect(within(row).getByTitle('machines did not load')).toHaveTextContent('—');
+    expect(within(row).queryByText(/^(\d+ machines?|no machines)$/)).toBeNull();
+    expect(within(row).queryByRole('img', { name: 'loading machines' })).toBeNull();
+  });
+
+  it('says — for a site whose machines the server would not give', () => {
+    answer({ 'site-a': null, 'site-b': [], 'site-c': [] });
+    renderList();
+
+    expect(within(rowFor('site-a')).getByTitle('machines did not load')).toHaveTextContent('—');
+  });
+
+  it('waits on a site the last answer did not hold while a new one is coming, then says —', () => {
+    answer({ 'site-b': [], 'site-c': [] }, { loading: true });
+    const { rerender } = render(
+      <TooltipProvider>
+        <SiteList />
+      </TooltipProvider>,
+    );
+    expect(within(rowFor('site-a')).getAllByRole('img', { name: 'loading machines' })).toHaveLength(2);
+
+    answer({ 'site-b': [], 'site-c': [] });
+    rerender(
+      <TooltipProvider>
+        <SiteList />
+      </TooltipProvider>,
+    );
+    expect(within(rowFor('site-a')).getByTitle('machines did not load')).toHaveTextContent('—');
+  });
+
+  it('reads a site with no machines as a muted 0, with no card, and no machines on a phone', () => {
+    answer({ 'site-a': [], 'site-b': [], 'site-c': [] });
+    renderList();
+
+    const row = rowFor('site-a');
+    expect(within(row).getByTitle('no machines on this site')).toHaveTextContent('0');
+    expect(within(row).queryByRole('button', { name: /machines/ })).toBeNull();
+    expect(phoneCount('site-a')).toHaveTextContent('no machines');
+  });
+
+  it('reads all online as the count and a green dot', () => {
+    answer({ 'site-a': MIXED.filter((m) => m.online), 'site-b': [machine('ONLY', 'online')], 'site-c': [] });
+    renderList();
+
+    const cell = cellOf('site-a');
+    expect(cell).toHaveAccessibleName('3 machines, all online');
+    expect(cell).toHaveTextContent(/^3$/);
+    expect(phoneCount('site-a')).toHaveTextContent('3 machines');
+    expect(within(rowFor('site-a')).getByRole('img', { name: 'all online' })).toBeInTheDocument();
+    expect(cellOf('site-b')).toHaveAccessibleName('1 machine, all online');
+    expect(phoneCount('site-b')).toHaveTextContent('1 machine');
+  });
+
+  it('reads a mixed site as the count, then how many are offline and asleep', () => {
+    answer({ 'site-a': MIXED, 'site-b': [], 'site-c': [] });
+    renderList();
+
+    const cell = cellOf('site-a');
+    expect(cell).toHaveAccessibleName('5 machines: 3 online, 1 asleep, 1 offline');
+    expect(within(cell).getByText('1 offline')).toHaveClass('text-danger');
+    expect(within(cell).getByText('1 asleep')).toHaveClass('text-info');
+    expect(phoneCount('site-a')).toHaveTextContent('5 machines');
+    expect(within(rowFor('site-a')).queryByRole('img', { name: 'all online' })).toBeNull();
+  });
+
+  it('reads a site with nothing online as all offline, and offline alone on a phone', () => {
+    const off = [machine('DEMO-PC', 'offline'), machine('DEMO-MAC', 'offline', { lastHeartbeat: null })];
+    answer({ 'site-a': off, 'site-b': [machine('LAB-MAC', 'asleep')], 'site-c': [] });
+    renderList();
+
+    expect(cellOf('site-a')).toHaveAccessibleName('2 machines, all offline');
+    expect(within(cellOf('site-a')).getByText('all offline')).toHaveClass('text-danger');
+    expect(within(rowFor('site-a')).getByText('offline', { exact: true })).toHaveClass('text-danger');
+    expect(cellOf('site-b')).toHaveAccessibleName('1 machine, all asleep');
+    expect(within(cellOf('site-b')).getByText('all asleep')).toHaveClass('text-info');
+    expect(within(rowFor('site-b')).getByText('asleep', { exact: true })).toHaveClass('text-info');
+  });
+
+  it('opens a card on hover: the site, how many are online, and each machine, trouble first', async () => {
+    answer({ 'site-a': MIXED, 'site-b': [], 'site-c': [] });
+    const user = renderList();
+
+    await user.hover(cellOf('site-a'));
+    const card = await screen.findByRole('tooltip');
+
+    expect(card).toHaveTextContent('Alpha');
+    expect(card).toHaveTextContent('3 of 5 online');
+    const machineRows = within(card).getAllByRole('listitem');
+    expect(machineRows.map((r) => r.textContent)).toEqual([
+      'TD-RENDER-1last seen 18d agov4.1.28',
+      'KIOSK-ENTRYasleepv4.2.7',
+      'GALLERY-WALL-01online—',
+      'GALLERY-WALL-02onlinev4.2.7',
+      'MEDIA-SRVonlinev4.2.7',
+    ]);
+    expect(within(machineRows[0]).getByText('last seen 18d ago')).toHaveClass('text-muted-foreground');
+    expect(within(machineRows[1]).getByText('asleep')).toHaveClass('text-info');
+    expect(within(machineRows[2]).getByText('online')).toHaveClass('text-success');
+    expect(cellOf('site-a')).toHaveAttribute('aria-describedby', card.id);
+  });
+
+  it('says never seen for a machine that never sent a heartbeat', async () => {
+    answer({
+      'site-a': [machine('DEMO-MAC', 'offline', { lastHeartbeat: null, agentVersion: null })],
+      'site-b': [],
+      'site-c': [],
+    });
+    const user = renderList();
+
+    await user.hover(cellOf('site-a'));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('DEMO-MACnever seen—');
+  });
+
+  it('lists 12 machines, then sums the rest, saying when they are all online', async () => {
+    const arena = Array.from({ length: 30 }, (_, i) =>
+      machine(`CONC-SCREEN-${String(i + 1).padStart(2, '0')}`, 'online'),
+    );
+    arena[4] = machine('CONC-SCREEN-05', 'offline');
+    arena[17] = machine('CONC-SCREEN-18', 'offline');
+    arena[22] = machine('CONC-SCREEN-23', 'asleep');
+    // 14 offline: two of them fall past the cap, so the rest are not all online
+    const crowded = Array.from({ length: 14 }, (_, i) => machine(`OFF-${String(i + 1).padStart(2, '0')}`, 'offline'));
+    answer({ 'site-a': arena, 'site-b': crowded, 'site-c': [] });
+    const user = renderList();
+
+    expect(cellOf('site-a')).toHaveAccessibleName('30 machines: 27 online, 1 asleep, 2 offline');
+    await user.hover(cellOf('site-a'));
+    const card = await screen.findByRole('tooltip');
+    const machineRows = within(card).getAllByRole('listitem');
+    expect(machineRows).toHaveLength(13);
+    expect(machineRows.slice(0, 4).map((r) => r.textContent?.match(/^CONC-SCREEN-\d+/)?.[0])).toEqual([
+      'CONC-SCREEN-05',
+      'CONC-SCREEN-18',
+      'CONC-SCREEN-23',
+      'CONC-SCREEN-01',
+    ]);
+    expect(machineRows[12]).toHaveTextContent('+ 18 more, all online');
+
+    await user.unhover(cellOf('site-a'));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 300)));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+
+    await user.hover(cellOf('site-b'));
+    const second = await screen.findByRole('tooltip');
+    expect(within(second).getAllByRole('listitem')[12]).toHaveTextContent(/^\+ 2 more$/);
+  });
+
+  it('opens on keyboard focus, stays open on a click, and closes on escape', async () => {
+    answer({ 'site-a': MIXED, 'site-b': [], 'site-c': [] });
+    const user = renderList();
+
+    act(() => cellOf('site-a').focus());
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('3 of 5 online');
+
+    await user.click(cellOf('site-a'));
+    expect(screen.getByRole('tooltip')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });

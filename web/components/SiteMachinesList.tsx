@@ -5,7 +5,7 @@ import { ArrowRightLeft, Loader2, Monitor, RotateCw, Trash2, X } from 'lucide-re
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
-import { formatRelativeTime } from '@/lib/timeUtils';
+import { listedMachineState, machineLastSeen, MACHINE_STATE_DOT, MACHINE_STATE_TEXT } from '@/lib/machineStateLabel';
 import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineMove } from '@/hooks/useMachineMove';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
@@ -120,14 +120,6 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
     );
   }
 
-  const lastSeen = (m: SiteMachine) => {
-    if (m.online) return 'online';
-    if (m.asleep) return 'asleep';
-    if (!m.lastHeartbeat) return 'never seen';
-    const parsed = Date.parse(m.lastHeartbeat);
-    return Number.isNaN(parsed) ? 'unknown' : `last seen ${formatRelativeTime(parsed / 1000)}`;
-  };
-
   return (
     <>
       <ul className="divide-y divide-border/40">
@@ -139,7 +131,7 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
             <span className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
-                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : m.asleep ? 'bg-info-solid' : 'bg-danger/70'}`}
+                className={`h-2 w-2 shrink-0 rounded-full ${MACHINE_STATE_DOT[listedMachineState(m)]}`}
               />
               <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="truncate text-xs text-foreground" title={m.name}>
@@ -163,8 +155,8 @@ export function SiteMachinesList({ siteId, siteName, targetSites }: SiteMachines
                 </>
               )}
             </span>
-            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : m.asleep ? 'text-info' : 'text-muted-foreground'}`}>
-              {lastSeen(m)}
+            <span className={`min-w-0 truncate text-[11px] ${MACHINE_STATE_TEXT[listedMachineState(m)]}`}>
+              {machineLastSeen(m)}
             </span>
             <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
               {m.agentVersion ? `v${m.agentVersion}` : '—'}
