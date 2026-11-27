@@ -67,11 +67,11 @@ websocket-client==1.9.2
 # lands, or hoot keeps fetching the old CLI.
 # Only pin a release that ships a win_amd64 wheel: 0.2.157 and 0.2.160-0.2.163
 # ship none, and pip then builds the sdist, which has no CLI, and exits 0.
-claude-agent-sdk==0.2.159
-mcp==2.2.0
+claude-agent-sdk==0.2.184
+mcp==2.3.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.73.0
+sentry-sdk==2.75.0
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
