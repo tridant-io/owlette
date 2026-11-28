@@ -74,3 +74,39 @@ test.describe('row buttons hover alike', () => {
     });
   }
 });
+
+// the admin side menu sweeps as every other control does: a row on hover and on
+// keyboard focus, with no flat fill under it. the open page keeps its cyan tint
+// and does not sweep, since cyan ink on the swept tint misses aa by day
+test.describe('admin side menu hover', () => {
+  test.use(roleState('superadmin'));
+
+  for (const scheme of ['dark', 'light'] as const) {
+    test(`a row sweeps on hover and keyboard focus, the open page does not, ${scheme}`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.goto('/admin/sites');
+      const aside = page.locator('#admin-sidebar');
+      const active = aside.getByRole('link', { name: 'sites', exact: true });
+      const row = aside.getByRole('link', { name: 'installers', exact: true });
+      await expect(active).toHaveAttribute('aria-current', 'page');
+      await page.mouse.move(1000, 700);
+
+      const rest = await expectSweepAtRest(row, 'the side menu row');
+      await row.hover();
+      await expectSweepSize(row, '100% 100%', 'the row sweeps in on hover');
+      expect((await sweepState(row)).color, 'no flat fill under the sweep').toBe(rest.color);
+      await attachPicture(page, aside, `admin side menu, row hovered, ${scheme}`);
+
+      await page.mouse.move(1000, 700);
+      await expectSweepSize(row, '0% 100%', 'the row sweeps out');
+      await active.focus();
+      await page.keyboard.press('Tab');
+      await expect(row).toBeFocused();
+      await expectSweepSize(row, '100% 100%', 'the row sweeps in on keyboard focus');
+
+      await active.hover();
+      expect((await sweepState(active)).image, 'the open page carries no sweep').toBe('none');
+    });
+  }
+});

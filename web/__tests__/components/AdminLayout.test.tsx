@@ -67,6 +67,27 @@ describe('admin layout', () => {
     expect(active[0]).toHaveAttribute('href', '/admin/sites');
   });
 
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it.each([false, true])('sweeps its rows and controls on hover like the rest of the app, not with a flat fill (collapsed: %s)', (rail) => {
+    collapsed = rail;
+    renderLayout();
+    const sidebar = document.getElementById('admin-sidebar')!;
+    const links = within(sidebar).getAllByRole('link');
+    const active = links.filter((link) => link.getAttribute('aria-current') === 'page');
+    const rest = links.filter((link) => !link.hasAttribute('aria-current'));
+    expect(active).toHaveLength(1);
+    expect(active[0]).toHaveAttribute('href', '/admin/sites');
+    // the open page keeps its cyan tint unswept: cyan on that tint under the sweep misses aa
+    expect(active[0]).not.toHaveClass('btn-sweep');
+    expect(rest.length).toBeGreaterThan(0);
+    for (const link of rest) expect(link).toHaveClass('btn-sweep');
+
+    // the whole shell: the mobile menu button sits outside the sidebar
+    for (const control of document.body.querySelectorAll('a, button')) {
+      expect(control.className).not.toMatch(/hover:bg-/);
+    }
+  });
+
   it('names the collapsed rail links, whose text is hidden', () => {
     collapsed = true;
     renderLayout();
