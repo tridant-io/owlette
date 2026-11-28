@@ -14,6 +14,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ### fixed
 
 - a display layout's **test** result reads in lowercase, as the rest of the dashboard does.
+- a machine card's open displays no longer say "no display data reported" and then jump as the page loads.
 
 ## [4.2.8] - 2026-11-28
 

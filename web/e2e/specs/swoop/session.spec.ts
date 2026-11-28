@@ -22,10 +22,11 @@
 
 import crypto from 'crypto';
 import { test, expect, devices, type Locator, type Page } from '@playwright/test';
+import type { WriteBatch } from 'firebase-admin/firestore';
 import { authenticator } from 'otplib';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
-import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
+import { grantMembership, seedMachine, seedSite, seedUser, type TestUser } from '../../helpers/seed';
 import { ageSignInCeremony } from '../../helpers/signInCeremony';
 import { unspentTotp } from '../../helpers/totp';
 import { mintApiKey, revokeApiKey } from '../../helpers/apiKey';
@@ -99,10 +100,13 @@ let demotableSecret = '';
 // a member of the site only until the revocation spec removes them
 let removable: TestUser;
 
-async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
-  const user = await seedDedicatedUser(dedicatedUser('member', suffix));
+/** a member of site-A with an authenticator; its firestore writes wait on `batch` */
+async function seedTotpUser(suffix: string, batch: WriteBatch): Promise<{ user: TestUser; secret: string }> {
+  const user = dedicatedUser('member', suffix);
+  await seedUser(user, batch);
   const secret = authenticator.generateSecret();
-  await getAdminDb().collection('users').doc(user.uid).set(
+  batch.set(
+    getAdminDb().collection('users').doc(user.uid),
     {
       mfaEnrolled: true,
       requiresMfaSetup: false,
@@ -223,81 +227,80 @@ test.beforeAll(async () => {
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
-  const seeded = await seedTotpUser(`swoop-operator-${SUFFIX}`);
+  // the people go in one commit (helpers/seed.ts put()): by this file's place in a
+  // full run, their ~80 writes one by one outlasted the hook's 30 s
+  const people = getAdminDb().batch();
+  const seeded = await seedTotpUser(`swoop-operator-${SUFFIX}`, people);
   operator = seeded.user;
   operatorSecret = seeded.secret;
-  await grantMembership(SITE_ID, operator.uid, 'admin');
+  await grantMembership(SITE_ID, operator.uid, 'admin', undefined, people);
 
-  const pointerSeeded = await seedTotpUser(`swoop-pointer-${SUFFIX}`);
+  const pointerSeeded = await seedTotpUser(`swoop-pointer-${SUFFIX}`, people);
   pointerOperator = pointerSeeded.user;
   pointerOperatorSecret = pointerSeeded.secret;
-  await grantMembership(SITE_ID, pointerOperator.uid, 'admin');
+  await grantMembership(SITE_ID, pointerOperator.uid, 'admin', undefined, people);
 
-  const fitSeeded = await seedTotpUser(`swoop-fit-${SUFFIX}`);
+  const fitSeeded = await seedTotpUser(`swoop-fit-${SUFFIX}`, people);
   fitOperator = fitSeeded.user;
   fitOperatorSecret = fitSeeded.secret;
-  await grantMembership(SITE_ID, fitOperator.uid, 'admin');
+  await grantMembership(SITE_ID, fitOperator.uid, 'admin', undefined, people);
 
-  const phoneSeeded = await seedTotpUser(`swoop-phone-${SUFFIX}`);
+  const phoneSeeded = await seedTotpUser(`swoop-phone-${SUFFIX}`, people);
   phoneOperator = phoneSeeded.user;
   phoneOperatorSecret = phoneSeeded.secret;
-  await grantMembership(SITE_ID, phoneOperator.uid, 'admin');
+  await grantMembership(SITE_ID, phoneOperator.uid, 'admin', undefined, people);
 
-  const sharedSeeded = await seedTotpUser(`swoop-shared-${SUFFIX}`);
+  const sharedSeeded = await seedTotpUser(`swoop-shared-${SUFFIX}`, people);
   sharedOperator = sharedSeeded.user;
   sharedOperatorSecret = sharedSeeded.secret;
-  await grantMembership(SITE_ID, sharedOperator.uid, 'admin');
+  await grantMembership(SITE_ID, sharedOperator.uid, 'admin', undefined, people);
 
-  const revokingSeeded = await seedTotpUser(`swoop-revoking-${SUFFIX}`);
+  const revokingSeeded = await seedTotpUser(`swoop-revoking-${SUFFIX}`, people);
   revokingOperator = revokingSeeded.user;
   revokingOperatorSecret = revokingSeeded.secret;
-  await grantMembership(SITE_ID, revokingOperator.uid, 'admin');
+  await grantMembership(SITE_ID, revokingOperator.uid, 'admin', undefined, people);
 
-  const leavingSeeded = await seedTotpUser(`swoop-leaving-${SUFFIX}`);
+  const leavingSeeded = await seedTotpUser(`swoop-leaving-${SUFFIX}`, people);
   leavingOperator = leavingSeeded.user;
   leavingOperatorSecret = leavingSeeded.secret;
-  await grantMembership(SITE_ID, leavingOperator.uid, 'admin');
+  await grantMembership(SITE_ID, leavingOperator.uid, 'admin', undefined, people);
 
-  const demotingSeeded = await seedTotpUser(`swoop-demoting-${SUFFIX}`);
+  const demotingSeeded = await seedTotpUser(`swoop-demoting-${SUFFIX}`, people);
   demotingOperator = demotingSeeded.user;
   demotingOperatorSecret = demotingSeeded.secret;
-  await grantMembership(SITE_ID, demotingOperator.uid, 'admin');
+  await grantMembership(SITE_ID, demotingOperator.uid, 'admin', undefined, people);
 
-  const demotableSeeded = await seedTotpUser(`swoop-demotable-${SUFFIX}`);
+  const demotableSeeded = await seedTotpUser(`swoop-demotable-${SUFFIX}`, people);
   demotable = demotableSeeded.user;
   demotableSecret = demotableSeeded.secret;
-  await grantMembership(SITE_ID, demotable.uid, 'admin');
+  await grantMembership(SITE_ID, demotable.uid, 'admin', undefined, people);
 
-  watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
-  removable = await seedDedicatedUser(dedicatedUser('member', `swoop-removable-${SUFFIX}`));
+  // no second factor, as seedUser leaves them
+  watcher = dedicatedUser('member', `swoop-watcher-${SUFFIX}`);
+  removable = dedicatedUser('member', `swoop-removable-${SUFFIX}`);
   for (const member of [watcher, removable]) {
-    await getAdminDb()
-      .collection('users')
-      .doc(member.uid)
-      .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
-    await grantMembership(SITE_ID, member.uid, 'member');
+    await seedUser(member, people);
+    await grantMembership(SITE_ID, member.uid, 'member', undefined, people);
   }
 
   await seedMachine(SITE_ID, MODE_CONTROL_ID, { displayName: `mode control box ${SUFFIX}` });
   await seedMachine(SITE_ID, MODE_VIEW_ID, { displayName: `mode view box ${SUFFIX}` });
   await seedMachine(SITE_ID, MODE_NONE_ID, { displayName: `mode none box ${SUFFIX}` });
 
-  const modeSeeded = await seedTotpUser(`swoop-mode-control-${SUFFIX}`);
+  const modeSeeded = await seedTotpUser(`swoop-mode-control-${SUFFIX}`, people);
   modeOperator = modeSeeded.user;
   modeOperatorSecret = modeSeeded.secret;
-  await grantMembership(SITE_ID, modeOperator.uid, 'member', { swoop: 'control' });
+  await grantMembership(SITE_ID, modeOperator.uid, 'member', { swoop: 'control' }, people);
 
-  const heldSeeded = await seedTotpUser(`swoop-mode-view-${SUFFIX}`);
+  const heldSeeded = await seedTotpUser(`swoop-mode-view-${SUFFIX}`, people);
   heldAdmin = heldSeeded.user;
   heldAdminSecret = heldSeeded.secret;
-  await grantMembership(SITE_ID, heldAdmin.uid, 'admin', { swoop: 'view' });
+  await grantMembership(SITE_ID, heldAdmin.uid, 'admin', { swoop: 'view' }, people);
 
-  offMember = await seedDedicatedUser(dedicatedUser('member', `swoop-mode-none-${SUFFIX}`));
-  await getAdminDb()
-    .collection('users')
-    .doc(offMember.uid)
-    .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
-  await grantMembership(SITE_ID, offMember.uid, 'member', { swoop: 'none' });
+  offMember = dedicatedUser('member', `swoop-mode-none-${SUFFIX}`);
+  await seedUser(offMember, people);
+  await grantMembership(SITE_ID, offMember.uid, 'member', { swoop: 'none' }, people);
+  await people.commit();
 });
 
 test.describe('the viewer page', () => {
@@ -1550,26 +1553,31 @@ test.describe('machine scope', () => {
     // seedMachine writes without merge, so the swoop field lands after it: the dashboard offers swoop only where it streams
     await getAdminDb().doc(`sites/${SITE_ID}/machines/${SCOPE_IN}`).set({ capabilities: { swoop: 1 } }, { merge: true });
 
-    const controller = await seedTotpUser(`scope-ctl-${SUFFIX}`);
+    // one commit, as the seeding at the top of the file
+    const people = getAdminDb().batch();
+    const controller = await seedTotpUser(`scope-ctl-${SUFFIX}`, people);
     scopedController = controller.user;
     scopedControllerSecret = controller.secret;
-    await grantMembership(SITE_ID, scopedController.uid, 'member', { swoop: 'control', machineIds: [SCOPE_IN] });
+    await grantMembership(SITE_ID, scopedController.uid, 'member', { swoop: 'control', machineIds: [SCOPE_IN] }, people);
 
-    const admin = await seedTotpUser(`scope-admin-${SUFFIX}`);
+    const admin = await seedTotpUser(`scope-admin-${SUFFIX}`, people);
     scopedAdmin = admin.user;
     scopedAdminSecret = admin.secret;
-    await grantMembership(SITE_ID, scopedAdmin.uid, 'admin', { machineIds: [SCOPE_IN] });
+    await grantMembership(SITE_ID, scopedAdmin.uid, 'admin', { machineIds: [SCOPE_IN] }, people);
 
-    const narrowing = await seedTotpUser(`scope-narrowing-${SUFFIX}`);
+    const narrowing = await seedTotpUser(`scope-narrowing-${SUFFIX}`, people);
     narrowingOperator = narrowing.user;
     narrowingOperatorSecret = narrowing.secret;
-    await grantMembership(SITE_ID, narrowingOperator.uid, 'admin');
+    await grantMembership(SITE_ID, narrowingOperator.uid, 'admin', undefined, people);
 
     // no second factor. `sites: []`, so this site is their only one and the picker and the dashboard open on it
-    scopedWatcher = await seedDedicatedUser({ ...dedicatedUser('member', `scope-watcher-${SUFFIX}`), sites: [] });
-    await grantMembership(SITE_ID, scopedWatcher.uid, 'member', { machineIds: [SCOPE_IN] });
-    wholeAdmin = await seedDedicatedUser({ ...dedicatedUser('member', `scope-whole-${SUFFIX}`), sites: [] });
-    await grantMembership(SITE_ID, wholeAdmin.uid, 'admin');
+    scopedWatcher = { ...dedicatedUser('member', `scope-watcher-${SUFFIX}`), sites: [] };
+    await seedUser(scopedWatcher, people);
+    await grantMembership(SITE_ID, scopedWatcher.uid, 'member', { machineIds: [SCOPE_IN] }, people);
+    wholeAdmin = { ...dedicatedUser('member', `scope-whole-${SUFFIX}`), sites: [] };
+    await seedUser(wholeAdmin, people);
+    await grantMembership(SITE_ID, wholeAdmin.uid, 'admin', undefined, people);
+    await people.commit();
   });
 
   test.afterAll(async () => {
