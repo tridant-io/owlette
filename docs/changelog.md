@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed
+
+- a display layout's **test** result reads in lowercase, as the rest of the dashboard does.
+
 ## [4.2.8] - 2026-11-28
 
 ### added
