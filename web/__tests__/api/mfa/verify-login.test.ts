@@ -223,6 +223,8 @@ describe('POST /api/mfa/verify-login — backup code single-use under concurrenc
     const r1 = await POST(verifyReq());
     expect(r1.status).toBe(200);
     expect(docState.data.backupCodes).toEqual(['hash-bk-2']);
+    // the count rides with the sheet it counts
+    expect(docState.data['mfaFactors.backupCodes']).toBe(1);
 
     // No trustDevice in the body → no mint, no Set-Cookie.
     expect(mockMintDeviceTrustToken).not.toHaveBeenCalled();
@@ -233,6 +235,27 @@ describe('POST /api/mfa/verify-login — backup code single-use under concurrenc
     const r2 = await POST(verifyReq());
     expect(r2.status).toBe(400);
     expect(docState.data.backupCodes).toEqual(['hash-bk-2']);
+  });
+});
+
+describe('POST /api/mfa/verify-login — the backup-code count', () => {
+  it('a refused backup code counts the sheet of a record with no count, and spends nothing', async () => {
+    mockVerifyBackupCode.mockReturnValue(false);
+
+    const res = await POST(verifyReq());
+
+    expect(res.status).toBe(400);
+    expect(docState.data.backupCodes).toEqual(['hash-bk-1', 'hash-bk-2']);
+    expect(docState.data['mfaFactors.backupCodes']).toBe(2);
+  });
+
+  it('a refused backup code on a counted record writes nothing', async () => {
+    mockVerifyBackupCode.mockReturnValue(false);
+    docState.data = { ...docState.data, mfaFactors: { totp: false, passkeys: 1, backupCodes: 2 } };
+
+    await POST(verifyReq());
+
+    expect(docState.version).toBe(0);
   });
 });
 

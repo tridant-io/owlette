@@ -27,12 +27,14 @@ import { SwoopStepUpDialog } from '@/components/swoop/SwoopStepUpDialog';
 import {
   readStepUpWindow,
   stepUpVerifyUrl,
+  stepUpRefusal,
   submitStepUpProof,
   type SwoopStepUpProps,
 } from '@/lib/swoop/stepUp';
 
 const startAuthentication = jest.fn();
 jest.mock('@simplewebauthn/browser', () => ({
+  browserSupportsWebAuthn: () => true,
   startAuthentication: (...args: unknown[]) => startAuthentication(...args),
 }));
 
@@ -52,7 +54,7 @@ function renderDialog(overrides: Partial<SwoopStepUpProps> = {}) {
   render(
     createElement(SwoopStepUpDialog, {
       open: true,
-      enrolled: true,
+      factors: { totp: true, passkeys: 1 },
       onProof,
       onCancel,
       ...overrides,
@@ -144,7 +146,7 @@ describe('swoop step-up ceremony', () => {
   });
 
   it('a zero-factor account renders the enrol hint and no code field', () => {
-    renderDialog({ enrolled: false });
+    renderDialog({ factors: { totp: false, passkeys: 0 } });
 
     expect(screen.getByRole('link', { name: /security settings/i })).toHaveAttribute(
       'href',
@@ -194,5 +196,29 @@ describe('owlette swoop\'s browser check', () => {
     mockOptionsResponse(body, false);
 
     await expect(submitStepUpProof('site-1', 'mach.one', { code: '123456' })).rejects.toThrow(message);
+  });
+});
+
+describe('which refusals are the ceremony’s to say', () => {
+  it.each([
+    [400, { code: 'invalid_mfa_proof', error: 'invalid verification code' }, "that code didn't work. try again."],
+    [400, { code: 'totp_not_enrolled', error: 'this account has no authenticator enrolled.' }, 'this account has no authenticator app. use a passkey or a backup code.'],
+    [400, { code: 'challenge_not_found' }, 'the passkey check expired. try again.'],
+    [403, { code: 'challenge_user_mismatch' }, "that passkey didn't check out. try again."],
+    [429, { code: 'mfa_attempts_exceeded' }, 'too many tries. wait a minute, then try again.'],
+    [429, {}, 'too many tries. wait a minute, then try again.'],
+    [401, { code: 'step_up_required', detail: 'enroll a passkey or an authenticator app first.' }, 'enroll a passkey or an authenticator app first.'],
+  ])('%i %j is said in the dialog', (status, body, message) => {
+    expect(stepUpRefusal(status, body)).toBe(message);
+  });
+
+  it.each([
+    [403, { code: 'swoop_disabled', detail: 'swoop is not enabled for this site.' }],
+    [404, { code: 'machine_not_found' }],
+    [401, { code: 'unauthorized' }],
+    [500, {}],
+    [400, { code: 'constructor' }],
+  ])('%i %j is not', (status, body) => {
+    expect(stepUpRefusal(status, body)).toBeNull();
   });
 });

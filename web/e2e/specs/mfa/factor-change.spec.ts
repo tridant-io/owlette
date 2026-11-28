@@ -8,6 +8,7 @@
  * covers the ceremonies, including a verified session removing the last passkey.
  */
 
+import crypto from 'crypto';
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { sealData, unsealData } from 'iron-session';
 import { authenticator } from 'otplib';
@@ -198,6 +199,66 @@ test('the security panel asks to verify when a change is refused', async ({ page
   });
 });
 
+test("the security panel's challenge offers a passkey-only account only what it holds", async ({ page }) => {
+  const user = await seedDedicatedUser(dedicatedUser('member', `factor-panel-passkey-${Date.now()}`));
+  await seedPasskeyDoc(user.uid);
+  const hash = (code: string) => crypto.createHash('sha256').update(code).digest('hex');
+  await getAdminDb()
+    .collection('users')
+    .doc(user.uid)
+    .set(
+      {
+        mfaEnrolled: true,
+        requiresMfaSetup: false,
+        mfaFactors: { totp: false, passkeys: 1, backupCodes: 2 },
+        backupCodes: [hash('ABCDEF12'), hash('BCDEF123')],
+      },
+      { merge: true },
+    );
+
+  // the sign-in's second factor: a backup code, the one this seeded passkey can't give
+  await signInWithPassword(page, user);
+  await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+  await page.getByRole('button', { name: 'use a backup code instead' }).click();
+  await page.getByPlaceholder('backup code').fill('ABCDEF12');
+  await page.getByRole('button', { name: /^verify$/i }).click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+
+  await page.getByTestId('user-menu-trigger').click();
+  await page.getByRole('menuitem', { name: /account settings/i }).click();
+  await page.getByRole('button', { name: /^security$/i }).first().click();
+  await expect(page.getByRole('button', { name: 'remove seeded passkey' })).toBeVisible();
+
+  // the session stops being verified underneath the open panel, as in the test above
+  const context = page.context();
+  const cookie = (await context.cookies()).find((c) => c.name === '__session');
+  const session = await unsealData<Record<string, unknown>>(cookie!.value, { password: E2E_SESSION_SECRET });
+  const value = await sealData({ ...session, mfaVerified: false }, { password: E2E_SESSION_SECRET });
+  await context.addCookies([{ ...cookie!, value }]);
+  // a refused change is what makes the panel read the factors again
+  const tryRemoving = async () => {
+    await page.getByRole('button', { name: 'remove seeded passkey' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: /^remove$/ }).click();
+    await expect(page.getByText('complete two-factor verification first').first()).toBeVisible();
+  };
+  await tryRemoving();
+
+  await expect(page.getByText(/verify a factor you already have before adding or changing one/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'verify with passkey' })).toBeVisible();
+  // one backup code is left after the sign-in spent one
+  await expect(page.getByRole('link', { name: 'use a backup code instead' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'use a code instead' })).toHaveCount(0);
+
+  // with none left, the passkey alone
+  await getAdminDb()
+    .collection('users')
+    .doc(user.uid)
+    .set({ backupCodes: [], mfaFactors: { backupCodes: 0 } }, { merge: true });
+  await tryRemoving();
+  await expect(page.getByRole('button', { name: 'verify with passkey' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'use a backup code instead' })).toHaveCount(0);
+});
+
 test('a verified session renames and removes factors, down to the last one', async ({ page }) => {
   const secret = authenticator.generateSecret();
   const user = await seedUserWithFactors('factor-verified', secret);
@@ -211,8 +272,9 @@ test('a verified session renames and removes factors, down to the last one', asy
     data: { code: await unspentTotp(page, secret) },
   });
   expect(removeApp.status(), await removeApp.text()).toBe(200);
+  // removing the app wipes the backup codes, and counts them
   expect(await readInventory(user.uid)).toEqual({
-    factors: { totp: false, passkeys: 1 },
+    factors: { totp: false, passkeys: 1, backupCodes: 0 },
     passkeyDocs: 1,
   });
 
@@ -220,7 +282,7 @@ test('a verified session renames and removes factors, down to the last one', asy
   const removeLast = await page.request.delete(passkeyPath(user));
   expect(removeLast.status(), await removeLast.text()).toBe(200);
   expect(await readInventory(user.uid)).toEqual({
-    factors: { totp: false, passkeys: 0 },
+    factors: { totp: false, passkeys: 0, backupCodes: 0 },
     passkeyDocs: 0,
   });
 
@@ -243,7 +305,7 @@ test('a live code removes the authenticator app before any challenge is cleared'
   });
   expect(right.status(), await right.text()).toBe(200);
   expect(await readInventory(user.uid)).toEqual({
-    factors: { totp: false, passkeys: 1 },
+    factors: { totp: false, passkeys: 1, backupCodes: 0 },
     passkeyDocs: 1,
   });
 });
@@ -275,8 +337,9 @@ test('a superadmin reset brings back someone who has lost every factor', async (
     data: { userId: user.uid, code: await unspentTotp(page, newSecret) },
   });
   expect(verify.status(), await verify.text()).toBe(200);
+  // enrolling issues a fresh sheet of backup codes, counted with it
   expect(await readInventory(user.uid)).toEqual({
-    factors: { totp: true, passkeys: 0 },
+    factors: { totp: true, passkeys: 0, backupCodes: 10 },
     passkeyDocs: 0,
   });
 });

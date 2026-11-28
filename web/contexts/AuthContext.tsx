@@ -27,6 +27,9 @@ import * as Sentry from '@sentry/nextjs';
 // Type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the
 // client bundle; `import type` is erased at compile time.
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
+// `users/{uid}.mfaFactors` is written only by `lib/mfaFactors.server.ts`; the
+// shared parser reads it the way every second-factor screen does.
+import { mfaFactorsFromUserDoc } from '@/lib/secondFactors';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
 import { isMemberRole } from '@/lib/capabilities';
 import { scopeCovers } from '@/lib/machineAccess';
@@ -120,26 +123,6 @@ const UNRESOLVED_MEMBERSHIP: { sites: undefined; fallbacks: readonly string[] } 
   sites: undefined,
   fallbacks: Object.freeze([]),
 });
-
-/**
- * Read the second-factor tally off a user document. `users/{uid}.mfaFactors` is
- * written only by `lib/mfaFactors.server.ts`, transactionally with the
- * `passkeys` subcollection. Parsed defensively: the field is absent on older
- * accounts, and a malformed value must read as "no factors" rather than
- * accidentally satisfying a "has a passkey" check.
- */
-function readMfaFactorsFromDoc(userData: Record<string, unknown>): MfaFactorInventory {
-  const raw = userData.mfaFactors;
-  if (typeof raw !== 'object' || raw === null) return NO_MFA_FACTORS;
-  const { totp, passkeys } = raw as { totp?: unknown; passkeys?: unknown };
-  return {
-    totp: totp === true,
-    passkeys:
-      typeof passkeys === 'number' && Number.isInteger(passkeys) && passkeys > 0
-        ? passkeys
-        : 0,
-  };
-}
 
 const createSessionCookie = async (userId: string, idToken: string): Promise<void> => {
   try {
@@ -698,7 +681,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                       : null;
                 const newSites: string[] = userData.sites || [];
                 const newRequiresMfa = userData.requiresMfaSetup || false;
-                const newMfaFactors = readMfaFactorsFromDoc(userData);
+                const newMfaFactors = mfaFactorsFromUserDoc(userData);
                 const newLastSiteId = userData.lastSiteId || null;
                 const newLastMachineIds = readLastMachineIds(userData.lastMachineIds);
 
@@ -707,7 +690,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setLegacySites(prev => arraysEqual(prev, newSites) ? prev : newSites);
                 setRequiresMfaSetup(prev => prev === newRequiresMfa ? prev : newRequiresMfa);
                 setMfaFactors(prev =>
-                  prev.totp === newMfaFactors.totp && prev.passkeys === newMfaFactors.passkeys
+                  prev.totp === newMfaFactors.totp &&
+                  prev.passkeys === newMfaFactors.passkeys &&
+                  prev.backupCodes === newMfaFactors.backupCodes
                     ? prev
                     : newMfaFactors
                 );

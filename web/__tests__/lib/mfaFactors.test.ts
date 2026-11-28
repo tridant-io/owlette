@@ -110,6 +110,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 import {
   EMPTY_MFA_FACTORS,
   applyMfaFactorChange,
+  backupCodeCountUpdate,
   deriveMfaEnrolled,
   normalizeMfaFactors,
   readMfaFactors,
@@ -319,7 +320,7 @@ describe('applyMfaFactorChange — guards', () => {
 
 describe('applyMfaFactorChange — counting', () => {
   it('recounts from the subcollection when recountPasskeys is set, overriding a stale copy', async () => {
-    users.set('u1', { mfaFactors: { totp: false, passkeys: 1 } });
+    users.set('u1', { mfaFactors: { totp: false, passkeys: 1, backupCodes: 0 } });
     passkeys.set('u1', ['a', 'b', 'c']);
 
     const result = await applyMfaFactorChange('u1', { recountPasskeys: true });
@@ -485,7 +486,7 @@ describe('applyMfaFactorChange — the write', () => {
     expect(setCalls[0].id).toBe('u1');
     expect(setCalls[0].options).toEqual({ merge: true });
     expect(setCalls[0].payload).toEqual({
-      mfaFactors: { totp: false, passkeys: 0 },
+      mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 },
       mfaEnrolled: false,
       requiresMfaSetup: true,
       sessionsValidAfter: expect.any(Number),
@@ -524,7 +525,7 @@ describe('applyMfaFactorChange — the write', () => {
   it('folds extraUpdate into the same single write on the ctx.tx path', async () => {
     // `extraUpdate` exists so the caller's cleanup commits with the flags;
     // dropping it on the tx branch leaves a disabled account holding its secret.
-    users.set('u1', { mfaFactors: { totp: true, passkeys: 0 }, mfaSecret: 'ENCRYPTED' });
+    users.set('u1', { mfaFactors: { totp: true, passkeys: 0, backupCodes: 0 }, mfaSecret: 'ENCRYPTED' });
     const tx = makeTx();
 
     await applyMfaFactorChange(
@@ -570,5 +571,51 @@ describe('applyMfaFactorChange — concurrent callers', () => {
     });
     expect(totpResult.factors.totp).toBe(true);
     expect(passkeyResult.factors).toEqual({ totp: true, passkeys: 2 });
+  });
+});
+
+describe('the backup-code leg', () => {
+  it('counts the sheet a change replaces, in the same write', async () => {
+    users.set('u1', { mfaFactors: { totp: false, passkeys: 1, backupCodes: 0 } });
+
+    const result = await applyMfaFactorChange(
+      'u1',
+      { totp: true },
+      { extraUpdate: { backupCodes: ['h1', 'h2', 'h3'] } },
+    );
+
+    expect(setCalls[0].payload.mfaFactors).toEqual({ totp: true, passkeys: 1, backupCodes: 3 });
+    // codes are recovery material, not a factor: the result is the factors alone
+    expect(result.factors).toEqual({ totp: true, passkeys: 1 });
+  });
+
+  it('heals a record with no count from the sheet it holds, on any change', async () => {
+    users.set('u1', { mfaFactors: { totp: true, passkeys: 0 }, backupCodes: ['h1', 'h2'] });
+
+    await applyMfaFactorChange('u1', { passkeys: 1 });
+
+    expect(setCalls[0].payload.mfaFactors).toEqual({ totp: true, passkeys: 1, backupCodes: 2 });
+  });
+
+  it('a record with no sheet at all holds none', async () => {
+    users.set('u1', { mfaFactors: { totp: false, passkeys: 0 } });
+
+    await applyMfaFactorChange('u1', { passkeys: 1 });
+
+    expect(setCalls[0].payload.mfaFactors).toEqual({ totp: false, passkeys: 1, backupCodes: 0 });
+  });
+
+  it('leaves a counted leg alone when the change does not touch the sheet', async () => {
+    users.set('u1', { mfaFactors: { totp: false, passkeys: 1, backupCodes: 7 }, backupCodes: ['h1'] });
+
+    await applyMfaFactorChange('u1', { totp: true });
+
+    // the merge keeps the stored count; only the write that spends or replaces a sheet moves it
+    expect(setCalls[0].payload.mfaFactors).toEqual({ totp: true, passkeys: 1 });
+  });
+
+  it('is written beside a sheet spent or replaced outside a factor change', () => {
+    expect(backupCodeCountUpdate(['h1', 'h2'])).toEqual({ 'mfaFactors.backupCodes': 2 });
+    expect(backupCodeCountUpdate([])).toEqual({ 'mfaFactors.backupCodes': 0 });
   });
 });

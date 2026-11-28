@@ -129,7 +129,7 @@ export async function bootstrapUser(
     // Seeded inline, not via applyMfaFactorChange (the single writer everywhere
     // else): it reads the user doc first and throws when missing, which is
     // exactly the state here. Without the seed every account is born "legacy".
-    mfaFactors: { totp: false, passkeys: 0 },
+    mfaFactors: { totp: false, passkeys: 0, backupCodes: 0 },
     preferences: {
       temperatureUnit: 'C',
       timezone,

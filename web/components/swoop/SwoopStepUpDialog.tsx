@@ -3,18 +3,20 @@
 /**
  * the live second-factor ceremony that unlocks control.
  *
- * **these props are frozen.** the page mounts this component with exactly this
- * contract so the ceremony lands without the page or the hook being touched:
  * `onProof` receives the body `parseMfaProof` accepts and the hook forwards it
  * verbatim into the session-create request. a proof is never logged, never
- * stored and never inspected on the way through.
+ * stored and never inspected on the way through. the dialog stays open until
+ * that create answers: a refused answer (a wrong code, too many tries) is said
+ * here, with the field ready for another, never on a page of its own.
  *
- * `enrolled: false` means the account holds no second factor at all — the
- * dialog shows an enroll hint pointing at the security settings rather than a
- * code field, because such an account cannot take control at all.
+ * it asks only for what the account holds and this page can run
+ * (`useSecondFactorChoices`): an authenticator code only with an authenticator
+ * app, a passkey only with a passkey, and a backup code beside either. an
+ * account with no second factor at all gets an enroll hint pointing at the
+ * security settings instead, because it cannot take control at all.
  *
  * in owlette swoop a passkey prompt reaches only the platform authenticator, so
- * there the passkey button gives way to "verify in your browser": the system
+ * there an account's passkey gives way to "verify in your browser": the system
  * browser passes the ceremony on `/swoop/<site>/<machine>/verify`, this dialog
  * polls until the window reads open and answers `STEP_UP_WINDOW_OPEN`, and the
  * hook retries the session with no proof. codes work in the app as they are.
@@ -36,6 +38,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useSecondFactorChoices } from '@/hooks/useSecondFactorChoices';
+import { holdsSecondFactor } from '@/lib/secondFactors';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import {
   codeStepUpProof,
@@ -52,13 +56,13 @@ import {
 const BROWSER_POLL_MS = 3000;
 const BROWSER_WAIT_MS = 10 * 60 * 1000;
 
-export function SwoopStepUpDialog({ open, enrolled, onProof, onCancel }: SwoopStepUpProps) {
+export function SwoopStepUpDialog({ open, factors, onProof, onCancel }: SwoopStepUpProps) {
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onCancel()}>
       <DialogContent className="sm:max-w-sm">
         {/* the form is a child so that closing the dialog unmounts it: a fresh
             ask never inherits the last attempt's code or error. */}
-        <StepUpForm enrolled={enrolled} onProof={onProof} onCancel={onCancel} />
+        <StepUpForm factors={factors} onProof={onProof} onCancel={onCancel} />
       </DialogContent>
     </Dialog>
   );
@@ -67,18 +71,24 @@ export function SwoopStepUpDialog({ open, enrolled, onProof, onCancel }: SwoopSt
 /**
  * the ceremony itself: the code being typed and the one attempt in flight.
  * shared with the browser's verify page, whose `onProof` posts the proof to the
- * step-up route instead of retrying a session.
+ * step-up route instead of retrying a session. without an authenticator app
+ * (`authenticator: false`) a code can only be a backup code, and with no backup
+ * codes left (`backupCode: false`) a code can only be an authenticator's.
  */
-export function useStepUpCeremony(onProof: (proof: SwoopStepUpProof) => Promise<void>) {
+export function useStepUpCeremony(
+  onProof: (proof: SwoopStepUpProof) => Promise<void>,
+  { authenticator, backupCode }: { authenticator: boolean; backupCode: boolean },
+) {
   const [code, setCode] = useState('');
-  const [isBackupCode, setIsBackupCode] = useState(false);
+  const [backupChosen, setBackupChosen] = useState(false);
+  const isBackupCode = !authenticator || backupChosen;
   const [pending, setPending] = useState<'code' | 'passkey' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   /**
    * one ceremony, then exactly one retry — `onProof` is what retries, and it is
-   * called once. a second `step_up_required` re-opens this dialog through the
-   * page, so the operator decides again rather than a loop deciding for them.
+   * called once. a refused retry rejects, and the operator decides again here
+   * rather than a loop deciding for them.
    */
   const submit = async (kind: 'code' | 'passkey') => {
     if (pending) return;
@@ -108,12 +118,27 @@ export function useStepUpCeremony(onProof: (proof: SwoopStepUpProof) => Promise<
     }
   };
 
-  return { code, setCode, isBackupCode, setIsBackupCode, pending, error, setError, submit };
+  return {
+    code,
+    setCode,
+    authenticator,
+    backupCode,
+    isBackupCode,
+    setIsBackupCode: setBackupChosen,
+    pending,
+    error,
+    setError,
+    submit,
+  };
 }
 
 export type StepUpCeremony = ReturnType<typeof useStepUpCeremony>;
 
-/** the authenticator code field and its backup-code switch. */
+/**
+ * the code field, with its backup-code switch when the account has both an
+ * authenticator app and a backup code left. a refusal hands the cleared field
+ * straight back.
+ */
 export function StepUpCodeFields({
   ceremony,
   disabled,
@@ -121,7 +146,12 @@ export function StepUpCodeFields({
   ceremony: StepUpCeremony;
   disabled: boolean;
 }) {
-  const { code, setCode, isBackupCode, setIsBackupCode, submit } = ceremony;
+  const { code, setCode, authenticator, backupCode, isBackupCode, setIsBackupCode, error, submit } = ceremony;
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (error && !disabled) input.current?.focus();
+  }, [error, disabled]);
+
   return (
     <>
       <div className="space-y-2">
@@ -129,6 +159,7 @@ export function StepUpCodeFields({
           {isBackupCode ? 'backup code' : 'authenticator code'}
         </Label>
         <Input
+          ref={input}
           id="swoop-step-up-code"
           value={code}
           onChange={(e) => setCode(e.target.value)}
@@ -144,36 +175,63 @@ export function StepUpCodeFields({
         />
       </div>
 
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id="swoop-step-up-backup"
-          checked={isBackupCode}
-          onCheckedChange={(checked) => {
-            setIsBackupCode(checked === true);
-            setCode('');
-          }}
-          disabled={disabled}
-        />
-        <Label
-          htmlFor="swoop-step-up-backup"
-          className="cursor-pointer text-xs text-muted-foreground"
-        >
-          use a backup code instead
-        </Label>
-      </div>
+      {authenticator && backupCode && (
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="swoop-step-up-backup"
+            checked={isBackupCode}
+            onCheckedChange={(checked) => {
+              setIsBackupCode(checked === true);
+              setCode('');
+            }}
+            disabled={disabled}
+          />
+          <Label
+            htmlFor="swoop-step-up-backup"
+            className="cursor-pointer text-xs text-muted-foreground"
+          >
+            use a backup code instead
+          </Label>
+        </div>
+      )}
     </>
   );
 }
 
-function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'open'>) {
-  const ceremony = useStepUpCeremony(onProof);
+/** the link that opens a backup-code field for an account with no authenticator app. */
+export function BackupCodeLink({ onClick, disabled }: { onClick: () => void; disabled: boolean }) {
+  return (
+    <p className="text-center">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className="hl-link cursor-pointer text-xs text-accent-cyan disabled:pointer-events-none disabled:opacity-50"
+      >
+        use a backup code instead
+      </button>
+    </p>
+  );
+}
+
+function StepUpForm({ factors, onProof, onCancel }: Omit<SwoopStepUpProps, 'open'>) {
+  const choices = useSecondFactorChoices(factors);
+  const enrolled = holdsSecondFactor(factors);
+  const ceremony = useStepUpCeremony(onProof, {
+    authenticator: choices.authenticatorCode,
+    backupCode: choices.backupCode,
+  });
   const { pending, error, setError, submit } = ceremony;
   const viewerApp = useViewerAppPlatform() !== null;
   const params = useParams<{ siteId: string; machineId: string }>();
+  // the browser check stands in for a passkey the app cannot prompt for
   const machine =
-    viewerApp && params?.siteId && params?.machineId
+    viewerApp && factors.passkeys > 0 && params?.siteId && params?.machineId
       ? { siteId: params.siteId, machineId: params.machineId }
       : null;
+  // a backup code waits behind its link while the account has another way here
+  const [backupOpen, setBackupOpen] = useState(false);
+  const showCode = choices.authenticatorCode || (choices.backupCode && (backupOpen || (!choices.passkey && !machine)));
 
   /** the verification page while owlette swoop waits on the browser for it. */
   const [browserWait, setBrowserWait] = useState<string | null>(null);
@@ -222,8 +280,9 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
       const status = await readStepUpWindow(machine.siteId, machine.machineId).catch(() => null);
       if (browserRun.current !== run) return;
       if (status && !status.sessionPassedCeremony) {
+        const instead = choices.authenticatorCode ? ' enter a code here instead.' : choices.backupCode ? ' enter a backup code here instead.' : '';
         return giveUp(
-          "this sign-in skipped the second factor, so a check in your browser can't reach owlette swoop. enter a code here instead.",
+          `this sign-in skipped the second factor, so a check in your browser can't reach owlette swoop.${instead}`,
         );
       }
       if (status?.open) {
@@ -248,27 +307,35 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
 
   const busy = pending !== null || browserWait !== null;
 
-  const browserCheck = !machine ? null : browserWait ? (
-    <div className="space-y-3">
-      <p role="status" className="text-center text-sm text-muted-foreground">
-        waiting for your browser…
-      </p>
-      <p className="text-center text-xs text-muted-foreground">
-        didn&apos;t open?{' '}
-        <a href={browserWait} target="_blank" rel="noopener" className="hl-link text-accent-cyan">
-          open the verification page
-        </a>
-      </p>
-      <Button type="button" variant="outline" className="w-full" onClick={cancelBrowserCheck}>
-        cancel
+  // the way that needs no code: the passkey here, or in owlette swoop the browser
+  const primary = machine ? (
+    browserWait ? (
+      <div className="space-y-3">
+        <p role="status" className="text-center text-sm text-muted-foreground">
+          waiting for your browser…
+        </p>
+        <p className="text-center text-xs text-muted-foreground">
+          didn&apos;t open?{' '}
+          <a href={browserWait} target="_blank" rel="noopener" className="hl-link text-accent-cyan">
+            open the verification page
+          </a>
+        </p>
+        <Button type="button" variant="outline" className="w-full" onClick={cancelBrowserCheck}>
+          cancel
+        </Button>
+      </div>
+    ) : (
+      <Button type="button" className="w-full" onClick={verifyInBrowser} disabled={busy}>
+        <Globe />
+        verify in your browser
       </Button>
-    </div>
-  ) : (
-    <Button type="button" className="w-full" onClick={verifyInBrowser} disabled={busy}>
-      <Globe />
-      verify in your browser
+    )
+  ) : choices.passkey ? (
+    <Button type="button" className="w-full" onClick={() => submit('passkey')} disabled={busy}>
+      <Fingerprint />
+      {pending === 'passkey' ? 'waiting for your passkey...' : 'use a passkey'}
     </Button>
-  );
+  ) : null;
 
   return (
     <>
@@ -285,25 +352,19 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
 
       {enrolled ? (
         <div className="space-y-3">
-          {browserCheck}
-          {browserCheck ? (
+          {primary}
+          {primary && choices.authenticatorCode ? (
             <p className="text-center text-xs text-muted-foreground">or enter a code</p>
           ) : null}
+          {!primary && !choices.authenticatorCode && choices.passkeyHint ? (
+            <p className="text-xs text-muted-foreground">{choices.passkeyHint}</p>
+          ) : null}
 
-          <StepUpCodeFields ceremony={ceremony} disabled={busy} />
-
-          {viewerApp ? null : (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              onClick={() => submit('passkey')}
-              disabled={busy}
-            >
-              <Fingerprint />
-              {pending === 'passkey' ? 'waiting for your passkey...' : 'use a passkey'}
-            </Button>
-          )}
+          {showCode ? (
+            <StepUpCodeFields ceremony={ceremony} disabled={busy} />
+          ) : choices.backupCode ? (
+            <BackupCodeLink onClick={() => setBackupOpen(true)} disabled={busy} />
+          ) : null}
         </div>
       ) : (
         <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 p-3">
@@ -331,7 +392,7 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
           <Button type="button" variant="ghost" onClick={onCancel} disabled={pending !== null}>
             cancel
           </Button>
-          {enrolled && (
+          {enrolled && showCode && (
             <Button type="button" onClick={() => submit('code')} disabled={pending !== null}>
               {pending === 'code' ? 'checking...' : 'confirm'}
             </Button>

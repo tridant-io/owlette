@@ -170,8 +170,20 @@ describe('GET /api/mfa/factors', () => {
       totp: { enrolled: false, enrolledAt: null },
       passkeys: [],
       totalFactors: 0,
+      backupCodeCount: 0,
       mfaVerified: false,
     });
+  });
+
+  it('says how many backup codes are left, so a screen offers one only when there is one', async () => {
+    mockAssertActiveUser.mockResolvedValue({
+      mfaFactors: { totp: false, passkeys: 1 },
+      backupCodes: ['$2a$10$one', '$2a$10$two'],
+    });
+
+    const body = await (await GET(createMockRequest('/api/mfa/factors'))).json();
+
+    expect(body.backupCodeCount).toBe(2);
   });
 
   it('propagates the auth failure status instead of masking it as a 500', async () => {

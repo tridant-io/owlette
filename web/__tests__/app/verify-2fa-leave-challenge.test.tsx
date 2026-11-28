@@ -32,6 +32,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     user: { uid: 'u1', email: 'davor@example.com' },
     loading: false,
     signOut,
+    mfaFactors: { totp: true, passkeys: 1 },
   }),
 }));
 

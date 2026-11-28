@@ -210,16 +210,20 @@ describe('POST /api/mfa/backup-codes — happy path', () => {
     expect(stored).toEqual((body.backupCodes as string[]).map(hashBackupCode));
   });
 
-  it('stamps backupCodesGeneratedAt and touches no factor-inventory field', async () => {
+  it('stamps backupCodesGeneratedAt and counts the new sheet, touching no factor', async () => {
     const res = await POST(codesReq({ code: '123456' }));
     expect(res.status).toBe(200);
 
     const write = writes.find((w) => Array.isArray(w.backupCodes))!;
     expect(write.backupCodesGeneratedAt).toBe('__SERVER_TIMESTAMP__');
+    // the count rides with the sheet, so a second-factor screen knows there is one to enter
+    expect(write['mfaFactors.backupCodes']).toBe(10);
     // only lib/mfaFactors.server.ts writes these; codes are not a factor
     expect(write).not.toHaveProperty('mfaEnrolled');
     expect(write).not.toHaveProperty('requiresMfaSetup');
     expect(write).not.toHaveProperty('mfaFactors');
+    expect(write).not.toHaveProperty(['mfaFactors.totp']);
+    expect(write).not.toHaveProperty(['mfaFactors.passkeys']);
   });
 
   it('emits a user_mutated audit row naming the proof that was presented', async () => {
@@ -265,19 +269,29 @@ describe('POST /api/mfa/backup-codes — proof of possession', () => {
     const res = await POST(codesReq({ code: 'A1B2C3D4', isBackupCode: true }));
     expect(res.status).toBe(200);
 
-    // consumption inside the verification txn, then the replacement sheet
+    // consumption inside the verification txn, then the replacement sheet, each counted
     expect(writes[0].backupCodes).toEqual(['old-hash-1', 'old-hash-3']);
+    expect(writes[0]['mfaFactors.backupCodes']).toBe(2);
     expect(writtenCodes()).toHaveLength(10);
     expect(mockEmitMutation.mock.calls[0][0].attributes.factorUsed).toBe('backup_code');
   });
 
-  it('rejects a backup code that matches nothing', async () => {
+  it('rejects a backup code that matches nothing, and writes nothing on a counted record', async () => {
     mockVerifyBackupCode.mockReturnValue(false);
+    userData = { ...userData, mfaFactors: { totp: true, passkeys: 0, backupCodes: 3 } };
 
     const res = await POST(codesReq({ code: 'DEADBEEF', isBackupCode: true }));
     expect(res.status).toBe(400);
     expect((await res.json()).code).toBe('invalid_mfa_proof');
     expect(writes).toHaveLength(0);
+  });
+
+  it('a refused backup code still counts the sheet of a record with no count, and spends nothing', async () => {
+    mockVerifyBackupCode.mockReturnValue(false);
+
+    const res = await POST(codesReq({ code: 'DEADBEEF', isBackupCode: true }));
+    expect(res.status).toBe(400);
+    expect(writes).toEqual([{ 'mfaFactors.backupCodes': 3 }]);
   });
 
   it('accepts a UV-verified passkey step-up assertion', async () => {

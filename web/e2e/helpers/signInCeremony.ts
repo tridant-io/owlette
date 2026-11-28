@@ -16,9 +16,10 @@ export const E2E_SESSION_SECRET = 'demo-session-secret-for-emulator-playwright-t
  * dates the signed-in page's second factor `ageMs` back, then returns it to the
  * dashboard. every page load re-posts the session and the answer reseals the
  * cookie that request carried, so the page leaves the origin first: nothing in
- * flight can undo the change, and the re-post afterwards keeps it.
+ * flight can undo the change, and the re-post afterwards keeps it. `origin` is
+ * the one the page signed in on, for a passkey spec's `WEBAUTHN_BASE_URL`.
  */
-export async function ageSignInCeremony(page: Page, ageMs = 10 * 60 * 1000): Promise<void> {
+export async function ageSignInCeremony(page: Page, ageMs = 10 * 60 * 1000, origin = ''): Promise<void> {
   await page.goto('about:blank');
   const context = page.context();
   const cookie = (await context.cookies()).find((c) => c.name === '__session');
@@ -30,6 +31,6 @@ export async function ageSignInCeremony(page: Page, ageMs = 10 * 60 * 1000): Pro
     { password: E2E_SESSION_SECRET },
   );
   await context.addCookies([{ ...cookie!, value }]);
-  await page.goto('/dashboard');
+  await page.goto(`${origin}/dashboard`);
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
 }

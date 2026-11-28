@@ -18,7 +18,7 @@ import {
 import { LoadingWord } from '@/components/LoadingWord';
 import { PasskeyManager } from '@/components/PasskeyManager';
 import { useMfaFactors } from '@/hooks/useMfaFactors';
-import { browserSupportsWebAuthn } from '@/hooks/usePasskeys';
+import { useSecondFactorChoices } from '@/hooks/useSecondFactorChoices';
 import { toast } from '@/lib/toast';
 
 /**
@@ -60,14 +60,21 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
   const [removing, setRemoving] = useState(false);
   const [steppingUp, setSteppingUp] = useState(false);
 
-  const { totp, passkeys, totalFactors, mfaVerified } = factors;
+  const { totp, passkeys, totalFactors, backupCodeCount, mfaVerified } = factors;
 
   // The gate only bites when a factor exists; a zero-factor account is in mandatory setup.
   const needsChallenge = totalFactors > 0 && !mfaVerified;
   const isLastFactor = totalFactors === 1;
 
-  // Inline verify needs a passkey AND a browser that can assert it; otherwise use the code path.
-  const canStepUpInline = passkeys.length > 0 && browserSupportsWebAuthn();
+  // Inline verify needs a passkey AND a page that can prompt for it; otherwise use the code path,
+  // which is a backup code for an account with no authenticator app, while one is left.
+  const choices = useSecondFactorChoices({
+    totp: totp.enrolled,
+    passkeys: passkeys.length,
+    ...(backupCodeCount === null ? {} : { backupCodes: backupCodeCount }),
+  });
+  const canStepUpInline = choices.passkey;
+  const codeInstead = choices.authenticatorCode || choices.backupCode;
 
   // /setup-2fa's first request 403s while the gate is armed, so route through the challenge.
   const totpSetupHref = needsChallenge ? '/verify-2fa?redirect=/setup-2fa' : '/setup-2fa';
@@ -191,17 +198,22 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
                     {steppingUp ? 'waiting for device...' : 'verify with passkey'}
                   </Button>
                 )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  asChild
-                  className="h-8 cursor-pointer border-border text-accent-cyan hover:bg-muted hover:text-accent-cyan"
-                >
-                  <Link href="/verify-2fa?redirect=/dashboard" onClick={onNavigateAway}>
-                    use a code instead
-                  </Link>
-                </Button>
+                {codeInstead && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    asChild
+                    className="h-8 cursor-pointer border-border text-accent-cyan hover:bg-muted hover:text-accent-cyan"
+                  >
+                    <Link href="/verify-2fa?redirect=/dashboard" onClick={onNavigateAway}>
+                      {choices.authenticatorCode ? 'use a code instead' : 'use a backup code instead'}
+                    </Link>
+                  </Button>
+                )}
+                {!canStepUpInline && !codeInstead && choices.passkeyHint && (
+                  <p className="text-xs text-muted-foreground">{choices.passkeyHint}</p>
+                )}
               </div>
             </div>
           )}
@@ -293,23 +305,26 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
                 if (e.key === 'Enter') handleRemoveTotp();
               }}
             />
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="removeTotpUseBackupCode"
-                checked={useBackupCode}
-                onCheckedChange={(checked) => {
-                  setUseBackupCode(checked === true);
-                  setRemoveCode('');
-                }}
-                disabled={removing}
-              />
-              <Label
-                htmlFor="removeTotpUseBackupCode"
-                className="cursor-pointer text-xs text-muted-foreground"
-              >
-                use a backup code instead
-              </Label>
-            </div>
+            {/* a backup code only while one is left, as every other screen asks */}
+            {choices.backupCode && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="removeTotpUseBackupCode"
+                  checked={useBackupCode}
+                  onCheckedChange={(checked) => {
+                    setUseBackupCode(checked === true);
+                    setRemoveCode('');
+                  }}
+                  disabled={removing}
+                />
+                <Label
+                  htmlFor="removeTotpUseBackupCode"
+                  className="cursor-pointer text-xs text-muted-foreground"
+                >
+                  use a backup code instead
+                </Label>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">

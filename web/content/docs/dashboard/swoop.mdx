@@ -79,11 +79,13 @@ a viewer that started watch-only stays watch-only. renewing its lease cannot pro
 
 ### the second factor
 
-control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, that covers that machine for 7 days, reconnects included. any of your factors answers it:
+control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, that covers that machine for 7 days, reconnects included. the prompt offers only the factors your account has, and any of them answers it:
 
-- a **passkey** (**use a passkey**), with user verification
-- an **authenticator code**, the 6 digits from your authenticator app
-- a **backup code** (**use a backup code instead**). each one works once
+- a **passkey** (**use a passkey**), with user verification, if you have one
+- an **authenticator code**, the 6 digits from your authenticator app, if you have one
+- a **backup code** (**use a backup code instead**), while you have one left. each one works once
+
+a code the check refuses, or too many tries, is said in the prompt, which stays open for the next try. cancelling it leaves **try again** on the viewer, which asks again for the same machine.
 
 a second factor you passed in the last five minutes, signing in here or in the browser that signs owlette swoop in, counts as the check for the machines you open in those five minutes, so the first machine after signing in does not ask again. approving owlette swoop from a browser that signed in earlier passes no second factor, so the app still asks.
 
@@ -91,7 +93,7 @@ the 7 days run from the check itself, and using the window does not extend it. t
 
 control is also tied to the networks you verified. every second factor you pass, signing in or at the prompt, verifies the network you passed it on for 7 days: your internet provider or mobile carrier, not your exact address. an open window counts only from a verified network, so a new network asks once, and passing the check adds it; a second factor passed at sign-in counts as the check only from the network it was passed on. watching is never affected, and the first time a network is verified you get an email naming it. this is rolling out: for now owlette only records which network each control request came from, and asks nothing new.
 
-in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of a passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so, and an authenticator or backup code in the app does the job.
+in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of your passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so. an authenticator code, or a backup code while you have one left, works in the app instead; with only a passkey, sign out of the app and sign in again with your browser, from a browser that asks for your passkey.
 
 an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, anyone in that state whose site role or swoop mode includes control cannot open the viewer to watch either. anyone else who may watch, an admin held to watch included, is never asked for a second factor: the viewer falls back to watching, which needs none.
 
@@ -233,7 +235,7 @@ the app keeps its own sign-in, apart from your browser's, and you rarely meet it
 
 - opened from the dashboard's monitor icon, it arrives signed in as you, carrying over your browser's second-factor check
 - started any other way, its sign-in page offers **sign in with your browser**: your browser opens owlette, you choose **approve** there, and the app signs in the same way. Google and passkey sign-in are not offered in the app, because neither works inside it; your email and password still do
-- taking control asks for the [second factor](#the-second-factor) as in a browser, with **verify in your browser** in place of a passkey
+- taking control asks for the [second factor](#the-second-factor) as in a browser, with **verify in your browser** in place of your passkey
 
 ### known gaps
 

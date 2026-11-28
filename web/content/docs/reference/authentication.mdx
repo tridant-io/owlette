@@ -60,7 +60,7 @@ clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`
 - **from the dashboard**: `POST /api/auth/app-link`, from a session that has passed two-factor, mints an approved code that lives 60 seconds. it rides the `owlette-swoop://<host>/app-link?code=…&next=/swoop/<site>/<machine>` link, and the app's `/app-link` page exchanges it
 - **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
 
-an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
+an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other whose account holds a passkey can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
 
 ### the network a second factor was passed on
 
@@ -306,14 +306,14 @@ two-factor authentication is mandatory, and **either** kind of factor satisfies 
 `lib/mfaFactors.server.ts` is the **only** writer of the three fields that describe an account's 2FA state:
 
 ```
-users/{userId}.mfaFactors       = { totp: boolean, passkeys: number }
+users/{userId}.mfaFactors       = { totp: boolean, passkeys: number, backupCodes: number }
 users/{userId}.mfaEnrolled      = mfaFactors.totp || mfaFactors.passkeys > 0
 users/{userId}.requiresMfaSetup = !mfaEnrolled
 ```
 
-`mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write.
+`mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write. `backupCodes` counts the unused backup codes, written with every sheet issued, spent or wiped, so a second-factor screen offers a backup code only while one is left; a document with no count yet is offered one, and its next code try or factor change writes it.
 
-an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. the API refuses its session and its Firebase ID token with `403` and `code: "mfa_setup_required"`, except on the routes that set up a factor; its API keys keep working. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors` and `mfaVerified`, with no secrets in it.
+an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. the API refuses its session and its Firebase ID token with `403` and `code: "mfa_setup_required"`, except on the routes that set up a factor; its API keys keep working. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors`, `backupCodeCount` and `mfaVerified`, with no secrets in it.
 
 ### setup flow
 

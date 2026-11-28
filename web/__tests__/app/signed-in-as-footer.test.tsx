@@ -15,7 +15,12 @@ const EMAIL = 'rosco@theexperiential.com';
 
 const mockSignOut = jest.fn();
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { email: EMAIL }, signOut: mockSignOut }),
+  useAuth: () => ({
+    user: { email: EMAIL },
+    loading: false,
+    signOut: mockSignOut,
+    mfaFactors: { totp: true, passkeys: 1 },
+  }),
 }));
 
 const replace = jest.fn();

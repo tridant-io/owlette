@@ -27,6 +27,7 @@ import { verifyBackupCode } from '@/lib/totp';
 import { decrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/mfaAttempts.server';
+import { backupCodeCountUpdate, recountBackupCodes } from '@/lib/mfaFactors.server';
 import {
   getRpId,
   getExpectedOrigins,
@@ -167,9 +168,11 @@ async function consumeBackupCode(
     const codes: string[] = Array.isArray(data.backupCodes) ? data.backupCodes : [];
     const idx = codes.findIndex((hash) => verifyBackupCode(normalizedCode, hash));
     if (idx === -1) {
+      recountBackupCodes(tx, userRef, data, codes);
       return { ok: false, reason: 'no_match' as const };
     }
-    tx.update(userRef, { backupCodes: codes.filter((_, i) => i !== idx) });
+    const remaining = codes.filter((_, i) => i !== idx);
+    tx.update(userRef, { backupCodes: remaining, ...backupCodeCountUpdate(remaining) });
     return { ok: true } as const;
   });
 
