@@ -88,6 +88,43 @@ describe('MetricsDetailPanel', () => {
     expect(screen.getByRole('button', { name: 'RAM' })).toHaveAttribute('aria-pressed', 'false');
   });
 
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it('sweeps the machine switcher and its rows on hover like the app menus, not with a flat fill', async () => {
+    // radix positions the popover with a ResizeObserver that jsdom does not have
+    global.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    const machines = Array.from({ length: 6 }, (_, i) => ({ machineId: `kiosk-0${i + 1}`, online: true }));
+    render(
+      <TooltipProvider>
+        <MetricsDetailPanel
+          machineId="kiosk-01"
+          siteId="site-A"
+          initialMetric="cpu"
+          onClose={jest.fn()}
+          machines={machines}
+          onSwitchMachine={jest.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    const trigger = screen.getByRole('button', { name: 'switch machine' });
+    // a menu's trigger, like the header's: it sweeps, and stays lit while open
+    expect(trigger).toHaveClass('btn-sweep');
+    expect(trigger.className).not.toMatch(/hover:bg-/);
+    await userEvent.click(trigger);
+
+    const rows = machines.map(({ machineId }) => screen.getByRole('button', { name: machineId }));
+    const current = rows.filter((row) => row.getAttribute('aria-current') === 'true');
+    expect(current.map((row) => row.textContent)).toEqual(['kiosk-01']);
+    // the current machine keeps its fill unswept: it is already the brightest row
+    expect(current[0]).not.toHaveClass('btn-sweep');
+    for (const row of rows.filter((r) => !r.hasAttribute('aria-current'))) expect(row).toHaveClass('btn-sweep');
+    for (const row of rows) expect(row.className).not.toMatch(/(?:hover|focus-visible):bg-/);
+  });
+
   it('marks a newly picked range as pressed', async () => {
     renderPanel();
 

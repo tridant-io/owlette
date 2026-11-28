@@ -17,6 +17,7 @@ import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { SearchRow } from '@/components/SearchRow';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Plus, MessageSquare, Trash2, KeyRound, Check, X, Zap, Search, Loader2, Pencil, ChevronRight, ChevronsDownUp, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RotateCw, Clock, Share2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { doc, getDoc } from 'firebase/firestore';
@@ -1425,11 +1426,10 @@ function ConversationPanelShell({
             <DialogPrimitive.Title className="text-sm font-medium text-foreground">
               conversations
             </DialogPrimitive.Title>
-            <DialogPrimitive.Close
-              aria-label="close conversations"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-            >
-              <X className="h-4 w-4" />
+            <DialogPrimitive.Close asChild>
+              <IconButton variant="ghost" size="icon-sm" label="close conversations" tooltip={false} className="text-muted-foreground">
+                <X className="size-4" />
+              </IconButton>
             </DialogPrimitive.Close>
           </div>
           {children}
@@ -1462,6 +1462,12 @@ function ConversationNotFoundState({ onStartNew }: { onStartNew: () => void }) {
   );
 }
 
+// a conversation row's rename and delete chips. above `md` they take the pointer only while
+// shown, on the row's hover or keyboard focus in their strip, as the strip did before it
+// went pointer-transparent: a touch tablet would otherwise tap chips it can't see
+const CONVERSATION_CHIP =
+  'relative size-5 rounded bg-card md:pointer-events-none md:group-hover:pointer-events-auto md:group-focus-within/actions:pointer-events-auto';
+
 function ConversationItem({
   conversation,
   isActive,
@@ -1485,32 +1491,36 @@ function ConversationItem({
         <p className="text-xs text-danger flex-1 truncate">delete?</p>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
+            <IconButton
+              variant="ghost-destructive"
+              label={`confirm delete ${conversation.title}`}
+              tooltip={false}
               onClick={(e) => {
                 e.stopPropagation();
                 onDelete();
                 setConfirming(false);
               }}
-              aria-label={`confirm delete ${conversation.title}`}
-              className="p-1 rounded hover:bg-danger-border/50 transition-colors cursor-pointer"
+              className="size-5.5 rounded"
             >
-              <Check className="h-3.5 w-3.5 text-danger" />
-            </button>
+              <Check className="size-3.5" />
+            </IconButton>
           </TooltipTrigger>
           <TooltipContent>
             <p>confirm delete</p>
           </TooltipContent>
         </Tooltip>
-        <button
+        <IconButton
+          variant="ghost"
+          label={`cancel delete ${conversation.title}`}
+          tooltip={false}
           onClick={(e) => {
             e.stopPropagation();
             setConfirming(false);
           }}
-          aria-label={`cancel delete ${conversation.title}`}
-          className="p-1 rounded hover:bg-accent transition-colors cursor-pointer"
+          className="size-5.5 rounded text-muted-foreground"
         >
-          <X className="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
+          <X className="size-3.5" />
+        </IconButton>
       </div>
     );
   }
@@ -1535,32 +1545,36 @@ function ConversationItem({
         />
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRename(editValue);
-              setEditing(false);
-            }}
-            aria-label={`save rename ${conversation.title}`}
-            className="p-1 rounded hover:bg-accent transition-colors cursor-pointer"
-          >
-              <Check className="h-3.5 w-3.5 text-accent-cyan" />
-            </button>
+            <IconButton
+              variant="ghost"
+              label={`save rename ${conversation.title}`}
+              tooltip={false}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRename(editValue);
+                setEditing(false);
+              }}
+              className="size-5.5 rounded"
+            >
+              <Check className="size-3.5 text-accent-cyan" />
+            </IconButton>
           </TooltipTrigger>
           <TooltipContent>
             <p>save</p>
           </TooltipContent>
         </Tooltip>
-        <button
+        <IconButton
+          variant="ghost"
+          label={`cancel rename ${conversation.title}`}
+          tooltip={false}
           onClick={(e) => {
             e.stopPropagation();
             setEditing(false);
           }}
-          aria-label={`cancel rename ${conversation.title}`}
-          className="p-1 rounded hover:bg-accent transition-colors cursor-pointer"
+          className="size-5.5 rounded text-muted-foreground"
         >
-          <X className="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
+          <X className="size-3.5" />
+        </IconButton>
       </div>
     );
   }
@@ -1568,19 +1582,24 @@ function ConversationItem({
   return (
     <div
       data-active-conversation={isActive ? 'true' : undefined}
-      className={`group relative flex items-center gap-2 px-3 py-2 hover:bg-accent/50 transition-colors ${
-        isActive ? 'bg-accent' : ''
-      }`}
+      className={`group relative flex items-center transition-colors ${isActive ? 'bg-accent' : ''}`}
     >
       {/* The open-conversation control is a real <button> (keyboard- and
           screen-reader-accessible) with the rename/delete buttons as SIBLINGS,
           not nested inside it — nesting interactive controls is a serious axe
-          violation (nested-interactive) and fails the hoot a11y gate. */}
+          violation (nested-interactive) and fails the hoot a11y gate.
+
+          It carries the row's padding and its sweep, so hover and keyboard focus
+          both sweep the row as a menu row does. The rename and delete chips sweep
+          on their own, like the split items of the header's download menu. The
+          open conversation takes no sweep: it is already the brightest row. */}
       <button
         type="button"
         onClick={onClick}
         aria-current={isActive ? 'true' : undefined}
-        className="flex items-center gap-2 flex-1 min-w-0 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan focus-visible:ring-inset"
+        className={`flex items-center gap-2 flex-1 min-w-0 px-3 py-2 text-left cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-accent-cyan focus-visible:ring-inset ${
+          isActive ? '' : 'btn-sweep'
+        }`}
       >
         {conversation.source === 'autonomous' ? (
           <Zap className="h-3.5 w-3.5 text-accent-cyan flex-shrink-0" />
@@ -1627,8 +1646,12 @@ function ConversationItem({
 
           Below `md` they stay in flow and always visible: touch devices never
           fire hover, so an overlay there would cover the title permanently and
-          these controls would be invisible but still tappable. */}
-      <div className="flex items-center gap-1.5 transition-opacity duration-150 md:absolute md:inset-y-0 md:right-0 md:pl-12 md:pr-2 md:opacity-0 md:pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto md:focus-within:opacity-100 md:focus-within:pointer-events-auto">
+          these controls would be invisible but still tappable.
+
+          Above `md` the strip itself never takes the pointer, only its chips do,
+          and only while shown: the pointer over the blur still hovers the row's
+          button beneath, so the row stays swept up to the chips. */}
+      <div className="group/actions flex items-center gap-1.5 pr-3 transition-opacity duration-150 md:absolute md:inset-y-0 md:right-0 md:pl-12 md:pr-2 md:opacity-0 md:pointer-events-none md:group-hover:opacity-100 md:focus-within:opacity-100">
         {/* Blur only — no tint. A backdrop-filter applies evenly across its
             element and stops dead at the edge, so this layer exists to be
             MASKED: the mask fades the blur itself into the title instead of
@@ -1638,29 +1661,33 @@ function ConversationItem({
           aria-hidden
           className="pointer-events-none absolute inset-0 hidden backdrop-blur-[3px] [-webkit-mask-image:linear-gradient(to_left,black_45%,transparent)] [mask-image:linear-gradient(to_left,black_45%,transparent)] md:block"
         />
-        <button
+        <IconButton
+          variant="ghost"
+          label={`rename ${conversation.title}`}
+          tooltip={false}
           onClick={(e) => {
             e.stopPropagation();
             setEditValue(conversation.title);
             setEditing(true);
           }}
-          aria-label={`rename ${conversation.title}`}
           /* Opaque chip: the blur softens the title behind these but doesn't
              dim it, so each glyph needs a solid ground of its own to read against. */
-          className="relative p-1 rounded bg-card hover:bg-accent transition-colors cursor-pointer"
+          className={`${CONVERSATION_CHIP} text-muted-foreground`}
         >
-          <Pencil className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
-        </button>
-        <button
+          <Pencil className="size-3" />
+        </IconButton>
+        <IconButton
+          variant="ghost-destructive"
+          label={`delete ${conversation.title}`}
+          tooltip={false}
           onClick={(e) => {
             e.stopPropagation();
             setConfirming(true);
           }}
-          aria-label={`delete ${conversation.title}`}
-          className="relative p-1 rounded bg-card hover:bg-danger-border/60 transition-colors cursor-pointer"
+          className={CONVERSATION_CHIP}
         >
-          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-danger transition-colors" />
-        </button>
+          <Trash2 className="size-3" />
+        </IconButton>
       </div>
     </div>
   );

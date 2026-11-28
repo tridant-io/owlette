@@ -479,12 +479,16 @@ export function ScreenshotDialog({
                           className={`group flex items-center transition-colors ${
                             isSelected || isLatest
                               ? 'bg-primary/10 border-l-2 border-primary'
-                              : 'border-l-2 border-transparent hover:bg-muted/50'
+                              : 'border-l-2 border-transparent'
                           }`}
                         >
+                          {/* the row's own button sweeps, so keyboard focus does too, and the
+                              delete beside it sweeps on its own. swept, its text lifts: muted
+                              misses aa on the sweep in dark. the shown capture keeps its cyan
+                              tint unswept, as the header drawer's current page does */}
                           <button
                             className={`flex-1 text-left px-3 py-2 text-xs min-w-0 ${
-                              isSelected || isLatest ? 'text-primary' : 'text-muted-foreground'
+                              isSelected || isLatest ? 'text-primary' : 'btn-sweep text-muted-foreground hover:text-foreground focus-visible:text-foreground'
                             }`}
                             aria-current={isSelected || isLatest || undefined}
                             onClick={() => setSelectedHistorical(isLatest ? null : hs)}

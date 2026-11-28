@@ -124,6 +124,22 @@ describe('MultiSelect — search', () => {
   });
 });
 
+// the sweep itself is globals.css, which jsdom never loads: this pins the classes
+describe('MultiSelect — rows', () => {
+  it('sweep on hover like the app menus, not with a flat fill', async () => {
+    const user = userEvent.setup();
+    const { trigger } = renderMultiSelect(['agent_started']);
+    await open(user, trigger);
+
+    const rows = screen.getAllByRole('checkbox').map((box) => box.closest('label')!);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row).toHaveClass('btn-sweep');
+      expect(row.className).not.toMatch(/hover:bg-/);
+    }
+  });
+});
+
 describe('MultiSelect — picking', () => {
   it('adds an option', async () => {
     const user = userEvent.setup();

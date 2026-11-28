@@ -53,4 +53,20 @@ describe('TimezoneSelect', () => {
       expect(option).not.toHaveClass('outline-none');
     }
   });
+
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it('sweeps its options on hover and keyboard focus like the app menus, not with a flat fill', async () => {
+    const user = await openPicker();
+    await user.type(screen.getByRole('textbox', { name: 'search timezones' }), 'Europe');
+
+    const options = screen.getAllByRole('button').filter((button) => button.getAttribute('aria-label') !== 'clear search');
+    const chosen = options.filter((option) => option.getAttribute('aria-current') === 'true');
+    expect(chosen.map((option) => option.textContent)).toEqual([expect.stringMatching(/^Berlin/)]);
+    // the chosen zone keeps its fill unswept: it is already the brightest row
+    expect(chosen[0]).not.toHaveClass('btn-sweep');
+    const rest = options.filter((option) => !option.hasAttribute('aria-current'));
+    expect(rest.length).toBeGreaterThan(0);
+    for (const option of rest) expect(option).toHaveClass('btn-sweep');
+    for (const option of options) expect(option.className).not.toMatch(/(?:hover|focus-visible):bg-/);
+  });
 });

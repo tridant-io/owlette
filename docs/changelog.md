@@ -48,6 +48,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 - signing in no longer shows a "2FA verification required" toast.
 - clearing a machine's stored display layout turns auto-restore off, and storing a new one leaves it off until you turn it on. the **auto-restore** switch used to read on after a clear, though nothing could be restored. [more](https://owlette.app/docs/dashboard/displays#storing-a-layout)
 - two-factor prompts offer only your account's own factors, and a wrong code no longer closes swoop's check.
+- the hoot sidebar, account settings, the docs sidebar, the phone menu, the screenshot history and the site, machine, timezone and filter pickers sweep on rollover like the rest of the dashboard.
 
 ## [4.2.7] - 2026-11-25
 

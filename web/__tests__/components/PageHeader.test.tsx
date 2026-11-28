@@ -470,6 +470,24 @@ describe('PageHeader mobile nav drawer', () => {
     expect(screen.queryByRole('dialog', { name: 'menu' })).toBeNull();
     expect(trigger).toHaveFocus();
   });
+
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it('sweeps its rows and close button on hover like the menus they stand in for, not with a flat fill', async () => {
+    const { user, drawer } = await openDrawer();
+    await user.click(screen.getByTestId('drawer-site-toggle'));
+
+    const controls = within(drawer).getAllByRole('button');
+    const current = controls.filter((control) => control.getAttribute('aria-current') === 'page');
+    expect(current.map((control) => control.textContent)).toEqual([expect.stringMatching(/^dashboard/)]);
+    // the current page keeps its cyan tint unswept: cyan on that tint under the sweep misses aa
+    expect(current[0]).not.toHaveClass('btn-sweep');
+    const rest = controls.filter((control) => control.getAttribute('aria-current') !== 'page');
+    for (const name of ['close menu', 'site settings', 'manage sites', 'gallery north', 'gallery south']) {
+      expect(rest.map((control) => control.textContent || control.getAttribute('aria-label'))).toContain(name);
+    }
+    for (const control of rest) expect(control).toHaveClass('btn-sweep');
+    for (const control of drawer.querySelectorAll('a, button')) expect(control.className).not.toMatch(/hover:bg-/);
+  });
 });
 
 describe('PageHeader below md', () => {

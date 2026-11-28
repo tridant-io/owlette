@@ -8,7 +8,7 @@
  * error box was neither announced nor tied to the field it was about.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
@@ -75,6 +75,26 @@ describe('AccountSettingsDialog', () => {
     }
     for (const tab of screen.getAllByRole('button', { name: /^profile$/ })) {
       expect(tab).not.toHaveAttribute('aria-current');
+    }
+  });
+
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it('sweeps its section rows on hover like the rest of the app, not with a flat fill', () => {
+    renderDialog();
+    const navs = screen.getAllByRole('navigation', { name: 'settings sections' });
+    // the phone tab strip and the desktop sidebar
+    expect(navs).toHaveLength(2);
+    for (const nav of navs) {
+      const rows = within(nav).getAllByRole('button');
+      const current = rows.filter((row) => row.getAttribute('aria-current') === 'true');
+      expect(current.map((row) => row.textContent)).toEqual(['profile']);
+      // the open section keeps its fill unswept, as the header drawer's current page does
+      expect(current[0]).not.toHaveClass('btn-sweep');
+      for (const row of rows.filter((r) => !r.hasAttribute('aria-current'))) expect(row).toHaveClass('btn-sweep');
+      // the danger zone keeps its red, and takes the brighter step on the sweep as ghost-destructive does
+      const danger = within(nav).getByRole('button', { name: 'danger zone' });
+      expect(danger).toHaveClass('text-danger', 'hover:text-danger-bright', 'focus-visible:text-danger-bright');
+      for (const row of rows) expect(row.className).not.toMatch(/hover:bg-/);
     }
   });
 
