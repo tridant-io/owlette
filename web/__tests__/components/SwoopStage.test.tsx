@@ -460,7 +460,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       settingsHref: '/admin/swoop',
       upgradeHref: '/settings/plan',
     });
-    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of core.');
     expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
     expect(screen.queryByText(/turn it on/)).toBeNull();
     expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
@@ -473,7 +473,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       refusal: 'plan_required',
       settingsHref: '/admin/swoop',
     });
-    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of core. ask the site owner to upgrade.');
     expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();
   });
 

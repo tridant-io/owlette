@@ -28,10 +28,11 @@ const FEATURES: Record<BillingTier, readonly string[]> = {
   core: [
     'everything in owlette free',
     'remote control: commands, process restart and kill, display restore, screenshots',
+    'swoop, the remote desktop',
     'alert rules and alert emails',
     'unlimited machines on this site',
   ],
-  pro: ['everything in core', 'deployments and roost', 'swoop, hoot and talons', 'webhooks and API keys'],
+  pro: ['everything in core', 'deployments and roost', 'hoot and talons', 'webhooks and API keys'],
 };
 
 interface PlanTierPickerProps {
