@@ -7,7 +7,7 @@ import { SearchRow } from '@/components/SearchRow';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
-import { CHECKBOX_ROW } from '@/components/ui/multi-select';
+import { checkboxRow } from '@/components/ui/multi-select';
 import { cn } from '@/lib/utils';
 
 /** past this many sites the list has a filter */
@@ -24,9 +24,10 @@ type Surface = 'menu' | 'drawer' | 'popover';
 
 // the filter is a SearchRow, whose rule runs edge to edge, so `filter` holds only what a surface
 // adds to it: the menu's row takes back the p-1 its menu pads with, and the drawer's lines up
-// with its px-4 rows. a menu marks the focused item, which the pointer focuses too; the
-// lists mark the hovered one. over that accent fill in dark the cyan marks and the muted id
-// miss aa, so the marked row takes the stronger tone, as in the add-member search
+// with its px-4 rows. every row sweeps as a menu row does: a menu's on the item radix
+// focuses, which the pointer focuses too; the lists' on hover and keyboard focus. over the
+// sweep in dark the cyan marks and the muted id miss aa, so the swept row takes the stronger
+// tone, as in the add-member search
 const SURFACE: Record<Surface, { filter: string; list?: string; item: string; id: string; empty: string }> = {
   menu: {
     filter: '-mx-1 -mt-1 mb-1',
@@ -36,15 +37,15 @@ const SURFACE: Record<Surface, { filter: string; list?: string; item: string; id
   },
   drawer: {
     filter: 'px-4',
-    item: 'group flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-accent dark:hover:[&_mark]:text-accent-foreground',
-    id: 'group-hover:text-accent-foreground/80',
+    item: 'btn-sweep group flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground dark:hover:[&_mark]:text-accent-foreground dark:focus-visible:[&_mark]:text-accent-foreground',
+    id: 'group-hover:text-accent-foreground/80 group-focus-visible:text-accent-foreground/80',
     empty: 'px-4 py-2.5',
   },
   popover: {
     filter: '',
     list: 'max-h-72 overflow-y-auto p-1',
-    item: 'group flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent dark:hover:[&_mark]:text-accent-foreground',
-    id: 'group-hover:text-accent-foreground/80',
+    item: 'btn-sweep group flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground dark:hover:[&_mark]:text-accent-foreground dark:focus-visible:[&_mark]:text-accent-foreground',
+    id: 'group-hover:text-accent-foreground/80 group-focus-visible:text-accent-foreground/80',
     empty: 'px-2 py-1.5',
   },
 };
@@ -214,11 +215,10 @@ export function SiteSwitcherList({
                 <label
                   key={site.id}
                   className={cn(
-                    CHECKBOX_ROW,
-                    // over its hover fill the marks take the stronger tone, for the reason given above SURFACE
-                    'dark:hover:[&_mark]:text-accent-foreground',
-                    // a blocked row takes no fill, so its marks keep their resting tone
-                    blocked && 'cursor-not-allowed opacity-50 hover:bg-transparent dark:hover:[&_mark]:text-accent-cyan',
+                    checkboxRow(!blocked),
+                    // over its sweep the marks take the stronger tone, for the reason given above
+                    // SURFACE. a blocked row takes no sweep, so its marks keep their resting tone
+                    blocked ? 'cursor-not-allowed opacity-50' : 'dark:hover:[&_mark]:text-accent-foreground',
                   )}
                 >
                   <Checkbox

@@ -521,14 +521,15 @@ export function PageHeader({
               <OwletteEyeIcon size={24} className="translate-y-[1px]" />
               <span className="text-base font-semibold text-foreground translate-y-[1px]">owlette</span>
             </div>
-            <button
-              type="button"
-              aria-label="close menu"
+            <IconButton
+              variant="ghost"
+              size="icon-sm"
+              label="close menu"
+              tooltip={false}
               onClick={() => setNavDrawerOpen(false)}
-              className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-accent transition-colors cursor-pointer"
             >
-              <X className="h-4 w-4 text-muted-foreground" />
-            </button>
+              <X className="size-4 text-muted-foreground" />
+            </IconButton>
           </div>
 
           {selectSite && (
@@ -539,7 +540,7 @@ export function PageHeader({
                   <button
                     type="button"
                     data-testid="drawer-site-toggle"
-                    className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
+                    className="btn-sweep flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm cursor-pointer"
                   >
                     <span className="text-xs text-muted-foreground">site</span>
                     <span className="min-w-0 flex-1 truncate text-foreground">{currentSiteName}</span>
@@ -572,7 +573,7 @@ export function PageHeader({
                     setNavDrawerOpen(false);
                     onSelect();
                   }}
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
+                  className="btn-sweep flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:text-foreground focus-visible:text-foreground cursor-pointer"
                 >
                   <EntryIcon className="h-4 w-4 flex-shrink-0" />
                   {label}
@@ -595,14 +596,20 @@ export function PageHeader({
                     router.push(item.href);
                     setNavDrawerOpen(false);
                   }}
+                  // a row sweeps like the page menu's. the current page doesn't: under the
+                  // sweep its cyan label drops below aa on the light tint
                   className={`flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors cursor-pointer ${
-                    isCurrent ? 'bg-accent-cyan/10 text-accent-cyan' : 'text-foreground hover:bg-accent'
+                    isCurrent ? 'bg-accent-cyan/10 text-accent-cyan' : 'btn-sweep group text-foreground'
                   }`}
                 >
                   <ItemIcon className={`h-4 w-4 mt-0.5 flex-shrink-0 ${isCurrent ? 'text-accent-cyan' : 'text-muted-foreground'}`} />
                   <span className="flex flex-col gap-0.5">
                     <span className="text-sm font-medium">{item.name}</span>
-                    <span className="text-xs text-muted-foreground font-normal">{item.description}</span>
+                    {/* muted misses aa on the swept row in dark, so a swept row's line takes the
+                        stronger tone, as the page menu's does */}
+                    <span className="text-xs text-muted-foreground font-normal group-hover:text-accent-foreground/80 group-focus-visible:text-accent-foreground/80">
+                      {item.description}
+                    </span>
                   </span>
                 </button>
               );

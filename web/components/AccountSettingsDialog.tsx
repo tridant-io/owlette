@@ -39,6 +39,16 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ElementType }[
   { id: 'danger', label: 'danger zone', icon: Trash2 },
 ];
 
+// both section navs' row states. a row sweeps on hover and keyboard focus like a button;
+// the open section keeps its fill unswept, as the header drawer's current page does. the
+// danger zone keeps its red and takes the bright step on the sweep, as ghost-destructive does
+const sectionRowTone = (id: SettingsSection, open: boolean) =>
+  open
+    ? 'bg-accent text-accent-foreground'
+    : id === 'danger'
+      ? 'btn-sweep text-danger hover:text-danger-bright focus-visible:text-danger-bright'
+      : 'btn-sweep text-muted-foreground hover:text-foreground focus-visible:text-foreground';
+
 interface AccountSettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -356,13 +366,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                 type="button"
                 aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors cursor-pointer flex-shrink-0 ${
-                  activeSection === id
-                    ? 'bg-accent text-accent-foreground'
-                    : id === 'danger'
-                      ? 'text-danger hover:bg-danger-surface'
-                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                }`}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors cursor-pointer flex-shrink-0 ${sectionRowTone(id, activeSection === id)}`}
               >
                 <Icon className="h-3.5 w-3.5 flex-shrink-0" />
                 {label}
@@ -381,13 +385,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                 type="button"
                 aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors cursor-pointer ${
-                  activeSection === id
-                    ? 'bg-accent text-accent-foreground'
-                    : id === 'danger'
-                      ? 'text-danger hover:bg-danger-surface'
-                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
-                }`}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors cursor-pointer ${sectionRowTone(id, activeSection === id)}`}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
                 {label}

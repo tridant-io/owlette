@@ -17,7 +17,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SITE_FILTER_THRESHOLD, SiteSwitcherList, filterClaimsEscape } from '@/components/SiteSwitcherList';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { CHECKBOX_ROW } from '@/components/ui/multi-select';
+import { checkboxRow } from '@/components/ui/multi-select';
 
 const NAMED = [
   { id: 'elm-gate', name: 'LIVE NATION' },
@@ -228,6 +228,26 @@ describe('SiteSwitcherList', () => {
   });
 });
 
+// the sweep itself is globals.css, which jsdom never loads: this pins the classes. the menu
+// surface's rows are radix items, which take .menu-sweep from dropdown-menu.tsx
+describe('SiteSwitcherList rows sweep', () => {
+  it.each(['drawer', 'popover'] as const)(
+    'a %s row sweeps on hover and keyboard focus, not with a flat fill, and its marks and id take the stronger tone on either',
+    async (surface) => {
+      const { user } = renderList({ surface });
+      await user.type(filterBox(), 'elm-gate');
+
+      const [row] = siteRows();
+      expect(row).toHaveClass('btn-sweep', 'dark:hover:[&_mark]:text-accent-foreground', 'dark:focus-visible:[&_mark]:text-accent-foreground');
+      expect(row.className).not.toMatch(/hover:bg-/);
+      expect(within(row).getByText('elm-gate', { selector: 'mark' }).closest('span.truncate')).toHaveClass(
+        'group-hover:text-accent-foreground/80',
+        'group-focus-visible:text-accent-foreground/80',
+      );
+    },
+  );
+});
+
 // the header passes each site's machine count once it has read them
 describe('SiteSwitcherList with counts', () => {
   const row = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
@@ -280,8 +300,12 @@ describe('SiteSwitcherList with checkedIds', () => {
       'Lobby Wall',
     ]);
     for (const box of boxes) {
-      // and by night a match over its hover fill takes the tone composited-contrast holds to aa
-      expect(box.closest('label')).toHaveClass(CHECKBOX_ROW, 'dark:hover:[&_mark]:text-accent-foreground');
+      // the multi-select's row, which sweeps on hover; by night a match over the sweep
+      // takes the tone composited-contrast holds to aa
+      const row = box.closest('label')!;
+      expect(row).toHaveClass(checkboxRow(), 'dark:hover:[&_mark]:text-accent-foreground');
+      expect(row).toHaveClass('btn-sweep');
+      expect(row.className).not.toMatch(/hover:bg-/);
       expect(box).not.toHaveAttribute('aria-current');
     }
   });
@@ -315,8 +339,12 @@ describe('SiteSwitcherList with checkedIds', () => {
 
     const kiosk = screen.getByRole('checkbox', { name: 'Kiosk 2' });
     expect(kiosk).toHaveAttribute('aria-disabled', 'true');
-    // no hover fill on a blocked row, so its marks keep their resting tone
-    expect(kiosk.closest('label')).toHaveClass('opacity-50', 'hover:bg-transparent', 'dark:hover:[&_mark]:text-accent-cyan');
+    // no sweep on a blocked row, so its marks keep their resting tone. it has to be left off:
+    // .btn-sweep is unlayered, so no utility on the row could switch it off
+    const blocked = kiosk.closest('label')!;
+    expect(blocked).toHaveClass('opacity-50', 'cursor-not-allowed');
+    expect(blocked).not.toHaveClass('btn-sweep');
+    expect(blocked.className).not.toMatch(/hover:bg-|hover:\[&_mark\]/);
     await user.click(kiosk);
     expect(onPick).not.toHaveBeenCalled();
 

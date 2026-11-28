@@ -681,6 +681,74 @@ describe('HootChatView labels', () => {
   });
 });
 
+// the sweep itself is globals.css, which jsdom never loads: these pin the classes
+describe('HootChatView conversation rows sweep', () => {
+  // every element, not only the controls: a fill on a row's wrapper would show through its button
+  const noFlatFill = (surface: HTMLElement) => {
+    for (const el of surface.querySelectorAll('[class]')) expect(el.getAttribute('class')).not.toMatch(/hover:bg-/);
+  };
+
+  beforeEach(() => {
+    mockConversations = [
+      conversation({ id: CHAT_ID, title: 'the open one' }),
+      conversation({ id: 'convo-2', title: 'deployment triage' }),
+    ];
+  });
+
+  it('sweeps a row and its rename and delete chips on hover, and leaves the open conversation unswept', () => {
+    renderView();
+    const panel = screen.getByTestId('hoot-conversation-panel');
+
+    // the sweep sits on the row's own button, so keyboard focus sweeps it too
+    expect(screen.getByRole('button', { name: /^deployment triage/ })).toHaveClass('btn-sweep');
+    // the open conversation is already the brightest row
+    expect(screen.getByRole('button', { name: /^the open one/ })).not.toHaveClass('btn-sweep');
+    for (const name of ['rename deployment triage', 'delete deployment triage']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('btn-sweep');
+    }
+    noFlatFill(panel);
+  });
+
+  it('sweeps the confirm and cancel icons of a delete and a rename', async () => {
+    const { user } = renderView();
+    const panel = screen.getByTestId('hoot-conversation-panel');
+
+    await user.click(screen.getByRole('button', { name: 'delete deployment triage' }));
+    for (const name of ['confirm delete deployment triage', 'cancel delete deployment triage']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('btn-sweep');
+    }
+    noFlatFill(panel);
+    await user.click(screen.getByRole('button', { name: 'cancel delete deployment triage' }));
+
+    await user.click(screen.getByRole('button', { name: 'rename deployment triage' }));
+    for (const name of ['save rename deployment triage', 'cancel rename deployment triage']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('btn-sweep');
+    }
+    noFlatFill(panel);
+  });
+
+  it("sweeps the phone sheet's close button", async () => {
+    const desktop = window.matchMedia;
+    window.matchMedia = jest.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+    }));
+    try {
+      const { user } = renderView();
+      await user.click(screen.getByRole('button', { name: 'conversations' }));
+      const sheet = await screen.findByRole('dialog', { name: 'conversations' });
+
+      expect(screen.getByRole('button', { name: 'close conversations' })).toHaveClass('btn-sweep');
+      expect(screen.getByRole('button', { name: /^deployment triage/ })).toHaveClass('btn-sweep');
+      noFlatFill(sheet);
+    } finally {
+      window.matchMedia = desktop;
+    }
+  });
+});
+
 const ALL_FLAGS: SitePlanResponse['flags'] = {
   control: true,
   deployments: true,

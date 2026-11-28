@@ -97,7 +97,8 @@ function MachineSwitcher({
         <button
           type="button"
           aria-label="switch machine"
-          className="flex min-w-0 items-center gap-2 text-xl font-semibold text-foreground -ml-1.5 px-1.5 py-0.5 rounded-md cursor-pointer hover:bg-accent/40 transition-colors"
+          // the header's menu triggers' sweep, held while the list is open (aria-expanded)
+          className="btn-sweep flex min-w-0 items-center gap-2 text-xl font-semibold text-foreground -ml-1.5 px-1.5 py-0.5 rounded-md cursor-pointer"
         >
           <Monitor className="h-5 w-5 shrink-0 text-muted-foreground" />
           <span className="truncate">{label}</span>
@@ -130,11 +131,13 @@ function MachineSwitcher({
                     setOpen(false);
                     if (!isCurrent) onSelect(m.machineId);
                   }}
+                  // a row sweeps on hover and keyboard focus like a menu row; the current
+                  // machine keeps its fill unswept, since it is already the brightest row
                   className={cn(
-                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors focus-visible:outline-none focus-visible:bg-accent focus-visible:text-foreground',
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-sm text-left cursor-pointer transition-colors focus-visible:outline-none',
                     isCurrent
                       ? 'bg-accent text-foreground'
-                      : 'text-muted-foreground hover:bg-accent/40 hover:text-foreground',
+                      : 'btn-sweep text-muted-foreground hover:text-foreground focus-visible:text-foreground',
                   )}
                 >
                   <span

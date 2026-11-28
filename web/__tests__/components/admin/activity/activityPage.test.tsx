@@ -12,7 +12,7 @@ import React from 'react';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { CHECKBOX_ROW } from '@/components/ui/multi-select';
+import { checkboxRow } from '@/components/ui/multi-select';
 import ActivityPage from '@/app/admin/activity/page';
 import type { ActivityRow } from '@/lib/activity/types';
 
@@ -561,7 +561,7 @@ describe('several users and sites', () => {
     for (const box of within(list).getAllByRole('checkbox')) {
       const row = box.closest('label')!;
       expect(row.firstElementChild).toBe(box);
-      expect(row).toHaveClass(CHECKBOX_ROW);
+      expect(row).toHaveClass(checkboxRow());
       expect(box).toHaveAttribute('data-state', box.getAttribute('aria-checked') === 'true' ? 'checked' : 'unchecked');
       // no trailing check: any icon in the row is the square's own
       for (const icon of row.querySelectorAll('svg')) expect(box).toContainElement(icon as unknown as HTMLElement);

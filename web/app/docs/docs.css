@@ -47,6 +47,33 @@
   --color-fd-ring: var(--accent-cyan);
 }
 
+/* the sidebar's page links and folder toggles sweep on hover and keyboard focus like
+   the dashboard's rows (.btn-sweep in app/globals.css: the same --btn-hover scrim and
+   timing), in place of fumadocs' instant hover:bg-fd-accent/50 fill. unlayered, so it
+   outranks fumadocs' utilities, hover:transition-none among them. the open page keeps
+   its cyan tint unswept, as the header drawer's current page does */
+:is(#nd-sidebar, #nd-sidebar-mobile) [data-radix-scroll-area-viewport] :is(a[data-active="false"], button[aria-expanded]) {
+  background-color: transparent;
+  background-image: linear-gradient(var(--btn-hover), var(--btn-hover));
+  background-repeat: no-repeat;
+  background-size: 0% 100%;
+  background-position: 100% 0; /* anchored right: the exit sweep continues L→R */
+  transition:
+    background-size 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:is(#nd-sidebar, #nd-sidebar-mobile) [data-radix-scroll-area-viewport] :is(a[data-active="false"], button[aria-expanded]):is(:hover, :focus-visible) {
+  background-position: 0 0; /* anchored left: the enter sweep runs L→R */
+  background-size: 100% 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(#nd-sidebar, #nd-sidebar-mobile) [data-radix-scroll-area-viewport] :is(a[data-active="false"], button[aria-expanded]) {
+    transition: none;
+  }
+}
+
 #nd-subnav {
   background: color-mix(in oklab, var(--background) 86%, var(--card));
   border-color: var(--border);

@@ -173,4 +173,25 @@ describe('ScreenshotDialog', () => {
 
     expect(screen.getByRole('img', { name: 'screenshot of kiosk-01' })).toHaveAttribute('src', 'data:image/png;base64,b2xk');
   });
+
+  // the sweep itself is globals.css, which jsdom never loads: this pins the classes
+  it('sweeps a history row on hover like the app menus, not with a flat fill, and leaves the shown one unswept', () => {
+    mockHistory = [
+      { id: 'shot-1', url: IMAGE_URL, timestamp: CAPTURED_MS, sizeKB: 120 },
+      { id: 'shot-0', url: 'data:image/png;base64,b2xk', timestamp: CAPTURED_MS - 60_000, sizeKB: 77 },
+    ];
+    renderScreenshotDialog();
+
+    // the caption above the picture carries a size too
+    const shown = screen.getByText(/· 120KB/).closest('button')!;
+    const other = screen.getByText(/· 77KB/).closest('button')!;
+    expect(shown).toHaveAttribute('aria-current', 'true');
+    // the shown capture keeps its cyan tint unswept, as the header drawer's current page does
+    expect(shown).not.toHaveClass('btn-sweep');
+    // on the row's own button, so keyboard focus sweeps it too
+    expect(other).toHaveClass('btn-sweep');
+    for (const row of [shown.parentElement!, other.parentElement!]) {
+      for (const el of [row, ...row.querySelectorAll('button')]) expect(el.className).not.toMatch(/hover:bg-/);
+    }
+  });
 });

@@ -173,17 +173,23 @@ function TimezoneItem({ tz, selected, onSelect }: { tz: TimezoneOption; selected
       onClick={() => onSelect(tz.value)}
       // the check icon is aria-hidden, so the chosen zone needs its own state
       aria-current={selected ? 'true' : undefined}
+      // a zone sweeps on hover and keyboard focus like a select's option; the chosen one keeps
+      // its fill unswept, since it is already the brightest row
       className={cn(
         'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer',
-        'text-foreground hover:bg-muted focus-visible:outline-none focus-visible:bg-muted',
-        selected && 'bg-muted'
+        'text-foreground focus-visible:outline-none',
+        selected ? 'bg-muted' : 'btn-sweep group'
       )}
     >
       <span className="flex items-center gap-2 truncate">
         {selected && <Check className="size-3.5 shrink-0" />}
         <span className={cn(!selected && 'ml-[22px]')}>{city}</span>
       </span>
-      <span className="ml-2 shrink-0 text-xs text-muted-foreground">{tz.offsetLabel}</span>
+      {/* muted misses aa on the sweep in dark, so a swept zone's offset takes the stronger
+          tone, as the page menu's descriptions do */}
+      <span className="ml-2 shrink-0 text-xs text-muted-foreground group-hover:text-accent-foreground/80 group-focus-visible:text-accent-foreground/80">
+        {tz.offsetLabel}
+      </span>
     </button>
   );
 }
