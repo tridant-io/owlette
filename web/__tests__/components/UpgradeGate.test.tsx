@@ -57,7 +57,7 @@ const CORE: SitePlanResponse = {
   tier: 'core',
   standing: 'active',
   inGoodStanding: true,
-  flags: { ...NO_FLAGS, control: true },
+  flags: { ...NO_FLAGS, control: true, swoop: true },
 };
 const TRIAL: SitePlanResponse = { ...CORE, tier: 'trial', standing: 'trialing', flags: ALL_FLAGS };
 const PRO: SitePlanResponse = { ...CORE, tier: 'pro', flags: ALL_FLAGS };
@@ -164,7 +164,6 @@ describe('UpgradeGate', () => {
 
   it.each([
     ['deployments', 'deployments'],
-    ['swoop', 'swoop'],
     ['hoot', 'hoot'],
   ] as const)('gates %s on core, naming pro as the upgrade', (flag, name) => {
     mockPlans = { [SITE]: CORE };
@@ -175,12 +174,22 @@ describe('UpgradeGate', () => {
     expect(screen.getByTestId('upgrade-gate')).toHaveTextContent('upgrade to pro to use it.');
   });
 
-  it('names core as the upgrade for remote control', () => {
+  it.each([
+    ['control', 'remote control'],
+    ['swoop', 'swoop'],
+  ] as const)('names core as the upgrade for %s', (flag, name) => {
     mockPlans = { [SITE]: FREE };
-    renderGate({ flag: 'control' });
+    renderGate({ flag });
 
-    expect(screen.getByTestId('upgrade-gate')).toHaveTextContent("this site's plan doesn't include remote control");
+    expect(screen.getByTestId('upgrade-gate')).toHaveTextContent(`this site's plan doesn't include ${name}`);
     expect(screen.getByTestId('upgrade-gate')).toHaveTextContent('upgrade to core to use it.');
+  });
+
+  it('leaves swoop open on core', () => {
+    mockPlans = { [SITE]: CORE };
+    renderGate({ flag: 'swoop' });
+
+    expect(screen.getByRole('button', { name: 'create roost' })).toBeInTheDocument();
   });
 
   it('renders the inline note in place of a create control, with the link for the owner', () => {

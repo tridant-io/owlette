@@ -73,7 +73,7 @@ a monitor on only one side is a monitor added or removed. the card's count leave
 
 restore takes three steps, the first two once per machine:
 
-1. **test** runs a read-only self-test on the machine: it reads the display configuration and validates it without applying anything, then reports "Self-test ok — N monitors…" or the error. it is shown until restore is enabled.
+1. **test** runs a read-only self-test on the machine: it reads the display configuration and validates it without applying anything, then reports "self-test ok — N monitors…" or the error. it is shown until restore is enabled.
 2. **enable restore** asks "enable restore on `machine`?" and lets admins restore on that machine from then on. the panel has no way to turn it off again.
 3. **restore**, on the live or stored tab, asks "restore this layout to `machine`?" and sends the stored layout. the monitors rearrange within a few seconds. it needs a stored layout and an agent that supports it; the tooltip says "agent too old" otherwise.
 

@@ -138,7 +138,7 @@ describe("loadSwoopSettings and the site's plan", () => {
     TRIDANT_LICENSE_KEY: 'test-license-key',
   };
 
-  /** a core site has control but not swoop; pro has both. */
+  /** control stays granted so only the swoop flag can decide these tests. */
   function siteSwoop(value: '0' | '1') {
     mockGetSiteEntitlements.mockResolvedValue({
       ok: true,
@@ -160,7 +160,7 @@ describe("loadSwoopSettings and the site's plan", () => {
     for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
   });
 
-  it('reports swoop off for a core site, and keeps the stored switch', async () => {
+  it("reports swoop off for a site whose plan leaves swoop out, and keeps the stored switch", async () => {
     siteSwoop('0');
 
     expect(await loadSwoopSettings(SITE)).toEqual({
@@ -174,7 +174,7 @@ describe("loadSwoopSettings and the site's plan", () => {
     expect(mockDocs.get(SETTINGS_PATH)).toMatchObject({ enabled: true });
   });
 
-  it('leaves swoop on for a pro site', async () => {
+  it('leaves swoop on for a core site', async () => {
     siteSwoop('1');
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
   });

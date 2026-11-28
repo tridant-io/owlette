@@ -41,7 +41,6 @@ const SETTLE_MS = DAY_MS;
 
 const PRO_ONLY_FLAGS = [
   'owlette.deployments',
-  'owlette.swoop',
   'owlette.hoot',
   'owlette.roost',
   'owlette.talons',
@@ -63,6 +62,7 @@ function entFor(tier: BillingTier): Record<string, boolean | number | string> {
     'owlette.machines': 'unlimited',
     'owlette.sites': pro ? 'unlimited' : 1,
     'owlette.control': true,
+    'owlette.swoop': true,
     ...Object.fromEntries(PRO_ONLY_FLAGS.map((flag) => [flag, pro])),
   };
 }

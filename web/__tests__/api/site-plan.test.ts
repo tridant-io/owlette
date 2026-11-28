@@ -264,7 +264,7 @@ describe('what the plan says', () => {
 
     expect(body.billing).toEqual({ tier: 'core', founders: false, endsAt: ENDS_AT });
     expect(body.tier).toBe('core');
-    expect(body.flags).toEqual(flags(['control']));
+    expect(body.flags).toEqual(flags(['control', 'swoop']));
   });
 
   it('describes a site under its owner\'s trial: pro flags, no billing, no period', async () => {

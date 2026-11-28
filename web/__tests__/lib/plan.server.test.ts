@@ -120,6 +120,9 @@ const FLAGS = [
   'owlette.api_keys',
 ] as const;
 
+/** the flags core carries; pro adds the rest. */
+const CORE_FLAGS: readonly string[] = ['owlette.control', 'owlette.swoop'];
+
 const enforced = (ent: Record<string, string>, standing = 'active', inGoodStanding = true): Plan => ({
   enforced: true,
   resolved: true,
@@ -301,13 +304,13 @@ describe('resolveSitePlan', () => {
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(true);
   });
 
-  it('reads a core site: in good standing, control only, with its billing period', async () => {
+  it('reads a core site: in good standing, control and swoop only, with its billing period', async () => {
     mockAnswers.s1 = CORE;
     const plan = await resolveSitePlan('s1');
 
     expect(plan).toMatchObject({ enforced: true, inGoodStanding: true, billing: CORE.billing });
     expect(planTier(plan)).toBe('core');
-    for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(flag === 'owlette.control');
+    for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(CORE_FLAGS.includes(flag));
   });
 
   it('reads a pro site: in good standing, every flag, with its billing period and organization', async () => {
@@ -354,9 +357,9 @@ describe('planLimit and entitled', () => {
     expect(planLimit(plan, 'owlette.machines')).toBe(1);
   });
 
-  it('read core: control and unlimited machines, none of pro', () => {
+  it('read core: control, swoop and unlimited machines, none of pro', () => {
     const plan = enforced(CORE.ent);
-    for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(flag === 'owlette.control');
+    for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(CORE_FLAGS.includes(flag));
     expect(planLimit(plan, 'owlette.machines')).toBe(Infinity);
   });
 
@@ -482,10 +485,11 @@ describe('requireEntitlement', () => {
     for (const flag of FLAGS) expect(await requireEntitlement('s1', flag)).toBeNull();
   });
 
-  it('lets a core site through on control only, refusing deployments, swoop and hoot by name', async () => {
+  it('lets a core site through on control and swoop, refusing deployments and hoot by name', async () => {
     mockAnswers.s1 = CORE;
     expect(await requireEntitlement('s1', 'owlette.control')).toBeNull();
-    for (const flag of ['owlette.deployments', 'owlette.swoop', 'owlette.hoot'] as const) {
+    expect(await requireEntitlement('s1', 'owlette.swoop')).toBeNull();
+    for (const flag of ['owlette.deployments', 'owlette.hoot'] as const) {
       const res = await requireEntitlement('s1', flag);
       expect(res?.status).toBe(402);
       expect(await res?.json()).toMatchObject({ entitlement: flag, detail: PLAN_REQUIRED_DETAIL[flag] });
