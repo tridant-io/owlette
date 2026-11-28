@@ -1029,7 +1029,12 @@ describe('authorizedSiteHandler — plan lockout', () => {
     },
     epoch: 0,
   };
-  const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
+  const CORE = {
+    ...FREE,
+    resolved: true,
+    standing: 'active',
+    ent: { ...FREE.ent, 'owlette.control': '1', 'owlette.swoop': '1' },
+  };
 
   beforeEach(() => {
     for (const key of ENV_KEYS) savedEnv[key] = process.env[key];
@@ -1163,33 +1168,55 @@ describe('authorizedSiteHandler — plan lockout', () => {
     expect(rows('allow')).toHaveLength(1);
   });
 
-  it.each([
-    ['DEPLOYMENT_MANAGE', 'owlette.deployments'],
-    ['MACHINE_REMOTE_CONTROL', 'owlette.swoop'],
-    ['MACHINE_REMOTE_VIEW', 'owlette.swoop'],
-  ] as const)('core: refuses a %s write on the pro key %s', async (capability, entitlement) => {
+  it('core: refuses a DEPLOYMENT_MANAGE write on the pro key owlette.deployments', async () => {
     mockGetSiteEntitlements.mockResolvedValue(CORE);
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
-    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
 
     const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
     expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ entitlement, detail: PLAN_REQUIRED_DETAIL[entitlement] });
+    expect(await res.json()).toMatchObject({
+      entitlement: 'owlette.deployments',
+      detail: PLAN_REQUIRED_DETAIL['owlette.deployments'],
+    });
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('pro: a deployment and a swoop write go through', async () => {
-    mockGetSiteEntitlements.mockResolvedValue({
-      ...CORE,
-      ent: { ...CORE.ent, 'owlette.deployments': '1', 'owlette.swoop': '1' },
-    });
+  it.each(['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW'] as const)(
+    'owlette free: refuses a %s write on owlette.swoop',
+    async (capability) => {
+      const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+      const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+
+      const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+      expect(res.status).toBe(402);
+      expect(await res.json()).toMatchObject({
+        entitlement: 'owlette.swoop',
+        detail: PLAN_REQUIRED_DETAIL['owlette.swoop'],
+      });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it('core: a swoop write goes through on owlette.swoop', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
-    for (const capability of ['DEPLOYMENT_MANAGE', 'MACHINE_REMOTE_CONTROL'] as const) {
+    for (const capability of ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW'] as const) {
       const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
       expect((await wrapped(makeRequest(), pathParamsFor('site-a'))).status).toBe(200);
     }
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it('pro: a deployment write goes through', async () => {
+    mockGetSiteEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.deployments': '1' } });
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
+
+    expect((await wrapped(makeRequest(), pathParamsFor('site-a'))).status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it('enforcement off: a gated write goes through without any plan lookup', async () => {

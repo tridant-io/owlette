@@ -509,7 +509,7 @@ export function MachineContextMenu({
                 <UpgradeMenuItem
                   icon={MonitorPlay}
                   label="swoop"
-                  tier="pro"
+                  tier="core"
                   testId="machine-context-menu-swoop-upgrade"
                   planSite={planSite}
                 />

@@ -72,11 +72,13 @@ test.describe('landing — pricing', () => {
     await expect(proCard).toContainText('REST API');
     await expect(proCard).toContainText('CLI + TypeScript SDK');
     await expect(proCard).toContainText('webhooks');
-    await expect(proCard).toContainText('swoop — live remote desktop in the browser');
-    await expect(coreCard).not.toContainText('swoop');
     await expect(coreCard).not.toContainText('REST API');
     await expect(coreCard).not.toContainText('CLI');
     await expect(coreCard).not.toContainText('webhooks');
+
+    // swoop is part of core; pro carries it under "everything in core" and doesn't list it again.
+    await expect(coreCard).toContainText('swoop — live remote desktop in the browser');
+    await expect(proCard).not.toContainText('swoop');
 
     // Pro-only product surface — deployment, hoot and talons moved out of core.
     await expect(proCard).toContainText('software & file deployment');

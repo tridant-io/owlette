@@ -334,7 +334,7 @@ export function SwoopStage({
           )}
           {planLocked && (
             <span className={NOTICE_DETAIL}>
-              {upgradeHref ? 'swoop is part of pro.' : 'swoop is part of pro. ask the site owner to upgrade.'}
+              {upgradeHref ? 'swoop is part of core.' : 'swoop is part of core. ask the site owner to upgrade.'}
             </span>
           )}
           {noSwoopAccess && (
