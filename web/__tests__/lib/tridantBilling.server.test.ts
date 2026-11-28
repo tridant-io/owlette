@@ -892,7 +892,7 @@ describe('the e2e fake', () => {
     'owlette.sites': 1,
     'owlette.control': true,
     'owlette.deployments': false,
-    'owlette.swoop': false,
+    'owlette.swoop': true,
     'owlette.hoot': false,
     'owlette.roost': false,
     'owlette.talons': false,

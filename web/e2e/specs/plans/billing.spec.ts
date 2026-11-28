@@ -205,7 +205,7 @@ test.beforeAll(async () => {
   await Promise.all(
     [FIRST, LINK_SITE, TRIAL_SITE, USED_SITE, ...CREATED].map((site) => siteEntitlements(site.id).set(FREE)),
   );
-  await Promise.all(USERS.map(seedUser));
+  await Promise.all(USERS.map((user) => seedUser(user)));
   // read by the fake's trial start, which owlette asks on the account's first plan read.
   await trialConfig().set({ linkRequired: [LINKER.uid], trialUsed: [TRIAL_USED.uid] });
   await endTrial(OWNER.uid);

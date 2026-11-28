@@ -11,44 +11,36 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed
+
+- a display layout's **test** result reads in lowercase, as the rest of the dashboard does.
+- a machine card's open displays no longer say "no display data reported" and then jump as the page loads.
+- the hoot sidebar, account settings, the docs sidebar, the phone menu, the screenshot history and the site, machine, timezone and filter pickers sweep on rollover like the rest of the dashboard.
+
+## [4.2.8] - 2026-11-28
+
 ### added
 
-- **admin** → **sites** has a machines column: each site's count, what is offline or asleep, and its machines on hover.
-- the admin panel's site selector, on alerts, hoot, schedules, agent tokens and webhooks, shows how many machines you can reach on each site and, past ten sites, has the header switcher's filter. it opens on the same panel as the header's site switcher, and so does owlette swoop's site picker.
-- in admin panel → sites, a site's name opens its settings, as its gear does.
-- the unsubscribe page offers a weekly digest instead of turning alert emails off.
-- your mail app's own unsubscribe button now works on alert emails.
+- admin panel site pickers get the header switcher's filter and machine counts.
+- the unsubscribe page offers a weekly digest, and your mail app's unsubscribe button works.
 
 ### changed
 
-- alert emails arrive as one daily digest at 8:00 am your time; choose hourly, weekly or as it happens. [more](https://owlette.app/docs/dashboard/admin/email-alerts#how-they-arrive)
-- account settings → alerts saves each switch as you flip it, and your timezone is always editable.
-- a site's machines list in the admin panel is set in the panel's text size. the move dialog says an online machine moves within seconds, with no restart; the row leaves the list on its own once the machine arrives, and an offline one's row says it is waiting to move.
-- a machine keeps every screenshot taken of it, not only its newest 20, until a site owner or admin deletes them. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
-- removing a machine, moving it to another site or deleting a site deletes its screenshots.
-- owlette's superadmins don't see a site's screenshots or watch its machines through swoop unless they are a member of it, and a talon's email gives a screenshot only to the site's members. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
-- on a site they are not a member of, owlette's superadmins change only a few things: they update owlette on its machines, start, stop, restart or kill a process, reboot a machine or stop a reboot, cancel a deployment, revoke a machine's token and kill or kick a swoop session. the dashboard hides or locks the rest and says how to add yourself. everything else, pairing a machine included, waits until they add themselves to the site, which its audit log records, and hoot gives them read-only tools there. [more](https://owlette.app/docs/api/errors#members_only)
-- when owlette deletes an account and hands its sites to a successor, each site's own audit log records the new owner.
-- a talon webhook's visual check no longer carries `condition.screenshotUrl`; `screenshotPath` stays. [more](https://owlette.app/docs/dashboard/talons#outputs)
-- the privacy policy says how long screenshots are kept, when owlette staff can see them, and what deleting your own account deletes. [more](https://owlette.app/privacy)
+- alert emails arrive as one daily digest at 8:00 your time; choose hourly, weekly or as it happens. [more](https://owlette.app/docs/dashboard/admin/email-alerts#how-they-arrive)
+- screenshots are kept until deleted; removing or moving a machine deletes its screenshots. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
+- owlette staff see a site's screenshots or swoop only after adding themselves to it. [more](https://owlette.app/docs/dashboard/machine-monitoring#the-machine-menu)
+- swoop is part of core, not only pro. [more](https://owlette.app/docs/plans#what-it-leaves-out)
 
 ### removed
 
-- live view, the screenshot slideshow: swoop shows a machine's screen live, and the menu of a machine that can't stream offers a screenshot. [more](https://owlette.app/docs/dashboard/swoop)
-- the cli's `owlette machine live-view`, which only pointed at `owlette swoop`: use [`owlette swoop`](https://owlette.app/docs/cli/reference/swoop).
+- live view: swoop shows a machine's screen live. [more](https://owlette.app/docs/dashboard/swoop)
 
 ### fixed
 
-- updating several machines at once from the dashboard no longer fails with "could not read request body".
-- the dashboard's list view says "no processes configured for this machine" in lowercase, as the rest of the dashboard does.
-- the [demo](https://owlette.app/demo) shows its machine count in the site switcher, and Mac, Linux and asleep machines.
-- a machine whose agent stopped without saying so reads offline in **site settings**, the API and hoot too, not only on the dashboard; an asleep one reads asleep.
-- the desktop app's **join a site** and **leave site** dialogs say what happened once; no toast repeats it, and join no longer says twice that the machine will appear on your dashboard.
-- in owlette swoop, the two-factor and other sign-in screens sit mid-window with the window controls, and offer no passkey.
-- signing in no longer shows a "2FA verification required" toast.
-- clearing a machine's stored display layout turns auto-restore off, and storing a new one leaves it off until you turn it on. the **auto-restore** switch used to read on after a clear, though nothing could be restored. [more](https://owlette.app/docs/dashboard/displays#storing-a-layout)
-- two-factor prompts offer only your account's own factors, and a wrong code no longer closes swoop's check.
-- the hoot sidebar, account settings, the docs sidebar, the phone menu, the screenshot history and the site, machine, timezone and filter pickers sweep on rollover like the rest of the dashboard.
+- updating several machines at once no longer fails with "could not read request body".
+- two-factor prompts offer only your account's own factors, and swoop's sign-in sits mid-window.
+- clearing a display layout turns auto-restore off; the switch no longer reads on. [more](https://owlette.app/docs/dashboard/displays#storing-a-layout)
+- and 6 smaller fixes.
 
 ## [4.2.7] - 2026-11-25
 

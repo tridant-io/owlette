@@ -6616,7 +6616,7 @@ class OwletteService:
                         q = result.get('query_ms', 0)
                         v = result.get('validate_ms', 0)
                         return (
-                            f"Self-test ok — {seen} monitors, "
+                            f"self-test ok — {seen} monitors, "
                             f"query {q}ms, validate {v}ms"
                         )
                     return _display_error_result(result)

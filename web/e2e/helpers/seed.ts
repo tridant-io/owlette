@@ -3,9 +3,34 @@
  * global-setup; specs may also call these to extend the baseline.
  */
 
-import { FieldValue } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  type DocumentData,
+  type DocumentReference,
+  type SetOptions,
+  type WriteBatch,
+} from 'firebase-admin/firestore';
 import type { SwoopMode } from '@/lib/swoopMode';
 import { getAdminAuth, getAdminDb } from './emulator';
+
+/**
+ * a write now, or queued on `batch` for the caller to commit.
+ *
+ * the emulator never drops the listeners of a page the run has closed, and each
+ * later commit to a collection they watched waits while it checks them all, so the
+ * cost is per commit, not per document: after 145 dashboard and sites specs, 8
+ * member rows took 1.5 s as 8 commits and 0.2 s as one. a caller seeding many
+ * people at once commits them together.
+ */
+async function put(
+  ref: DocumentReference,
+  data: DocumentData,
+  batch?: WriteBatch,
+  options: SetOptions = {},
+): Promise<void> {
+  if (batch) batch.set(ref, data, options);
+  else await ref.set(data, options);
+}
 
 /**
  * FIXTURE identities, not global roles. `owner` is the important one: a global
@@ -90,9 +115,10 @@ export const TEST_USERS: Record<TestRole, TestUser> = {
 /**
  * Create the Auth account (if missing) and the Firestore users/{uid} doc.
  * MFA is pre-satisfied so the redirect gates in dashboard/ and login/ don't
- * trip the E2E flow.
+ * trip the E2E flow. With `batch`, the Auth account is made at once and the
+ * Firestore writes wait on the caller's commit.
  */
-export async function seedUser(user: TestUser): Promise<void> {
+export async function seedUser(user: TestUser, batch?: WriteBatch): Promise<void> {
   const auth = getAdminAuth();
   const db = getAdminDb();
 
@@ -119,7 +145,7 @@ export async function seedUser(user: TestUser): Promise<void> {
     }
   }
 
-  await db.collection('users').doc(user.uid).set({
+  await put(db.collection('users').doc(user.uid), {
     email: user.email,
     role: user.role,
     // Membership is granted below, through grantMembership — seeded empty here
@@ -149,7 +175,7 @@ export async function seedUser(user: TestUser): Promise<void> {
       statsExpanded: true,
       processesExpanded: true,
     },
-  });
+  }, batch);
 
   // One writer, not two: the user document above no longer carries membership.
   //
@@ -163,7 +189,9 @@ export async function seedUser(user: TestUser): Promise<void> {
     await grantMembership(
       siteId,
       user.uid,
-      explicit ?? (user.role === 'admin' ? 'admin' : 'member')
+      explicit ?? (user.role === 'admin' ? 'admin' : 'member'),
+      undefined,
+      batch,
     );
   }
 }
@@ -184,23 +212,22 @@ export type SeedMemberRole = 'owner' | 'admin' | 'member';
  *
  * That the seam existed is why this is one edit instead of one per spec file.
  *
- * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide
+ * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide.
+ * with `batch`, the writes wait on the caller's commit
  */
 export async function grantMembership(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
   extra?: { swoop?: SwoopMode; machineIds?: string[] },
+  batch?: WriteBatch,
 ): Promise<void> {
   const db = getAdminDb();
-  await db
-    .collection('users')
-    .doc(uid)
-    .set({ sites: FieldValue.arrayUnion(siteId) }, { merge: true });
+  await put(db.collection('users').doc(uid), { sites: FieldValue.arrayUnion(siteId) }, batch, { merge: true });
   if (role === 'owner') {
-    await db.collection('sites').doc(siteId).set({ owner: uid }, { merge: true });
+    await put(db.collection('sites').doc(siteId), { owner: uid }, batch, { merge: true });
   }
-  await seedMemberRow(siteId, uid, role, extra);
+  await seedMemberRow(siteId, uid, role, extra, batch);
 }
 
 /**
@@ -212,27 +239,28 @@ export async function grantMembership(
  * a site seeded without one is unreadable even by the uid its `owner` field
  * names — which is exactly how the owner-delete spec started failing.
  *
- * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide
+ * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide.
+ * with `batch`, the write waits on the caller's commit
  */
 export async function seedMemberRow(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
   extra?: { swoop?: SwoopMode; machineIds?: string[] },
+  batch?: WriteBatch,
 ): Promise<void> {
-  await getAdminDb()
-    .collection('sites')
-    .doc(siteId)
-    .collection('members')
-    .doc(uid)
-    .set({
+  await put(
+    getAdminDb().collection('sites').doc(siteId).collection('members').doc(uid),
+    {
       uid,
       role,
       status: 'active',
       addedAt: new Date(0),
       addedBy: 'system:e2e-seed',
       ...extra,
-    });
+    },
+    batch,
+  );
 }
 
 export interface TestSite {
@@ -329,7 +357,7 @@ export async function releaseFixtureSite(siteId: string, uid = 'admin-uid'): Pro
 export async function seedBaseline(): Promise<void> {
   // Sites first — some rules guards reference site docs via get().
   await Promise.all(TEST_SITES.map(seedSite));
-  await Promise.all(Object.values(TEST_USERS).map(seedUser));
+  await Promise.all(Object.values(TEST_USERS).map((user) => seedUser(user)));
 }
 
 export interface SeedMachineOptions {

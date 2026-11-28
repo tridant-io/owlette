@@ -210,7 +210,7 @@ describe('POST /api/agent/swoop/doorbell-token', () => {
     expect((await response.json()).code).toBe('machine_excluded');
   });
 
-  it('answers a core site, whose plan has no swoop, with the same designed 403 swoop_disabled', async () => {
+  it('answers a site whose plan has no swoop with the same designed 403 swoop_disabled', async () => {
     agentToken();
     docs.set(`sites/${SITE}`, { owner: 'payer-1' });
     mockGetSiteEntitlements.mockResolvedValue({
