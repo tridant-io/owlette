@@ -248,12 +248,16 @@ const MachineCard = memo(function MachineCard({
   // Always subscribed so the COLLAPSED summary can show resolutions instead
   // of "no data". No assigned-layout sub — the drift dot reads the
   // heartbeat-published `metrics.displayDriftCount`, not a client-side diff.
-  const { profile: displayProfile } = useDisplayState(
+  const { profile: displayProfile, loading: displayLoading } = useDisplayState(
     currentSiteId,
     machine.machineId,
     { enabled: !planLocked, subscribeAssigned: false }
   );
   const displayMonitors = displayProfile?.monitors ?? [];
+  // only windows agents report a layout (agent firebase_client.py), so a windows
+  // card keeps the open panes' room until it lands. growing when it landed pushed
+  // every card below down, and carried a menu opened from one out of the window
+  const displayPending = displayLoading && (machine.osFamily ?? 'windows') === 'windows';
   const displayDriftCount = machine.metrics?.displayDriftCount ?? 0;
   // Parent preference is the source of truth; default collapsed on first render.
   const effectiveDisplaysExpanded = displaysExpanded ?? false;
@@ -947,21 +951,23 @@ const MachineCard = memo(function MachineCard({
               onClick={openMetric ? (e) => { e.stopPropagation(); openMetric('display'); } : undefined}
             >
               {openMetric && <TileButton label={`open display layout for ${machineId}`} />}
-              {displayMonitors.length > 0 ? (
+              {displayMonitors.length > 0 || displayPending ? (
                 /* One column below sm: the monitor list's nowrap rows (name +
                    resolution + primary star) demand ~200px of min-content each,
                    and a two-`fr` split doubles that demand into the card's
                    intrinsically-sized grid track — which is what pushed the
                    document past 390px. Stacked, the panes share one track and the
                    shared enclosure rounds top/bottom instead of left/right. */
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
+                <div data-testid="display-panes" aria-busy={displayPending} className="grid grid-cols-1 sm:grid-cols-2 gap-0">
                   <div className="min-w-0 h-[160px] border border-border/30 bg-card border-b-0 sm:border-b rounded-t-lg sm:rounded-tr-none sm:rounded-bl-lg md:border-r-0 overflow-hidden">
-                    <DisplayCanvas
-                      monitors={displayMonitors}
-                      mosaicGrids={displayProfile?.mosaicGrids}
-                      labelMode="indexOnly"
-                      className="h-[160px]"
-                    />
+                    {displayMonitors.length > 0 && (
+                      <DisplayCanvas
+                        monitors={displayMonitors}
+                        mosaicGrids={displayProfile?.mosaicGrids}
+                        labelMode="indexOnly"
+                        className="h-[160px]"
+                      />
+                    )}
                   </div>
                   <div className="h-[160px] border border-border/30 bg-card rounded-b-lg sm:rounded-bl-none sm:rounded-tr-lg overflow-hidden flex flex-col justify-center gap-1.5 px-3 text-xs text-muted-foreground">
                     {displayMonitors.map((m, i) => {
