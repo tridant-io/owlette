@@ -47,7 +47,7 @@ it tints exactly what moved. worth knowing: a monitor's identity includes the po
 plugged into — re-cable it somewhere else and owlette reads it as a different monitor.
 
 ## [b05] turn restore on
-**SCREEN:** re-seed with **both** `displays.remoteApplyEnabled` false **and** `displays.autoRestore.enabled` false so the "test" and "enable restore" buttons render; click "test" → inline result banner ("Self-test ok — 4 monitors, query Nms, validate Nms"); then "enable restore" → confirm dialog.
+**SCREEN:** re-seed with **both** `displays.remoteApplyEnabled` false **and** `displays.autoRestore.enabled` false so the "test" and "enable restore" buttons render; click "test" → inline result banner ("self-test ok — 4 monitors, query Nms, validate Nms"); then "enable restore" → confirm dialog.
 **NOTE:** the fixture ships both flags true. auto-restore matters as much as remote apply here: the action bar's last slot is a three-way choice — auto chip if auto-restore is on, else "enable restore" if remote apply is off, else "restore" — so leaving auto-restore enabled hides "enable restore" behind the green chip. the header auto-restore switch can't be used to turn it off on camera either; it's disabled while remote apply is off.
 **VOICEOVER:**
 pushing a layout back is switched off until you turn it on, machine by machine. run test
