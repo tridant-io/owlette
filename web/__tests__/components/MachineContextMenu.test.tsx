@@ -355,7 +355,7 @@ describe('MachineContextMenu — plan', () => {
     await openMenu({ swoopCapable: true, swoopLocked: true, planSite: OWNER });
 
     const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
-    expect(item).toHaveTextContent('swooppart of pro');
+    expect(item).toHaveTextContent('swooppart of core');
     expect(item).toHaveAttribute('href', BILLING);
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
   });
@@ -364,12 +364,12 @@ describe('MachineContextMenu — plan', () => {
     await openMenu({ swoopCapable: true, swoopLocked: true, planSite: MEMBER_OF_SITE });
 
     const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
-    expect(item).toHaveTextContent('swooppart of proask the site owner to upgrade this site');
+    expect(item).toHaveTextContent('swooppart of coreask the site owner to upgrade this site');
     expect(item).not.toHaveAttribute('href');
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
   });
 
-  it("marks hoot part of pro as swoop is: a link to the site's billing for its owner, ask the owner for anyone else", async () => {
+  it("marks hoot part of pro, locked as swoop is: a link to the site's billing for its owner, ask the owner for anyone else", async () => {
     await openMenu({ hootLocked: true, planSite: OWNER });
 
     const item = screen.getByTestId('machine-context-menu-hoot-upgrade');
@@ -424,7 +424,7 @@ describe('MachineContextMenu — plan', () => {
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'remote controlpart of core',
       'schedule restarts',
-      'swooppart of pro',
+      'swooppart of core',
       'view displays',
       'hoot',
       'mute alerts',

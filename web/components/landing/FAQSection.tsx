@@ -19,11 +19,11 @@ const faqs: { q: string; a: React.ReactNode }[] = [
     q: "is it actually free?",
     a: `${FREE_PERIOD}, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
       PRICING_FACTS.core.list,
-    )} for monitoring, process control, displays, and alerts. pro is ${perMachineMonth(
+    )} for monitoring, process control, displays, swoop, and alerts. pro is ${perMachineMonth(
       PRICING_FACTS.pro.list,
     )} (${
       PRICING_FACTS.pro.minMachines
-    }-machine minimum) and adds deployment, hoot, talons, swoop, the public API, CLI, SDK, webhooks, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. each site has its own plan and is billed on its own. the first ${
+    }-machine minimum) and adds deployment, hoot, talons, the public API, CLI, SDK, webhooks, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. each site has its own plan and is billed on its own. the first ${
       PRICING_FACTS.foundersCohort
     } customers keep a founders rate of ${usd(PRICING_FACTS.core.founders)} core / ${usd(
       PRICING_FACTS.pro.founders,
@@ -48,6 +48,10 @@ const faqs: { q: string; a: React.ReactNode }[] = [
   {
     q: "what's roost?",
     a: `roost is owlette's project sync. point it at a folder — a TouchDesigner project, a content drop, a build output — and it ships only the bytes that changed to every machine on the site, atomically: a machine gets the whole new version or stays on the old one, never a half-copied mess. every deploy is versioned, so you can roll back to any of the last 50 for up to 30 days. it's part of the pro tier and includes ${INCLUDED_STORAGE} of storage per site (${STORAGE_OVERAGE} after that). no more zipping a folder and RDP-ing into ten machines at 2am.`,
+  },
+  {
+    q: "what's swoop?",
+    a: "swoop is owlette's remote desktop: a machine's screen, live in a browser tab or in owlette swoop, the desktop viewer app, with keyboard, mouse and clipboard. watching needs no second factor; taking control asks for one, which then covers that machine for 7 days. it's off until a site turns it on, every session is audited, and it's included in core and pro. windows machines and macs host it; linux machines can't. no more driving to the venue to click \"ok\" on a dialog box.",
   },
   {
     q: "is my data secure?",

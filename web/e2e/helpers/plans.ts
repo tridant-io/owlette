@@ -12,9 +12,10 @@ import { expect, type Page } from '@playwright/test';
 import { getAdminDb } from './emulator';
 import type { TestUser } from './seed';
 
+const CORE_FLAGS = ['owlette.control', 'owlette.swoop'];
+
 const PRO_FLAGS = [
   'owlette.deployments',
-  'owlette.swoop',
   'owlette.hoot',
   'owlette.roost',
   'owlette.talons',
@@ -23,8 +24,11 @@ const PRO_FLAGS = [
 ];
 
 /** as tridant id sends them: flags as booleans. */
-function flags(control: boolean, pro: boolean): Record<string, boolean> {
-  return { 'owlette.control': control, ...Object.fromEntries(PRO_FLAGS.map((flag) => [flag, pro])) };
+function flags(core: boolean, pro: boolean): Record<string, boolean> {
+  return {
+    ...Object.fromEntries(CORE_FLAGS.map((flag) => [flag, core])),
+    ...Object.fromEntries(PRO_FLAGS.map((flag) => [flag, pro])),
+  };
 }
 
 /** owlette free: tridant's answer for a site nobody pays for. */
@@ -34,7 +38,7 @@ export const FREE = {
   ent: { ...flags(false, false), 'owlette.machines': 1, 'owlette.sites': 1 },
 };
 
-/** core: control on one site; deployments, swoop, hoot and the rest of pro withheld. */
+/** core: control and swoop on one site; deployments, hoot and the rest of pro withheld. */
 export const CORE = {
   resolved: true,
   standing: 'active',

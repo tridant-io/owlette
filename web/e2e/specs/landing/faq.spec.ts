@@ -5,7 +5,7 @@ import { LICENSE_URL } from '@/lib/repoLinks';
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe('landing faq + footer', () => {
-  test('renders exactly eight faq items and excludes the cut mayonnaise question', async ({ page }) => {
+  test('renders exactly nine faq items and excludes the cut mayonnaise question', async ({ page }) => {
     await page.goto('/');
 
     // FAQ heading anchors the section so we can scope all assertions to it.
@@ -14,7 +14,7 @@ test.describe('landing faq + footer', () => {
 
     const faqSection = page.locator('section').filter({ has: faqHeading });
     const questionButtons = faqSection.locator('button[aria-expanded]');
-    await expect(questionButtons).toHaveCount(8);
+    await expect(questionButtons).toHaveCount(9);
 
     // Regression check — the joke FAQ was cut and must not come back.
     await expect(page.getByText(/is mayonnaise an instrument/i)).toHaveCount(0);
@@ -42,6 +42,19 @@ test.describe('landing faq + footer', () => {
     );
     await expect(answer).toContainText('$20/machine/month');
     await expect(answer).toContainText('$60/machine/month');
+  });
+
+  test('swoop answer names the second factor for control and the platforms that host it', async ({ page }) => {
+    await page.goto('/');
+
+    const question = page.getByRole('button', { name: /what's swoop/i });
+    await question.click();
+    const answer = question.locator('xpath=following-sibling::div[1]//p');
+
+    await expect(answer).toContainText("swoop is owlette's remote desktop");
+    await expect(answer).toContainText('taking control asks for one');
+    await expect(answer).toContainText("windows machines and macs host it; linux machines can't");
+    await expect(answer).toContainText('included in core and pro');
   });
 
   test('self-host answer cites FSL-1.1-Apache-2.0, not agpl-3.0', async ({ page }) => {

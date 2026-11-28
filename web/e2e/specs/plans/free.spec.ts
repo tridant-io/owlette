@@ -194,6 +194,7 @@ test.describe('owlette free', () => {
     const upgrade = menu.getByTestId('machine-context-menu-control-upgrade');
     await expect(upgrade).toContainText('part of core');
     await expect(upgrade).toHaveAttribute('href', BILLING_SECTION);
+    await expect(menu.getByTestId('machine-context-menu-swoop-upgrade')).toContainText('part of core');
     await expect(menu.getByTestId('machine-context-menu-reboot')).toHaveCount(0);
     await page.keyboard.press('Escape');
 
@@ -251,6 +252,15 @@ test.describe('owlette free', () => {
     await expect(usage.locator('dt')).toHaveText(['sites', 'machines']);
     await expect(usage.locator('dd')).toHaveText(['1 of 1', '1 of 1']);
   });
+
+  test("the swoop viewer says swoop is part of core, sends the owner to the site's billing, and stops", async ({ page }) => {
+    await signIn(page, PAYER);
+    await page.goto(`/swoop/${SITE_ID}/${LIVE_MACHINE}`);
+    const notice = page.getByRole('alert').filter({ hasText: 'swoop is part of core.' });
+    await expect(notice).toBeVisible();
+    await expect(notice.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', BILLING_SECTION);
+    await expect(notice).not.toContainText(/reconnecting in|turn it on/);
+  });
 });
 
 test.describe('core', () => {
@@ -258,10 +268,12 @@ test.describe('core', () => {
     await setPlan(CORE);
   });
 
-  test('swoop and hoot read part of pro, and remote commands go through', async ({ page }) => {
+  test('swoop is not locked, hoot reads part of pro, and remote commands go through', async ({ page }) => {
     await signIn(page, PAYER);
     const menu = await openMenu(page, cardFor(page, LIVE_MACHINE));
-    await expect(menu.getByTestId('machine-context-menu-swoop-upgrade')).toContainText('part of pro');
+    await expect(menu.getByTestId('machine-context-menu-swoop-upgrade')).toHaveCount(0);
+    // the site's own swoop switch is off, which is all that stands between its owner and a session
+    await expect(menu.getByTestId('machine-context-menu-swoop-off')).toContainText('turn on swoop');
     await expect(menu.getByTestId('machine-context-menu-hoot-upgrade')).toContainText('part of pro');
     await expect(menu.getByTestId('machine-context-menu-hoot')).toHaveCount(0);
     await expect(menu.getByTestId('machine-context-menu-reboot')).toBeVisible();
@@ -272,13 +284,13 @@ test.describe('core', () => {
     expect(await pendingTypes()).toEqual(['reboot_machine']);
   });
 
-  test("the swoop viewer says swoop is part of pro, sends the owner to the site's billing, and stops", async ({ page }) => {
+  test("the swoop viewer isn't plan-locked: it asks for the site's swoop switch, not an upgrade", async ({ page }) => {
     await signIn(page, PAYER);
     await page.goto(`/swoop/${SITE_ID}/${LIVE_MACHINE}`);
-    const notice = page.getByRole('alert').filter({ hasText: 'swoop is part of pro.' });
+    const notice = page.getByRole('alert').filter({ hasText: 'turn it on in swoop settings.' });
     await expect(notice).toBeVisible();
-    await expect(notice.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', BILLING_SECTION);
-    await expect(notice).not.toContainText(/reconnecting in|turn it on/);
+    await expect(notice).not.toContainText('part of');
+    await expect(notice.getByRole('link', { name: 'upgrade' })).toHaveCount(0);
   });
 });
 

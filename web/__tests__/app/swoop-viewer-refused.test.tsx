@@ -114,7 +114,7 @@ it("a plan without swoop says so and links the owner to the site's billing, not 
     body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
-  expect(notice).toHaveTextContent('swoop is part of pro.');
+  expect(notice).toHaveTextContent('swoop is part of core.');
   expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute(
     'href',
     '/admin/sites/site%201?section=billing',
@@ -130,7 +130,7 @@ it('a member on a site whose plan leaves swoop out is told to ask the owner, wit
     body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
-  expect(notice).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
+  expect(notice).toHaveTextContent('swoop is part of core. ask the site owner to upgrade.');
   expect(within(notice).queryByRole('link', { name: 'upgrade' })).toBeNull();
 });
 

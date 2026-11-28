@@ -68,7 +68,7 @@ const CORE: SitePlanResponse = {
   tier: 'core',
   standing: 'active',
   inGoodStanding: true,
-  flags: { ...NO_FLAGS, control: true },
+  flags: { ...NO_FLAGS, control: true, swoop: true },
   billing: { tier: 'core', founders: false, endsAt: null },
   period: { start: 1_700_000_000_000, end: 1_702_000_000_000 },
   freeMachines: null,
@@ -153,12 +153,12 @@ describe('sitePlan', () => {
     expect(state.controlLocked).toBe(true);
   });
 
-  it('on core, leaves control and every machine alone, and locks swoop and hoot', () => {
+  it('on core, leaves control, swoop and every machine alone, and locks hoot', () => {
     const state = sitePlan(CORE);
 
     expect(state.machineLimitFor('kiosk-2')).toBeNull();
     expect(state.controlLocked).toBe(false);
-    expect(state.swoopLocked).toBe(true);
+    expect(state.swoopLocked).toBe(false);
     expect(state.hootLocked).toBe(true);
   });
 });

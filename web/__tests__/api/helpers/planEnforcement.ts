@@ -44,10 +44,10 @@ export const PRO_ENTITLEMENTS: Entitlements = {
   trialEndsAt: null,
 };
 
-/** a site billed at core: remote control; deployments, swoop, hoot and the rest of pro withheld. */
+/** a site billed at core: remote control and swoop; deployments, hoot and the rest of pro withheld. */
 export const CORE_ENTITLEMENTS: Entitlements = {
   ...PRO_ENTITLEMENTS,
-  ent: { ...PRO_ENTITLEMENTS.ent, ...flags('0'), 'owlette.control': '1' },
+  ent: { ...PRO_ENTITLEMENTS.ent, ...flags('0'), 'owlette.control': '1', 'owlette.swoop': '1' },
   billing: { ...PRO_ENTITLEMENTS.billing!, productId: 'prd_owlette_core' },
 };
 

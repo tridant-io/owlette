@@ -159,7 +159,7 @@ const CORE_SITE: SitePlanResponse = {
   tier: 'core',
   standing: 'active',
   inGoodStanding: true,
-  flags: { ...NO_FLAGS, control: true },
+  flags: { ...NO_FLAGS, control: true, swoop: true },
   billing: { tier: 'core', founders: false, endsAt: null },
 };
 

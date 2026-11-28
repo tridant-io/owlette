@@ -142,7 +142,7 @@ const PRO: SitePlanResponse = {
 const CORE: SitePlanResponse = {
   ...PRO,
   tier: 'core',
-  flags: { ...NO_FLAGS, control: true },
+  flags: { ...NO_FLAGS, control: true, swoop: true },
   billing: { tier: 'core', founders: false, endsAt: null },
 };
 // stopped, and still running to a period end far ahead of the test's clock
