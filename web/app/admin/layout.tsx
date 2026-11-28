@@ -7,6 +7,7 @@ import RequireAdminAccess from '@/components/RequireAdminAccess';
 import { ArrowLeft, Menu, X, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevicePrefFlag, useDevicePrefNumber } from '@/hooks/useDevicePrefFlag';
@@ -111,7 +112,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           size="icon-sm"
           onClick={() => setCollapsed(true)}
           aria-label="collapse sidebar"
-          className="shrink-0 text-muted-foreground hover:text-foreground! hover:bg-accent! cursor-pointer"
+          className="shrink-0 text-muted-foreground"
         >
           <PanelLeftClose className="h-4 w-4" />
         </Button>
@@ -137,7 +138,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               aria-label="open admin menu"
               aria-expanded={false}
               aria-controls="admin-sidebar"
-              className="border-border bg-muted/95 backdrop-blur-sm text-foreground hover:bg-muted! cursor-pointer shadow-lg"
+              className="border-border bg-muted/95 backdrop-blur-sm text-foreground shadow-lg"
             >
               <Menu className="h-5 w-5 stroke-[2.5]" />
             </Button>
@@ -199,15 +200,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             <div className="lg:hidden mb-3 md:mb-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xl font-bold text-foreground">admin panel</p>
-                <button
+                <IconButton
                   ref={closeMenuButtonRef}
-                  type="button"
+                  variant="ghost"
+                  label="close admin menu"
+                  tooltip={false}
                   onClick={() => setMobileMenuOpen(false)}
-                  className="p-2 hover:bg-muted! rounded-lg transition-colors cursor-pointer"
-                  aria-label="close admin menu"
+                  className="text-muted-foreground"
                 >
-                  <X className="h-5 w-5 text-muted-foreground hover:text-foreground" />
-                </button>
+                  <X className="size-5" />
+                </IconButton>
               </div>
             </div>
 
@@ -218,18 +220,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                    hover/focus), saving a row on the rail. Desktop only. */
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <button
-                      type="button"
+                    <IconButton
+                      variant="ghost"
+                      size="icon-lg"
+                      label="expand sidebar"
+                      tooltip={false}
                       onClick={() => setCollapsed(false)}
-                      aria-label="expand sidebar"
-                      className="group relative flex items-center justify-center h-10 w-10 rounded-lg transition-colors hover:bg-accent! focus-visible:bg-accent! outline-none cursor-pointer"
+                      className="group relative"
                     >
+                      {/* size-9 holds the eye at 36px: button.tsx sizes an svg without a size-* class to 16px */}
                       <OwletteEyeIcon
                         size={36}
-                        className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
+                        className="size-9 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
                       />
-                      <PanelLeftOpen className="absolute h-5 w-5 text-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
-                    </button>
+                      <PanelLeftOpen className="absolute size-5 text-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
+                    </IconButton>
                   </TooltipTrigger>
                   <TooltipContent side="right">
                     <p>expand sidebar</p>
@@ -259,7 +264,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   size="sm"
                   onClick={handleBack}
                   aria-label={collapsed ? backLabel : undefined}
-                  className={`w-full border-border bg-background text-foreground hover:bg-accent! hover:text-foreground! cursor-pointer ${collapsed ? 'lg:px-2' : 'lg:px-3'}`}
+                  className={`w-full border-border bg-background text-foreground ${collapsed ? 'lg:px-2' : 'lg:px-3'}`}
                 >
                   <ArrowLeft className={`h-4 w-4 ${collapsed ? 'lg:mr-0' : 'lg:mr-2'}`} />
                   <span className={collapsed ? 'inline lg:hidden' : 'inline'}>{backLabel}</span>
@@ -306,20 +311,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                           // the collapsed rail hides the text, and the icon is aria-hidden
                           aria-label={collapsed ? item.name : undefined}
                           aria-current={isActive ? 'page' : undefined}
+                          // the row is the link, so hover and keyboard focus both sweep it.
+                          // the open page doesn't: under the sweep its cyan label drops to
+                          // 4.4:1 on the light tint, below aa
+                          className={`
+                            flex items-center gap-3 px-3 py-2 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:justify-start'} rounded-lg transition-colors mb-0.5 border
+                            ${
+                              isActive
+                                ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border-accent-cyan/30'
+                                : 'btn-sweep border-transparent text-foreground'
+                            }
+                          `}
                         >
-                          <div
-                            className={`
-                              flex items-center gap-3 px-3 py-2 ${collapsed ? 'lg:p-2 lg:justify-center' : 'lg:justify-start'} rounded-lg cursor-pointer transition-colors mb-0.5
-                              ${
-                                isActive
-                                  ? 'bg-accent-cyan/10 dark:bg-accent-cyan/15 text-accent-cyan border border-accent-cyan/30'
-                                  : 'border border-transparent text-foreground hover:bg-accent! hover:text-foreground!'
-                              }
-                            `}
-                          >
-                            <Icon className="h-5 w-5 flex-shrink-0" />
-                            <span className={`font-medium text-sm ${collapsed ? 'lg:hidden' : ''}`}>{item.name}</span>
-                          </div>
+                          <Icon className="h-5 w-5 flex-shrink-0" />
+                          <span className={`font-medium text-sm ${collapsed ? 'lg:hidden' : ''}`}>{item.name}</span>
                         </Link>
                       </TooltipTrigger>
                       {/* the description lives here now; the collapsed rail also needs the name */}

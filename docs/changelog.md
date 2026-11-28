@@ -15,7 +15,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 - a display layout's **test** result reads in lowercase, as the rest of the dashboard does.
 - a machine card's open displays no longer say "no display data reported" and then jump as the page loads.
-- the hoot sidebar, account settings, the docs sidebar, the phone menu, the screenshot history and the site, machine, timezone and filter pickers sweep on rollover like the rest of the dashboard.
+- menus, side navs and pickers across the dashboard, the admin panel and the docs sweep on rollover like its buttons.
 
 ## [4.2.8] - 2026-11-28
 
