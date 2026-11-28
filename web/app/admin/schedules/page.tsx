@@ -11,10 +11,12 @@ import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { SitePicker } from '@/components/SitePicker';
 import { Plus, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { MemberLockSection } from '@/components/MemberLock';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { CompactButton } from '@/components/admin/CompactButton';
 
 export default function SchedulePresetsPage() {
@@ -36,6 +38,8 @@ export default function SchedulePresetsPage() {
     error,
     deletePreset,
   } = useSchedulePresets(selectedSiteId);
+  // a superadmin without a member row reads the presets and changes none (adr 0021)
+  const memberLocked = useMemberLock(selectedSiteId);
 
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
   const [editingPreset, setEditingPreset] = useState<SchedulePreset | null>(null);
@@ -105,22 +109,19 @@ export default function SchedulePresetsPage() {
           description="manage reusable schedule presets for process scheduling across machines"
           toolbar={
             sites.length > 1 && (
-              <Select value={selectedSiteId || ''} onValueChange={setSelectedSiteId}>
-                <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none border-border bg-card text-foreground">
-                  <SelectValue placeholder="select site" />
-                </SelectTrigger>
-                <SelectContent className="border-border bg-card text-foreground">
-                  {sites.map(site => (
-                    <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SitePicker
+                sites={sites}
+                value={selectedSiteId || ''}
+                onChange={setSelectedSiteId}
+                className="min-w-32 flex-1 sm:w-[180px] sm:flex-none"
+              />
             )
           }
-          actions={<CompactButton icon={Plus} label="create preset" onClick={handleCreateNew} />}
+          actions={!memberLocked && <CompactButton icon={Plus} label="create preset" onClick={handleCreateNew} />}
         />
 
         {/* Presets list */}
+        <MemberLockSection siteId={selectedSiteId}>
         {presets.length > 0 && (
           <div className="space-y-3">
             {presets.map((preset) => (
@@ -141,6 +142,7 @@ export default function SchedulePresetsPage() {
                     {preset.description || formatScheduleSummary(preset.blocks, userPreferences.timeFormat || '12h')}
                   </p>
                 </div>
+                {!memberLocked && (
                 <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                   <IconButton
                     label={`edit ${preset.name}`}
@@ -161,11 +163,13 @@ export default function SchedulePresetsPage() {
                     </IconButton>
                   )}
                 </div>
+                )}
               </div>
             ))}
 
           </div>
         )}
+        </MemberLockSection>
       </div>
 
       {/* Create/Edit Dialog */}

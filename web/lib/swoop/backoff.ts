@@ -92,6 +92,8 @@ const WITHDRAWALS: ReadonlySet<string> = new Set([
   'capability_missing',
   'members_may_not_watch',
   'api_key_not_permitted',
+  // the site gates' answer to a superadmin without a member row (adr 0021)
+  'members_only',
 ]);
 
 /**

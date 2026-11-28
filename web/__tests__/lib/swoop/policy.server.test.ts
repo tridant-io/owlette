@@ -70,6 +70,17 @@ const member: Actor = { type: 'user', userId: 'm', role: 'member', siteRoles: { 
 const admin: Actor = { type: 'user', userId: 'a', role: 'member', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
 const owner: Actor = { type: 'user', userId: 'o', role: 'member', siteRoles: { [SITE]: 'owner' }, machineScopes: { [SITE]: null } };
 const outsider: Actor = { type: 'user', userId: 'x', role: 'member', siteRoles: {} };
+// holds every capability on every site, and no member row here
+const superadmin: Actor = { type: 'user', userId: 's', role: 'superadmin', siteRoles: {}, swoopModes: {}, machineScopes: {} };
+// the same, with a member row: added to the site, which is recorded
+const memberSuperadmin: Actor = {
+  type: 'user',
+  userId: 's',
+  role: 'superadmin',
+  siteRoles: { [SITE]: 'admin' },
+  swoopModes: {},
+  machineScopes: { [SITE]: null },
+};
 
 const ON: SwoopSiteSettings = { ...SWOOP_SETTINGS_DEFAULTS, enabled: true };
 
@@ -259,6 +270,24 @@ describe('evaluateSwoopAccess', () => {
     expect(access({})).toEqual({ ok: true, ctl: false });
   });
 
+  // a site's screens are for its members, swoop's picture included (adr 0021)
+  it('refuses a superadmin who is not a member of the site, to watch and to control', () => {
+    expect(access({ actor: superadmin })).toEqual({
+      ok: false,
+      status: 403,
+      code: 'capability_missing',
+      error: "swoop shows the machine's screen, which is for the site's members.",
+    });
+    expect(access({ actor: superadmin, intent: 'control', stepUpOpen: true })).toMatchObject({
+      code: 'capability_missing',
+    });
+  });
+
+  it('lets a superadmin who is a member of the site watch and, with a step-up, control', () => {
+    expect(access({ actor: memberSuperadmin })).toEqual({ ok: true, ctl: false });
+    expect(access({ actor: memberSuperadmin, intent: 'control', stepUpOpen: true })).toEqual({ ok: true, ctl: true });
+  });
+
   it('refuses control without an open step-up window, and allows it with one', () => {
     expect(access({ actor: admin, intent: 'control' })).toEqual({
       ok: false,
@@ -298,6 +327,10 @@ describe('evaluateLeaseRenewal', () => {
 
   it('refuses a renewal once membership is gone', () => {
     expect(renewal({ actor: outsider })).toMatchObject({ code: 'capability_missing' });
+  });
+
+  it('refuses a superadmin who is not a member of the site a renewal, so no session outlives the rule', () => {
+    expect(renewal({ actor: superadmin, intent: 'control' })).toMatchObject({ code: 'capability_missing' });
   });
 
   it('refuses a control renewal once the control capability is gone', () => {

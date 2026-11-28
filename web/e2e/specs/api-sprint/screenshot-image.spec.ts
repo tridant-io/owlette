@@ -1,8 +1,9 @@
 /**
  * Screenshot records over the real routes: the image route opens only this
- * machine's screenshots, and only the machine's own agent records a capture.
- * The signed redirect itself needs storage signing credentials the emulator
- * rig does not have, so the jest suite covers it (screenshot-storage.test.ts).
+ * machine's screenshots, only for the site's members, and only the machine's
+ * own agent records a capture. The signed redirect itself needs storage
+ * signing credentials the emulator rig does not have, so the jest suite covers
+ * it (screenshot-storage.test.ts).
  */
 import crypto from 'crypto';
 import { test, expect } from '@playwright/test';
@@ -17,6 +18,8 @@ const IMAGE_ROUTE = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/screenshots/im
 
 let readKey: MintedApiKey;
 let writeKey: MintedApiKey;
+// super-uid holds no member row on this site
+let superKey: MintedApiKey;
 
 test.beforeAll(async () => {
   const db = getAdminDb();
@@ -41,12 +44,38 @@ test.beforeAll(async () => {
     name: `e2e-shot-write-${SUFFIX}`,
     scopes: [{ resource: 'machine', id: '*', permissions: ['read', 'write'] }],
   });
+  superKey = await mintApiKey({
+    ownerUid: 'super-uid',
+    name: `e2e-shot-super-${SUFFIX}`,
+    scopes: [{ resource: 'machine', id: '*', permissions: ['read'] }],
+  });
 });
 
 test.afterAll(async () => {
   if (readKey) await revokeApiKey(readKey);
   if (writeKey) await revokeApiKey(writeKey);
+  if (superKey) await revokeApiKey(superKey);
   await releaseFixtureSite(SITE_ID);
+});
+
+test("GET .../screenshots/image refuses a superadmin who is not a member, before it reads the path", async ({ request }) => {
+  // the member's key gets past the door and is refused on the path (400); the
+  // superadmin's is refused at the door (403), so it never reaches the signing
+  const path = encodeURIComponent('chat-images/admin-uid/chat-1/1.jpg');
+
+  const member = await request.get(`${IMAGE_ROUTE}?path=${path}`, {
+    headers: authHeaders(readKey, false),
+    maxRedirects: 0,
+  });
+  expect(member.status()).toBe(400);
+
+  const superadmin = await request.get(`${IMAGE_ROUTE}?path=${path}`, {
+    headers: authHeaders(superKey, false),
+    maxRedirects: 0,
+  });
+  expect(superadmin.status()).toBe(403);
+  expect((await superadmin.json()).detail).toBe("screenshots are visible only to the site's members");
+  expect(superadmin.headers()['location']).toBeUndefined();
 });
 
 test('GET .../screenshots/image without credentials is 401', async ({ request }) => {

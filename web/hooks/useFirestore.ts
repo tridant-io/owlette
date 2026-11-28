@@ -18,6 +18,7 @@ import {
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
 import { MAX_MACHINE_SCOPE, parseMachineIds } from '@/lib/machineAccess';
+import { isMachineOnline, machineOnlineState, parseFirestoreSeconds } from '@/lib/machineOnline';
 import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
 import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import {
@@ -58,48 +59,6 @@ export function firestoreTsToMs(ts: FirestoreTs): number {
     if (typeof v.seconds === 'number') return v.seconds * 1000;
     if (typeof v._seconds === 'number') return v._seconds * 1000;
   }
-  return 0;
-}
-
-/**
- * FirestoreTs -> Unix seconds; 0 means "no value" (renders `--`, isOnline false).
- * Must handle every shape the JS SDK emits: cache rehydration yields plain
- * {seconds,nanoseconds}, which an earlier Timestamp-only parser silently dropped
- * and made the dashboard online pill flap.
- */
-function parseFirestoreSeconds(value: unknown): number {
-  if (value == null) return 0;
-
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  if (typeof value === 'object') {
-    const v = value as {
-      toMillis?: () => number;
-      seconds?: number;
-      _seconds?: number;
-    };
-    if (typeof v.toMillis === 'function') {
-      try {
-        const ms = v.toMillis();
-        return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
-      } catch {
-        // fall through to property reads
-      }
-    }
-    if (typeof v.seconds === 'number') return v.seconds;
-    // legacy admin-SDK shape
-    if (typeof v._seconds === 'number') return v._seconds;
-    if (value instanceof Date) return Math.floor(value.getTime() / 1000);
-  }
-
-  // some Firestore paths hand back ISO strings
-  if (typeof value === 'string') {
-    const ms = Date.parse(value);
-    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
-  }
-
   return 0;
 }
 
@@ -425,12 +384,6 @@ export interface Machine {
     url: string;       // image route: redirects a signed-in viewer to a short-lived read url
     timestamp: FirestoreTs;
     sizeKB: number;
-  };
-  liveView?: {
-    active: boolean;
-    interval?: number;
-    startedAt?: number;
-    expiresAt?: number;
   };
   metrics?: {
     schemaVersion?: number;
@@ -1107,30 +1060,6 @@ function scopedMachines(col: CollectionReference, scopeKey: string | null): Quer
   return query(col, where(documentId(), 'in', JSON.parse(scopeKey) as string[]));
 }
 
-// Heartbeat age at which the pill flips offline. 300s tolerates two missed idle
-// beats (120s each); 180s greyed out healthy machines on one slow tick. Must match
-// OFFLINE_THRESHOLD_MS in `app/api/cron/health-check/route.ts` or pill and alerts disagree.
-const OFFLINE_HEARTBEAT_AGE_SEC = 300;
-
-/**
- * Single source of truth for "is this machine online": agent flag AND heartbeat
- * younger than OFFLINE_HEARTBEAT_AGE_SEC (Unix seconds; 0 = absent, fails the
- * check). Both the snapshot parser and the 30s staleness tick call this — with
- * separate logic a killed agent (doc stuck at `online: true`) rendered green
- * forever. Mirrors `classifyMachineHealth` in `app/api/cron/health-check/route.ts`.
- * An asleep machine is offline too: the snapshot parser rules it out before this
- * check, and the tick reads the parsed flag, so it never turns one green.
- */
-export function isMachineOnline(
-  onlineFlag: unknown,
-  lastHeartbeatSec: number,
-  nowSec: number,
-): boolean {
-  if (onlineFlag !== true) return false;
-  if (!Number.isFinite(lastHeartbeatSec)) return false;
-  return nowSec - lastHeartbeatSec < OFFLINE_HEARTBEAT_AGE_SEC;
-}
-
 export function useMachineHardware(siteId: string | null, machineId: string | null) {
   const requestedKey = db && siteId && machineId ? `${siteId}/${machineId}` : null;
   const [state, setState] = useState<{
@@ -1495,10 +1424,10 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
           const rebootDeferredUntilParsed = parseFirestoreSeconds(data.rebootDeferredUntil);
           const rebootDeferredUntil = rebootDeferredUntilParsed > 0 ? rebootDeferredUntilParsed : undefined;
 
-          const now = Math.floor(Date.now() / 1000);
-          // a dark wake heartbeats for seconds and still says asleep: no green flicker
-          const asleep = data.asleep === true && data.online === true;
-          const isOnline = !asleep && isMachineOnline(data.online, lastHeartbeat, now);
+          // the api, hoot, the fleet tools and talons read the doc through the same call
+          const onlineState = machineOnlineState(data, Math.floor(Date.now() / 1000));
+          const asleep = onlineState === 'asleep';
+          const isOnline = onlineState === 'online';
 
             // keep the last good GPU when this update reports "N/A"/missing
             const metrics = data.metrics ? {
@@ -1970,14 +1899,6 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
     await sendMachineCommand(machineId, 'capture_screenshot');
   };
 
-  const startLiveView = async (machineId: string, interval: number = 10, duration: number = 600) => {
-    await sendMachineCommand(machineId, 'start_live_view', { interval, duration });
-  };
-
-  const stopLiveView = async (machineId: string) => {
-    await sendMachineCommand(machineId, 'stop_live_view');
-  };
-
   /**
    * Merges into `config/{siteId}/machines/{machineId}.rebootSchedule` — the field
    * and endpoint keep the legacy "reboot" spelling because deployed agents read
@@ -2016,5 +1937,5 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
   const loading = !!db && !!siteId && !emptyScope && loadedKey !== loadKey;
   const error = !db ? 'Firebase not configured' : failure?.key === loadKey ? failure.message : null;
 
-  return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView, updateRestartSchedule };
+  return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, updateRestartSchedule };
 }

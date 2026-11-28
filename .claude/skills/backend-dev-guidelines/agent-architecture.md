@@ -320,7 +320,7 @@ Commands are `{type, ...params}` map fields of the single `commands/pending` doc
 | `swoop_session_requested` / `swoop_kill` / `swoop_refresh` | session fields | swoop (`swoop_commands.py`) |
 | `mcp_tool_call` / `cancel_mcp_tool` / `provision_cortex_key` | tool fields | hoot |
 
-Others: `toggle_autolaunch`, `refresh_software_inventory`, `start_live_view`, `stop_live_view`, the display-topology commands, `site_settings_refresh`.
+Others: `toggle_autolaunch`, `refresh_software_inventory`, the display-topology commands, `site_settings_refresh`. Live view (`start_live_view`, `stop_live_view`) is gone for swoop: the server refuses both, and agents from this release have no handler.
 
 ### Machine Flags (Firestore)
 

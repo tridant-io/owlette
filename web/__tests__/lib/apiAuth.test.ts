@@ -785,9 +785,10 @@ describe('assertUserHasSiteAccess', () => {
     const result = await assertUserHasSiteAccess('user-1', 'site-1');
     expect(result.siteId).toBe('site-1');
     expect(result.siteData).toEqual({ owner: 'user-1', name: 'Site A' });
+    expect(result.member).toBe(true);
   });
 
-  it('allows access when user is superadmin', async () => {
+  it('allows access when user is superadmin, and says they hold no member row', async () => {
     mockDocGet.mockImplementation((col: string) => {
       if (col === 'sites')
         return Promise.resolve({ exists: true, data: () => ({ owner: 'other', name: 'Site B' }) });
@@ -801,6 +802,8 @@ describe('assertUserHasSiteAccess', () => {
 
     const result = await assertUserHasSiteAccess('user-2', 'site-2');
     expect(result.siteId).toBe('site-2');
+    // a superadmin manages the site, but its screens are for its members
+    expect(result.member).toBe(false);
   });
 
   it('allows access when the user holds a member membership', async () => {

@@ -581,8 +581,8 @@ describe('startTurn — happy path', () => {
     // the real listing: both machines are online on the site, one is outside the scope now
     const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
     const docs = [
-      { id: 'machine-1', data: () => ({ online: true }) },
-      { id: 'machine-2', data: () => ({ online: true }) },
+      { id: 'machine-1', data: () => ({ online: true, lastHeartbeat: new Date() }) },
+      { id: 'machine-2', data: () => ({ online: true, lastHeartbeat: new Date() }) },
     ];
     const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
     (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
@@ -1500,9 +1500,9 @@ describe('startTurn — which agents hold a restart for active hours', () => {
     // the real listing over the machine docs: an older agent never clears the capability
     const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
     const docs = [
-      { id: 'machine-1', data: () => ({ online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }) },
-      { id: 'machine-2', data: () => ({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } }) },
-      { id: 'machine-3', data: () => ({ online: true }) },
+      { id: 'machine-1', data: () => ({ online: true, lastHeartbeat: new Date(), agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-2', data: () => ({ online: true, lastHeartbeat: new Date(), agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-3', data: () => ({ online: true, lastHeartbeat: new Date() }) },
     ];
     const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
     (hootUtils.listSiteMachines as jest.Mock).mockImplementation(

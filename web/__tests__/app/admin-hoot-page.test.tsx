@@ -30,6 +30,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     lastSiteId,
     updateLastSite,
     isSiteAdmin: (siteId: string) => administered.includes(siteId),
+    machineScope: () => null,
   }),
 }));
 jest.mock('@/hooks/useFirestore', () => ({
@@ -113,8 +114,9 @@ describe('which site it shows', () => {
     render(<HootSettingsPage />);
 
     await user.click(screen.getByRole('combobox', { name: 'site' }));
-    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual(['Site A', 'Site B']);
-    await user.click(screen.getByRole('option', { name: 'Site B' }));
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    expect(within(list).getAllByRole('button').map((row) => row.textContent)).toEqual(['Site A', 'Site B']);
+    await user.click(within(list).getByRole('button', { name: 'Site B' }));
 
     expect(theSwitch()).toHaveAttribute('id', 'fleet-site-b');
     expect(updateLastSite).toHaveBeenCalledWith('site-b');

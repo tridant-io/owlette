@@ -1,8 +1,11 @@
+import crypto from 'node:crypto';
 import { test, expect } from '@playwright/test';
 import {
   deleteDocIfExists,
   seedInstallerLatest,
 } from '../../helpers/coverageSeed';
+import { E2E_CRON_SECRET } from '../../helpers/cron';
+import { getAdminDb } from '../../helpers/emulator';
 import { HERO_HEADLINE } from '../../helpers/landing';
 
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -44,6 +47,26 @@ test.describe('public routes', () => {
     await expect(page.getByRole('heading', { name: /unsubscribed/i })).toBeVisible();
     await expect(page.getByText(/all alert emails, including offline notifications, have been turned off/i)).toBeVisible();
     expect(posted).toEqual([{ token: 'e2e-token' }]);
+  });
+
+  test('unsubscribe offers the weekly digest instead, which keeps alert emails on', async ({ page }) => {
+    // a throwaway user, and a real link: the uid signed with the app's CRON_SECRET, as the route mints it
+    const uid = `weekly-${crypto.randomBytes(4).toString('hex')}`;
+    const user = getAdminDb().collection('users').doc(uid);
+    await user.set({ email: `${uid}@e2e.test`, preferences: { healthAlerts: true, processAlerts: true, alertDelivery: 'daily' } });
+    const signature = crypto.createHmac('sha256', E2E_CRON_SECRET).update(uid).digest('hex');
+    const token = Buffer.from(`${uid}:${signature}`).toString('base64url');
+
+    try {
+      await page.goto(`/unsubscribe?token=${token}`);
+      await page.getByRole('button', { name: 'weekly digest instead', exact: true }).click();
+
+      await expect(page.getByRole('heading', { name: /weekly digest/i })).toBeVisible();
+      await expect(page.getByText(/your alert emails now arrive as one weekly digest/i)).toBeVisible();
+      expect((await user.get()).get('preferences')).toEqual({ healthAlerts: true, processAlerts: true, alertDelivery: 'weekly' });
+    } finally {
+      await user.delete();
+    }
   });
 
   test('unsubscribe says so when the link is missing or refused', async ({ page }) => {

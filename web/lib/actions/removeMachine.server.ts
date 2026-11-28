@@ -14,7 +14,11 @@
  * The id then leaves every member's machine scope, and the site's fleet grant
  * with its fleet sessions and call records (ADR 0017), best-effort too: machine
  * ids get reused, and a failed prune is caught when the id next pairs
- * (`recordPairing`).
+ * (`recordPairing`). Its stored screenshots, images and history records, go
+ * last and best-effort through `deleteScreenshotsBestEffort`, which each caller
+ * awaits once everything else is done: they belong to the site, so they never
+ * follow a machine that is removed or moved off it, and their delete has no
+ * bound, so nothing the removal needs waits on it.
  *
  * No active-deployment guard: the legacy client-side check was racy against
  * in-flight commands and lived in the UI, not the data layer. The audit log
@@ -31,6 +35,7 @@ import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
 import { moveRef } from '@/lib/machineMoves.server';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
+import { deleteScreenshotsBestEffort } from '@/lib/screenshotStorage.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
 import { endSwoopSession, listUnendedSwoopSessionsForMachine } from '@/lib/swoop/sessionStore.server';
 
@@ -165,6 +170,7 @@ export async function removeMachineData(
     });
   }
 
+
   // Best-effort: these docs may never have existed. Warn rather than throw,
   // so unexpected modes (e.g. permission denied) stay visible in telemetry.
   try {
@@ -256,5 +262,6 @@ export async function removeMachine(
     },
   });
 
+  await deleteScreenshotsBestEffort(siteId, machineId, 'removeMachine', input.db);
   return result;
 }

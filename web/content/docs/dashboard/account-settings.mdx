@@ -12,13 +12,13 @@ open it from your avatar in the top right. seven sections:
 |---|---|---|
 | **profile** | first and last name, and the email you signed in with (which cannot be changed) | **save changes** |
 | **preferences** | appearance, and how timestamps and temperatures render | appearance at once; the rest with **save changes** |
-| **alerts** | which alert emails you get, extra recipients, and which machines are muted | with **save changes**, see [alerts](#alerts) |
+| **alerts** | how alert emails arrive, which you get, extra recipients, and which machines are muted | at once; extra recipients with **save changes**, see [alerts](#alerts) |
 | **hoot** | your LLM provider, model and API key | its own buttons |
 | **security** | second factors and passkeys, and your password | factors at once; the password with **save changes** |
 | **api** | your scoped API keys | at once |
 | **danger zone** | delete your account | its own confirm |
 
-**save changes** sits at the foot of the profile, preferences and security sections and saves everything the dialog holds, alert switches included.
+**save changes** sits at the foot of the profile, preferences and security sections and saves everything the dialog holds but the alert switches, which save as you flip them.
 
 ---
 
@@ -34,7 +34,7 @@ open it from your avatar in the top right. seven sections:
 | **my timezone** | every machine rendered in the timezone you pick below. one shared reference frame, wherever the machines are |
 | **site timezone** | every machine rendered in the site's configured timezone, set in site settings |
 
-the **your timezone** field below it is only used in *my timezone* mode.
+the **your timezone** field below it is the clock in *my timezone* mode, and the timezone your [alert digest](/docs/dashboard/admin/email-alerts#how-they-arrive) arrives at 8:00 am in.
 
 this preference does **not** move schedules. a process window or a restart entry is a wall-clock rule evaluated against its own clock — see [timezones](/docs/dashboard/timezones) for which clock that is in each case. changing this setting changes how times are *displayed*, never when anything fires.
 
@@ -43,6 +43,8 @@ this preference does **not** move schedules. a process window or a restart entry
 ---
 
 ## alerts
+
+**alert emails arrive** picks how: **daily digest** (the default), **hourly digest**, **weekly digest** or **as it happens**. a daily or weekly digest names the timezone it uses, with **change** to open preferences. see [how they arrive](/docs/dashboard/admin/email-alerts#how-they-arrive).
 
 seven categories, each on by default and individually switchable:
 
@@ -58,7 +60,7 @@ seven categories, each on by default and individually switchable:
 
 **alert email** shows where they go: the email you signed in with. **additional CC recipients** copies up to five more addresses onto every alert email.
 
-in this dialog the switches and the CC list are saved by **save changes**, which is on the profile, preferences and security sections, not on this one. to change one switch and be done, use [the deep link](#the-deep-link) below, where each switch saves as you flip it.
+**alert emails arrive** and each switch save as you change them, here and on [the deep link](#the-deep-link). the CC list is saved by **save changes**, which is on the profile, preferences and security sections, not on this one.
 
 ### muted machines
 
@@ -68,7 +70,7 @@ muting is per user. a machine you have muted still emails everyone else on the s
 
 ### the deep link
 
-every alert email ends with **manage alerts**, which opens `/settings/alerts`: the same seven switches on a page of their own, so you can turn one off from your phone without going through the dashboard. each switch saves as you flip it. CC recipients are only in this dialog.
+every alert email ends with **manage alerts**, which opens `/settings/alerts`: the same choice and seven switches on a page of their own, so you can change one from your phone without going through the dashboard. each saves as you change it. CC recipients are only in this dialog.
 
 ---
 
@@ -119,6 +121,6 @@ your personal scoped API keys — the same manager as `/settings/api-keys`, with
 
 ## danger zone
 
-**delete account** removes your account after you re-enter your password: your sites and machines, their deployments and logs, and your account data, and you are signed out. it cannot be undone.
+**delete account** removes your account after you re-enter your password: your sites and machines, their deployments, logs and screenshots, and your account data, and you are signed out. it cannot be undone.
 
 if you **own a site that has other members**, the deletion is refused with `needs_successor` — transfer ownership to another admin first. this is a hard stop, not a warning: an owned shared site cannot be left without an owner.

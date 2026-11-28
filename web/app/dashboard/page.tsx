@@ -45,6 +45,7 @@ import { nextDuplicateName } from '@/lib/processNaming';
 import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { MissingPathDialog } from './components/MissingPathDialog';
 import { machinesNotice, NoMachinesForYou, MachinesLoadError } from './components/MachinesNotice';
 import { usePathCheck, type PathWarning } from '@/hooks/usePathCheck';
@@ -82,10 +83,6 @@ const CreateSiteDialog = dynamic(
 );
 const ScreenshotDialog = dynamic(
   () => import('@/components/ScreenshotDialog').then((m) => ({ default: m.ScreenshotDialog })),
-  { ssr: false, loading: () => null },
-);
-const LiveViewModal = dynamic(
-  () => import('@/components/LiveViewModal').then((m) => ({ default: m.LiveViewModal })),
   { ssr: false, loading: () => null },
 );
 
@@ -132,6 +129,8 @@ export default function DashboardPage() {
   const [addMachineTab, setAddMachineTab] = useState<'enter' | 'generate'>('enter');
   // Inline 3-word-phrase authorize; shares AddMachineButton's "enter code" implementation.
   const emptyStateAuthorize = useDeviceCodeAuthorize(currentSiteId);
+  // a superadmin without a member row reads the site; the banner says how to change it (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
 
 
   // Single editor instance, opened by the gear icon on any process.
@@ -201,7 +200,7 @@ export default function DashboardPage() {
     ? editProcessForm.schedules
     : DEFAULT_SCHEDULE;
 
-  const { machines, loading: machinesLoading, error: machinesError, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId, scope);
+  const { machines, loading: machinesLoading, error: machinesError, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot } = useMachines(currentSiteId, scope);
   const { prefs: devicePrefs, setListPref } = useDevicePrefs();
   const listPref = devicePrefs.listView;
   const { presets: schedulePresets, createPreset, deletePreset: deleteSchedulePreset, updatePreset: updateSchedulePreset } = useSchedulePresets(currentSiteId);
@@ -232,9 +231,6 @@ export default function DashboardPage() {
 
   const [screenshotDialogOpen, setScreenshotDialogOpen] = useState(false);
   const [screenshotTarget, setScreenshotTarget] = useState<{ machineId: string; machineName: string; isOnline: boolean } | null>(null);
-
-  const [liveViewOpen, setLiveViewOpen] = useState(false);
-  const [liveViewTarget, setLiveViewTarget] = useState<{ machineId: string; machineName: string } | null>(null);
 
   // A live "clear all" keeps the panel open, but an empty selection restored from a
   // previous session must NOT reopen it — that reserves an empty slide and pushes the
@@ -610,7 +606,8 @@ export default function DashboardPage() {
       (p) => p.id === alert.processId || p.name === alert.processName,
     );
 
-    if (!machine || !process) {
+    // a superadmin without a member row can't save the process, so the path is copied instead (adr 0021)
+    if (!machine || !process || memberLocked) {
       void navigator.clipboard?.writeText(suggestedPath);
       toast.success('suggested path copied');
       return;
@@ -877,11 +874,6 @@ export default function DashboardPage() {
     setScreenshotDialogOpen(true);
   };
 
-  const openLiveView = (machineId: string) => {
-    setLiveViewTarget({ machineId, machineName: machineId });
-    setLiveViewOpen(true);
-  };
-
   // Stable for the memoized cards and rows: see useStableCallback.
   const onEditProcess = useStableCallback(openEditProcessDialog);
   const onDuplicateProcess = useStableCallback(handleDuplicateProcess);
@@ -897,7 +889,6 @@ export default function DashboardPage() {
   const onCancelRestart = useStableCallback(cancelRestart);
   const onDismissRestartPending = useStableCallback(dismissRestartPending);
   const onScreenshot = useStableCallback(openScreenshot);
-  const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
   const onSwoopApp = useStableCallback(openSwoopApp);
   const onSiteSettings = useStableCallback(() => router.push(SWOOP_SETTINGS_PATH));
@@ -938,13 +929,12 @@ export default function DashboardPage() {
     onShutdown: (options?: PowerCommandOptions) => onShutdownMachine(id, options),
     onCancelRestart: () => onCancelRestart(id),
     onScreenshot: () => onScreenshot(id),
-    onLiveView: () => onLiveView(id),
     onSwoop: () => onSwoop(id),
     onSwoopApp: () => onSwoopApp(id),
   }])), [
     machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
     onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
-    onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+    onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onSwoop,
     onSwoopApp,
   ]);
 
@@ -1092,7 +1082,7 @@ export default function DashboardPage() {
               // this banner unreachable.
               schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
               machines={machines}
-              isSiteAdmin={isSiteAdmin(currentSiteId)}
+              isSiteAdmin={isSiteAdmin(currentSiteId) && !memberLocked}
               onUpdateSite={updateSite}
             />
 
@@ -1108,10 +1098,12 @@ export default function DashboardPage() {
               {sitePlan.plan?.enforced && isSiteAdmin(currentSiteId) && (
                 <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
               )}
+              {!memberLocked && (
               <AddMachineButton
                 currentSiteId={currentSiteId}
                 currentSiteName={currentSite?.name}
               />
+              )}
             </MachinesHeading>
 
             {/* Card View — only rendered when active */}
@@ -1143,7 +1135,6 @@ export default function DashboardPage() {
                   onCancelRestart={onCancelRestart}
                   onDismissRestartPending={onDismissRestartPending}
                   onScreenshot={onScreenshot}
-                  onLiveView={onLiveView}
                   onSwoop={onSwoop}
                   onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
@@ -1198,7 +1189,7 @@ export default function DashboardPage() {
               {/* Header "+" — reachable even with zero machines, so the manual
 "enter code" and bulk "generate code" pairing paths aren't
                   gated behind already having a machine. */}
-              {sites.length > 0 && (
+              {sites.length > 0 && !memberLocked && (
                 <CardAction>
                   <AddMachineButton
                     currentSiteId={currentSiteId}
@@ -1253,7 +1244,7 @@ export default function DashboardPage() {
                   log in and authorize the agent for site <span className="font-mono text-accent-cyan">{currentSite?.name || currentSiteId}</span>
                 </p>
 
-                {emptyStateAuthorize.success ? (
+                {memberLocked ? null : emptyStateAuthorize.success ? (
                   <div className="mt-3 flex items-center gap-2 rounded-md border border-success-border bg-success-surface px-3 py-2 text-sm text-foreground">
                     <CheckCircle2 className="h-4 w-4 shrink-0 text-success/80" />
                     machine authorized — it will appear above within seconds.
@@ -1737,9 +1728,9 @@ export default function DashboardPage() {
           currentLaunchMode={effectiveLaunchMode(scheduleEditorTarget.process)}
           presets={schedulePresets}
           // presets are site-wide: without the handlers a scoped admin applies them but writes none
-          onCreatePreset={isSiteAdmin(currentSiteId) ? handleCreatePreset : undefined}
-          onDeletePreset={isSiteAdmin(currentSiteId) ? async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); } : undefined}
-          onUpdatePreset={isSiteAdmin(currentSiteId) ? async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); } : undefined}
+          onCreatePreset={isSiteAdmin(currentSiteId) && !memberLocked ? handleCreatePreset : undefined}
+          onDeletePreset={isSiteAdmin(currentSiteId) && !memberLocked ? async (id) => { await deleteSchedulePreset(id); toast.success('preset deleted'); } : undefined}
+          onUpdatePreset={isSiteAdmin(currentSiteId) && !memberLocked ? async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('preset updated'); } : undefined}
         />
       )}
 
@@ -1756,19 +1747,6 @@ export default function DashboardPage() {
           onCaptureScreenshot={() => captureScreenshot(screenshotTarget.machineId)}
           lastScreenshot={machines.find(m => m.machineId === screenshotTarget.machineId)?.lastScreenshot}
           hasActiveDeployment={checkMachineHasActiveDeployment(screenshotTarget.machineId)}
-        />
-      )}
-
-      {/* Live View Modal */}
-      {liveViewTarget && (
-        <LiveViewModal
-          open={liveViewOpen}
-          onOpenChange={setLiveViewOpen}
-          siteId={currentSiteId}
-          machineId={liveViewTarget.machineId}
-          machineName={liveViewTarget.machineName}
-          onStartLiveView={startLiveView}
-          onStopLiveView={stopLiveView}
         />
       )}
     </PageCascade>

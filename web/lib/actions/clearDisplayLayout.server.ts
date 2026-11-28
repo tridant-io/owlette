@@ -4,8 +4,10 @@
  * — the machine's display config stays whatever Windows decides on its
  * own (no auto-revert, no drift tracking).
  *
- * Uses `FieldValue.delete()` so sibling `displays` keys (e.g. `enabled`,
- * `auto_enforce`, `autoRestore`) survive untouched.
+ * The same write turns auto-restore off: with no layout there is nothing to
+ * restore, and a layout stored later must not bring it back without a
+ * click. Merge-write with `FieldValue.delete()`, so the other `displays`
+ * keys and auto-restore's history and circuit breaker survive.
  */
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -36,6 +38,7 @@ export async function clearDisplayLayout(
     {
       displays: {
         assigned: FieldValue.delete(),
+        autoRestore: { enabled: false },
       },
     },
     { merge: true },

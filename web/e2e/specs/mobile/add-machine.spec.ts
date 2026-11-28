@@ -3,7 +3,7 @@
  * `mobile-chromium` project in playwright.config.ts.
  *
  * `mobile/responsive-acceptance.spec.ts` only measures /add; this one operates
- * it. Superadmin (not member) is deliberate: a member auto-selects their single
+ * it. A superadmin on two sites is deliberate: a member auto-selects their single
  * site, skipping the one control that needs proving on a phone — the Radix
  * `Select` whose listbox is portalled to `document.body` and so escapes every
  * layout constraint on the card.
@@ -16,9 +16,18 @@
 import { test, expect } from '@playwright/test';
 import { assertNoHorizontalOverflow } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
-import { TEST_SITES } from '../../helpers/seed';
+import { revokeMembership, seedMemberRow, TEST_SITES, TEST_USERS } from '../../helpers/seed';
 
 test.use(roleState('superadmin'));
+
+// /add offers a superadmin only the sites they are a member of (adr 0021): two, so the picker opens
+test.beforeAll(async () => {
+  for (const site of TEST_SITES.slice(0, 2)) await seedMemberRow(site.id, TEST_USERS.superadmin.uid, 'admin');
+});
+
+test.afterAll(async () => {
+  for (const site of TEST_SITES.slice(0, 2)) await revokeMembership(site.id, TEST_USERS.superadmin.uid);
+});
 
 const PAIR_PHRASE = 'silver-compass-drift';
 const PAIRED_MACHINE_ID = 'e2e-mobile-paired-machine';

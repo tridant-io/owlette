@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from '@/lib/toast';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 /**
  * a site's name and timezone. the fields seed from props once, so mount it keyed
@@ -23,6 +24,7 @@ export function SiteGeneralSection({
   const [name, setName] = useState(site.name);
   const [timezone, setTimezone] = useState(savedTimezone);
   const [saving, setSaving] = useState(false);
+  const memberLocked = useMemberLock(site.id);
 
   const trimmedName = name.trim();
   const nameChanged = trimmedName !== site.name;
@@ -87,9 +89,11 @@ export function SiteGeneralSection({
             className="border-border bg-background text-foreground"
           />
         </div>
-        <Button type="submit" disabled={saving || !dirty}>
-          {saving ? 'saving…' : 'save'}
-        </Button>
+        {!memberLocked && (
+          <Button type="submit" disabled={saving || !dirty}>
+            {saving ? 'saving…' : 'save'}
+          </Button>
+        )}
       </form>
     </Panel>
   );

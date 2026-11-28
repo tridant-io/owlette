@@ -50,17 +50,15 @@ every process command matches `process_id` / `processId` first and falls back to
 
 for `restart_process`, `timeout_seconds` is the graceful-terminate window before the running process is force-killed: it defaults to 5 seconds, must be `>= 0`, and is capped at 30. `POST /api/sites/{siteId}/machines/{machineId}/commands` stamps its own top-level `timeout_seconds` (default 60, max 600) into every payload it queues, so an API-queued restart hits the 30-second cap unless the request body sends a smaller value — a `timeout_seconds` placed inside `params` is dropped by the route. restarting a process whose launch mode is `scheduled` outside its window records a manual override, the same as `start_process`.
 
-### screenshots and live view
+### screenshots
 
 | command | description | data payload |
 |---------|-------------|--------------|
 | `capture_screenshot` | capture a desktop screenshot | `{monitor}` (0=all, 1=primary, etc.) |
-| `start_live_view` | start a repeating screenshot loop | `{interval?, duration?}` |
-| `stop_live_view` | stop the live-view loop | `{}` |
 
-`capture_screenshot` uploads through the signed-URL flow. the capture happens inside the signed-in user's session: on Windows the service runs it there itself; on macOS the desktop app takes it, because the service has no display, and needs the app's Screen Recording grant. a Linux machine refuses the capture rather than answer with a black frame — there is no screen capture on Linux yet, though the dashboard menu still offers screenshot and live view.
+`capture_screenshot` uploads through the signed-URL flow. the capture happens inside the signed-in user's session: on Windows the service runs it there itself; on macOS the desktop app takes it, because the service has no display, and needs the app's Screen Recording grant. a Linux machine refuses the capture rather than answer with a black frame — there is no screen capture on Linux yet, though the dashboard menu still offers screenshot.
 
-`start_live_view` clamps `interval` to 5-60 seconds (default 10) and `duration` to 60-1800 seconds (default 600), then sets the machine's `liveView` flag until the duration expires or `stop_live_view` arrives. on a machine that can host [swoop](/docs/dashboard/swoop), the dashboard offers swoop in place of live view.
+live view, the repeating screenshot loop, is gone: [swoop](/docs/dashboard/swoop) shows a machine's screen live. the server answers `start_live_view` and `stop_live_view` with `unsupported_command_type`, and a loop an older agent was already running ends on its own within 30 minutes.
 
 ### configuration
 

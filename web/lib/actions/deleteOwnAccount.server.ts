@@ -2,7 +2,8 @@
  * Server-side cascade for `DELETE /api/users/me` (security-boundary-migration wave 3.10
  * + CRIT-A6). Replaces the old client-side writeBatch in AuthContext.deleteAccount.
  *
- * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs;
+ * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs
+ * and their machines' screenshots;
  * member-only sites are left intact; owned-but-shared sites refuse with `needs_successor`
  * — ownership must be transferred first (mirrors the admin cascade's `orphan_sites` guard).
  * Each deleted site's billing is stopped first and the site removed from tridant id, as
@@ -23,12 +24,14 @@
  * `dryRun` runs the same scans + classification and reports counts without mutating.
  */
 
-import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import { FieldValue, type CollectionReference, type Firestore } from 'firebase-admin/firestore';
 import type { Auth } from 'firebase-admin/auth';
 import type { Storage } from 'firebase-admin/storage';
+import { ALERT_DIGESTS, DIGEST_EVENTS } from '@/lib/alerts/digest.server';
 import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import { cancelMovesForSite } from '@/lib/machineMoves.server';
+import { deleteScreenshotsBestEffort } from '@/lib/screenshotStorage.server';
 import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
 import { removeTridantSite } from '@/lib/tridantSiteRemoval.server';
 import { unlinkTridantAccount } from '@/lib/userDeleteCascade.server';
@@ -98,6 +101,7 @@ export type DeleteOwnAccountResult =
         apiKeys: number;
         apiKeyLookups: number;
         mfaPending: number;
+        alertDigests: number;
         agentRefreshTokens: number;
         chats: number;
         chatMessages: number;
@@ -143,6 +147,7 @@ function emptyDeletedCounts() {
     apiKeys: 0,
     apiKeyLookups: 0,
     mfaPending: 0,
+    alertDigests: 0,
     agentRefreshTokens: 0,
     chats: 0,
     chatMessages: 0,
@@ -205,10 +210,14 @@ async function drainUserSubcollection(
   ctx: CascadeContext,
   subName: string,
 ): Promise<number> {
-  const colRef = ctx.db
-    .collection('users')
-    .doc(ctx.userId)
-    .collection(subName);
+  return drainCollection(ctx, ctx.db.collection('users').doc(ctx.userId).collection(subName));
+}
+
+/** Drain one flat collection in chunks of BATCH_SIZE. Returns docs deleted (counted in dry-run). */
+async function drainCollection(
+  ctx: CascadeContext,
+  colRef: CollectionReference,
+): Promise<number> {
   let total = 0;
 
   if (ctx.dryRun) {
@@ -221,7 +230,7 @@ async function drainUserSubcollection(
       if (snap.empty) break;
 
       for (const doc of snap.docs) {
-        ctx.deletedPaths.push(`users/${ctx.userId}/${subName}/${doc.id}`);
+        ctx.deletedPaths.push(`${colRef.path}/${doc.id}`);
       }
       total += snap.size;
 
@@ -239,7 +248,7 @@ async function drainUserSubcollection(
     const batch = ctx.db.batch();
     for (const doc of snap.docs) {
       batch.delete(doc.ref);
-      ctx.deletedPaths.push(`users/${ctx.userId}/${subName}/${doc.id}`);
+      ctx.deletedPaths.push(`${colRef.path}/${doc.id}`);
     }
     await batch.commit();
 
@@ -398,6 +407,20 @@ async function drainQueryWhereEqualsUser(
   }
 
   return { deleted, subDeleted };
+}
+
+/**
+ * Delete `alert_digests/{uid}`: the queued digest rows, then the state doc with
+ * any stored digest body. Returns docs deleted (counted in dry-run).
+ */
+async function drainAlertDigest(ctx: CascadeContext): Promise<number> {
+  const stateRef = ctx.db.collection(ALERT_DIGESTS).doc(ctx.userId);
+  const rows = await drainCollection(ctx, stateRef.collection(DIGEST_EVENTS));
+  const state = await stateRef.get();
+  if (!state.exists) return rows;
+  ctx.deletedPaths.push(`${ALERT_DIGESTS}/${ctx.userId}`);
+  if (!ctx.dryRun) await stateRef.delete();
+  return rows + 1;
 }
 
 /** Delete `mfa_pending/{uid}`. Returns 1 if the doc existed, else 0. */
@@ -627,6 +650,7 @@ export async function deleteOwnAccount(
             apiKeys: numberOr0(counts.apiKeys),
             apiKeyLookups: numberOr0(counts.apiKeyLookups),
             mfaPending: numberOr0(counts.mfaPending),
+            alertDigests: numberOr0(counts.alertDigests),
             agentRefreshTokens: numberOr0(counts.agentRefreshTokens),
             chats: numberOr0(counts.chats),
             chatMessages: numberOr0(counts.chatMessages),
@@ -752,6 +776,9 @@ export async function deleteOwnAccount(
         deletedAt: FieldValue.serverTimestamp(),
       });
       await siteRef.delete();
+      // last: the drain took only the machine documents, so their screenshot records
+      // are still listed, and the images live in Storage. a failure keeps nothing
+      await deleteScreenshotsBestEffort(entry.siteId, null, 'deleteOwnAccount', db);
     }
     deletedPaths.push(`site_ids/${entry.siteId}`);
     deletedPaths.push(`sites/${entry.siteId}`);
@@ -767,6 +794,7 @@ export async function deleteOwnAccount(
   const verifiedNetworks = await drainUserSubcollection(ctx, 'verified_networks');
   const { apiKeys, apiKeyLookups } = await drainApiKeys(ctx);
   const mfaPending = await deleteMfaPending(ctx);
+  const alertDigests = await drainAlertDigest(ctx);
   const agentTokens = await drainQueryWhereEqualsUser(
     ctx,
     'agent_refresh_tokens',
@@ -806,6 +834,7 @@ export async function deleteOwnAccount(
     apiKeys,
     apiKeyLookups,
     mfaPending,
+    alertDigests,
     agentRefreshTokens: agentTokens.deleted,
     chats: chats.deleted,
     chatMessages: chats.subDeleted,

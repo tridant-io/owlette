@@ -34,11 +34,13 @@ import {
   type ActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
+import { machineOnlineState } from '@/lib/machineOnline';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
 import { screenshotUrlForModel } from '@/lib/screenshotStorage.server';
 import {
   Capability,
   hasCapability,
+  isMemberRole,
   siteStanding,
   type Actor,
   type MachineActor,
@@ -204,6 +206,14 @@ export interface BuildExecutableToolsOptions {
    * the server-side tools never read it, so the autonomous path leaves it out.
    */
   machineScope?: readonly string[] | null;
+  /**
+   * whether the person holds a member row on the site. false for a superadmin
+   * without one: a site's screens are for its members, so the screenshot tool
+   * is not offered (adr 0021); their tier is 1 (`resolveHootMaxTier`). for the
+   * conversations API, which builds no site standing; `userStanding` says the
+   * same where it is passed, and with neither the person counts as no member.
+   */
+  isSiteMember?: boolean;
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
@@ -586,10 +596,12 @@ export async function verifyUserSiteAccess(
  * disk cleans) or tier 3 (run_powershell, deploy_software, reboot).
  */
 export function resolveHootMaxTier(access: SiteAccessLevel): ToolTier {
+  // a superadmin with no member row here reads, and changes nothing (adr 0021)
+  if (!isMemberRole(access.standing?.role)) return 1;
   return access.isSiteAdmin ? 3 : 1;
 }
 
-/** Reads the machine's presence document. */
+/** Reads the machine's doc as the dashboard does: {@link machineOnlineState}, not the bare flag. */
 export async function isMachineOnline(
   db: FirebaseFirestore.Firestore,
   siteId: string,
@@ -604,9 +616,7 @@ export async function isMachineOnline(
 
   if (!presenceDoc.exists) return false;
 
-  const data = presenceDoc.data()!;
-  const online = data.online ?? false;
-  return !!online;
+  return machineOnlineState(presenceDoc.data()!, Math.floor(Date.now() / 1000)) === 'online';
 }
 
 /**
@@ -661,6 +671,7 @@ export async function getHootRequireTier3Approval(
 /** One machine of a site, with the facts a dispatch and its prompt turn on. */
 export interface SiteMachineSummary {
   id: string;
+  /** {@link machineOnlineState} is `online`: the flag and a fresh heartbeat, as the dashboard reads it. */
   online: boolean;
   /** `cortexEnabled !== false` — absent means on, mirroring {@link isHootEnabled}. */
   hootEnabled: boolean;
@@ -678,7 +689,7 @@ export interface SiteMachineSummary {
 function machineSummary(id: string, data: FirebaseFirestore.DocumentData): SiteMachineSummary {
   return {
     id,
-    online: !!data.online,
+    online: machineOnlineState(data, Math.floor(Date.now() / 1000)) === 'online',
     hootEnabled: data.cortexEnabled !== false,
     timezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
     activeHoursGuard: hasActiveHoursGuard(data),
@@ -2435,6 +2446,11 @@ export function buildExecutableTools(
   const turnMachines = siteMode ? onlineMachines : [machineId];
   // anything but null is a scope, so a missing one hides the site-wide tools too
   const scoped = options.machineScope !== null;
+  // a superadmin reaches every site without a member row, and a site's screens are
+  // for its members. a granted machine answers to its grant (adr 0017), not to a
+  // member row. with nothing said, no member: fail closed
+  const member = options.isSiteMember ?? isMemberRole(options.userStanding?.role);
+  const hidesScreens = !options.machineActor && !member;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = {};
@@ -2442,6 +2458,7 @@ export function buildExecutableTools(
   for (const def of toolDefs) {
     const toolName = def.name;
     if (scoped && SITE_WIDE_SERVER_TOOLS.has(toolName)) continue;
+    if (hidesScreens && toolName === 'capture_screenshot') continue;
     if (options.machineActor && PERSON_ONLY_TOOLS.has(toolName)) continue;
     const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
     const takesOverride = takesActiveHoursOverride(def);

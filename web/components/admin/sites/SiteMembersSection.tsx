@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { SiteMemberApiError, useSiteMembers, type SiteMember } from '@/hooks/useSiteMembers';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { useTalonReassign, type SiteAuthoredTalons } from '@/hooks/useTalonReassign';
 import { SWOOP_MODE_LABELS, effectiveSwoopMode } from '@/lib/swoopMode';
 import { siteTalonSuccessors } from '@/lib/talonSuccessors';
@@ -103,6 +104,8 @@ function AccessCell({ machineIds, machines }: { machineIds: string[] | null; mac
  */
 export function SiteMembersSection({ siteId }: { siteId: string }) {
   const { user } = useAuth();
+  // a superadmin without a member row reads the members and changes none (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const { members, loading, error, refresh, addMember, removeMember, updateMember } = useSiteMembers(siteId);
   const { fetchSiteAuthored } = useTalonReassign();
   const { membersMayWatch } = useSwoopSettings(siteId).settings;
@@ -189,7 +192,7 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
         id="site-section-members"
         title="members"
         description="the people who can reach this site, their role, their swoop and their access."
-        actions={<CompactButton icon={Plus} label="add member" onClick={() => setAddOpen(true)} />}
+        actions={!memberLocked && <CompactButton icon={Plus} label="add member" onClick={() => setAddOpen(true)} />}
       >
         {error && <LoadError message={error} action="retry" onRetry={() => void refresh()} />}
 
@@ -234,9 +237,9 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
                   members.map((member) => {
                     const shown = displayRole(member.role);
                     // the server refuses both rows anyway: cannot_change_owner_role, cannot_modify_own_membership
-                    const canChangeAccess = member.role !== 'owner' && member.uid !== user?.uid;
+                    const canChangeAccess = !memberLocked && member.role !== 'owner' && member.uid !== user?.uid;
                     // ownership moves by transfer, never by removal
-                    const canRemove = member.role !== 'owner';
+                    const canRemove = !memberLocked && member.role !== 'owner';
                     const busy = removingUid === member.uid;
                     const swoop = SWOOP_MODE_LABELS[effectiveSwoopMode(shown, member.swoop, membersMayWatch)];
 

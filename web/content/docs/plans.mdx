@@ -34,7 +34,7 @@ owlette free is for watching one machine and keeping its software running.
 - **the dashboard.** live status, metrics, history and logs.
 - **process configuration.** adding, editing and removing processes, launch modes and schedules, so crash-restart can be set up from the dashboard as well as from the machine.
 - **updates.** `update_owlette` is accepted on every plan.
-- **stopping things.** cancelling a pending reboot, dismissing a restart-pending notice, stopping live view, cancelling a running hoot tool, cancelling a deployment, and ending a swoop session.
+- **stopping things.** cancelling a pending reboot, dismissing a restart-pending notice, cancelling a running hoot tool, cancelling a deployment, and ending a swoop session.
 - **removing things.** deleting a machine, site, deployment, roost, talon, webhook or API key is never refused by a plan.
 
 ### what it leaves out
@@ -45,7 +45,7 @@ each of these maps to one entitlement, which is what a refusal names in its `ent
 |---|---|---|
 | a second machine, counted across the free sites you own | `owlette.machines` | core |
 | another site once your free site is taken: it is created on core or pro | `owlette.sites` | core |
-| remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, live view, display changes | `owlette.control` | core |
+| remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, display changes | `owlette.control` | core |
 | alert rules, and every alert email | `owlette.control` | core |
 | software deployments | `owlette.deployments` | pro |
 | [swoop](/docs/dashboard/swoop) | `owlette.swoop` | pro |

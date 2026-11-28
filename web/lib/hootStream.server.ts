@@ -27,6 +27,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import { getSiteTimezone } from '@/lib/talons/store.server';
+import { isMemberRole } from '@/lib/capabilities';
 import { scopeCovers } from '@/lib/machineAccess';
 import { compareVersions, LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION } from '@/lib/versionUtils';
 import {
@@ -97,6 +98,8 @@ export async function runHootStream(
   const access = await verifyUserSiteAccess(db, userId, siteId);
   const maxToolTier = req.maxToolTier ?? resolveHootMaxTier(access);
   const machineScope = access.standing.machineIds;
+  // a superadmin reaches the site without a member row, and its screens are for its members
+  const isSiteMember = isMemberRole(access.standing.role);
 
   if (isSiteMode) {
     // a scoped caller's site is the machines in their scope
@@ -137,6 +140,7 @@ export async function runHootStream(
         dispatchMachines,
         access.role,
         machineScope,
+        isSiteMember,
         req.onAssistantText,
       ),
     };
@@ -172,9 +176,12 @@ export async function runHootStream(
 
   // Both conditions force the server-side path, because the local path runs tools
   // inside the agent where the web server can gate nothing: non-admins would
-  // escape the tier-1 cap, and tier-3 approval would escape `needsApproval`.
+  // escape the tier-1 cap, and tier-3 approval would escape `needsApproval`. For
+  // the same reason someone who may not see the screen stays on the server,
+  // where the screenshot tool is not offered.
   const localPathAllowed =
     access.isSiteAdmin &&
+    isSiteMember &&
     maxToolTier >= 3 &&
     !(await getHootRequireTier3Approval(db, siteId));
   const hootLocal = localPathAllowed
@@ -201,6 +208,7 @@ export async function runHootStream(
       maxToolTier,
       access.role,
       machineScope,
+      isSiteMember,
       req.onAssistantText,
     ),
   };
@@ -432,10 +440,11 @@ function handleServerSideLLM(
   maxToolTier: ToolTier,
   userRole: string | null,
   machineScope: readonly string[] | null,
+  isSiteMember: boolean,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole, machineScope),
+    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole, machineScope, isSiteMember),
     onAssistantText,
   );
 }
@@ -451,6 +460,7 @@ async function runServerSideLLM(
   maxToolTier: ToolTier,
   userRole: string | null,
   machineScope: readonly string[] | null,
+  isSiteMember: boolean,
 ): Promise<Response> {
   const [llmConfig, processes, requireTier3Approval, machine] = await Promise.all([
     resolveLlmConfig(db, userId),
@@ -470,7 +480,7 @@ async function runServerSideLLM(
     toolDefs,
     false,
     [],
-    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
+    { userId, userRole, machineScope, isSiteMember, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
@@ -503,10 +513,11 @@ function handleSiteWideMode(
   dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
   machineScope: readonly string[] | null,
+  isSiteMember: boolean,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole, machineScope),
+    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole, machineScope, isSiteMember),
     onAssistantText,
   );
 }
@@ -522,6 +533,7 @@ async function runSiteWideMode(
   dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
   machineScope: readonly string[] | null,
+  isSiteMember: boolean,
 ): Promise<Response> {
   const [llmConfig, requireTier3Approval, siteTimeZone] = await Promise.all([
     resolveLlmConfig(db, userId),
@@ -541,7 +553,7 @@ async function runSiteWideMode(
     toolDefs,
     true,
     machineIds,
-    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
+    { userId, userRole, machineScope, isSiteMember, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);

@@ -7,8 +7,10 @@
  *
  * DESIGN CONTRACTS — read before changing anything here:
  *
- * 1. STATELESS AND REMOUNT-SAFE. No hooks, no state, no Suspense boundary, no
- *    auth guard. Children sit at a fixed position in the tree so a parent
+ * 1. STATELESS AND REMOUNT-SAFE. No state, no Suspense boundary, no auth guard,
+ *    and no hook but the owlette swoop read, which only sets <main>'s padding
+ *    and drag surface; the window strip renders in every case and is empty in
+ *    a browser. Children sit at a fixed position in the tree so a parent
  *    re-render never unmounts them. Three things in the consuming pages die on
  *    a remount: the Turnstile token (TurnstileWidget's cleanup calls
  *    turnstile.remove(), and the submit button is gated on that token),
@@ -59,6 +61,8 @@ import {
 } from '@/components/ui/card';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { LoadingWord } from '@/components/LoadingWord';
+import { SwoopWindowStrip, dragBackground } from '@/components/swoop/SwoopWindowControls';
+import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { cn } from '@/lib/utils';
 
 export type AuthShellWidth = 'default' | 'wide';
@@ -157,14 +161,23 @@ export function AuthShell({
   const single = minimal || compact;
   const titleClass = compact ? COMPACT_TITLE_CLASS : BRAND_TITLE_CLASS;
   const description = brandDescription === undefined && !compact ? DEFAULT_DESCRIPTION : brandDescription;
+  const inViewerApp = useViewerAppPlatform() !== null;
 
   return (
     /* pb-32 clears the app-wide fixed Footer, whose inner container is
        pointer-events-auto and otherwise swallows taps on the card's bottom
-       controls at short viewport heights. */
-    <main className={cn('relative flex min-h-screen items-center justify-center p-4', !single && 'pb-32')}>
-      <div className="absolute inset-0 dot-grid opacity-30" aria-hidden="true" />
-      <div className="absolute inset-0 blueprint-grid opacity-15" aria-hidden="true" />
+       controls at short viewport heights. owlette swoop shows no footer
+       (Footer.tsx); there a press on the background around the card moves the
+       window, and the card's own text and controls keep their presses. the
+       textures let presses through so the background is what they land on. */
+    <main
+      {...(inViewerApp ? dragBackground : {})}
+      className={cn('relative flex min-h-screen items-center justify-center p-4', !single && !inViewerApp && 'pb-32')}
+    >
+      <div className="pointer-events-none absolute inset-0 dot-grid opacity-30" aria-hidden="true" />
+      <div className="pointer-events-none absolute inset-0 blueprint-grid opacity-15" aria-hidden="true" />
+      {/* owlette swoop's window has no frame: its controls, and nothing in a browser */}
+      <SwoopWindowStrip />
 
       {/* p-0 zeroes the Card primitive's py-6/gap-6 so each column owns its own
           p-8. overflow-hidden is what makes the -mx-8 bleeds (the divider, the

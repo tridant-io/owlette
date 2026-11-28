@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useSyncExternalStore, Suspense } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { doc, getDoc } from 'firebase/firestore';
@@ -12,24 +12,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Fingerprint } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
-import { useInAppBrowser } from '@/hooks/useInAppBrowser';
+import { startAuthentication } from '@simplewebauthn/browser';
+import { useSecondFactorChoices } from '@/hooks/useSecondFactorChoices';
 import { toast } from '@/lib/toast';
 import { safeNextPath } from '@/lib/appLink';
-
-/**
- * `browserSupportsWebAuthn()` reads `window.PublicKeyCredential`, so answering it during
- * render makes the passkey button server-absent / client-present. React recovers from that
- * hydration mismatch by discarding the SSR tree, which has swallowed clicks on these auth
- * pages before (see `canUsePasskey` in app/login/page.tsx).
- *
- * useSyncExternalStore rather than a mounted flag (matching `useInAppBrowser`): the server
- * snapshot is a real value, not an initial state to correct, so no cascading render. The
- * environment can't change within a document, so there is nothing to subscribe to.
- */
-const subscribeWebAuthnSupport = () => () => {};
-const getWebAuthnSupport = () => browserSupportsWebAuthn();
-const getWebAuthnSupportOnServer = () => false;
+import { ANY_FACTOR, holdsSecondFactor } from '@/lib/secondFactors';
 
 /**
  * Leave the challenge with a document load, NOT `router.push`.
@@ -57,7 +44,7 @@ function leaveChallenge(destination: string) {
 }
 
 function Verify2FAContent() {
-  const { user, loading, signOut } = useAuth();
+  const { user, loading, signOut, mfaFactors } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   // Accept `redirect` (proxy + login page) and the historical `return`. Must be a
@@ -72,17 +59,24 @@ function Verify2FAContent() {
   const [useBackupCode, setUseBackupCode] = useState(false);
   const [trustThisDevice, setTrustThisDevice] = useState(false);
   const [, setMfaReady] = useState(false);
-  const canUsePasskey = useSyncExternalStore(
-    subscribeWebAuthnSupport,
-    getWebAuthnSupport,
-    getWebAuthnSupportOnServer
-  );
   const [isPasskeyPending, setIsPasskeyPending] = useState(false);
-  const inApp = useInAppBrowser();
-  /** Also gated on the host app: in an embedded webview the ceremony can only use the HOST
-   * app's passkeys, so browserSupportsWebAuthn() is true but the prompt always fails. Safe
-   * to hide — TOTP and backup codes are always rendered. */
-  const showPasskey = canUsePasskey && !inApp.isInApp;
+  const [backupOpen, setBackupOpen] = useState(false);
+  // only the factors this account holds and this page can run. an inventory
+  // that reads empty here is a legacy or unreadable user document on an account
+  // the gate is challenging, so it gets every way in rather than none.
+  const choices = useSecondFactorChoices(
+    holdsSecondFactor(mfaFactors) ? mfaFactors : ANY_FACTOR,
+  );
+  const showPasskey = choices.passkey;
+  // without an authenticator app the code is a backup code, and it waits
+  // behind its link while the passkey is here to use; with neither, no form
+  const isBackupCode = useBackupCode || !choices.authenticatorCode;
+  const showCodeForm =
+    choices.authenticatorCode || (choices.backupCode && (backupOpen || !showPasskey));
+  // the ways in besides the passkey, for its failure's toast
+  const otherWays = [choices.authenticatorCode && 'your authenticator app', choices.backupCode && 'a backup code']
+    .filter(Boolean)
+    .join(' or ');
 
   useEffect(() => {
     if (!loading && !user) {
@@ -126,7 +120,7 @@ function Verify2FAContent() {
       return;
     }
 
-    if (!useBackupCode && verificationCode.length !== 6) {
+    if (!isBackupCode && verificationCode.length !== 6) {
       toast.error('please enter a 6-digit code');
       return;
     }
@@ -146,7 +140,7 @@ function Verify2FAContent() {
         body: JSON.stringify({
           userId: user.uid,
           code: verificationCode,
-          isBackupCode: useBackupCode,
+          isBackupCode,
           trustDevice: trustThisDevice,
         }),
       });
@@ -155,7 +149,7 @@ function Verify2FAContent() {
 
       if (!response.ok || data.error) {
         toast.error(data.error || 'invalid code', {
-          description: useBackupCode
+          description: isBackupCode
             ? 'the backup code you entered is incorrect.'
             : 'please check your authenticator app and try again.',
         });
@@ -213,9 +207,7 @@ function Verify2FAContent() {
           optionsData.code === 'no_passkeys'
             ? 'no passkeys are registered on this account'
             : 'could not start the passkey prompt',
-          {
-            description: 'use your authenticator app or a backup code instead.',
-          }
+          { description: otherWays ? `use ${otherWays} instead.` : 'try again.' }
         );
         setIsPasskeyPending(false);
         return;
@@ -233,7 +225,7 @@ function Verify2FAContent() {
 
       if (!verifyRes.ok) {
         toast.error('passkey verification failed', {
-          description: 'please try again, or use your authenticator app.',
+          description: otherWays ? `please try again, or use ${otherWays}.` : 'please try again.',
         });
         setIsPasskeyPending(false);
         return;
@@ -266,9 +258,14 @@ function Verify2FAContent() {
     <AuthShell
       brandTitle="two-factor authentication"
       brandDescription={
-        useBackupCode
-          ? 'enter one of your backup codes'
-          : 'enter the code from your authenticator app'
+        showCodeForm
+          ? isBackupCode
+            ? 'enter one of your backup codes'
+            : 'enter the code from your authenticator app'
+          : showPasskey
+            ? 'confirm it with your passkey'
+            : // nothing that runs here: say how to use the passkey instead
+              (choices.passkeyHint ?? 'confirm it with your passkey')
       }
       footer={
         <Button
@@ -283,14 +280,15 @@ function Verify2FAContent() {
     >
       {/* Passkey sits ABOVE the code form, mirroring /login's ordering, so
           the "trust this device" checkbox reads as belonging to the code
-          path it actually applies to. Hidden entirely in an embedded
-          webview or a browser without WebAuthn — the form below is always
-          rendered, so hiding this never strands the user. */}
+          path it actually applies to. Hidden for an account without one, and
+          in an embedded webview or a browser without WebAuthn: the code form
+          then shows on its own, so hiding this never strands the user. */}
       {showPasskey && (
         <>
           <Button
             type="button"
-            variant="outline"
+            // the one way in on its own is the primary one, as in swoop's step-up
+            variant={showCodeForm ? 'outline' : 'default'}
             className="w-full"
             onClick={handlePasskeyStepUp}
             disabled={isSubmitting || isPasskeyPending}
@@ -298,91 +296,114 @@ function Verify2FAContent() {
             <Fingerprint className="mr-2 h-4 w-4" />
             {isPasskeyPending ? 'waiting for passkey...' : 'use a passkey'}
           </Button>
-          <AuthDivider />
+          {showCodeForm ? (
+            <AuthDivider />
+          ) : choices.backupCode ? (
+            <Button
+              type="button"
+              variant="link"
+              onClick={() => setBackupOpen(true)}
+              disabled={isPasskeyPending}
+              className="w-full text-sm"
+            >
+              use a backup code instead
+            </Button>
+          ) : null}
         </>
       )}
 
-      <form onSubmit={handleVerify} className="space-y-6">
-        <div className="space-y-2">
-          <Label htmlFor="otp-code" className="sr-only">
-            {useBackupCode ? 'backup code' : '6-digit code'}
-          </Label>
-          <Input
-            id="otp-code"
-            type="text"
-            name="otp"
-            autoComplete="one-time-code"
-            inputMode={useBackupCode ? 'text' : 'numeric'}
-            placeholder={useBackupCode ? 'backup code' : '000000'}
-            value={verificationCode}
-            onChange={(e) => {
-              const value = useBackupCode
-                ? e.target.value.toUpperCase()
-                : e.target.value.replace(/\D/g, '').slice(0, 6);
-              setVerificationCode(value);
-            }}
-            maxLength={useBackupCode ? 16 : 6}
-            /* h-16 px-4 because text-2xl (32px line box) clips inside the
-               Input primitive's h-9 at every viewport — /setup-2fa's
-               identical field already does this. A 16-char backup code at
-               text-2xl + tracking-widest needs ~269px, more than the column
-               has on a phone, so that mode steps down a size until the
-               column is wide enough. */
-            className={cn(
-              'h-16 px-4 text-center font-mono tracking-widest',
-              useBackupCode ? 'text-lg @sm/auth-form:text-2xl' : 'text-2xl',
-            )}
-            autoFocus
-          />
-        </div>
+      {/* above a backup code; with no code either, the brand line says it */}
+      {!showPasskey && !choices.authenticatorCode && showCodeForm && choices.passkeyHint && (
+        <p className="text-xs text-muted-foreground">{choices.passkeyHint}</p>
+      )}
 
-        {/* Trust Device Checkbox */}
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="trustDevice"
-            checked={trustThisDevice}
-            onCheckedChange={(checked) => setTrustThisDevice(checked === true)}
-            // the hairline is dark-only (it vanishes on the light card) and
-            // unchecked-only, or the dark: variant would outrank the checked cyan.
-            className="dark:data-[state=unchecked]:border-border"
-          />
-          <Label
-            htmlFor="trustDevice"
-            className="text-sm text-foreground cursor-pointer"
+      {showCodeForm && (
+        <form onSubmit={handleVerify} className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="otp-code" className="sr-only">
+              {isBackupCode ? 'backup code' : '6-digit code'}
+            </Label>
+            <Input
+              id="otp-code"
+              type="text"
+              name="otp"
+              autoComplete="one-time-code"
+              inputMode={isBackupCode ? 'text' : 'numeric'}
+              placeholder={isBackupCode ? 'backup code' : '000000'}
+              value={verificationCode}
+              onChange={(e) => {
+                const value = isBackupCode
+                  ? e.target.value.toUpperCase()
+                  : e.target.value.replace(/\D/g, '').slice(0, 6);
+                setVerificationCode(value);
+              }}
+              maxLength={isBackupCode ? 16 : 6}
+              /* h-16 px-4 because text-2xl (32px line box) clips inside the
+                 Input primitive's h-9 at every viewport — /setup-2fa's
+                 identical field already does this. A 16-char backup code at
+                 text-2xl + tracking-widest needs ~269px, more than the column
+                 has on a phone, so that mode steps down a size until the
+                 column is wide enough. */
+              className={cn(
+                'h-16 px-4 text-center font-mono tracking-widest',
+                isBackupCode ? 'text-lg @sm/auth-form:text-2xl' : 'text-2xl',
+              )}
+              autoFocus
+            />
+          </div>
+
+          {/* Trust Device Checkbox */}
+          <div className="flex items-center space-x-2">
+            <Checkbox
+              id="trustDevice"
+              checked={trustThisDevice}
+              onCheckedChange={(checked) => setTrustThisDevice(checked === true)}
+              // the hairline is dark-only (it vanishes on the light card) and
+              // unchecked-only, or the dark: variant would outrank the checked cyan.
+              className="dark:data-[state=unchecked]:border-border"
+            />
+            <Label
+              htmlFor="trustDevice"
+              className="text-sm text-foreground cursor-pointer"
+            >
+              trust this device for 30 days
+            </Label>
+          </div>
+
+          <Button
+            type="submit"
+            disabled={
+              isSubmitting ||
+              isPasskeyPending ||
+              (!isBackupCode && verificationCode.length !== 6) ||
+              (isBackupCode && !verificationCode)
+            }
+            className="w-full"
           >
-            trust this device for 30 days
-          </Label>
-        </div>
+            {isSubmitting ? 'verifying...' : 'verify'}
+          </Button>
 
-        <Button
-          type="submit"
-          disabled={
-            isSubmitting ||
-            isPasskeyPending ||
-            (!useBackupCode && verificationCode.length !== 6) ||
-            (useBackupCode && !verificationCode)
-          }
-          className="w-full"
-        >
-          {isSubmitting ? 'verifying...' : 'verify'}
-        </Button>
-
-        {/* Stays in the form, directly under submit: it changes the field
-            above it. Only the sign-out escape moves to the footer band. */}
-        <Button
-          type="button"
-          variant="link"
-          onClick={() => {
-            setUseBackupCode(!useBackupCode);
-            setVerificationCode('');
-          }}
-          className="w-full text-sm"
-        >
-          {useBackupCode
-            ? 'use authenticator app instead'
-            : 'use backup code instead'}
-        </Button>
-      </form>
+          {/* Stays in the form, directly under submit: it changes the field
+              above it. Only the sign-out escape moves to the footer band. An
+              account with no authenticator app has only the backup code, and
+              one with no backup code left only the authenticator. */}
+          {choices.authenticatorCode && choices.backupCode && (
+            <Button
+              type="button"
+              variant="link"
+              onClick={() => {
+                setUseBackupCode(!useBackupCode);
+                setVerificationCode('');
+              }}
+              className="w-full text-sm"
+            >
+              {useBackupCode
+                ? 'use authenticator app instead'
+                : 'use backup code instead'}
+            </Button>
+          )}
+        </form>
+      )}
     </AuthShell>
   );
 }

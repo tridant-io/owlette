@@ -12,7 +12,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite } from '../../helpers/seed';
+import { grantMembership, revokeMembership, seedSite, TEST_USERS } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 import { expectSweepSize, sweptContrast } from '../../helpers/sweep';
 
 test.use(roleState('superadmin'));
@@ -63,6 +64,8 @@ async function getAlertRules(): Promise<AlertRule[]> {
 
 test.beforeEach(async () => {
   await seedSite({ id: SITE_ID, name: SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
+  // the superadmin changes a site only as its member (adr 0021)
+  await grantMembership(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
   // Reset to empty; each test seeds what it needs.
   await setAlertRules([]);
 });
@@ -74,10 +77,7 @@ async function gotoAlertsForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'alerts', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox').first();
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(siteSelect).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists a seeded rule with its severity badge and summary line', async ({ page }) => {
@@ -184,4 +184,8 @@ test('deleting a rule removes it from the Firestore rules array', async ({ page 
 
   const rules = await getAlertRules();
   expect(rules.find((r) => r.id === SEEDED_RULE.id)).toBeUndefined();
+});
+
+test.afterAll(async () => {
+  await revokeMembership(SITE_ID, TEST_USERS.superadmin.uid);
 });

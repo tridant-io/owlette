@@ -39,12 +39,13 @@ function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-// parsed as useDisplayState reads the config document: partial data is normal
-function readAutoRestore(raw: unknown) {
+// parsed as useDisplayState reads the config document: partial data is normal. with no
+// layout stored auto-restore is off whatever the flag says, as the panel shows it
+function readAutoRestore(raw: unknown, hasLayout: boolean) {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const cb = (r.circuitBreaker && typeof r.circuitBreaker === 'object' ? r.circuitBreaker : {}) as Record<string, unknown>;
   return {
-    enabled: r.enabled === true,
+    enabled: hasLayout && r.enabled === true,
     enabledBy: str(r.enabledBy) ?? null,
     enabledAt: timestampToIso(r.enabledAt),
     circuitBreakerTripped: cb.tripped === true,
@@ -68,12 +69,13 @@ const getSavedDisplayLayoutTool: FleetServerTool = {
     const snap = await ctx.db.collection('config').doc(ctx.siteId).collection('machines').doc(machine).get();
     const displays = (snap.exists ? snap.data()?.displays : null) ?? {};
     const candidate = displays.assigned;
+    const hasLayout = Array.isArray(candidate?.monitors) && candidate.monitors.length > 0;
     const result: Record<string, unknown> = {
       assigned: null,
-      autoRestore: readAutoRestore(displays.autoRestore),
+      autoRestore: readAutoRestore(displays.autoRestore, hasLayout),
       remoteApplyEnabled: displays.remoteApplyEnabled === true,
     };
-    if (candidate && Array.isArray(candidate.monitors)) {
+    if (hasLayout) {
       result.assigned = {
         monitors: candidate.monitors.slice(0, MAX_MONITORS),
         capturedAt: timestampToIso(candidate.capturedAt),

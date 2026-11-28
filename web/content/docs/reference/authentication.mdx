@@ -60,7 +60,7 @@ clearing a code at `/verify-2fa` with **trust this device** (`trustDevice: true`
 - **from the dashboard**: `POST /api/auth/app-link`, from a session that has passed two-factor, mints an approved code that lives 60 seconds. it rides the `owlette-swoop://<host>/app-link?code=…&next=/swoop/<site>/<machine>` link, and the app's `/app-link` page exchanges it
 - **from the app**: **sign in with your browser** calls `POST /api/auth/app-link/start`, which returns a pending code, a poll secret and the page `/app-link/approve?code=…`, all good for 10 minutes. the app opens that page in the system browser, where a user whose session has passed two-factor approves it, and polls `POST /api/auth/app-link/exchange` with the code and its secret
 
-an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
+an exchange is single use, never names the uid, and answers a Firebase custom token whose `appLinkMfa` claim carries the approver's `mfaSatisfiedBy`, and `appLinkMfaAt` the time the approver passed its second factor. `POST /api/auth/session` honours the claims only for a custom-token sign-in made in the last 5 minutes, so the app's session has the approver's two-factor state and the time of the approver's ceremony, not of the hand-off: a ceremony under five minutes old counts as swoop's step-up for the machines opened in those five minutes, and a browser signed in days ago hands the app no step-up by approving. a `device-trust` approver therefore gives a `device-trust` app session, which answers swoop's step-up with a code in the app; any other whose account holds a passkey can use **verify in your browser**, which passes the ceremony at `/swoop/<site>/<machine>/verify` in the system browser and opens the same 7-day window for that user and machine while the app polls `GET …/swoop/step-up`.
 
 ### the network a second factor was passed on
 
@@ -85,6 +85,7 @@ an agent holds a one-hour Firebase ID token for its Firestore and API calls, and
 2. someone authorizes the phrase: POST /api/agent/auth/device-code/authorize
    ├── body: pairPhrase, siteId. needs a dashboard session holding
    │     MACHINE_ENROLL on that site: a site owner or admin, or a superadmin
+   │     who is a member of it (403 members_only otherwise)
    ├── preview: true answers machineId and whether that machine is already
    │     on the site, and changes nothing
    ├── a machine already on the site needs replaceMachineId naming it; without
@@ -305,14 +306,14 @@ two-factor authentication is mandatory, and **either** kind of factor satisfies 
 `lib/mfaFactors.server.ts` is the **only** writer of the three fields that describe an account's 2FA state:
 
 ```
-users/{userId}.mfaFactors       = { totp: boolean, passkeys: number }
+users/{userId}.mfaFactors       = { totp: boolean, passkeys: number, backupCodes: number }
 users/{userId}.mfaEnrolled      = mfaFactors.totp || mfaFactors.passkeys > 0
 users/{userId}.requiresMfaSetup = !mfaEnrolled
 ```
 
-`mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write.
+`mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write. `backupCodes` counts the unused backup codes, written with every sheet issued, spent or wiped, so a second-factor screen offers a backup code only while one is left; a document with no count yet is offered one, and its next code try or factor change writes it.
 
-an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. the API refuses its session and its Firebase ID token with `403` and `code: "mfa_setup_required"`, except on the routes that set up a factor; its API keys keep working. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors` and `mfaVerified`, with no secrets in it.
+an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. the API refuses its session and its Firebase ID token with `403` and `code: "mfa_setup_required"`, except on the routes that set up a factor; its API keys keep working. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors`, `backupCodeCount` and `mfaVerified`, with no secrets in it.
 
 ### setup flow
 
@@ -398,13 +399,13 @@ it also [ends every session](#ending-sessions) the target holds: their next sign
 
 ## roles and access
 
-a person has a **global** role and, on each site they belong to, a **site** role. only one global role carries authority: `superadmin`, which holds every capability on every site without any member rows. every other global value (`member` or `admin`, being narrowed to `user`) grants self-service only: your own preferences and deleting your own account. a global `admin` gives nothing on a site.
+a person has a **global** role and, on each site they belong to, a **site** role. only one global role carries authority: `superadmin`, which holds every capability on every site without any member rows. a site's screens and changes to it are the exception: where they hold no member row a superadmin reads the site but sees none of its screens, and changes only an allowlist: updating owlette (to a published installer only), starting, stopping, restarting or killing a configured process, rebooting a machine or cancelling or dismissing a reboot, cancelling a deployment, revoking an agent token, and killing or kicking a swoop session. every other change there, pairing or moving a machine, processes, deployments, roost, talons, presets, settings, members, webhooks and alerts among them, answers [`403 members_only`](/docs/api/errors#members_only), and hoot gives them tier 1, without `capture_screenshot`. adding one to a site is recorded in its audit log. every other global value (`member` or `admin`, being narrowed to `user`) grants self-service only: your own preferences and deleting your own account. a global `admin` gives nothing on a site.
 
 what you can do on a site comes from your row in `sites/{siteId}/members/{uid}`:
 
 | site role | capabilities |
 |-----------|--------------|
-| **member** | `MACHINE_VIEW` (screenshots and live view) and `MACHINE_REMOTE_VIEW` by default (watching swoop, where the site lets members watch). read-only otherwise |
+| **member** | `MACHINE_VIEW` (screenshots) and `MACHINE_REMOTE_VIEW` by default (watching swoop, where the site lets members watch). read-only otherwise |
 | **admin** | a member's, plus `MACHINE_EXEC_COMMAND`, `MACHINE_REMOTE_CONTROL` by default, `SWOOP_SETTINGS_MANAGE`, `FLEET_SETTINGS_MANAGE`, `MACHINE_CONFIG_WRITE`, `MACHINE_REMOVE`, `MACHINE_ENROLL`, `AGENT_TOKEN_REVOKE`, `DEPLOYMENT_MANAGE`, `DISTRIBUTION_MANAGE`, `UNINSTALL_TRIGGER`, `PRESET_MANAGE`, `WEBHOOK_MANAGE`, `SITE_LOGS_MANAGE`, `SITE_MEMBER_MANAGE`, `TALON_MANAGE` and `ALERT_RULES_MANAGE` |
 | **owner** | an admin's, plus `SITE_DELETE` and `SITE_BILLING_MANAGE` |
 
@@ -432,7 +433,7 @@ a scoped member holds only the five **machine-class** capabilities their role an
 2. the swoop mode, which alone decides `MACHINE_REMOTE_VIEW` and `MACHINE_REMOTE_CONTROL` when the row sets one
 3. the machine scope: on a scoped row, a site-wide capability is refused, and a machine-class one holds only for a machine in the scope. a check that names no machine refuses a scoped member
 
-on a machine in their scope, every scoped member gets screenshots and live view, and the rest follows their role and swoop mode. on any other machine they get nothing:
+on a machine in their scope, every scoped member gets screenshots, and the rest follows their role and swoop mode. on any other machine they get nothing:
 
 | row | on a machine in scope |
 |---|---|

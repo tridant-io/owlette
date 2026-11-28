@@ -19,6 +19,7 @@ import {
   computeIsSiteOwner,
   computeMachineScope,
   computeIsMachineAdmin,
+  computeIsSiteMember,
   computeSiteRole,
   computeSwoopMode,
   shouldListenerBootstrap,
@@ -223,6 +224,16 @@ describe('machine scope', () => {
       expect(computeSiteRole(NO_SITES, SITE_IN)).toBeNull();
     });
   });
+
+  // the screens gate: a superadmin reaches every site without a row (adr 0021)
+  describe('computeIsSiteMember', () => {
+    it('is true for any row, scoped or not, and false with none', () => {
+      const mixed = roles({ [SITE_IN]: 'admin' });
+      expect(computeIsSiteMember(mixed, SITE_IN)).toBe(true);
+      expect(computeIsSiteMember(mixed, SITE_OUT)).toBe(false);
+      expect(computeIsSiteMember(NO_SITES, SITE_IN)).toBe(false);
+    });
+  });
 });
 
 describe('computeSwoopMode', () => {
@@ -243,8 +254,13 @@ describe('computeSwoopMode', () => {
     expect(computeSwoopMode('member', roleMap, swoopMap, SITE_IN, membersMayWatch)).toBe(expected);
   });
 
-  it('a superadmin controls on a site where they hold no row', () => {
-    expect(computeSwoopMode('superadmin', NO_SITES, NO_MODES, SITE_IN, false)).toBe('control');
+  // a site's screens are for its members, swoop's picture included (adr 0021)
+  it('a superadmin has no swoop on a site where they hold no row', () => {
+    expect(computeSwoopMode('superadmin', NO_SITES, NO_MODES, SITE_IN, true)).toBe('none');
+  });
+
+  it('a superadmin controls on a site where they hold a row, whatever it says', () => {
+    expect(computeSwoopMode('superadmin', MEMBER_ON_A, NO_MODES, SITE_IN, false)).toBe('control');
   });
 
   it('is none while the session is unresolved', () => {

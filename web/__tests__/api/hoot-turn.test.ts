@@ -110,7 +110,7 @@ const MACHINE_B = 'lobby-02';
 let chatDoc: Record<string, unknown> | null;
 
 /** `sites/{SITE}/machines`, both online: what the real resolver lists. */
-const siteMachines = [MACHINE, MACHINE_B].map((id) => ({ id, data: () => ({ online: true }) }));
+const siteMachines = [MACHINE, MACHINE_B].map((id) => ({ id, data: () => ({ online: true, lastHeartbeat: new Date() }) }));
 
 const fakeDb = {
   collection: (name: string) => {

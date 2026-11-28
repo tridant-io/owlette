@@ -1,14 +1,15 @@
 /**
  * When autonomous Hoot can't resolve an issue it emails site admins with what
- * it investigated and attempted.
+ * it investigated and attempted, or queues it for each one's alert digest.
  *
  * Server-side only — never import this in client components.
  */
 
 import { getSiteAlertRecipients, getMachineTimezone, recipientWantsMachine } from '@/lib/adminUtils.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
-import { getResend, FROM_EMAIL, ENV_LABEL, isProduction } from '@/lib/resendClient.server';
+import { ENV_LABEL, isProduction } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
+import { alertEmailDelivery, type DigestEvent } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { sanitizeForLog } from '@/lib/logSanitize';
 
 export async function escalate(
@@ -24,45 +25,46 @@ export async function escalate(
     return false;
   }
 
-  const resend = getResend();
-  if (!resend) {
-    console.warn('[hoot/escalation] Resend not configured — escalation email not sent');
-    return false;
-  }
-
   const tz = await getMachineTimezone(siteId, machineName);
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || (isProduction ? 'https://owlette.app' : 'https://dev.owlette.app');
   const subject = safeEmailSubject(`hoot escalation: ${processName} on ${machineName}`);
+  // keyed on the cortex-events id, so the cron and the autonomous route queue it once
+  const digestEvent: DigestEvent = {
+    sourceKey: `hoot|${siteId}|${eventId}`,
+    siteId,
+    machineId: machineName,
+    category: 'cortexAlerts',
+    kind: 'hoot_escalation',
+    severity: 'warning',
+    title: processName,
+    detail: hootResponse,
+    at: Date.now(),
+  };
 
-  let anySent = false;
+  // a queued escalation counts as handled: it reaches the person in their digest
+  const delivery = alertEmailDelivery();
+  let anyDelivered = false;
   for (const recipient of recipients) {
     // machineName is the machine id here, as the timezone lookup above reads it
     if (!recipientWantsMachine(recipient, machineName)) continue;
 
-    const unsubscribeUrl = recipient.userId !== 'fallback'
-      ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-      : undefined;
-    const html = buildEscalationEmail(siteId, machineName, processName, hootResponse, eventId, { unsubscribeUrl, timezone: tz });
-
-    const result = await resend.emails.send({
-      from: FROM_EMAIL,
-      to: [recipient.email],
-      ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-      subject,
-      html,
-    });
-
-    if (result.error) {
-      console.error(`[hoot/escalation] Resend error for ${sanitizeForLog(recipient.email)}:`, result.error);
-    } else {
-      anySent = true;
-    }
+    const outcome = await delivery.deliver(recipient, [digestEvent], () =>
+      sendAlertEmailNow({
+        log: '[hoot/escalation]',
+        recipient,
+        baseUrl,
+        subject,
+        html: (unsubscribeUrl) =>
+          buildEscalationEmail(siteId, machineName, processName, hootResponse, eventId, { unsubscribeUrl, timezone: tz }),
+      }),
+    );
+    if (outcome !== 'failed') anyDelivered = true;
   }
 
-  if (anySent) {
-    console.log(`[hoot/escalation] Escalation sent for ${sanitizeForLog(processName)} on ${sanitizeForLog(machineName)} (${sanitizeForLog(eventId)})`);
+  if (anyDelivered) {
+    console.log(`[hoot/escalation] Escalation delivered for ${sanitizeForLog(processName)} on ${sanitizeForLog(machineName)} (${sanitizeForLog(eventId)})`);
   }
-  return anySent;
+  return anyDelivered;
 }
 
 function buildEscalationEmail(

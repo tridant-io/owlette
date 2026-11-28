@@ -12,7 +12,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
-import { seedSite } from '../../helpers/seed';
+import { grantMembership, revokeMembership, seedSite, TEST_USERS } from '../../helpers/seed';
+import { pickSite } from '../../helpers/sitePicker';
 
 test.use(roleState('superadmin'));
 
@@ -48,6 +49,8 @@ async function seedCustomPreset(name: string) {
 
 test.beforeEach(async () => {
   await seedSite({ id: SITE_ID, name: SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
+  // the superadmin changes a site only as its member (adr 0021)
+  await grantMembership(SITE_ID, TEST_USERS.superadmin.uid, 'admin');
   await clearSchedulePresets();
 });
 
@@ -58,10 +61,7 @@ async function gotoSchedulesForSeededSite(page: Page) {
   await expect(
     page.getByRole('heading', { name: 'schedules', exact: true }),
   ).toBeVisible({ timeout: 10_000 });
-  const siteSelect = page.getByRole('combobox');
-  await siteSelect.click();
-  await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-  await expect(page.getByRole('combobox')).toContainText(SITE_NAME);
+  await pickSite(page, SITE_NAME);
 }
 
 test('lists all four built-in presets with the built-in badge and no trash', async ({ page }) => {
@@ -146,4 +146,8 @@ test('deleting a custom preset removes the Firestore doc', async ({ page }) => {
     .doc(presetId)
     .get();
   expect(snap.exists).toBe(false);
+});
+
+test.afterAll(async () => {
+  await revokeMembership(SITE_ID, TEST_USERS.superadmin.uid);
 });

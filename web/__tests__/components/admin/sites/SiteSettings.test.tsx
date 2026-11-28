@@ -40,6 +40,7 @@ jest.mock('@/contexts/AuthContext', () => ({
         auth.isSuperadmin ||
         (scopeOf(siteId) === null && (auth.adminOf.includes(siteId) || auth.ownerOf.includes(siteId))),
       isSiteOwner: (siteId: string) => auth.isSuperadmin || (scopeOf(siteId) === null && auth.ownerOf.includes(siteId)),
+      isSiteMember: (siteId: string) => auth.adminOf.includes(siteId) || auth.ownerOf.includes(siteId),
       machineScope: scopeOf,
       siteRole: (siteId: string) =>
         auth.ownerOf.includes(siteId) ? 'owner' : auth.adminOf.includes(siteId) ? 'admin' : 'member',
@@ -481,14 +482,21 @@ describe('sections', () => {
       expect(mockMachines?.targetSites).toEqual([]);
     });
 
-    it('are every other site for a superadmin', () => {
-      mockAuth = { isSuperadmin: true, adminOf: [], ownerOf: [] };
+    it('are every other site a superadmin is a member of', () => {
+      mockAuth = { isSuperadmin: true, adminOf: ['site-a'], ownerOf: ['site-c'] };
       renderSettings('site-b', 'machines');
 
       expect(mockMachines?.targetSites).toEqual([
         { id: 'site-a', name: 'Alpha' },
         { id: 'site-c', name: 'Charlie' },
       ]);
+    });
+
+    it('leave out the sites a superadmin is not a member of, as /add does', () => {
+      mockAuth = { isSuperadmin: true, adminOf: ['site-c'], ownerOf: [] };
+      renderSettings('site-b', 'machines');
+
+      expect(mockMachines?.targetSites).toEqual([{ id: 'site-c', name: 'Charlie' }]);
     });
   });
 

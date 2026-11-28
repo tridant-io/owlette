@@ -32,6 +32,16 @@ const mockDisplayAlertQuery = {
   get: mockDisplayAlertGet,
 };
 
+// global/alert_digest, the digest job's last run
+const mockDigestStatusGet = jest.fn();
+// alert_digests where pending == true, limit 1
+const mockDigestPendingGet = jest.fn();
+const mockDigestPendingQuery = {
+  where: jest.fn(() => mockDigestPendingQuery),
+  limit: jest.fn(() => mockDigestPendingQuery),
+  get: mockDigestPendingGet,
+};
+
 const mockTalonGet = jest.fn();
 const mockTalonQuery = {
   where: jest.fn(() => mockTalonQuery),
@@ -47,6 +57,10 @@ const mockDb = {
     if (name === 'webhook_deliveries') return mockWebhookQuery;
     if (name === 'pending_process_alerts') return mockProcessAlertQuery;
     if (name === 'pending_display_alerts') return mockDisplayAlertQuery;
+    if (name === 'alert_digests') return mockDigestPendingQuery;
+    if (name === 'global') {
+      return { doc: jest.fn(() => ({ get: mockDigestStatusGet })) };
+    }
     if (name === 'system_status') {
       return {
         doc: jest.fn(() => ({ get: mockSystemGet })),
@@ -102,6 +116,8 @@ describe('status health checks', () => {
     mockProcessAlertGet.mockResolvedValue(querySnapshot([]));
     mockDisplayAlertGet.mockResolvedValue(querySnapshot([]));
     mockTalonGet.mockResolvedValue(querySnapshot([]));
+    mockDigestStatusGet.mockResolvedValue({ data: () => ({ lastRunAt: 2_000_000 - 60_000 }) });
+    mockDigestPendingGet.mockResolvedValue({ empty: true, docs: [] });
     mockSystemGet.mockResolvedValue({ exists: true });
   });
 
@@ -280,6 +296,42 @@ describe('status health checks', () => {
 
     expect(mockProcessAlertQuery.where).toHaveBeenCalledWith('timestamp', '<=', expect.any(Date));
     expect(mockDisplayAlertQuery.where).toHaveBeenCalledWith('timestamp', '<=', expect.any(Date));
+  });
+
+  const pending = { empty: false, docs: [{ id: 'u1' }] };
+
+  it('marks alert delivery degraded when the digest job last ran over 45 minutes ago and a digest is waiting', async () => {
+    const now = 10_000_000;
+    mockDigestStatusGet.mockResolvedValueOnce({ data: () => ({ lastRunAt: now - 46 * 60_000 }) });
+    mockDigestPendingGet.mockResolvedValueOnce(pending);
+
+    const result = await alertDeliveryHealth({ now: () => now });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('alert digest job');
+    expect(result.metadata).toMatchObject({ alert_digest_threshold_minutes: 45, alert_digests_pending: true });
+    expect(mockDigestPendingQuery.where).toHaveBeenCalledWith('pending', '==', true);
+  });
+
+  it('marks alert delivery degraded when the digest job has never run and a digest is waiting', async () => {
+    mockDigestStatusGet.mockResolvedValueOnce({ data: () => undefined });
+    mockDigestPendingGet.mockResolvedValueOnce(pending);
+
+    const result = await alertDeliveryHealth({ now: () => 2_000_000 });
+
+    expect(result.ok).toBe(false);
+    expect(result.metadata).toMatchObject({ alert_digest_last_run_at: null });
+  });
+
+  it.each([
+    ['has never run', () => ({ data: () => undefined })],
+    ['last ran over 45 minutes ago', () => ({ data: () => ({ lastRunAt: 1 }) })],
+  ])('passes alert delivery when the digest job %s but nothing is waiting, since senders then email at once', async (_name, status) => {
+    mockDigestStatusGet.mockResolvedValueOnce(status());
+
+    const result = await alertDeliveryHealth({ now: () => 10_000_000 });
+
+    expect(result.ok).toBe(true);
   });
 
   it('marks alert delivery degraded when Firestore throws', async () => {

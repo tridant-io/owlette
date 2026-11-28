@@ -27,6 +27,8 @@ export interface MfaFactorsSnapshot {
   passkeys: PasskeyInfo[];
   /** TOTP (0 or 1) + registered passkeys. Zero means mandatory setup. */
   totalFactors: number;
+  /** Unused backup codes, so a code is offered only while one is left; null when unknown. */
+  backupCodeCount: number | null;
   /**
    * Has this session cleared an MFA challenge? Mirrors `checkMfaEnrollmentGate`
    * so the UI can offer a step-up before walking into a 403.
@@ -39,6 +41,7 @@ const EMPTY_SNAPSHOT: MfaFactorsSnapshot = {
   totp: { enrolled: false, enrolledAt: null },
   passkeys: [],
   totalFactors: 0,
+  backupCodeCount: null,
   mfaVerified: false,
 };
 
@@ -72,6 +75,7 @@ export function useMfaFactors(userId: string | undefined) {
         totp: data.totp ?? EMPTY_SNAPSHOT.totp,
         passkeys: data.passkeys ?? [],
         totalFactors: data.totalFactors ?? 0,
+        backupCodeCount: data.backupCodeCount ?? null,
         mfaVerified: data.mfaVerified === true,
       });
       setError(null);

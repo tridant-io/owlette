@@ -7,10 +7,11 @@
  * signature. The path must be one of this machine's screenshots.
  *
  * Auth: `machine=<id>:read` (api key) or site membership, as on the command poll.
+ * A superadmin who holds no member row on the site is refused: 403.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { problemFromError, problemValidation } from '@/lib/apiErrors';
+import { problemForbidden, problemFromError, problemValidation } from '@/lib/apiErrors';
 import {
   applyAuthDeprecations,
   requireMachineAuthAndScope,
@@ -18,6 +19,7 @@ import {
 import {
   isMachineScreenshotPath,
   issueScreenshotReadUrl,
+  SCREENS_MEMBERS_ONLY,
 } from '@/lib/screenshotStorage.server';
 
 interface RouteParams {
@@ -30,6 +32,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const auth = await requireMachineAuthAndScope(request, siteId, machineId, 'read');
     if (!auth.ok) return auth.response;
+    if (!auth.seesScreens) return problemForbidden(SCREENS_MEMBERS_ONLY);
 
     const storagePath = request.nextUrl.searchParams.get('path');
     const signed = isMachineScreenshotPath(storagePath, siteId, machineId)

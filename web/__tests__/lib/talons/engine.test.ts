@@ -296,8 +296,13 @@ function seedTalon(id: string, overrides: Partial<TalonDoc> = {}): StoredTalon {
   return { id, ...doc };
 }
 
+/** a heartbeat `ageMs` before NOW, as a Timestamp reads: only `toMillis` is used. */
+function heartbeatAgo(ageMs: number) {
+  return { toMillis: () => NOW.getTime() - ageMs };
+}
+
 function seedMachine(id: string, online: boolean, name = id): void {
-  fake.docs.set(`${MACHINES_PATH}/${id}`, { name, online });
+  fake.docs.set(`${MACHINES_PATH}/${id}`, { name, online, lastHeartbeat: heartbeatAgo(30_000) });
 }
 
 function seedRun(id: string, overrides: Partial<TalonRunDoc>): void {
@@ -1095,7 +1100,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null, member: true },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -1115,6 +1120,97 @@ describe('visual_check condition', () => {
     expect(html).toContain('the wall is showing the windows desktop');
   });
 
+  // a site's screens are for its members (adr 0021): the signed image goes only into
+  // a member's own email; everyone else gets the verdict and the reason without it
+  describe('who gets the capture', () => {
+    const FAILED = {
+      verdict: 'fail' as const,
+      confidence: 0.81,
+      reason: 'the wall is showing the windows desktop',
+      screenshotPath: 'screenshots/site-a/m1/shot.png',
+      screenshotUrl: 'https://storage.example.com/signed',
+    };
+
+    function failedRun(outputs: Array<Record<string, unknown>>) {
+      const talon = visualTalon({ scope: { machineIds: ['m1'] }, outputs });
+      seedMachine('m1', true);
+      mockEvaluateVisualCheck.mockResolvedValue(FAILED);
+      return runTalon(db, talon, { siteId: SITE, now: NOW });
+    }
+
+    it('sends a recipient who is not a member, such as the fallback address, the verdict without the image', async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'fallback', email: 'staff@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      ]);
+
+      const summaries = await failedRun([{ type: 'email' }]);
+
+      expect(outputByType(summaries[0].outputs, 'email').status).toBe('sent');
+      const html = send.mock.calls[0][0].html as string;
+      expect(html).not.toContain('https://storage.example.com/signed');
+      expect(html).not.toContain('what the display looked like');
+      expect(html).toContain('the wall is showing the windows desktop');
+    });
+
+    it("gives a member's cc addresses their own copy, without the image", async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'u1', email: 'a@example.com', ccEmails: ['team@example.com'], mutedMachines: [], machineIds: null, member: true },
+      ]);
+
+      await failedRun([{ type: 'email' }]);
+
+      expect(send).toHaveBeenCalledTimes(2);
+      const [own, copy] = send.mock.calls.map(
+        (call) => call[0] as { to: string[]; cc?: string[]; html: string; headers?: Record<string, string> },
+      );
+      expect(own.to).toEqual(['a@example.com']);
+      expect(own.cc).toBeUndefined();
+      expect(own.html).toContain('https://storage.example.com/signed');
+      // one-click unsubscribe only on the copy nobody else receives: a colleague's button must not turn off the member's alerts
+      expect(own.headers).toHaveProperty('List-Unsubscribe-Post', 'List-Unsubscribe=One-Click');
+      expect(copy.headers).toBeUndefined();
+      expect(copy.to).toEqual(['team@example.com']);
+      expect(copy.html).not.toContain('https://storage.example.com/signed');
+      expect(copy.html).toContain('the wall is showing the windows desktop');
+    });
+
+    it('keeps a cc on the one email when there is no image to keep from it', async () => {
+      const { client, send } = workingResend();
+      mockGetResend.mockReturnValue(client);
+      mockGetSiteAlertRecipients.mockResolvedValue([
+        { userId: 'u1', email: 'a@example.com', ccEmails: ['team@example.com'], mutedMachines: [], machineIds: null, member: true },
+      ]);
+      const talon = seedTalon('t1', { outputs: [{ type: 'email' }] });
+
+      await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'], cc: ['team@example.com'] });
+      expect(send.mock.calls[0][0]).not.toHaveProperty('headers');
+    });
+
+    it('sends a webhook the verdict and the storage path, never the signed image link', async () => {
+      fake.docs.set(`sites/${SITE}/talon_secrets/t1`, { talonId: 't1', secret: 'whsec_x' });
+
+      await failedRun([{ type: 'webhook', url: 'https://hooks.example.com/t' }]);
+
+      const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      const body = init.body as string;
+      expect(body).not.toContain('https://storage.example.com/signed');
+      expect(JSON.parse(body).data.condition).toEqual({
+        type: 'visual_check',
+        verdict: 'fail',
+        confidence: 0.81,
+        reason: 'the wall is showing the windows desktop',
+        screenshotPath: 'screenshots/site-a/m1/shot.png',
+      });
+    });
+  });
+
   it('skips an offline machine without attempting a capture', async () => {
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', false);
@@ -1124,6 +1220,23 @@ describe('visual_check condition', () => {
     expect(summaries[0]).toMatchObject({ status: 'skipped', error: 'machine_offline' });
     expect(mockEvaluateVisualCheck).not.toHaveBeenCalled();
     expect(logDocs()[0].action).toBe('talon_skipped');
+  });
+
+  // an agent that died without writing online: false leaves the flag stuck true.
+  // a capture of it can only fail, and ten of those would switch the talon off.
+  it.each([
+    ['a flag stuck true and an 18-day-old heartbeat, named in the scope', ['m1'], { online: true, lastHeartbeat: heartbeatAgo(18 * 24 * 60 * 60 * 1000) }],
+    ['a flag stuck true and an 18-day-old heartbeat, on a whole-site scope', null, { online: true, lastHeartbeat: heartbeatAgo(18 * 24 * 60 * 60 * 1000) }],
+    ['an asleep machine', ['m1'], { online: true, asleep: true, lastHeartbeat: heartbeatAgo(30_000) }],
+  ])('skips %s as offline', async (_label, machineIds, doc) => {
+    const talon = visualTalon({ scope: { machineIds } });
+    fake.docs.set(`${MACHINES_PATH}/m1`, { name: 'm1', ...doc });
+
+    const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+    expect(summaries[0]).toMatchObject({ status: 'skipped', error: 'machine_offline' });
+    expect(mockEvaluateVisualCheck).not.toHaveBeenCalled();
+    expect(talonDoc('t1').consecutiveFailures).toBe(0);
   });
 
   it('treats a machine with nobody logged in as a skip, not a failure', async () => {
@@ -1297,7 +1410,7 @@ describe('unrecoverable author problems', () => {
       condition: { type: 'visual_check', expectation: 'the loop is playing' },
       scope: { machineIds: ['m1'] },
     });
-    fake.docs.set(`${MACHINES_PATH}/m1`, { name: 'LOBBY-01', online: true });
+    seedMachine('m1', true, 'LOBBY-01');
     mockEvaluateVisualCheck.mockRejectedValue(
       new TalonVisualCheckError(
         'author_unavailable',

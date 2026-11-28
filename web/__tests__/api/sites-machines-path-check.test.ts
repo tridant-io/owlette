@@ -136,11 +136,17 @@ describe('who may call it', () => {
     });
   });
 
-  it('a superadmin queues check_path on a site it holds no row for', async () => {
+  // it tells the caller what is on a machine's disk, to edit what the machine launches,
+  // which a superadmin without a member row does not (adr 0021)
+  it('a superadmin is refused check_path on a site it holds no row for', async () => {
     mocks.memberDocs.clear();
     mocks.userDocs.set('user-1', { role: 'superadmin', sites: [] });
 
-    expect((await call({ field: 'cwd', value: 'C:\\show' })).status).toBe(202);
+    const res = await call({ field: 'cwd', value: 'C:\\show' });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('members_only');
+    expect(queuedCommand()).toBeNull();
   });
 
   it('a read-only member is refused: it may not edit the config either', async () => {

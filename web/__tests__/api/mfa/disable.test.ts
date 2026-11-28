@@ -414,13 +414,15 @@ describe('POST /api/mfa/disable — backup-code path', () => {
       'hash-bk-1',
       'hash-bk-3',
     ]);
+    expect(txConsumeWrite!.payload['mfaFactors.backupCodes']).toBe(2);
 
-    // The teardown write zeros out backupCodes entirely.
+    // The teardown write zeros out backupCodes entirely, and their count.
     const teardown = updateCalls.find(
       (c) => 'mfaEnrolled' in c.payload && c.payload.mfaEnrolled === false,
     );
     expect(teardown).toBeTruthy();
     expect(teardown!.payload.backupCodes).toEqual([]);
+    expect((teardown!.payload.mfaFactors as { backupCodes?: number }).backupCodes).toBe(0);
 
     expect(mockMarkSessionMfaDisabled).toHaveBeenCalledTimes(1);
     // Audit factor recorded as backup_code.

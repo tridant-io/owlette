@@ -64,6 +64,10 @@ export interface SwoopStageProps {
   upgradeHref?: string | null;
   /** connecting found no media path; the stage says so instead of a bare "connecting". */
   noPath?: SwoopNoPath | null;
+  /** asks again for the same machine; the notice offers it first, ahead of the way back. */
+  onTryAgain?: () => void;
+  /** where a lapsed sign-in signs in again and comes back here; offered first, as `onTryAgain` is. */
+  signInHref?: string | null;
   /** what the page is doing about a frozen picture; the stage says it over the picture. */
   stall?: SwoopStallRecovery;
   stageRef: RefObject<HTMLDivElement | null>;
@@ -157,6 +161,8 @@ export function SwoopStage({
   settingsHref = null,
   upgradeHref = null,
   noPath,
+  onTryAgain,
+  signInHref = null,
   stall = 'none',
   stageRef,
   videoRef,
@@ -337,6 +343,16 @@ export function SwoopStage({
           {/* text lines carry leading above and below their ink and the buttons' edge does not,
               so the same gap reads 7px tighter there; measured at these sizes */}
           <span className="pointer-events-auto mt-[7px] flex gap-2">
+            {onTryAgain && (
+              <Button type="button" size="sm" onClick={onTryAgain}>
+                try again
+              </Button>
+            )}
+            {signInHref && (
+              <Button asChild size="sm">
+                <Link href={signInHref}>sign in again</Link>
+              </Button>
+            )}
             {swoopOff && settingsHref && (
               <Button asChild size="sm">
                 <Link href={settingsHref}>open swoop settings</Link>

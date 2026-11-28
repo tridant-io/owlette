@@ -166,6 +166,23 @@ export async function deleteUser(
       reassignedTalonCount: reassignedTalonIds.length,
     },
   });
+  // in each site's own audit log too, as transfer-ownership writes it: the row above is
+  // the platform's, and a site's members read who took it over in theirs (adr 0021)
+  for (const siteId of result.transferredSites) {
+    emitMutation({
+      kind: 'site_member_mutated',
+      siteId,
+      actor: ctx.auditActor,
+      targetId: input.successorUid ?? '',
+      attributes: {
+        endpoint: ctx.endpoint ?? '',
+        method: ctx.method ?? 'DELETE',
+        verb: 'ownership_transferred',
+        previousOwnerUid: input.uid,
+        newOwnerUid: input.successorUid ?? null,
+      },
+    });
+  }
 
   return {
     ...result,

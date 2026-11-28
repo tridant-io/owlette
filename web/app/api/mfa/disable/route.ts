@@ -40,7 +40,7 @@ import {
   deviceTrustCookieOptions,
 } from '@/lib/deviceTrust.server';
 import { emitMutation } from '@/lib/auditLogClient';
-import { applyMfaFactorChange } from '@/lib/mfaFactors.server';
+import { applyMfaFactorChange, backupCodeCountUpdate, recountBackupCodes } from '@/lib/mfaFactors.server';
 import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
 
 export const POST = withRateLimit(async (request: NextRequest) => {
@@ -99,12 +99,13 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         const codes: string[] = Array.isArray(data.backupCodes) ? data.backupCodes : [];
         const idx = codes.findIndex((hash) => verifyBackupCode(normalizedCode, hash));
         if (idx === -1) {
+          recountBackupCodes(tx, userRef, data, codes);
           return { ok: false, reason: 'no_match' as const };
         }
         // Consume inside the transaction so a crash between verification and the
         // disable-write below can't leave the backup code re-usable.
         const remaining = codes.filter((_, i) => i !== idx);
-        tx.update(userRef, { backupCodes: remaining });
+        tx.update(userRef, { backupCodes: remaining, ...backupCodeCountUpdate(remaining) });
         return { ok: true } as const;
       });
 

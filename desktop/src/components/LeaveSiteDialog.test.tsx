@@ -103,7 +103,6 @@ function open(props: Partial<Parameters<typeof LeaveSiteDialog>[0]> = {}) {
     open: true,
     site: 'TEC',
     onClose: vi.fn(),
-    onLeft: vi.fn(),
     onHold: vi.fn(() => release),
     ...props,
   }
@@ -220,7 +219,6 @@ describe('LeaveSiteDialog', () => {
 
     expect(startAgentRun).not.toHaveBeenCalled()
     expect(serviceStart).not.toHaveBeenCalled()
-    expect(props.onLeft).not.toHaveBeenCalled()
     expect(copy()).toContain('nothing on this machine changed')
     expect(copy()).toContain('still paired to TEC')
     expect(screen.getByTestId('leave-error').textContent).toContain(
@@ -286,7 +284,6 @@ describe('LeaveSiteDialog', () => {
     await startLeave()
     await run.finish({ event: 'done', value: { siteId: 'default_site', deregistered: true } })
 
-    expect(props.onLeft).toHaveBeenCalledOnce()
     expect(copy()).toContain('this machine has left TEC and is no longer monitored.')
     expect(props.release).toHaveBeenCalledOnce()
   })
@@ -474,7 +471,6 @@ describe('LeaveSiteDialog off windows', () => {
 
     expect(serviceStart).not.toHaveBeenCalled()
     expect(copy()).toContain('this machine has left TEC and is no longer monitored.')
-    expect(props.onLeft).toHaveBeenCalledOnce()
     expect(props.release).toHaveBeenCalledOnce()
   })
 

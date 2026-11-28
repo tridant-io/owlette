@@ -20,13 +20,18 @@ import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { parseAlertDelivery, type AlertDelivery } from '@/lib/alerts/delivery';
 import { THEMES, type ThemeChoice } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import * as Sentry from '@sentry/nextjs';
 // Type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the
 // client bundle; `import type` is erased at compile time.
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
+// `users/{uid}.mfaFactors` is written only by `lib/mfaFactors.server.ts`; the
+// shared parser reads it the way every second-factor screen does.
+import { mfaFactorsFromUserDoc } from '@/lib/secondFactors';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
+import { isMemberRole } from '@/lib/capabilities';
 import { scopeCovers } from '@/lib/machineAccess';
 import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import { emitMembershipFallback, emitMembershipListenerError } from '@/lib/membershipMetrics';
@@ -118,26 +123,6 @@ const UNRESOLVED_MEMBERSHIP: { sites: undefined; fallbacks: readonly string[] } 
   sites: undefined,
   fallbacks: Object.freeze([]),
 });
-
-/**
- * Read the second-factor tally off a user document. `users/{uid}.mfaFactors` is
- * written only by `lib/mfaFactors.server.ts`, transactionally with the
- * `passkeys` subcollection. Parsed defensively: the field is absent on older
- * accounts, and a malformed value must read as "no factors" rather than
- * accidentally satisfying a "has a passkey" check.
- */
-function readMfaFactorsFromDoc(userData: Record<string, unknown>): MfaFactorInventory {
-  const raw = userData.mfaFactors;
-  if (typeof raw !== 'object' || raw === null) return NO_MFA_FACTORS;
-  const { totp, passkeys } = raw as { totp?: unknown; passkeys?: unknown };
-  return {
-    totp: totp === true,
-    passkeys:
-      typeof passkeys === 'number' && Number.isInteger(passkeys) && passkeys > 0
-        ? passkeys
-        : 0,
-  };
-}
 
 const createSessionCookie = async (userId: string, idToken: string): Promise<void> => {
   try {
@@ -372,9 +357,21 @@ export function computeSiteRole(
 }
 
 /**
+ * whether the caller holds a member row on `siteId`, scoped or not. a superadmin
+ * reaches every site without one, and a site's screens are for its members
+ * (adr 0021): the gate for showing them. the server still decides.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeIsSiteMember(roleMap: Map<string, SiteRole>, siteId: string): boolean {
+  return isMemberRole(roleMap.get(siteId));
+}
+
+/**
  * the caller's effective swoop mode on `siteId`, given the site's
- * `membersMayWatch`. a superadmin holds no member rows and always controls; no
- * row, or an unresolved session, is none.
+ * `membersMayWatch`. a superadmin controls where they hold a member row and has
+ * none elsewhere, since a site's screens are for its members (adr 0021); no row,
+ * or an unresolved session, is none.
  *
  * exported so it's testable without AuthProvider.
  */
@@ -385,7 +382,7 @@ export function computeSwoopMode(
   siteId: string,
   membersMayWatch: boolean
 ): SwoopMode {
-  if (role === 'superadmin') return 'control';
+  if (role === 'superadmin') return isMemberRole(roleMap.get(siteId)) ? 'control' : 'none';
   if (role === null) return 'none';
   const siteRole = roleMap.get(siteId);
   if (siteRole === undefined) return 'none';
@@ -408,6 +405,8 @@ export interface UserPreferences {
   displayAlerts: boolean; // Receive email alerts when display layout / topology events fire (drift, monitor removed, apply failed, auto-revert, etc). Default: true
   talonAlerts: boolean; // Receive email alerts when a talon (automation) fires or fails. Default: true
   apiKeyAlerts: boolean; // Receive email notices before one of your api keys expires (14 / 3 / 0 days out). Default: true
+  /** How the alert emails above arrive: each as it happens, or one digest an hour, a day (08:00 in `timezone`) or a week. Default: 'daily'. Talon and api key emails are always immediate. */
+  alertDelivery: AlertDelivery;
   displayAlertsBannerDismissed: boolean; // [B4.3] One-shot dismissal of the "new: display alerts" banner on /admin/alerts. Default: false (banner shows). The banner also auto-hides after 30 days from feature launch regardless of dismissal state.
   mutedMachines: string[]; // Machine IDs to suppress all alerts for. Default: []
   alertCcEmails: string[]; // Additional CC recipients for alert emails. Default: []
@@ -464,6 +463,8 @@ interface AuthContextType {
   isMachineAdmin: (siteId: string, machineId: string) => boolean;
   /** the role map's value for `siteId`, scoped or not. for labels only, never a gate. */
   siteRole: (siteId: string) => SiteRole | null;
+  /** holds a member row on `siteId`: a superadmin without one sees none of its screens. */
+  isSiteMember: (siteId: string) => boolean;
   /**
    * the caller's effective swoop mode on `siteId`; `membersMayWatch` comes from
    * the site's swoop settings. the dashboard offers no swoop at none, and the
@@ -485,6 +486,12 @@ interface AuthContextType {
   /** Second factors, mirrored live from the user doc. `totp || passkeys > 0` === `mfaEnrolled`. */
   mfaFactors: MfaFactorInventory;
   userPreferences: UserPreferences; // User preferences (temperature unit, etc.)
+  /**
+   * The timezone the account holds, or null. `userPreferences.timezone` falls
+   * back to the browser's zone when none is stored; the alert digest's server
+   * falls back to UTC, so a control naming the digest's clock reads this.
+   */
+  storedTimezone: string | null;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, firstName?: string, lastName?: string, turnstileToken?: string) => Promise<void>;
   signInWithGoogle: () => Promise<GoogleSignInResult>;
@@ -511,13 +518,15 @@ const AuthContext = createContext<AuthContextType>({
   machineScope: () => null,
   isMachineAdmin: () => false,
   siteRole: () => null,
+  isSiteMember: () => false,
   swoopMode: () => 'none',
   userSites: [],
   lastSiteId: null,
   lastMachineIds: {},
   requiresMfaSetup: false,
   mfaFactors: NO_MFA_FACTORS,
-  userPreferences: { temperatureUnit: 'C', timezone: 'UTC', timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true },
+  storedTimezone: null,
+  userPreferences: { temperatureUnit: 'C', timezone: 'UTC', timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, alertDelivery: 'daily', displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true },
   signIn: async () => {},
   signUp: async () => {},
   signInWithGoogle: async () => ({ isNewUser: false }),
@@ -550,7 +559,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [legacySites, setLegacySites] = useState<string[]>([]);
   const [requiresMfaSetup, setRequiresMfaSetup] = useState(false);
   const [mfaFactors, setMfaFactors] = useState<MfaFactorInventory>(NO_MFA_FACTORS);
-  const [userPreferences, setUserPreferences] = useState<UserPreferences>({ temperatureUnit: 'C', timezone: getBrowserTimezone(), timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true });
+  const [storedTimezone, setStoredTimezone] = useState<string | null>(null);
+  const [userPreferences, setUserPreferences] = useState<UserPreferences>({ temperatureUnit: 'C', timezone: getBrowserTimezone(), timeFormat: '12h', timeDisplayMode: 'machine', healthAlerts: true, processAlerts: true, thresholdAlerts: true, cortexAlerts: true, displayAlerts: true, talonAlerts: true, apiKeyAlerts: true, alertDelivery: 'daily', displayAlertsBannerDismissed: false, mutedMachines: [], alertCcEmails: [], statsExpanded: true, processesExpanded: true });
   // Ref mirror so updateUserPreferences reads current prefs without listing
   // them in its deps — that caused stale closures to clobber rapid stacked
   // updates (cell-click + sparkline-toggle).
@@ -671,7 +681,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                       : null;
                 const newSites: string[] = userData.sites || [];
                 const newRequiresMfa = userData.requiresMfaSetup || false;
-                const newMfaFactors = readMfaFactorsFromDoc(userData);
+                const newMfaFactors = mfaFactorsFromUserDoc(userData);
                 const newLastSiteId = userData.lastSiteId || null;
                 const newLastMachineIds = readLastMachineIds(userData.lastMachineIds);
 
@@ -680,7 +690,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setLegacySites(prev => arraysEqual(prev, newSites) ? prev : newSites);
                 setRequiresMfaSetup(prev => prev === newRequiresMfa ? prev : newRequiresMfa);
                 setMfaFactors(prev =>
-                  prev.totp === newMfaFactors.totp && prev.passkeys === newMfaFactors.passkeys
+                  prev.totp === newMfaFactors.totp &&
+                  prev.passkeys === newMfaFactors.passkeys &&
+                  prev.backupCodes === newMfaFactors.backupCodes
                     ? prev
                     : newMfaFactors
                 );
@@ -691,6 +703,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 setLastMachineIds(prev => isDeepEqual(prev, newLastMachineIds) ? prev : newLastMachineIds);
 
                 const preferences = userData.preferences || {};
+                setStoredTimezone(typeof preferences.timezone === 'string' && preferences.timezone ? preferences.timezone : null);
                 // Unknown/missing timeDisplayMode falls back to 'machine'.
                 const rawTdm = preferences.timeDisplayMode;
                 const timeDisplayMode: 'user' | 'machine' | 'site' =
@@ -707,6 +720,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   displayAlerts: preferences.displayAlerts !== false, // Default: true
                   talonAlerts: preferences.talonAlerts !== false, // Default: true
                   apiKeyAlerts: preferences.apiKeyAlerts !== false, // Default: true
+                  alertDelivery: parseAlertDelivery(preferences.alertDelivery), // Default: 'daily'
                   displayAlertsBannerDismissed: preferences.displayAlertsBannerDismissed === true, // Default: false (banner shows)
                   mutedMachines: preferences.mutedMachines || [], // Default: []
                   alertCcEmails: preferences.alertCcEmails || [], // Default: []
@@ -744,6 +758,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     prev.displayAlerts === newPrefs.displayAlerts &&
                     prev.talonAlerts === newPrefs.talonAlerts &&
                     prev.apiKeyAlerts === newPrefs.apiKeyAlerts &&
+                    prev.alertDelivery === newPrefs.alertDelivery &&
                     prev.displayAlertsBannerDismissed === newPrefs.displayAlertsBannerDismissed &&
                     prev.statsExpanded === newPrefs.statsExpanded &&
                     prev.processesExpanded === newPrefs.processesExpanded &&
@@ -1345,6 +1360,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (siteId: string) => computeSiteRole(roleMap, siteId),
     [roleMap]
   );
+  const isSiteMember = useCallback(
+    (siteId: string) => computeIsSiteMember(roleMap, siteId),
+    [roleMap]
+  );
   const swoopMode = useCallback(
     (siteId: string, membersMayWatch: boolean) =>
       computeSwoopMode(role, roleMap, swoopMap, siteId, membersMayWatch),
@@ -1362,12 +1381,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     machineScope,
     isMachineAdmin,
     siteRole,
+    isSiteMember,
     swoopMode,
     userSites,
     lastSiteId,
     lastMachineIds,
     requiresMfaSetup,
     mfaFactors,
+    storedTimezone,
     userPreferences,
     signIn,
     signUp,
@@ -1381,7 +1402,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, isSiteMember, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, storedTimezone, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

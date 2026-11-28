@@ -123,9 +123,12 @@ class FakeFirestore {
   }
 }
 
-/** The presence doc a pre-flight reads — `m1` is the machine-scoped target. */
+/**
+ * The presence doc a pre-flight reads — `m1` is the machine-scoped target. It
+ * heartbeats now: a flag with no fresh heartbeat reads offline, as on the dashboard.
+ */
 function seedMachine(data: DocData, machineId = 'm1'): void {
-  fake.seeded.set(`sites/${SITE}/machines/${machineId}`, data);
+  fake.seeded.set(`sites/${SITE}/machines/${machineId}`, { lastHeartbeat: Math.floor(NOW_MS / 1000), ...data });
 }
 
 let fake: FakeFirestore;

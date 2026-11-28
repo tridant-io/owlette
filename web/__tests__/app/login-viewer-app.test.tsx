@@ -8,8 +8,8 @@
  * signs in with the custom token and goes to the redirect.
  *
  * the page is also the app's own: the owlette swoop lockup with no tagline, the email form and
- * forgot-password behind a quiet link, one line to sign up, and the whole page the window's drag
- * surface.
+ * forgot-password behind a quiet link, one line to sign up, and the page's background the window's
+ * drag surface.
  *
  * the browser case matters as much: outside the app the page must be exactly what it was.
  */
@@ -198,10 +198,14 @@ describe('/login inside owlette swoop', () => {
     expect(screen.getByRole('link', { name: 'sign up' })).toHaveAttribute('href', '/register');
   });
 
-  it('makes the whole page the window drag surface', async () => {
+  it("makes the page's background the window drag surface, and leaves the card's presses alone", async () => {
     const { container } = await renderPage();
 
-    expect(container.firstElementChild).toHaveAttribute('data-tauri-drag-region', 'deep');
+    const background = container.firstElementChild!;
+    expect(background).toHaveAttribute('data-tauri-drag-region', 'true');
+    const card = background.querySelector('[data-slot="card"]')!;
+    expect(card.closest('[data-tauri-drag-region="deep"]')).toBeNull();
+    expect(card.querySelector('[data-tauri-drag-region]')).toBeNull();
   });
 
   it('never starts the passkey autofill ceremony', async () => {

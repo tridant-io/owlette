@@ -21,6 +21,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 export interface WebhookListItem {
   id: string;
@@ -91,6 +92,8 @@ export function WebhookCard({
   const [deliveriesLoading, setDeliveriesLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  // a superadmin without a member row reads a webhook and its deliveries, and changes neither (adr 0021)
+  const memberLocked = useMemberLock(siteId);
 
   const loadDeliveries = useCallback(async () => {
     setDeliveriesLoading(true);
@@ -261,6 +264,7 @@ export function WebhookCard({
             </div>
           </div>
 
+          {!memberLocked && (
           <div className="flex items-center gap-1">
             <IconButton
               label={webhook.paused ? 'resume webhook' : 'pause webhook'}
@@ -312,6 +316,7 @@ export function WebhookCard({
               )}
             </IconButton>
           </div>
+          )}
         </div>
 
         {/* -mx-1 px-1: room past the refresh button, flush right, for the focus ring the slide's clip would cut */}
@@ -362,6 +367,7 @@ export function WebhookCard({
                     <span className="text-muted-foreground w-24 text-right">
                       {formatRelative(d.createdAt)}
                     </span>
+                    {!memberLocked && (
                     <IconButton
                       label="retry this delivery"
                       type="button"
@@ -377,6 +383,7 @@ export function WebhookCard({
                         <RotateCcw className="h-3 w-3" />
                       )}
                     </IconButton>
+                    )}
                   </div>
                 ))}
               </div>

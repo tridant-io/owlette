@@ -4,6 +4,8 @@ import type { Actor } from '@/lib/capabilities';
 
 const mockSet = jest.fn().mockResolvedValue(undefined);
 const mockEmitMutation = jest.fn();
+// the config doc as it stood before the write; capture reads it inside its transaction
+let mockConfigDoc: Record<string, unknown> | undefined;
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
@@ -14,6 +16,12 @@ jest.mock('@/lib/firebase-admin', () => ({
         }),
       }),
     }),
+    runTransaction: (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        get: async () => ({ exists: mockConfigDoc !== undefined, data: () => mockConfigDoc }),
+        // tx.set takes the doc ref first; drop it so every op reads mockSet the same way
+        set: (_ref: unknown, data: unknown, opts: unknown) => mockSet(data, opts),
+      }),
   }),
 }));
 jest.mock('firebase-admin/firestore', () => ({
@@ -40,6 +48,7 @@ const CTX: ActionContext = { siteId: SITE, actor: ACTOR, auditActor: 'user:uid' 
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockConfigDoc = undefined;
 });
 
 describe('setDisplayLayout — capture', () => {
@@ -82,6 +91,41 @@ describe('setDisplayLayout — capture', () => {
       { id: 'primary', primary: true, position: { x: 0, y: 0 } },
       { id: 'secondary', primary: false, position: { x: 1920, y: 0 } },
     ]);
+  });
+
+  it('turns auto-restore off when it stores a layout where none was stored', async () => {
+    // a machine from before clear turned auto-restore off: the flag on, no layout
+    mockConfigDoc = { displays: { autoRestore: { enabled: true, enabledBy: 'bob@acme.com' } } };
+    await setDisplayLayout(CTX, {
+      machineId: MACHINE,
+      op: 'capture',
+      monitors: [{ deviceName: 'm' }],
+      capturedBy: 'alice@acme.com',
+    });
+    expect(mockSet).toHaveBeenCalledTimes(1);
+    const [payload] = mockSet.mock.calls[0];
+    expect((payload as { displays: { autoRestore: unknown } }).displays.autoRestore).toEqual({
+      enabled: false,
+    });
+  });
+
+  it('leaves auto-restore alone when it replaces a stored layout', async () => {
+    mockConfigDoc = {
+      displays: {
+        assigned: { monitors: [{ deviceName: 'old' }] },
+        autoRestore: { enabled: true, enabledBy: 'bob@acme.com' },
+      },
+    };
+    await setDisplayLayout(CTX, {
+      machineId: MACHINE,
+      op: 'capture',
+      monitors: [{ deviceName: 'm' }],
+      capturedBy: 'alice@acme.com',
+    });
+    const [payload] = mockSet.mock.calls[0];
+    expect((payload as { displays: Record<string, unknown> }).displays).not.toHaveProperty(
+      'autoRestore',
+    );
   });
 
   it('rejects empty monitors array', async () => {

@@ -3,12 +3,14 @@
 import { ImmediateSwitch, SettingSwitch } from '@/components/admin/SettingSwitch';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { useDisplaySettings } from '@/hooks/useDisplaySettings';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 const siteApi = (siteId: string) => `/api/sites/${encodeURIComponent(siteId)}`;
 
 /** a site's swoop switch, in its row on admin panel → swoop → settings. */
 export function SwoopSwitch({ siteId, siteName }: { siteId: string; siteName: string }) {
   const swoop = useSwoopSettings(siteId);
+  const locked = useMemberLock(siteId);
 
   return (
     <ImmediateSwitch
@@ -18,6 +20,7 @@ export function SwoopSwitch({ siteId, siteName }: { siteId: string; siteName: st
       loading={swoop.loading}
       url={`${siteApi(siteId)}/swoop-settings`}
       field="enabled"
+      locked={locked}
     />
   );
 }
@@ -25,6 +28,7 @@ export function SwoopSwitch({ siteId, siteName }: { siteId: string; siteName: st
 /** the site's keep screens awake switch, on its settings page's machines section. */
 export function KeepScreensAwakeSwitch({ siteId }: { siteId: string }) {
   const display = useDisplaySettings(siteId);
+  const locked = useMemberLock(siteId);
 
   return (
     <SettingSwitch
@@ -35,6 +39,7 @@ export function KeepScreensAwakeSwitch({ siteId }: { siteId: string }) {
       loading={display.loading}
       url={`${siteApi(siteId)}/display-settings`}
       field="keepAwake"
+      locked={locked}
     />
   );
 }

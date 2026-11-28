@@ -322,7 +322,7 @@ describe('POST /api/users/{uid}/mfa-reset', () => {
     const target = store.get(`users/${TARGET_UID}`) as Data;
     // The inventory module owns these three — the route may not write them
     // itself, so assert the outcome, not the mechanism.
-    expect(target.mfaFactors).toEqual({ totp: false, passkeys: 0 });
+    expect(target.mfaFactors).toEqual({ totp: false, passkeys: 0, backupCodes: 0 });
     expect(target.mfaEnrolled).toBe(false);
     expect(target.requiresMfaSetup).toBe(true);
 
@@ -419,7 +419,7 @@ describe('POST /api/users/{uid}/mfa-reset', () => {
     });
 
     const target = store.get(`users/${TARGET_UID}`) as Data;
-    expect(target.mfaFactors).toEqual({ totp: false, passkeys: 0 });
+    expect(target.mfaFactors).toEqual({ totp: false, passkeys: 0, backupCodes: 0 });
     expect(target.requiresMfaSetup).toBe(true);
     expect(target.email).toBe('never-enrolled@example.com');
   });

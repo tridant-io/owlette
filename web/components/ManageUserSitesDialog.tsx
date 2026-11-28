@@ -213,14 +213,15 @@ export function ManageUserSitesDialog({
             </DialogDescription>
           </DialogHeader>
 
-          {/* Superadmins reach every site by global role. A global `admin` does
-              NOT — since the per-site-roles migration it grants nothing on a site
-              it holds no membership row for, and this callout previously told
-              operators the opposite. */}
+          {/* Superadmins reach every site by global role, but see its screens and
+              change it only where they hold a membership row (adr 0021). A global
+              `admin` reaches nothing — since the per-site-roles migration it grants
+              nothing on a site it holds no membership row for, and this callout
+              previously told operators the opposite. */}
           {userRole === 'superadmin' && (
             <div className="bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-3 mt-4">
               <p className="text-accent-cyan text-sm">
-                <strong className="font-semibold">superadmin:</strong> this user reaches <strong>every site</strong> by their platform role, regardless of the assignments below.
+                <strong className="font-semibold">superadmin:</strong> this user reads <strong>every site</strong> by their platform role, but sees a site&apos;s screens and changes it only where assigned below. each assignment is recorded in that site&apos;s audit log.
               </p>
             </div>
           )}

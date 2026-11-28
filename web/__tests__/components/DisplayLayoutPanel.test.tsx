@@ -362,6 +362,17 @@ describe('DisplayLayoutPanel — auto-restore UI', () => {
     expect(toggle).toBeDisabled();
   });
 
+  it('reads off with no assigned layout even when auto-restore is stored on', () => {
+    // a layout cleared before clear turned auto-restore off left the flag on; the agent has
+    // nothing to restore to, so the switch and the "auto" chip must not claim it is on
+    setup({ access: SITE_ADMIN, hasAssignedLayout: false, autoRestore: { enabled: true } });
+    renderPanel();
+    const toggle = screen.getByTestId('display-auto-restore-toggle');
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeDisabled();
+    expect(screen.queryByTestId('display-auto-restore-status')).not.toBeInTheDocument();
+  });
+
   it('toggle is disabled when nvidia mosaic is active', () => {
     setup({ access: SITE_ADMIN, hasAssignedLayout: true, mosaicActive: true });
     renderPanel();

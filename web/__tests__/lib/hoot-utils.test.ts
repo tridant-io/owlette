@@ -177,18 +177,28 @@ function createProcessConfigDb(processes: unknown[]) {
 type MachineFixture = {
   id: string;
   online?: unknown;
+  asleep?: unknown;
+  lastHeartbeat?: unknown;
   cortexEnabled?: unknown;
   machine_timezone_iana?: unknown;
   capabilities?: unknown;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** a heartbeat `ageMs` old, as a Timestamp reads: only `toMillis` is used. */
+function heartbeatAgo(ageMs: number) {
+  return { toMillis: () => Date.now() - ageMs };
+}
+
 /**
  * A db whose only readable path is `sites/{siteId}/machines`, counting the
- * collection reads — resolving a set is specified to cost exactly one.
+ * collection reads — resolving a set is specified to cost exactly one. Every
+ * machine heartbeats now unless its fixture says otherwise.
  */
 function createSiteMachinesDb(machines: MachineFixture[]) {
   const machinesGet = jest.fn(async () => ({
-    docs: machines.map(({ id, ...data }) => ({ id, data: () => data })),
+    docs: machines.map(({ id, ...data }) => ({ id, data: () => ({ lastHeartbeat: heartbeatAgo(0), ...data }) })),
   }));
 
   const db = {
@@ -214,6 +224,7 @@ import {
   executeServerSideTool,
   buildExecutableTools,
   getMachineSummary,
+  isMachineOnline,
   listSiteMachines,
   resolveHootTargets,
   assertLlmKeyAvailable,
@@ -233,7 +244,7 @@ import {
   type BuildExecutableToolsOptions,
 } from '@/lib/hoot-utils.server';
 
-import { allTools } from '@/lib/mcp-tools';
+import { allTools, getToolsByTier } from '@/lib/mcp-tools';
 import { changesWhatMachineLaunches } from '@/lib/hoot/launchChange';
 import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
@@ -770,6 +781,7 @@ describe('deploy_software', () => {
       const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [def], false, [], {
         userId: 'u1',
         machineScope: null,
+        isSiteMember: true,
         launchChangeApprovable: true,
         turnId: 'turn-1',
         toolCallbacks: { abortSignal: stop.signal },
@@ -1002,10 +1014,45 @@ describe('listSiteMachines', () => {
       listSiteMachines(db, 's1', undefined as unknown as readonly string[] | null),
     ).rejects.toThrow(TypeError);
   });
+
+  // an agent that died without writing online: false leaves the flag stuck true;
+  // the dashboard reads it offline by its heartbeat, and so must a dispatch.
+  it('reads a stuck flag with a stale or absent heartbeat, and an asleep machine, as offline', async () => {
+    const { db } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true, lastHeartbeat: heartbeatAgo(18 * DAY_MS) },
+      { id: 'kiosk-02', online: true, lastHeartbeat: undefined },
+      { id: 'kiosk-03', online: true, asleep: true },
+      { id: 'kiosk-04', online: true },
+    ]);
+
+    const machines = await listSiteMachines(db, 's1', null);
+    expect(machines.map((machine) => machine.online)).toEqual([false, false, false, true]);
+  });
+});
+
+describe('isMachineOnline', () => {
+  function createMachineDb(data: Record<string, unknown> | null) {
+    const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
+    return {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({ get }) }) }) }),
+    } as unknown as FirebaseFirestore.Firestore;
+  }
+
+  it.each([
+    ['a fresh heartbeat', { online: true, lastHeartbeat: heartbeatAgo(30_000) }, true],
+    ['a flag stuck true and an 18-day-old heartbeat', { online: true, lastHeartbeat: heartbeatAgo(18 * DAY_MS) }, false],
+    ['a flag and no heartbeat', { online: true }, false],
+    ['an asleep machine', { online: true, asleep: true, lastHeartbeat: heartbeatAgo(30_000) }, false],
+    ['online: false', { online: false, lastHeartbeat: heartbeatAgo(30_000) }, false],
+    ['no doc', null, false],
+  ])('reads %s as the dashboard does', async (_label, data, expected) => {
+    await expect(isMachineOnline(createMachineDb(data), 's1', 'kiosk-01')).resolves.toBe(expected);
+  });
 });
 
 describe('getMachineSummary', () => {
-  function createMachineDb(data: Record<string, unknown> | null) {
+  function createMachineDb(fixture: Record<string, unknown> | null) {
+    const data = fixture === null ? null : { lastHeartbeat: heartbeatAgo(0), ...fixture };
     const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
     const paths: string[] = [];
     const db = {
@@ -1453,7 +1500,7 @@ async function runApproved(
 }
 
 describe('buildExecutableTools', () => {
-  const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null };
+  const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null, isSiteMember: true };
 
   it('creates an executable tool for each definition', () => {
     const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
@@ -1477,7 +1524,7 @@ describe('buildExecutableTools', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', siteMode ? '__site__' : 'm1', 'c1', allTools, siteMode, siteMode ? ['m1'] : [],
-      { machineScope: ['m1'] },
+      { machineScope: ['m1'], isSiteMember: true },
     );
 
     const offered = Object.keys(tools);
@@ -1498,6 +1545,40 @@ describe('buildExecutableTools', () => {
 
     const offered = Object.keys(tools);
     for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+  });
+
+  it('offers no screenshot to someone without a member row on the site, and everything else', () => {
+    // a superadmin reaches every site, but a site's screens are for its members
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      { machineScope: null, userStanding: { role: null, swoopMode: null, machineIds: null } },
+    );
+
+    expect(Object.keys(tools).sort()).toEqual(
+      allTools.map((def) => def.name).filter((name) => name !== 'capture_screenshot').sort(),
+    );
+  });
+
+  it('offers no screenshot when the conversations API says the person may not see the screen', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      { ...WHOLE_SITE, isSiteMember: false },
+    );
+
+    expect(Object.keys(tools)).not.toContain('capture_screenshot');
+    expect(Object.keys(tools)).toContain('get_system_info');
+  });
+
+  it('offers the screenshot to a member of the site', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      { ...WHOLE_SITE, userStanding: { role: 'member', swoopMode: null, machineIds: null } },
+    );
+
+    expect(Object.keys(tools)).toContain('capture_screenshot');
   });
 
   it('names exactly the five site-wide tools, each a tool that exists', () => {
@@ -1595,7 +1676,7 @@ describe('buildExecutableTools', () => {
       [toolDef],
       false,
       [],
-      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'], ...DASHBOARD_TURN },
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'], isSiteMember: true, ...DASHBOARD_TURN },
     );
     const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
 
@@ -1623,7 +1704,7 @@ describe('buildExecutableTools', () => {
       [toolDef],
       true,
       ['m1', 'm3'],
-      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'], ...DASHBOARD_TURN },
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'], isSiteMember: true, ...DASHBOARD_TURN },
     );
     const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
 
@@ -1765,7 +1846,7 @@ describe('a call names its machines in a turn on several', () => {
     db: FirebaseFirestore.Firestore,
     toolName: string,
     machines: string[] = TURN,
-    options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null } = { machineScope: null },
+    options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null } = { machineScope: null, isSiteMember: true },
   ) {
     const def = allTools.find((t) => t.name === toolName)!;
     return buildExecutableTools(db, 's1', '__site__', 'c1', [def], true, machines, options)[toolName];
@@ -1778,7 +1859,7 @@ describe('a call names its machines in a turn on several', () => {
 
   it('offers the list on every tool that runs on machines, and requires it above read-only', () => {
     const tools = buildExecutableTools(
-      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null, isSiteMember: true },
     );
 
     for (const def of allTools) {
@@ -1794,7 +1875,7 @@ describe('a call names its machines in a turn on several', () => {
 
   it('offers no list in a turn on one machine', () => {
     const tools = buildExecutableTools(
-      {} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], { machineScope: null },
+      {} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], { machineScope: null, isSiteMember: true },
     );
 
     for (const def of allTools) expect(tools[def.name].inputSchema.properties).not.toHaveProperty('machines');
@@ -1814,7 +1895,7 @@ describe('a call names its machines in a turn on several', () => {
   it('keeps the list out of what the agent is sent', async () => {
     const { db, docs } = createStoreDb();
 
-    const tool = toolFor(db, 'run_command', TURN, { machineScope: null, ...DASHBOARD_TURN });
+    const tool = toolFor(db, 'run_command', TURN, { machineScope: null, isSiteMember: true, ...DASHBOARD_TURN });
     await runApproved(db, tool, { command: 'hostname', machines: ['m2'] });
 
     const [command] = queuedAt(docs, 'sites/s1/machines/m2/commands/pending');
@@ -1905,7 +1986,7 @@ describe('a call names its machines in a turn on several', () => {
   });
 
   describe('an approved call, resumed after a machine it named left the turn', () => {
-    const ASKED = { machineScope: null, ...DASHBOARD_TURN };
+    const ASKED = { machineScope: null, isSiteMember: true, ...DASHBOARD_TURN };
     const RESUMED = { ...ASKED, incomingToolCallIds: ['call_1'] };
     const input = { machines: ['m1', 'm2'] };
 
@@ -1965,7 +2046,7 @@ describe('a call names its machines in a turn on several', () => {
 
     const { db } = createStoreDb();
     const tool = toolFor(db, 'add_process', TURN, {
-      userId: 'uid_alice', userRole: 'admin', machineScope: null, ...DASHBOARD_TURN,
+      userId: 'uid_alice', userRole: 'admin', machineScope: null, isSiteMember: true, ...DASHBOARD_TURN,
     });
     await runApproved(db, tool, { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machines: ['m3'] });
 
@@ -1974,7 +2055,7 @@ describe('a call names its machines in a turn on several', () => {
 
   it('leaves a tool that works on the site, not on machines, as it was', async () => {
     const tools = buildExecutableTools(
-      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null, isSiteMember: true },
     );
 
     expect(tools.list_talons.inputSchema).toEqual(allTools.find((t) => t.name === 'list_talons')!.parameters);
@@ -3183,6 +3264,7 @@ describe('the hoot actor', () => {
       userId: 'u1',
       userRole: 'admin',
       machineScope: null,
+      isSiteMember: true,
     });
     await tools.update_process.execute({ process_name: 'TouchDesigner', priority: 'High' });
     const actor: UserActor = mockUpdateProcess.mock.calls[0][0].actor;
@@ -3354,12 +3436,12 @@ describe('the hoot actor', () => {
 // resolveHootMaxTier
 
 describe('resolveHootMaxTier', () => {
-  it('returns 3 for site admins', () => {
+  it('returns 3 for site admins, a superadmin added to the site included', () => {
     expect(
-      resolveHootMaxTier({ role: 'superadmin', isSuperadmin: true, isSiteAdmin: true, isSiteOwner: false })
+      resolveHootMaxTier({ role: 'superadmin', standing: { role: 'admin', swoopMode: null, machineIds: null }, isSuperadmin: true, isSiteAdmin: true, isSiteOwner: false })
     ).toBe(3);
     expect(
-      resolveHootMaxTier({ role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true })
+      resolveHootMaxTier({ role: 'admin', standing: { role: 'owner', swoopMode: null, machineIds: null }, isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true })
     ).toBe(3);
   });
 
@@ -3367,10 +3449,10 @@ describe('resolveHootMaxTier', () => {
     // Regression: members with site access must not receive tier 2/3 tools,
     // which include registry writes, execute_script, run_powershell, etc.
     expect(
-      resolveHootMaxTier({ role: 'member', isSuperadmin: false, isSiteAdmin: false, isSiteOwner: true })
+      resolveHootMaxTier({ role: 'member', standing: { role: 'member', swoopMode: null, machineIds: null }, isSuperadmin: false, isSiteAdmin: false, isSiteOwner: true })
     ).toBe(1);
     expect(
-      resolveHootMaxTier({ role: 'member', isSuperadmin: false, isSiteAdmin: false, isSiteOwner: false })
+      resolveHootMaxTier({ role: 'member', standing: { role: 'member', swoopMode: null, machineIds: null }, isSuperadmin: false, isSiteAdmin: false, isSiteOwner: false })
     ).toBe(1);
   });
 });
@@ -3432,7 +3514,7 @@ describe('capture_screenshot toModelOutput', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', siteMode ? '' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [],
-      { machineScope: null },
+      { machineScope: null, isSiteMember: true },
     );
     return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => Promise<{
       type: string;
@@ -3505,5 +3587,50 @@ describe('capture_screenshot toModelOutput', () => {
       output: { machines: [{ machine: 'm1', url: forged, message: 'shot' }] },
     });
     expect(siteWide).toEqual({ type: 'content', value: [{ type: 'text', text: 'm1: shot' }] });
+  });
+});
+
+// the owner's ruling (adr 0021): a superadmin with no member row on a site reads it
+// through hoot, at tier 1, with no screenshot
+describe('hoot for a superadmin who is not a member of the site', () => {
+  const NON_MEMBER = {
+    role: 'superadmin',
+    standing: { role: null, swoopMode: null, machineIds: null },
+    isSuperadmin: true,
+    isSiteAdmin: true,
+    isSiteOwner: false,
+  } as const;
+
+  it('caps them at tier 1, and keeps tier 3 for one added to the site', () => {
+    expect(resolveHootMaxTier(NON_MEMBER)).toBe(1);
+    expect(resolveHootMaxTier({ ...NON_MEMBER, standing: { role: 'admin', swoopMode: null, machineIds: null } })).toBe(3);
+  });
+
+  it('tier 1 offers nothing that changes what a machine launches or runs an installer', () => {
+    const names = getToolsByTier(1).map((tool) => tool.name);
+    for (const name of ['update_process', 'add_process', 'delete_process', 'set_launch_mode', 'deploy_software', 'run_powershell']) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it('offers them no screenshot', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      { userId: 'super-uid', userRole: 'superadmin', userStanding: NON_MEMBER.standing, machineScope: null, ...DASHBOARD_TURN },
+    );
+
+    expect(Object.keys(tools)).not.toContain('capture_screenshot');
+    expect(Object.keys(tools)).toContain('get_system_info');
+  });
+
+  it('offers no screenshot when the caller says nothing of their standing: it fails closed', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      { machineScope: null },
+    );
+
+    expect(Object.keys(tools)).not.toContain('capture_screenshot');
   });
 });

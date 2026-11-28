@@ -13,6 +13,7 @@ import { decrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { rateLimitedResponse, withRateLimit } from '@/lib/withRateLimit';
 import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/mfaAttempts.server';
+import { backupCodeCountUpdate, recountBackupCodes } from '@/lib/mfaFactors.server';
 import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
@@ -99,11 +100,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         );
 
         if (matchingCodeIndex === -1) {
+          recountBackupCodes(tx, userRef, data, codes);
           return { ok: false, reason: 'no_match' as const };
         }
 
         const remaining = codes.filter((_, index) => index !== matchingCodeIndex);
-        tx.update(userRef, { backupCodes: remaining });
+        tx.update(userRef, { backupCodes: remaining, ...backupCodeCountUpdate(remaining) });
         return { ok: true, remaining: remaining.length } as const;
       });
 

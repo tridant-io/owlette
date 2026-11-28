@@ -4,7 +4,8 @@
  *
  *   capture          → assigned monitor topology + audit metadata under
  *                      `displays.assigned` (what the machine should look like
- *                      after a reboot or driver refresh)
+ *                      after a reboot or driver refresh); a first layout also
+ *                      turns auto-restore off
  *   set_auto_restore → toggle `displays.autoRestore.enabled`; enable also stamps
  *                      enabledBy/enabledAt, disable leaves history intact
  *   reset_breaker    → clear the circuit breaker (tripped:false, failures:0)
@@ -118,18 +119,29 @@ export async function setDisplayLayout(
         );
       }
     }
-    await configRef.set(
-      {
-        displays: {
-          assigned: {
-            monitors: normalizePrimaryToOrigin(input.monitors),
-            capturedAt: FieldValue.serverTimestamp(),
-            capturedBy: input.capturedBy,
+    const monitors = normalizePrimaryToOrigin(input.monitors);
+    const capturedBy = input.capturedBy;
+    await db.runTransaction(async (tx) => {
+      const prior = (await tx.get(configRef)).data()?.displays?.assigned?.monitors;
+      // auto-restore is on only if someone turned it on while a layout was stored. machines
+      // cleared before clear turned it off still hold the flag on with no layout, so a first
+      // layout must not arm it
+      const firstLayout = !Array.isArray(prior) || prior.length === 0;
+      tx.set(
+        configRef,
+        {
+          displays: {
+            assigned: {
+              monitors,
+              capturedAt: FieldValue.serverTimestamp(),
+              capturedBy,
+            },
+            ...(firstLayout ? { autoRestore: { enabled: false } } : {}),
           },
         },
-      },
-      { merge: true },
-    );
+        { merge: true },
+      );
+    });
   } else if (input.op === 'set_auto_restore') {
     if (typeof input.enabled !== 'boolean') {
       throw new ActionInputError(

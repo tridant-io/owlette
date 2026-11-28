@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Loader2, CheckCircle2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
+import { AddYourselfLink } from '@/components/MemberLock';
 
 interface Site {
   id: string;
@@ -21,7 +22,7 @@ interface Site {
 }
 
 export default function AddMachinePage() {
-  const { user, loading: authLoading, isSuperadmin, userSites, isSiteAdmin } = useAuth();
+  const { user, loading: authLoading, isSuperadmin, userSites, isSiteAdmin, isSiteMember } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
@@ -88,11 +89,13 @@ export default function AddMachinePage() {
         const fetchedSites: Site[] = [];
 
         if (isSuperadmin) {
-          // Superadmin sees every site, as on the setup page.
+          // a superadmin reads every site but pairs a machine only onto one they are a
+          // member of (adr 0021), so only those are offered
           const { collection, getDocs } = await import('firebase/firestore');
           const sitesRef = collection(db, 'sites');
           const sitesSnapshot = await getDocs(sitesRef);
           sitesSnapshot.forEach((doc) => {
+            if (!isSiteMember(doc.id)) return;
             fetchedSites.push({ id: doc.id, ...doc.data() as Omit<Site, 'id'> });
           });
         } else {
@@ -132,7 +135,7 @@ export default function AddMachinePage() {
     }
 
     fetchSites();
-  }, [user, isSuperadmin, userSites]);
+  }, [user, isSuperadmin, userSites, isSiteMember]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -261,7 +264,14 @@ export default function AddMachinePage() {
           </Select>
         ) : (
           <p className="text-sm text-muted-foreground">
-            no sites available. create a site on the dashboard first.
+            {isSuperadmin ? (
+              <>
+                add yourself to a site to pair a machine onto it.
+                <AddYourselfLink />
+              </>
+            ) : (
+              'no sites available. create a site on the dashboard first.'
+            )}
           </p>
         )}
       </div>

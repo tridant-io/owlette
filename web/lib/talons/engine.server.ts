@@ -26,6 +26,7 @@ import { generateCorrelationId } from '@/lib/auditLog.server';
 import type { Actor } from '@/lib/capabilities';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
+import { machineOnlineState } from '@/lib/machineOnline';
 import { TalonAuthorError, resolveTalonAuthor } from './author.server';
 import {
   executeTalonOutput,
@@ -176,7 +177,7 @@ export async function runTalon(
   const needsMachines =
     talon.condition.type === 'visual_check' ||
     talon.outputs.some((output) => output.type === 'command');
-  const targets = needsMachines ? await resolveTargets(db, siteId, talon.scope.machineIds) : [];
+  const targets = needsMachines ? await resolveTargets(db, siteId, talon.scope.machineIds, now) : [];
 
   const env: RunEnvironment = {
     db,
@@ -203,7 +204,7 @@ export async function runTalon(
     }
   } else {
     const machine = context.machineId
-      ? await readMachine(db, siteId, context.machineId)
+      ? await readMachine(db, siteId, context.machineId, now)
       : undefined;
     summaries.push(await executeRun(env, talon, machine));
   }
@@ -321,6 +322,7 @@ async function readMachine(
   db: Firestore,
   siteId: string,
   machineId: string,
+  now: Date,
 ): Promise<TargetMachine | undefined> {
   try {
     const snapshot = await machinesCollection(db, siteId).doc(machineId).get();
@@ -329,7 +331,7 @@ async function readMachine(
     return {
       id: machineId,
       name: (data.name as string | undefined) || machineId,
-      online: data.online === true,
+      online: machineOnlineState(data, Math.floor(now.getTime() / 1000)) === 'online',
     };
   } catch {
     return undefined;
@@ -341,11 +343,12 @@ async function resolveTargets(
   db: Firestore,
   siteId: string,
   machineIds: string[] | null,
+  now: Date,
 ): Promise<TargetMachine[]> {
   if (machineIds !== null) {
     const resolved: TargetMachine[] = [];
     for (const machineId of machineIds) {
-      const machine = await readMachine(db, siteId, machineId);
+      const machine = await readMachine(db, siteId, machineId, now);
       // A machine that was removed from the site after the talon was authored
       // is not a run with no target — it is simply no longer in scope.
       if (machine) resolved.push(machine);
@@ -359,7 +362,7 @@ async function resolveTargets(
     return {
       id: doc.id,
       name: (data.name as string | undefined) || doc.id,
-      online: data.online === true,
+      online: machineOnlineState(data, Math.floor(now.getTime() / 1000)) === 'online',
     };
   });
 }
@@ -440,8 +443,8 @@ async function executeRun(
         verdict: result.verdict,
         confidence: result.confidence,
         reason: result.reason,
-        // PATH only: signed urls expire in ~1h and the object at 30 days, so a
-        // persisted url would be a dead link on a longer-lived run record.
+        // PATH only: signed urls expire in ~1h, so a persisted url would be a
+        // dead link on a longer-lived run record.
         ...(result.screenshotPath ? { screenshotPath: result.screenshotPath } : {}),
       };
       conditionForOutputs = result.screenshotUrl

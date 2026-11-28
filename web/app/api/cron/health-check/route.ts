@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { OFFLINE_HEARTBEAT_AGE_SEC } from '@/lib/machineOnline';
 import { getSiteAlertRecipients, getSiteLabel, recipientWantsMachine, type SiteRecipient } from '@/lib/adminUtils.server';
-import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
-import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
+import { wrapEmailLayout, EMAIL_COLORS, emailMachineTable, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
+import { alertEmailDelivery, type DigestEvent } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { fireWebhooks } from '@/lib/webhookSender.server';
 import { tapTalonMatcher } from '@/lib/talons/matcher.server';
 import { createPlanMemo } from '@/lib/planPause.server';
@@ -14,7 +15,8 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
 
 /**
  * GET /api/cron/health-check — scans machines for stale heartbeats and emails
- * site admins. Auth: X-Cron-Secret must equal CRON_SECRET. Dedupe:
+ * site admins, or queues the alert for each one's digest (lib/alerts/digest.server.ts).
+ * Auth: X-Cron-Secret must equal CRON_SECRET. Dedupe:
  * health.lastCronAlertAt suppresses repeats within ALERT_COOLDOWN_MS.
  *
  * a machine its agent marked `asleep` is never offline: it gets one asleep email
@@ -25,9 +27,9 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
  *   Header: X-Cron-Secret: <that environment's CRON_SECRET>
  */
 
-// Clear of the agent's 120s idle heartbeat cadence so two missed beats don't trip
-// it — at 3 minutes one slow tick marked healthy machines stale.
-const OFFLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+// The heartbeat age at which every other reader calls a machine offline (5
+// minutes), so pill and alerts agree.
+const OFFLINE_THRESHOLD_MS = OFFLINE_HEARTBEAT_AGE_SEC * 1000;
 
 // Don't re-alert for the same machine within this window
 const ALERT_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
@@ -178,8 +180,16 @@ interface PendingMachine {
   machineId: string;
   ref: FirebaseFirestore.DocumentReference;
   lastHeartbeatMs: number;
+  staleSinceMs: number;
   heartbeatAgeMinutes: number;
   timezone?: string;
+}
+
+// a page-trigger machine, for its webhook, talon tap and digest row
+interface TriggerMachine {
+  machineId: string;
+  lastHeartbeatMs: number;
+  staleSinceMs: number;
 }
 
 // A single machine row rendered in one of the offline email's sections.
@@ -201,7 +211,7 @@ interface SendPlan {
   siteId: string;
   siteName: string;
   sections: OfflineSections;
-  webhookMachines: { machineId: string; lastHeartbeatMs: number }[];
+  webhookMachines: TriggerMachine[];
   timezone?: string;
 }
 
@@ -216,28 +226,41 @@ interface MachineRow {
   value: string;
 }
 
-function machineTableHtml(valueLabel: string, rows: MachineRow[]): string {
-  const th = `padding:10px 14px;text-align:left;background:${EMAIL_COLORS.altRow};color:${EMAIL_COLORS.muted};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid ${EMAIL_COLORS.border};`;
-  const td = `padding:10px 14px;border-bottom:1px solid ${EMAIL_COLORS.border};font-size:13px;`;
-  const body = rows
-    .map(
-      (r) => `
-      <tr>
-        <td style="${td}color:${EMAIL_COLORS.text};">${escapeHtml(r.machineId)}</td>
-        <td style="${td}color:${EMAIL_COLORS.muted};">${escapeHtml(r.value)}</td>
-      </tr>`
-    )
-    .join('');
-  return `
-    <table width="100%" style="border-collapse:collapse;border:1px solid ${EMAIL_COLORS.border};border-radius:6px;overflow:hidden;" cellpadding="0" cellspacing="0">
-      <thead>
-        <tr>
-          <th style="${th}">machine</th>
-          <th style="${th}">${valueLabel}</th>
-        </tr>
-      </thead>
-      <tbody>${body}</tbody>
-    </table>`;
+// a sleep row also carries what its digest line needs
+interface SleepRow extends MachineRow {
+  asleepSinceMs: number;
+  /** to the wake's heartbeat; 0 for an asleep notice */
+  sleptMs: number;
+  lastHeartbeatMs: number;
+}
+
+/** one machine of a settled outage, for the digest: repeats of one outage share staleSince, so they collapse */
+function offlineDigestEvent(siteId: string, m: TriggerMachine): DigestEvent {
+  return {
+    sourceKey: `offline|${siteId}|${m.machineId}|${m.staleSinceMs}`,
+    siteId,
+    machineId: m.machineId,
+    category: 'healthAlerts',
+    kind: 'offline',
+    severity: 'critical',
+    title: 'offline',
+    data: { staleSince: m.staleSinceMs },
+    at: m.lastHeartbeatMs || m.staleSinceMs,
+  };
+}
+
+function sleepDigestEvent(siteId: string, kind: SleepNoticeKind, row: SleepRow): DigestEvent {
+  return {
+    sourceKey: `${kind}|${siteId}|${row.machineId}|${row.asleepSinceMs}`,
+    siteId,
+    machineId: row.machineId,
+    category: 'healthAlerts',
+    kind,
+    severity: 'info',
+    title: kind,
+    data: { asleepSince: row.asleepSinceMs, sleptMs: row.sleptMs },
+    at: kind === 'asleep' ? row.asleepSinceMs : row.lastHeartbeatMs,
+  };
 }
 
 function offlineSectionHtml(label: string, description: string, accent: string, rows: OfflineRow[]): string {
@@ -245,7 +268,7 @@ function offlineSectionHtml(label: string, description: string, accent: string, 
   return `
     <p style="margin:22px 0 6px;color:${accent};font-size:13px;font-weight:700;text-transform:lowercase;">${label} (${rows.length})</p>
     <p style="margin:0 0 10px;color:${EMAIL_COLORS.muted};font-size:12px;">${description}</p>
-    ${machineTableHtml(
+    ${emailMachineTable(
       'last seen',
       rows.map((r) => ({ machineId: r.machineId, value: `${r.heartbeatAgeMinutes} minute(s) ago` }))
     )}`;
@@ -284,7 +307,7 @@ function buildOfflineEmail(
 interface SleepPlan {
   siteId: string;
   kind: SleepNoticeKind;
-  rows: MachineRow[];
+  rows: SleepRow[];
 }
 
 const SLEEP_EMAIL_COPY: Record<SleepNoticeKind, { color: string; did: string; column: string; outro: string }> = {
@@ -311,7 +334,7 @@ function buildSleepEmail(kind: SleepNoticeKind, siteLabel: string, rows: Machine
   const content = `
     <h2 style="color:${copy.color};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">machines ${kind}</h2>
     <p style="margin:0 0 16px;color:${EMAIL_COLORS.muted};">${rows.length} machine(s) in site <strong style="color:${EMAIL_COLORS.text};">${escapeHtml(siteLabel)}</strong> ${copy.did}.</p>
-    ${machineTableHtml(copy.column, rows)}
+    ${emailMachineTable(copy.column, rows)}
     <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">${copy.outro}</p>
   `;
   return wrapEmailLayout(content, {
@@ -390,7 +413,7 @@ export async function GET(request: NextRequest) {
       const notResponding: PendingMachine[] = [];
       const shuttingDown: OfflineRow[] = [];
       const stillOffline: OfflineRow[] = [];
-      const sleepRows: Record<SleepNoticeKind, (MachineRow & { ref: FirebaseFirestore.DocumentReference })[]> = {
+      const sleepRows: Record<SleepNoticeKind, (SleepRow & { ref: FirebaseFirestore.DocumentReference })[]> = {
         asleep: [],
         awake: [],
       };
@@ -424,15 +447,20 @@ export async function GET(request: NextRequest) {
             machineId: machineDoc.id,
             ref: machineDoc.ref,
             value: emailTimestamp(new Date(snapshot.asleepSinceMs), timezone),
+            asleepSinceMs: snapshot.asleepSinceMs,
+            sleptMs: 0,
+            lastHeartbeatMs,
           });
         } else if (notice === 'awake') {
+          // to its latest heartbeat, so long by up to one scan
+          const sleptMs = snapshot.asleepSinceMs > 0 ? Math.max(0, lastHeartbeatMs - snapshot.asleepSinceMs) : 0;
           sleepRows.awake.push({
             machineId: machineDoc.id,
             ref: machineDoc.ref,
-            // to its latest heartbeat, so long by up to one scan
-            value: snapshot.asleepSinceMs > 0
-              ? `${Math.max(0, Math.floor((lastHeartbeatMs - snapshot.asleepSinceMs) / 60000))} minute(s)`
-              : 'unknown',
+            value: snapshot.asleepSinceMs > 0 ? `${Math.floor(sleptMs / 60000)} minute(s)` : 'unknown',
+            asleepSinceMs: snapshot.asleepSinceMs,
+            sleptMs,
+            lastHeartbeatMs,
           });
         }
 
@@ -485,6 +513,7 @@ export async function GET(request: NextRequest) {
             machineId: machineDoc.id,
             ref: machineDoc.ref,
             lastHeartbeatMs,
+            staleSinceMs,
             heartbeatAgeMinutes: decision.heartbeatAgeMinutes,
             timezone,
           });
@@ -515,8 +544,8 @@ export async function GET(request: NextRequest) {
       // cooldown, so a send failure can never repeat an email. a row whose stamp
       // failed is left for the next scan: sent unstamped, it would repeat every scan.
       for (const kind of ['asleep', 'awake'] as const) {
-        const stamped: MachineRow[] = [];
-        for (const { ref, machineId, value } of sleepRows[kind]) {
+        const stamped: SleepRow[] = [];
+        for (const { ref, ...row } of sleepRows[kind]) {
           try {
             await ref.set(
               {
@@ -526,9 +555,9 @@ export async function GET(request: NextRequest) {
               },
               { merge: true }
             );
-            stamped.push({ machineId, value });
+            stamped.push(row);
           } catch (error) {
-            console.error(`[cron/health-check] Failed to stamp the ${kind} notice for ${siteId}/${machineId}:`, error);
+            console.error(`[cron/health-check] Failed to stamp the ${kind} notice for ${siteId}/${row.machineId}:`, error);
           }
         }
         if (stamped.length > 0) sleepPlans.push({ siteId, kind, rows: stamped });
@@ -605,7 +634,7 @@ export async function GET(request: NextRequest) {
           shuttingDown,
           stillOffline,
         },
-        webhookMachines: notResponding.map(({ machineId, lastHeartbeatMs }) => ({ machineId, lastHeartbeatMs })),
+        webhookMachines: notResponding.map(({ machineId, lastHeartbeatMs, staleSinceMs }) => ({ machineId, lastHeartbeatMs, staleSinceMs })),
         timezone: notResponding[0]?.timezone,
       });
     }
@@ -620,20 +649,24 @@ export async function GET(request: NextRequest) {
       machinesChecked,
       offlineMachines: 0,
       alertsSent: 0,
+      alertsQueued: 0,
       sleepNoticesSent: 0,
+      sleepNoticesQueued: 0,
     });
   }
 
-  const resendClient = getResend();
+  const delivery = alertEmailDelivery();
   const baseUrl = publicOrigin(request);
   let alertsSent = 0;
+  let alertsQueued = 0;
   let sleepNoticesSent = 0;
+  let sleepNoticesQueued = 0;
   // one plan lookup per site for the whole run, shared by recipients, webhooks and talons
   const planMemo = createPlanMemo();
 
   for (const plan of sendPlans) {
     try {
-      // Before the email, which has two early exits below: webhooks and
+      // Before the email, which has an early exit below: webhooks and
       // `machine_offline` talons must fire even with no email recipients. This is
       // the only dispatcher — an offline machine can't report itself offline.
       for (const m of plan.webhookMachines) {
@@ -660,11 +693,6 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      if (!resendClient) {
-        console.warn('[cron/health-check] Resend not configured — skipping email');
-        continue;
-      }
-
       const siteLabel = await getSiteLabel(plan.siteId);
 
       // One email per user so each gets their own unsubscribe link.
@@ -674,32 +702,28 @@ export async function GET(request: NextRequest) {
           // Muted or out of scope on every triggering machine = nothing to page, even if context remains.
           if (sections.notResponding.length === 0) continue;
 
+          const events = plan.webhookMachines
+            .filter((m) => recipientWantsMachine(recipient, m.machineId))
+            .map((m) => offlineDigestEvent(plan.siteId, m));
           const total = sections.notResponding.length + sections.shuttingDown.length + sections.stillOffline.length;
-
-          const unsubscribeUrl = recipient.userId !== 'fallback'
-            ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-            : undefined;
-
-          const result = await resendClient.emails.send({
-            from: FROM_EMAIL,
-            to: [recipient.email],
-            ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-            subject: safeEmailSubject(`${total} machine(s) offline in ${siteLabel}`),
-            html: buildOfflineEmail(siteLabel, sections, plan.timezone, unsubscribeUrl),
-          });
-
-          if (result.error) {
-            console.error(`[cron/health-check] Resend error for ${recipient.email}:`, result.error);
-          } else {
-            alertsSent++;
-          }
+          const outcome = await delivery.deliver(recipient, events, () =>
+            sendAlertEmailNow({
+              log: '[cron/health-check]',
+              recipient,
+              baseUrl,
+              subject: safeEmailSubject(`${total} machine(s) offline in ${siteLabel}`),
+              html: (unsubscribeUrl) => buildOfflineEmail(siteLabel, sections, plan.timezone, unsubscribeUrl),
+            }),
+          );
+          if (outcome === 'sent') alertsSent++;
+          else if (outcome === 'queued') alertsQueued++;
         } catch (emailError) {
           console.error(`[cron/health-check] Failed to send to ${recipient.email}:`, emailError);
         }
       }
 
       console.log(
-        `[cron/health-check] Alert sent for site ${plan.siteId}: ` +
+        `[cron/health-check] Alert handled for site ${plan.siteId}: ` +
           `${plan.sections.notResponding.length} not responding, ${recipients.length} recipient(s)`
       );
     } catch (error) {
@@ -710,10 +734,6 @@ export async function GET(request: NextRequest) {
   // no webhook or talon: those stay outage events, and a sleep the agent announced is not one.
   for (const plan of sleepPlans) {
     try {
-      if (!resendClient) {
-        console.warn('[cron/health-check] Resend not configured — skipping email');
-        break;
-      }
       const recipients = await getSiteAlertRecipients(plan.siteId, 'healthAlerts', planMemo);
       const siteLabel = await getSiteLabel(plan.siteId);
 
@@ -722,23 +742,18 @@ export async function GET(request: NextRequest) {
           const rows = plan.rows.filter((r) => recipientWantsMachine(recipient, r.machineId));
           if (rows.length === 0) continue;
 
-          const unsubscribeUrl = recipient.userId !== 'fallback'
-            ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-            : undefined;
-
-          const result = await resendClient.emails.send({
-            from: FROM_EMAIL,
-            to: [recipient.email],
-            ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
-            subject: sleepEmailSubject(plan.kind, rows.length, siteLabel),
-            html: buildSleepEmail(plan.kind, siteLabel, rows, unsubscribeUrl),
-          });
-
-          if (result.error) {
-            console.error(`[cron/health-check] Resend error for ${recipient.email}:`, result.error);
-          } else {
-            sleepNoticesSent++;
-          }
+          const events = rows.map((r) => sleepDigestEvent(plan.siteId, plan.kind, r));
+          const outcome = await delivery.deliver(recipient, events, () =>
+            sendAlertEmailNow({
+              log: '[cron/health-check]',
+              recipient,
+              baseUrl,
+              subject: sleepEmailSubject(plan.kind, rows.length, siteLabel),
+              html: (unsubscribeUrl) => buildSleepEmail(plan.kind, siteLabel, rows, unsubscribeUrl),
+            }),
+          );
+          if (outcome === 'sent') sleepNoticesSent++;
+          else if (outcome === 'queued') sleepNoticesQueued++;
         } catch (emailError) {
           console.error(`[cron/health-check] Failed to send to ${recipient.email}:`, emailError);
         }
@@ -754,6 +769,8 @@ export async function GET(request: NextRequest) {
     machinesChecked,
     offlineMachines,
     alertsSent,
+    alertsQueued,
     sleepNoticesSent,
+    sleepNoticesQueued,
   });
 }

@@ -45,6 +45,7 @@ import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { resolveDevice, unionIds } from '@/lib/deviceResolvers';
 import { type DeviceKind, type DeviceSelection } from '@/hooks/useDevicePrefs';
 import { useCanAdminMachine } from '@/hooks/useCanAdminMachine';
+import { useMemberLock } from '@/hooks/useMemberLock';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
 import type { Machine, Process, LaunchMode, ScheduleBlock } from '@/hooks/useFirestore';
 import type { MetricType } from '@/components/charts';
@@ -287,7 +288,6 @@ interface MachineRowProps {
   onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
-  onLiveView?: () => void;
   onSwoop?: () => void;
   onSwoopApp?: () => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
@@ -333,7 +333,6 @@ export const MachineRow = memo(function MachineRow({
   onShutdown,
   onCancelRestart,
   onScreenshot,
-  onLiveView,
   onSwoop,
   onSwoopApp,
   swoopOff,
@@ -394,6 +393,9 @@ export const MachineRow = memo(function MachineRow({
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
   const canAdminMachine = useCanAdminMachine(currentSiteId)(machine.machineId);
+  // a superadmin without a member row runs this machine's processes but changes none of its config (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
+  const canConfigure = canAdminMachine && !memberLocked;
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
   const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
@@ -806,7 +808,6 @@ export const MachineRow = memo(function MachineRow({
               activeHoursGuard={activeHoursGuardOf(machine)}
               onCancelRestart={onCancelRestart}
               onScreenshot={onScreenshot}
-              onLiveView={onLiveView}
               swoopCapable={machine.capabilities?.swoop === 1}
               swoopViewers={machine.swoopViewers}
               onSwoop={onSwoop}
@@ -900,7 +901,7 @@ export const MachineRow = memo(function MachineRow({
                               <>
                                 {/* Desktop controls (lg+) */}
                                 <div className="hidden lg:flex items-center gap-3 ml-4 flex-shrink-0">
-                                  {!canAdminMachine ? (
+                                  {!canConfigure ? (
                                     // Non-admins are read-only: static mode pill, no toggle (which would 403).
                                     <div className="flex items-center h-8">
                                       <span className={`flex items-center px-3 text-sm font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
@@ -970,6 +971,7 @@ export const MachineRow = memo(function MachineRow({
                                   )}
                                   {canAdminMachine && (
                                     <>
+                                  {canConfigure && (
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -979,7 +981,8 @@ export const MachineRow = memo(function MachineRow({
                                     <Pencil className="h-3 w-3 mr-1" />
                                     edit
                                   </Button>
-                                  {onDuplicateProcess && (
+                                  )}
+                                  {canConfigure && onDuplicateProcess && (
                                   <Button
                                     variant="ghost"
                                     size="sm"
@@ -1021,13 +1024,12 @@ export const MachineRow = memo(function MachineRow({
                                 </div>
                                 {/* Compact controls (<lg) */}
                                 <div className="flex lg:hidden items-center gap-2 sm:ml-2 flex-shrink-0">
-                                  {!canAdminMachine ? (
+                                  {!canConfigure ? (
                                     // Non-admins are read-only: static mode pill, no write menu.
                                     <span className={`flex items-center px-2.5 h-8 text-xs font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
                                       {currentMode === 'always' ? 'always on' : currentMode === 'scheduled' ? 'scheduled' : 'off'}
                                     </span>
                                   ) : (
-                                    <>
                                   <DropdownMenu>
                                     <Tooltip>
                                       <TooltipTrigger asChild>
@@ -1094,7 +1096,8 @@ export const MachineRow = memo(function MachineRow({
                                       )}
                                     </DropdownMenuContent>
                                   </DropdownMenu>
-                                  {controlLocked ? (
+                                  )}
+                                  {canAdminMachine && (controlLocked ? (
                                     <ControlUpgradeLink label="restart and kill are part of core" planSite={planSite} />
                                   ) : (
                                     <>
@@ -1133,9 +1136,7 @@ export const MachineRow = memo(function MachineRow({
                                         </TooltipContent>
                                       </Tooltip>
                                     </>
-                                  )}
-                                    </>
-                                  )}
+                                  ))}
                                 </div>
                               </>
                             );
@@ -1144,7 +1145,7 @@ export const MachineRow = memo(function MachineRow({
                     ))}
                   </div>
                   {/* add process Button — admin-only write action */}
-                  {canAdminMachine && (
+                  {canConfigure && (
                     <div className="flex justify-center pt-3">
                       <Button
                         variant="ghost"
@@ -1160,8 +1161,8 @@ export const MachineRow = memo(function MachineRow({
                 </>
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                  <p className="mb-4 text-sm">No processes configured for this machine</p>
-                  {canAdminMachine && (
+                  <p className="mb-4 text-sm">no processes configured for this machine</p>
+                  {canConfigure && (
                     <Button
                       variant="ghost"
                       size="sm"

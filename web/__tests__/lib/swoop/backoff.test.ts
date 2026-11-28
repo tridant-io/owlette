@@ -51,6 +51,8 @@ describe('isWithdrawal', () => {
     [403, 'capability_missing', true],
     [403, 'members_may_not_watch', true],
     [403, 'api_key_not_permitted', true],
+    // a superadmin without a member row, refused a session or its lease (adr 0021)
+    [403, 'members_only', true],
     // the plan gate: no retry changes the plan.
     [402, 'plan_required', true],
     [402, null, false],

@@ -6,8 +6,10 @@
  * agent's `sites/{siteId}/logs` write. Tapping both would double-run every display talon on a
  * 3.0.0+ agent. These tests pin the asymmetry — display in, no tap; process in, tap.
  *
- * The last block pins the connection-failure branch's webhook: sent whatever the email settings
+ * The connection-failure block pins that branch's webhook: sent whatever the email settings
  * are, and never for a reboot-pending notice, whose email reads as a notice, not an agent error.
+ * The last block pins its digest: a recipient on one gets a queued row and no email, and a
+ * failed queue write never turns the agent's POST into an error it would re-post.
  */
 
 import { createMockRequest } from '../helpers/utils';
@@ -36,17 +38,40 @@ const siteDocRef = {
   },
 };
 
+// the digest job's last run: senders queue only while it is recent
+let mockLastRunAt: number | null = Date.now();
+// digest rows a recipient on a digest gets, as `{ uid, data }`
+const queuedRows: { uid: string; data: Record<string, unknown> }[] = [];
+const digestCommit = jest.fn(async (rows: { uid: string; data: Record<string, unknown> }[]) => {
+  queuedRows.push(...rows);
+});
+
 const mockDb = {
   collection: jest.fn((name: string) => {
     if (name === 'pending_display_alerts') return { add: pendingDisplayAdd };
     if (name === 'pending_process_alerts') return { add: pendingProcessAdd };
     if (name === 'sites') return { doc: () => siteDocRef };
+    if (name === 'global') {
+      return { doc: () => ({ get: async () => ({ data: () => (mockLastRunAt === null ? undefined : { lastRunAt: mockLastRunAt }) }) }) };
+    }
+    if (name === 'alert_digests') {
+      return { doc: (uid: string) => ({ uid, collection: () => ({ doc: () => ({ uid }) }) }) };
+    }
     throw new Error(`unexpected collection: ${name}`);
   }),
+  batch: () => {
+    const rows: { uid: string; data: Record<string, unknown> }[] = [];
+    return {
+      create: (ref: { uid: string }, data: Record<string, unknown>) => rows.push({ uid: ref.uid, data }),
+      set: jest.fn(),
+      commit: () => digestCommit(rows),
+    };
+  },
 };
 
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { serverTimestamp: jest.fn(() => ({ __op: 'serverTimestamp' })) },
+  Timestamp: { fromMillis: (ms: number) => ({ __ts: ms }) },
 }));
 
 jest.mock('@/lib/firebase-admin', () => ({
@@ -115,6 +140,8 @@ function post(body: Record<string, unknown>) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  queuedRows.length = 0;
+  mockLastRunAt = Date.now();
   mockResendClient = null;
   mockRecipients = [];
   mockVerifyIdToken.mockResolvedValue({
@@ -227,7 +254,7 @@ describe('POST /api/agent/alert — connection failure webhook', () => {
     beforeEach(() => {
       mockResendClient = { emails: { send } };
       mockRecipients = [
-        { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+        { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
       ];
     });
 
@@ -281,5 +308,84 @@ describe('POST /api/agent/alert — connection failure webhook', () => {
       expect(html).toContain('agent alert');
       expect(html).toContain('error code');
     });
+  });
+});
+
+describe('POST /api/agent/alert — connection failure digest', () => {
+  beforeEach(() => {
+    mockRecipients = [
+      { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'daily' },
+    ];
+  });
+
+  it('queues the alert for a recipient on a digest and sends nothing, even with Resend configured', async () => {
+    const send = jest.fn(async () => ({ error: null }));
+    mockResendClient = { emails: { send } };
+
+    const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+    expect(await res.json()).toMatchObject({ success: true, emailSent: false, digested: 1 });
+    expect(send).not.toHaveBeenCalled();
+    expect(queuedRows).toEqual([
+      {
+        uid: 'user-1',
+        data: expect.objectContaining({
+          siteId: SITE,
+          machineId: MACHINE,
+          category: 'healthAlerts',
+          kind: 'agent_error',
+          severity: 'critical',
+          detail: 'no route to host',
+        }),
+      },
+    ]);
+  });
+
+  it('queues even with Resend unconfigured, and words a reboot-pending notice as one', async () => {
+    const res = await post({ errorCode: 'reboot_pending', errorMessage: 'Reboot pending on LOBBY-01' });
+
+    expect(await res.json()).toMatchObject({ success: true, digested: 1 });
+    expect(queuedRows[0].data).toMatchObject({ kind: 'reboot_pending', severity: 'info', title: 'reboot pending' });
+  });
+
+  it('queues a critical display alert for a recipient on a digest instead of emailing it inline', async () => {
+    const send = jest.fn(async () => ({ error: null }));
+    mockResendClient = { emails: { send } };
+
+    const res = await post({
+      eventType: 'display_monitor_removed',
+      data: { monitor: { edidHash: 'abc', friendlyName: 'DELL P2415Q', port: 'DP' } },
+    });
+
+    expect(await res.json()).toMatchObject({ success: true, emailSent: false, digested: 1, criticalPath: true });
+    expect(send).not.toHaveBeenCalled();
+    expect(queuedRows[0].data).toMatchObject({
+      category: 'displayAlerts',
+      kind: 'display_monitor_removed',
+      severity: 'critical',
+      title: 'monitor removed',
+      detail: 'DELL P2415Q (DP)',
+    });
+  });
+
+  it('emails at once instead when the digest job has never run, so nothing waits on a job that does not exist', async () => {
+    mockLastRunAt = null;
+    const send = jest.fn(async () => ({ error: null }));
+    mockResendClient = { emails: { send } };
+
+    const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+    expect(await res.json()).toMatchObject({ success: true, emailSent: true, digested: 0 });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(queuedRows).toEqual([]);
+  });
+
+  it('answers 200 when the queue write throws, so the agent does not re-post a duplicate', async () => {
+    digestCommit.mockRejectedValueOnce(new Error('firestore unavailable'));
+
+    const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ success: true, emailSent: false, digested: 0 });
   });
 });

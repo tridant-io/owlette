@@ -8,13 +8,13 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { Timestamp } from 'firebase-admin/firestore';
 import {
   problem,
   problemFromError,
   ProblemType,
 } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { machineStatus } from '@/lib/machineStatus.server';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
@@ -57,21 +57,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const data = machineSnap.data() ?? {};
-    const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
 
     return applyAuthDeprecations(
       NextResponse.json({
-        id: machineId,
+        ...machineStatus(machineId, data, Math.floor(Date.now() / 1000)),
         siteId,
-        name: typeof data.name === 'string'
-          ? data.name
-          : typeof data.machine_name === 'string'
-            ? data.machine_name
-            : machineId,
-        online: data.online === true,
-        lastHeartbeat: heartbeatToIso(lastHeartbeat),
-        agentVersion:
-          data.agent_version ?? data.presence?.agent_version ?? null,
         os: data.os ?? data.presence?.os ?? null,
         // what the agent writes on every heartbeat (firebase_client._os_identity):
         // 'windows' | 'macos' | 'linux', 'x64' | 'arm64', and the version string.
@@ -144,18 +134,4 @@ function liveProcessList(map: unknown): Record<string, unknown>[] {
   return Object.entries(map as Record<string, Record<string, unknown>>)
     .map(([processId, entry]): Record<string, unknown> => ({ processId, ...entry }))
     .sort((a, b) => Number(a.index ?? 0) - Number(b.index ?? 0));
-}
-
-function heartbeatToIso(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  if (v instanceof Timestamp) return v.toDate().toISOString();
-  if (typeof v === 'number') return new Date(v).toISOString();
-  if (typeof v === 'string') {
-    const parsed = Date.parse(v);
-    return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
-  }
-  if (v && typeof v === 'object' && 'toDate' in v && typeof (v as { toDate: () => Date }).toDate === 'function') {
-    return (v as { toDate: () => Date }).toDate().toISOString();
-  }
-  return null;
 }

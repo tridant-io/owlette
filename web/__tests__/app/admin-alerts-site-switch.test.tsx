@@ -7,7 +7,7 @@
  * screen under B, and the next edit on B saved A's rules over B's.
  */
 import React from 'react';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import AlertsPage from '@/app/admin/alerts/page';
@@ -27,6 +27,9 @@ jest.mock('@/contexts/AuthContext', () => ({
     updateUserPreferences: jest.fn(),
   }),
 }));
+
+// the site picker's counts read firestore, which this file mocks for the rules alone
+jest.mock('@/hooks/useSiteMachineCounts', () => ({ useSiteMachineCounts: () => ({}) }));
 
 jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({
@@ -91,7 +94,7 @@ it("never shows a save for the last site under the one now selected", async () =
   // site A: turn its rule off; the save is still out when the admin moves on
   await user.click(await screen.findByRole('switch', { name: 'enable site A cpu' }));
   await user.click(screen.getByRole('combobox', { name: 'site' }));
-  await user.click(screen.getByRole('option', { name: 'site B' }));
+  await user.click(within(await screen.findByRole('dialog', { name: 'sites' })).getByRole('button', { name: 'site B' }));
   expect(await screen.findByText('site B cpu')).toBeInTheDocument();
 
   await act(async () => landSave());

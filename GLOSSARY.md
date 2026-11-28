@@ -130,6 +130,10 @@ _Avoid_: audit log (the stored records behind it), audit trail, event feed, the 
 What a detection rule raises when activity looks risky, such as a new superadmin, removed 2fa, a deleted site or a burst of failures. It is `high` (emailed at once) or `digest` (sent once a day) and is stored under `global/activity_watch/findings`.
 _Avoid_: alert (that is a site's alert rule or alert email), incident, anomaly, detection
 
+**Alert digest**:
+One email per person per period (hourly, daily or weekly) carrying the alert emails they would otherwise get one by one, with repeats collapsed. Daily at 08:00 in the person's timezone is the default (`preferences.alertDelivery`, absent means `daily`); `immediate` is each alert as it happens. Talon and API key emails are never digested. See ADR 0022.
+_Avoid_: summary, roundup, newsletter
+
 **API key**:
 A scoped, expiring `owk_live_` key whose scopes each name a resource, an ID and exact permissions. A key never grants more than its owner holds. Its `maxToolTier` caps the tool tier it can run through the commands route; missing means 1.
 _Avoid_: token, secret, credential
@@ -204,7 +208,7 @@ owlette's remote desktop: a live, controllable view of a machine's screen in a b
 _Avoid_: remote control, KVM, VNC, live view
 
 **Live view**:
-The older screenshot slideshow that swoop replaces on machines that can stream. It is still offered where the agent cannot, or the site has swoop off.
+The older screenshot slideshow, removed for swoop. The server refuses `start_live_view` and `stop_live_view`; a machine that can't stream offers a screenshot alone.
 _Avoid_: using it as a synonym for swoop
 
 **Session**:
@@ -324,4 +328,5 @@ _Avoid_: org or organization for anything inside owlette, customer, tenant
 - **rung.** Not a domain term on its own: the code uses it for one step of any ladder, including swoop's quality ladder, the encoder preference order, API-key expiry notices (14, 3 and 0 days) and reconnect backoff. Name the ladder.
 - **admin.** The global `admin` role grants nothing since roles moved onto sites. "admin" means site admin unless it says superadmin.
 - **provisioning.** It means two different things: publishing hoot CLI pins (`scripts/upload-cortex-cli.mjs`) and pushing a user's LLM key to a machine's local hoot (`/api/hoot/provision-key`). Name which.
+- **digest.** Four things: the alert digest (a person's hourly, daily or weekly email of their alerts); the superadmin activity digest (a finding of `digest` severity, mailed once a day); the 3-minute process and display drains, whose code calls their batched email a digest (`buildDisplayDigestEmail`) though it goes out as it happens; and roost's chunk digest, a SHA-256 (`/api/chunks/[digest]`). Say which; "digest" alone means the alert digest.
 - **scope.** An API key's scopes (`site=<id>:read`), a talon's `scope.machineIds`, and a member's machine scope (`machineIds` on the member row) are three different things. Say which.

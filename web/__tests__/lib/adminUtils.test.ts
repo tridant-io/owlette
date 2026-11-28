@@ -67,6 +67,7 @@ jest.mock('@/lib/logger', () => ({
 const ADMIN_EMAIL = 'admin@owlette.test';
 
 let getSiteAlertRecipients: typeof import('@/lib/adminUtils.server').getSiteAlertRecipients;
+let getSiteAlertAudience: typeof import('@/lib/adminUtils.server').getSiteAlertAudience;
 let getUserAlertRecipient: typeof import('@/lib/adminUtils.server').getUserAlertRecipient;
 let recipientWantsMachine: typeof import('@/lib/adminUtils.server').recipientWantsMachine;
 let createPlanMemo: typeof import('@/lib/planPause.server').createPlanMemo;
@@ -74,7 +75,7 @@ let createPlanMemo: typeof import('@/lib/planPause.server').createPlanMemo;
 beforeAll(async () => {
   // ADMIN_EMAIL is read at module load from ADMIN_EMAIL_DEV — set it first.
   process.env.ADMIN_EMAIL_DEV = ADMIN_EMAIL;
-  ({ getSiteAlertRecipients, getUserAlertRecipient, recipientWantsMachine } = await import('@/lib/adminUtils.server'));
+  ({ getSiteAlertRecipients, getSiteAlertAudience, getUserAlertRecipient, recipientWantsMachine } = await import('@/lib/adminUtils.server'));
   ({ createPlanMemo } = await import('@/lib/planPause.server'));
 });
 
@@ -175,7 +176,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     // users/{auth uid}, not users/{email}: doc(ADMIN_EMAIL) must not pass here.
     expect(mockUsersDoc).toHaveBeenCalledWith('admin-uid');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -183,7 +184,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     mockGetUserByEmail.mockRejectedValue(new Error('auth/user-not-found'));
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -193,7 +194,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     });
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -203,7 +204,8 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     });
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'u1', email: 'u1@owlette.test', ccEmails: [], mutedMachines: ['OTHER-1'], machineIds: null },
+      // listed by the legacy array alone, with no member row: not a member
+      { userId: 'u1', email: 'u1@owlette.test', ccEmails: [], mutedMachines: ['OTHER-1'], machineIds: null, member: false, delivery: 'daily' },
     ]);
     expect(mockGetUserByEmail).not.toHaveBeenCalled();
   });
@@ -214,7 +216,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     mockSiteDocGet.mockRejectedValue(new Error('firestore unavailable'));
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
     expect(mockGetUserByEmail).not.toHaveBeenCalled();
   });
@@ -227,7 +229,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(mockGetUserByEmail).toHaveBeenCalledWith(ADMIN_EMAIL);
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -239,7 +241,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     mockUserDocGet.mockRejectedValue(new Error('owner read failed'));
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
     expect(mockGetUserByEmail).not.toHaveBeenCalled();
   });
@@ -273,7 +275,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(mockGetUserByEmail).toHaveBeenCalledWith(ADMIN_EMAIL);
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null, delivery: 'immediate' },
     ]);
   });
 
@@ -283,7 +285,7 @@ describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {
     });
     const recipients = await getSiteAlertRecipients('default_site', 'thresholdAlerts');
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: ['TEC-A4D'], machineIds: null, delivery: 'immediate' },
     ]);
   });
 });
@@ -321,6 +323,34 @@ describe('getSiteAlertRecipients — machine scope', () => {
     expect(mockGetAll).not.toHaveBeenCalled();
   });
 
+  // a site's screens are for its members (adr 0021), so a talon's image reads this
+  it('marks the owner and every active member row a member, and a stale sites[] entry not', async () => {
+    mockSiteDocGet.mockResolvedValue({ data: () => ({ owner: 'owner-uid' }) });
+    mockMembersGet.mockResolvedValue({
+      docs: [
+        row('whole', { status: 'active', role: 'admin' }),
+        row('left', { status: 'removed', role: 'member' }),
+      ],
+    });
+    mockUsersWhereGet.mockResolvedValue({
+      docs: [
+        user('whole', { email: 'whole@owlette.test' }),
+        user('left', { email: 'left@owlette.test' }),
+        user('stale', { email: 'stale@owlette.test' }),
+      ],
+    });
+    mockUserDocGet.mockResolvedValue({ data: () => ({ email: 'owner@owlette.test' }) });
+
+    const recipients = await getSiteAlertRecipients('site-1', 'talonAlerts');
+
+    expect(recipients.map((r) => [r.userId, r.member])).toEqual([
+      ['whole', true],
+      ['left', false],
+      ['stale', false],
+      ['owner-uid', true],
+    ]);
+  });
+
   it('still mails a scoped member whose users doc has no legacy sites[] entry', async () => {
     mockMembersGet.mockResolvedValue({
       docs: [row('row-only', { status: 'active', role: 'member', machineIds: ['m1'] })],
@@ -330,7 +360,7 @@ describe('getSiteAlertRecipients — machine scope', () => {
     const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
 
     expect(recipients).toEqual([
-      { userId: 'row-only', email: 'row-only@owlette.test', ccEmails: [], mutedMachines: ['m9'], machineIds: ['m1'] },
+      { userId: 'row-only', email: 'row-only@owlette.test', ccEmails: [], mutedMachines: ['m9'], machineIds: ['m1'], member: true, delivery: 'daily' },
     ]);
     expect(mockUsersDoc).toHaveBeenCalledWith('row-only');
   });
@@ -395,9 +425,39 @@ describe('getSiteAlertRecipients — machine scope', () => {
     const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
 
     expect(recipients).toEqual([
-      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines: [], machineIds: null, delivery: 'immediate' },
     ]);
     expect(mockUsersWhereGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('getSiteAlertAudience', () => {
+  it("carries each person's delivery choice, a missing or unknown one read as the daily digest", async () => {
+    mockUsersWhereGet.mockResolvedValue({
+      docs: [
+        { id: 'now', data: () => ({ email: 'now@owlette.test', preferences: { alertDelivery: 'immediate' } }) },
+        { id: 'weekly', data: () => ({ email: 'weekly@owlette.test', preferences: { alertDelivery: 'weekly' } }) },
+        { id: 'unset', data: () => ({ email: 'unset@owlette.test' }) },
+        { id: 'odd', data: () => ({ email: 'odd@owlette.test', preferences: { alertDelivery: 'monthly' } }) },
+      ],
+    });
+    const { recipients, complete } = await getSiteAlertAudience('site-1', 'healthAlerts');
+    expect(complete).toBe(true);
+    expect(recipients.map((r) => [r.userId, r.delivery])).toEqual([
+      ['now', 'immediate'],
+      ['weekly', 'weekly'],
+      ['unset', 'daily'],
+      ['odd', 'daily'],
+    ]);
+  });
+
+  it('says the list is incomplete when enumeration failed, so a digest holds rather than drops', async () => {
+    mockSiteDocGet.mockRejectedValue(new Error('firestore unavailable'));
+    await expect(getSiteAlertAudience('site-1', 'healthAlerts')).resolves.toMatchObject({ complete: false });
+  });
+
+  it('says a genuinely empty or orphan list is complete', async () => {
+    await expect(getSiteAlertAudience('site-1', 'healthAlerts')).resolves.toMatchObject({ complete: true });
   });
 });
 

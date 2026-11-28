@@ -7,6 +7,7 @@ import { Building2, Plus, Search, Settings, User, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
 import { createSite, type Site } from '@/hooks/useFirestore';
+import { useMachinesBySite } from '@/hooks/useMachinesBySite';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
@@ -17,6 +18,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { CopySiteIdButton } from './CopySiteIdButton';
 import { highlightMatch } from './highlightMatch';
 import { accessLabel } from './MachineAccessField';
+import { SiteMachinesCell, SiteMachinesSummary, type SiteMachinesState } from './SiteMachinesCell';
 
 function SkeletonRows() {
   return (
@@ -35,16 +37,18 @@ function SkeletonRows() {
 }
 
 // the header and every row share these columns from md up
-const SITE_COLUMNS = 'md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_2rem] md:gap-x-4';
+const SITE_COLUMNS =
+  'md:grid-cols-[minmax(0,2fr)_minmax(0,1.4fr)_minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_2rem] md:gap-x-4';
 
 // one grid, two shapes, as the issue list. a phone: the name and the gear on the
-// first line, then id · timezone · role. md up: one row of columns, where the
+// first line, then id · timezone · machines · role. md up: one row of columns, where the
 // second line's box drops out (display: contents) so each of its cells takes a column
 function SiteRow({
   site,
   current,
   query,
   access,
+  machines,
   administered,
 }: {
   site: Site;
@@ -52,14 +56,27 @@ function SiteRow({
   query: string;
   /** the caller's role on the site, or for a superadmin its owner */
   access: ReactNode;
+  machines: SiteMachinesState;
   administered: boolean;
 }) {
   return (
     <li className={`site-row-cv grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-x-3 gap-y-1 px-3 py-2 sm:px-4 ${SITE_COLUMNS}`}>
       <div className="col-[1] row-[1] flex min-w-0 items-center gap-2">
-        <span className="min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate">
-          {highlightMatch(site.name, query)}
-        </span>
+        {/* the name goes where the gear goes, so an administered one is a link too. a filter's
+            marks paint their own glyphs, cyan by night, which the cyan sweep would swallow, so
+            under it they take the sweep's ink as the rest of the name does */}
+        {administered ? (
+          <Link
+            href={siteSettingsPath(site.id)}
+            className="hl-link hl-link-plain min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate hover:[&_mark]:text-background focus-visible:[&_mark]:text-background"
+          >
+            {highlightMatch(site.name, query)}
+          </Link>
+        ) : (
+          <span className="min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate">
+            {highlightMatch(site.name, query)}
+          </span>
+        )}
         {/* ink by day: cyan glyphs on a cyan tint miss aa, as with the match highlight */}
         {current && (
           <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground dark:text-accent-cyan">
@@ -73,11 +90,23 @@ function SiteRow({
         </CopySiteIdButton>
         <span aria-hidden="true" className="md:hidden">·</span>
         <span className="min-w-0 truncate md:col-[3] md:row-[1]">{highlightMatch(site.timezone || 'UTC', query)}</span>
+        {/* a phone has no card: the count and what is not online, and nothing when they did not load */}
+        {machines !== 'failed' && (
+          <>
+            <span aria-hidden="true" className="md:hidden">·</span>
+            <span className="md:hidden">
+              <SiteMachinesSummary state={machines} />
+            </span>
+          </>
+        )}
+        <div className="hidden min-w-0 md:col-[4] md:row-[1] md:flex">
+          <SiteMachinesCell siteName={site.name} state={machines} />
+        </div>
         <span aria-hidden="true" className="md:hidden">·</span>
-        <span className="min-w-0 md:col-[4] md:row-[1]">{access}</span>
+        <span className="min-w-0 md:col-[5] md:row-[1]">{access}</span>
       </div>
       {/* a row without a gear keeps the cell, so the columns line up */}
-      <div className="col-[2] row-[1] flex justify-end md:col-[5]">
+      <div className="col-[2] row-[1] flex justify-end md:col-[6]">
         {administered ? (
           <IconButton asChild label={`settings for ${site.name}`} variant="ghost" size="icon-sm">
             <Link href={siteSettingsPath(site.id)}>
@@ -111,6 +140,19 @@ export function SiteList() {
     }
     return map;
   }, [users]);
+
+  const { machinesBySite, loading: machinesLoading, failed: machinesFailed } = useMachinesBySite(
+    sites.map((s) => s.id),
+  );
+  const machinesFor = (siteId: string): SiteMachinesState => {
+    const listed = machinesBySite?.get(siteId);
+    if (listed) return listed;
+    // null: the server found no access to the site's machines
+    if (listed === null) return 'failed';
+    if (machinesBySite === null) return machinesFailed ? 'failed' : 'loading';
+    // a site the last answer did not hold, as when it joined the list since
+    return machinesLoading ? 'loading' : 'failed';
+  };
 
   // the filter shows only with two or more sites, so a hidden one never narrows the list
   const query = sites.length > 1 ? filter.trim() : '';
@@ -167,7 +209,7 @@ export function SiteList() {
         <AdminPageHeader
           className="mb-4 md:mb-6 md:flex-wrap md:gap-x-6 md:gap-y-4"
           title="sites"
-          description="the sites you belong to. a site's gear opens its settings."
+          description="the sites you belong to. a site's name or gear opens its settings."
           actions={<CompactButton icon={Plus} label="new site" onClick={() => setCreateOpen(true)} />}
           toolbar={
             // no autofocus: on a phone it would raise the keyboard
@@ -245,6 +287,7 @@ export function SiteList() {
                   <span>site</span>
                   <span>id</span>
                   <span>timezone</span>
+                  <span>machines</span>
                   <span>{isSuperadmin ? 'owner' : 'your role'}</span>
                 </div>
                 <ul aria-label="sites" className="divide-y divide-border">
@@ -255,6 +298,7 @@ export function SiteList() {
                       current={site.id === currentSiteId}
                       query={query}
                       access={accessFor(site)}
+                      machines={machinesFor(site.id)}
                       administered={isSiteAdmin(site.id)}
                     />
                   ))}

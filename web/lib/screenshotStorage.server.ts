@@ -7,12 +7,21 @@
  * private: a stored record carries the path and `screenshotImageUrl`, which
  * signs a read url for whoever loads it.
  *
- * Paths are `screenshots/{siteId}/{machineId}/{unixMs}-{rand}.{ext}`; a
- * bucket lifecycle rule prunes `screenshots/**` after 30 days, so nothing
- * here enumerates or deletes.
+ * Paths are `screenshots/{siteId}/{machineId}/{unixMs}-{rand}.{ext}`. Nothing
+ * deletes a screenshot by age or count: it is kept until a site admin deletes
+ * it (`deleteMachineScreenshots`, which throws), the machine is removed or
+ * moved, or the site is deleted (`deleteScreenshotsBestEffort`, which logs).
  */
 import crypto from 'crypto';
+import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
+import logger from '@/lib/logger';
+
+/**
+ * what a caller who reaches a site but holds no member row on it is told: a
+ * superadmin manages every site, and a site's screens are for its own members.
+ */
+export const SCREENS_MEMBERS_ONLY = "screenshots are visible only to the site's members";
 
 const WRITE_URL_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const READ_URL_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -161,7 +170,7 @@ export function screenshotRecordPath(
  * A url a model provider can fetch, for the screenshot url a capture on `machineId`
  * returned: the `path` stored on that machine's screenshot record carrying the url
  * becomes a fresh read url, an absolute url passes through, and anything else is
- * null, a capture pruned from the history included.
+ * null, a capture deleted from the history included.
  */
 export async function screenshotUrlForModel(
   url: string,
@@ -180,4 +189,83 @@ export async function screenshotUrlForModel(
   const storagePath: unknown = records.docs[0]?.data()?.path;
   if (!isMachineScreenshotPath(storagePath, siteId, machineId)) return null;
   return (await issueScreenshotReadUrl(storagePath))?.url ?? null;
+}
+
+/**
+ * The storage folder of a site's or one machine's screenshots. An id that is
+ * empty, holds a slash or is a dot segment is refused, since it would widen the
+ * folder a delete empties: an empty site id is every screenshot there is.
+ */
+function screenshotFolder(siteId: string, machineId?: string): string {
+  const segment = (id: string) => id.length > 0 && !id.includes('/') && id !== '.' && id !== '..';
+  if (!segment(siteId) || (machineId !== undefined && !segment(machineId))) {
+    throw new Error('[screenshotStorage] a screenshot folder needs a site id and machine id without a slash');
+  }
+  return machineId === undefined ? `screenshots/${siteId}/` : `screenshots/${siteId}/${machineId}/`;
+}
+
+/** both deletes run whatever the other does; the first failure is thrown after them */
+async function settle(deletes: Promise<unknown>[]): Promise<void> {
+  const results = await Promise.allSettled(deletes);
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
+}
+
+/**
+ * Delete every stored screenshot of a machine: the images in its folder and its
+ * history records. Throws on a failure, for clearing the history, where the
+ * person asked for exactly this delete.
+ */
+export async function deleteMachineScreenshots(
+  siteId: string,
+  machineId: string,
+  db: Firestore = getAdminDb(),
+): Promise<void> {
+  const prefix = screenshotFolder(siteId, machineId);
+  const bucket = getAdminStorage().bucket(resolveBucketName());
+  await settle([
+    bucket.deleteFiles({ prefix, force: true }),
+    db.recursiveDelete(
+      db.collection('sites').doc(siteId).collection('machines').doc(machineId).collection('screenshots'),
+    ),
+  ]);
+}
+
+/**
+ * Delete every stored screenshot of a site: the images in its folder and every
+ * machine's history records. `listDocuments` also returns a machine whose
+ * document is gone but whose records are not. Throws on a failure.
+ */
+export async function deleteSiteScreenshots(
+  siteId: string,
+  db: Firestore = getAdminDb(),
+): Promise<void> {
+  const prefix = screenshotFolder(siteId);
+  const bucket = getAdminStorage().bucket(resolveBucketName());
+  const records = async () => {
+    const machines = await db.collection('sites').doc(siteId).collection('machines').listDocuments();
+    for (const machine of machines) await db.recursiveDelete(machine.collection('screenshots'));
+  };
+  await settle([bucket.deleteFiles({ prefix, force: true }), records()]);
+}
+
+/**
+ * The screenshots a site keeps after a machine leaves it (`machineId`) or it is
+ * deleted (null), as the last step of that, best effort: a failure is logged as
+ * an error and never undoes what came before. Last, as the delete has no bound.
+ */
+export async function deleteScreenshotsBestEffort(
+  siteId: string,
+  machineId: string | null,
+  context: string,
+  db: Firestore = getAdminDb(),
+): Promise<void> {
+  try {
+    await (machineId === null ? deleteSiteScreenshots(siteId, db) : deleteMachineScreenshots(siteId, machineId, db));
+  } catch (err) {
+    logger.error(`${context}: screenshot delete failed (non-fatal)`, {
+      context,
+      data: { siteId, machineId, err: err instanceof Error ? err.message : String(err) },
+    });
+  }
 }

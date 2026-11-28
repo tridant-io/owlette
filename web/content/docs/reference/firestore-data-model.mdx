@@ -94,7 +94,7 @@ firestore/
 |-- plan_accounts/{uid}
 |-- billing_checkouts/{sessionId}
 |-- tridant_site_removals/{siteId}
-`-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
+`-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, alert_digests, ... (see platform)
 ```
 
 ---
@@ -221,7 +221,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | --- | --- | --- |
 | `machineId` | string | the machine ID. |
 | `siteId` | string | owning site. |
-| `online` | boolean | agent-reported online flag. the dashboard also checks heartbeat age. |
+| `online` | boolean | agent-reported online flag. the dashboard, the API, hoot and talons read a machine as online only while this is true, `asleep` is not, and `lastHeartbeat` is under 5 minutes old, so an agent that died without writing `false` still reads offline. |
 | `lastHeartbeat` | timestamp | updated with each heartbeat. |
 | `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. on owlette free, the machine with the earliest one across the owner's free sites stays live in the owner's dashboard. missing on machines paired before it existed. |
 | `agent_version` | string | agent build version. |
@@ -245,7 +245,6 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `rebootPending` | map | `{ active, processName, reason, timestamp }`: relaunch attempts ran out. see [restart pending](/docs/dashboard/machine-monitoring#restart-pending). |
 | `rebootState` | map | last fired schedule entry plus the current reboot attempt. |
 | `lastScreenshot` | map or null | `{ url, path, timestamp, sizeKB }`, the latest screenshot. `path` is the storage object; `url` opens it, as in the history below. |
-| `liveView` | map | `{ active, interval, startedAt, expiresAt }`, unix seconds, while live view runs. |
 | `swoopViewers` | number | viewers across live swoop sessions with an unexpired lease, recomputed by the server when sessions change (not on every lease renewal, so it can lag). missing until the first session. |
 | `swoopSeats` | array | the seats `swoopViewers` counts, as `{ uid, displayName, ctl }`, written with it, so the swoop picker can name who is in the session. `displayName` is null when the account has none or is gone, and there is no email: every member whose access covers the machine reads this document. missing until a session changes on the machine. |
 | `configChangeFlag` | boolean | set by the server after process-config writes. nothing in the agent reads it. |
@@ -317,13 +316,13 @@ screenshot history, written by the server after an upload. **access**: members w
 
 | field | type | notes |
 | --- | --- | --- |
-| `url` | string | `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which redirects anyone with access to the machine to a short-lived signed link. older entries hold a storage URL. |
+| `url` | string | `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which redirects a member whose access covers the machine to a short-lived signed link, and refuses a superadmin who is not a member of the site with `403`. older entries hold a storage URL. |
 | `path` | string | the image's storage object, `screenshots/{siteId}/{machineId}/…`. |
 | `timestamp` | timestamp or number | capture time. |
 | `sizeKB` | number | image size. at most 10 MB. |
 | `monitor` | number | the monitor captured, on uploads through the current pipeline. |
 
-the history keeps the newest 20.
+the history keeps every capture, with no limit by age or count, until a site owner or admin deletes it, the machine is removed or moved to another site, or the site is deleted; each of those deletes the images under `screenshots/{siteId}/{machineId}/` too. the screenshot window lists the newest 20.
 
 ### `.../installed_software/{softwareId}`
 
@@ -662,14 +661,14 @@ the user's profile and preferences. **access**: the user reads their own and may
 | `deletedAt` | number | ms; an admin soft-delete. once set, the rules deny the user every site. |
 | `lastSiteId` | string | the site the dashboard last opened. |
 | `lastMachineIds` | map | per site, hoot's last target: `__site__`, a machine ID, or a list of IDs. |
-| `preferences` | map | the user's own settings, merged through `updateUserPreferences`. display: `temperatureUnit`, `timezone`, `timeFormat`, `timeDisplayMode` (`machine`, `user` or `site`), `theme` (`system`, `dark` or `light`; absent means `system`). alert opt-outs: `healthAlerts`, `processAlerts`, `thresholdAlerts`, `cortexAlerts`, `displayAlerts`, `talonAlerts`, `apiKeyAlerts`, plus `mutedMachines` and `alertCcEmails`. layout memory: `statsExpanded`, `processesExpanded`, `displaysExpanded`, `graphTabs`, `activeGraphPanel`, `graphTimeRange`, `displayAlertsBannerDismissed`. |
+| `preferences` | map | the user's own settings, merged through `updateUserPreferences`. display: `temperatureUnit`, `timezone`, `timeFormat`, `timeDisplayMode` (`machine`, `user` or `site`), `theme` (`system`, `dark` or `light`; absent means `system`). alert opt-outs: `healthAlerts`, `processAlerts`, `thresholdAlerts`, `cortexAlerts`, `displayAlerts`, `talonAlerts`, `apiKeyAlerts`, plus `mutedMachines` and `alertCcEmails`. `alertDelivery` (`immediate`, `hourly`, `daily` or `weekly`; absent or unknown means `daily`) is how the alert emails arrive; the server reads it through `parseAlertDelivery`, since the client writes it. layout memory: `statsExpanded`, `processesExpanded`, `displaysExpanded`, `graphTabs`, `activeGraphPanel`, `graphTimeRange`, `displayAlertsBannerDismissed`. |
 | `mfaSecret`, `backupCodes` | string, array | encrypted TOTP secret and hashed backup codes. server only. |
-| `mfaFactors` | map | `{ totp, passkeys }`, the authoritative second-factor tally. server only. |
+| `mfaFactors` | map | `{ totp, passkeys, backupCodes }`, the authoritative second-factor tally, and how many backup codes are left. server only. |
 | `mfaEnrolled`, `requiresMfaSetup` | boolean | derived from `mfaFactors`; server only. `requiresMfaSetup` re-arms when the last factor is removed, and the proxy redirects such a session to `/setup-2fa`. |
 | `sessionsValidAfter` | number | ms, written with every second-factor change. a dashboard session started before it stops working, except the one that made the change, which is re-stamped. server only. |
 | `totpLastStep` | number | the time step of the last authenticator code accepted, so a code works once. server only. |
 
-`mfaFactors`, `mfaEnrolled` and `requiresMfaSetup` have exactly one writer, `lib/mfaFactors.server.ts`.
+`mfaFactors`, `mfaEnrolled` and `requiresMfaSetup` have exactly one writer, `lib/mfaFactors.server.ts`; the routes that spend or replace backup codes write `mfaFactors.backupCodes` beside them, through its `backupCodeCountUpdate`.
 
 ### `users/{uid}/settings/llm`
 
@@ -731,7 +730,10 @@ these are server only unless noted.
 | `idempotency_cache/{hash}` | stored responses for `Idempotency-Key` requests, 24 hours: `userId`, `environment`, `key`, `bodyHash`, `method`, `path`, `query`, `status`, `headers`, `body`, `expiresAt`, `createdAt`. swept daily. |
 | `sites/{siteId}/rate_limits/{bucket}/subjects/{subject}/capabilities/{capability}/shards/{n}` | rate-limit counters, `{ count, windowStart }`. `rate_limit_observations/{id}` records hits in observe-only mode. |
 | `sites/{siteId}/alert_cooldowns/{ruleId}_{machineId}` | `{ lastTriggered }`, unix seconds, so a threshold rule respects its cooldown. |
-| `pending_process_alerts/{id}`, `pending_display_alerts/{id}` | alert queues written by `/api/agent/alert` and drained by the process-alert and display-alert digest crons. |
+| `pending_process_alerts/{id}`, `pending_display_alerts/{id}` | alert queues written by `/api/agent/alert` and drained every 3 minutes by the process-alert and display-alert crons, which email or queue each alert for a digest. |
+| `alert_digests/{uid}` | one person's [alert digest](/docs/dashboard/admin/email-alerts#how-they-arrive) state: `pending` (rows are queued), `lastQueuedAt`, `lastClosedAt` (ms, when the last period closed, sent or not), `lastSentPeriodKey`, `lastSentAt`, `introducedAt` (the first digest's note), and while a period is being sent `claim` `{ claimId, periodKey, mode, dueAt, cutoff, leaseUntil, attempts, subject?, html?, held? }`, which holds the rendered email until it is sent. deleted with the account. |
+| `alert_digests/{uid}/digest_events/{eventId}` | one queued alert: `siteId`, `machineId`, `category` (the preference key), `kind`, `severity`, `title`, `detail`, `data`, `at` (ms, when it happened), `queuedAt` (server time; periods are cut on it) and `deleteAt`, 14 days on, which a Firestore TTL policy on `digest_events.deleteAt` deletes. the ID is a hash of its source for alerts that repeat (an outage's `staleSince`, a queue doc, an escalation), so a repeat is stored once. deleted when its digest is sent. |
+| `global/alert_digest` | the digest job's last run: `lastRunAt` (ms) and `lastRun` `{ users, due, sent, failed, held, deferred }`. senders queue alerts only while `lastRunAt` is under 45 minutes old, and email at once otherwise; the `alert_delivery` status component degrades when a digest is queued and it is older or absent. |
 | `bug_reports/{reportId}` | issues filed from the dashboard and the desktop app: `number`, `source` (`web` or `agent`), `category`, `title`, `description`, `status`, `createdAt`, `userId`, `userEmail`, `browserUA`, `pageUrl`, `appVersion`, and `siteId` and `machineId` from the machine's token (`null` for one from the dashboard). when no `title` is sent, or the desktop app sends its placeholder `agent feedback`, it is the first line of the description's text, cut to 120 characters, or the category's label when there is no text. `number` is the issue's `#N`, taken from `counters/bug_reports` in the same transaction that writes the issue; issues from before numbering get one from `scripts/migrations/backfill-issue-numbers.mjs`. `status` is `new`, `triaged`, `fixed` or `wontfix`, and starts as `new`. setting it writes `triageNote` (up to 2,000 characters, when a note was given), `statusUpdatedAt`, and `statusUpdatedBy`, the user ID of the superadmin who set it. `logs` `{ key, size, expiresAt, hasLogs, screenshots?, videos? }` names the [log zip](/docs/agent/troubleshooting#sending-logs-to-support) in R2 when one was attached, with `hasLogs` saying whether it holds the machine's logs, and `screenshots` (1 to 10) and `videos` (1 to 20) when the agent's report says the zip holds them; an issue from before `hasLogs` was stored holds logs when it names no screenshots or videos. the object is deleted 30 days after upload. an issue from the dashboard has no `logs`; `files` `[{ key, ext, kind, size }]` lists the screenshots and videos its user uploaded, each its own object in R2 under `issues/web/{uid}/`, with `kind` `screenshot` or `video` and `size` in bytes as R2 reported it, and `filesExpireAt` is 30 days after the issue was sent. the objects are deleted 30 days after upload. |
 | `counters/bug_reports` | `{ next }`, the last issue number handed out in this environment. each environment numbers its issues on its own. |
 | `global/security_config` | platform security kill switches. |

@@ -2,8 +2,18 @@ import { test, expect, type Page } from '@playwright/test';
 import { roleState } from '../../helpers/roles';
 import { getAdminDb } from '../../helpers/emulator';
 import { seedLogEvents } from '../../helpers/coverageSeed';
+import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/seed';
 
 test.use(roleState('superadmin'));
+
+// the superadmin clears a site's logs only as its member (adr 0021)
+test.beforeAll(async () => {
+  await grantMembership('site-A', TEST_USERS.superadmin.uid, 'admin');
+});
+
+test.afterAll(async () => {
+  await revokeMembership('site-A', TEST_USERS.superadmin.uid);
+});
 
 test.beforeEach(async () => {
   await seedLogEvents('site-A');

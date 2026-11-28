@@ -37,6 +37,16 @@ info:
     over `Authorization: Bearer`; a bearer that is not an `owk_` key is treated
     as a Firebase ID token.
 
+    A superadmin reaches every site without being a member of it. On a site
+    where the caller (or the key's owner) is not a member, every request but
+    `GET`, `HEAD` and `OPTIONS` answers `403 members_only`, except queueing
+    a command the commands operation lists for them, starting, stopping,
+    restarting or killing a configured process, dismissing a pending reboot,
+    cancelling a deployment, revoking an agent token, and killing or kicking
+    a swoop session. Pairing a machine onto the site and moving one onto it answer
+    the same way. A superadmin adds themselves to the site first
+    (`POST /api/users/{uid}/assign-sites`), which the site's audit log records.
+
     ## Versioning
 
     Owlette does not require a global API-version header. Roost and chunk
@@ -1827,7 +1837,7 @@ paths:
       summary: Delete machine screenshots
       description: |
         Deletes one screenshot by id, or all screenshot history for the machine
-        when omitted. Requires `machine=<machineId>:write`. Response shape is
+        when omitted, with its latest screenshot. Requires `machine=<machineId>:write`. Response shape is
         transitional JSON (`{ success, deleted }`) for dashboard compatibility.
       security:
         - apiKey: []
@@ -4884,6 +4894,12 @@ paths:
 
         This endpoint is unpaginated.
 
+        `include=machines` adds each site's `machines`, read as
+        `GET /api/sites/{siteId}/machines` reads them, for the dashboard's
+        site list. Each site's machines follow the caller's access to that
+        site: a member limited to some machines gets only those, and a listed
+        site the caller has no access to gets `machines: null`.
+
         ### Authentication and scopes
 
         Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
@@ -4893,10 +4909,25 @@ paths:
         sees the owning user's sites narrowed to the ids in its `site` scopes
         (any permission); a `site=*` entry removes the narrowing, and a key
         with no `site` scope gets an empty list.
+
+        `include=machines` is for sessions and Firebase ID tokens only: an API
+        key gets `403` with `code: api_key_not_permitted`, and lists a site's
+        machines with `GET /api/sites/{siteId}/machines`, which checks its
+        `site=<siteId>:read` scope.
       security:
         - apiKey: []
         - bearerApiKey: []
         - firebaseIdToken: []
+      parameters:
+        - name: include
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [machines]
+          description: |
+            `machines` adds each site's machines. Any other value is refused
+            (400). Not available to an API key.
       responses:
         '200':
           description: Accessible sites.
@@ -4908,7 +4939,20 @@ paths:
                 properties:
                   sites:
                     type: array
-                    items: { $ref: '#/components/schemas/SiteSummary' }
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/SiteSummary'
+                        - type: object
+                          properties:
+                            machines:
+                              type: array
+                              nullable: true
+                              description: |
+                                Only with `include=machines`. The site's machines
+                                the caller can reach, sorted by name; `null` when
+                                the caller has no access to the site's machines.
+                              items: { $ref: '#/components/schemas/MachineStatus' }
+        '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -5112,9 +5156,11 @@ paths:
         refused. In order, it writes the audit row to the platform's own log
         (the site's log goes with the site), retires the id so it cannot be
         reused, revokes the site's agent refresh tokens, clears the site from
-        every member's legacy `users/{uid}.sites[]`, and deletes the site
-        document and every subcollection: machines and their history, roosts,
-        talons, webhooks, settings and member rows.
+        every member's legacy `users/{uid}.sites[]`, deletes the site's stored
+        screenshots (best effort: a failure is logged and the site is deleted
+        all the same), and deletes the site document and every subcollection:
+        machines and their history, roosts, talons, webhooks, settings and
+        member rows.
 
         While a machine is switching into or out of the site (a move whose agent
         has fetched the new site's tokens), the delete is refused with `409`
@@ -5231,7 +5277,9 @@ paths:
         pending/completed command-map documents, and the machine's agent
         refresh tokens (so the agent cannot reconnect), and ends the machine's
         swoop sessions as `machine_removed`, so their viewers say the machine
-        has left the site. Idempotent.
+        has left the site. Last, it deletes the machine's stored screenshots,
+        images and history records, best effort: a failure is logged and the
+        machine is removed all the same. Idempotent.
 
         ### Authentication and scopes
 
@@ -7353,13 +7401,18 @@ paths:
       description: |
         Canonical site-scoped command endpoint. Restricted to an
         operator-safe allowlist covering machine power, screenshots,
-        live view, display topology, process commands, hoot MCP tool
-        calls, and Owlette updates. Requires an idempotency key for all
-        callers. Capability depends on `type`: `capture_screenshot`,
-        `start_live_view` and `stop_live_view` need MACHINE_VIEW (any site
-        member); every other type needs MACHINE_EXEC_COMMAND (site admin or
-        owner; superadmin anywhere). API keys need `machine=<machineId>:write`
-        for every type. 60/min per caller. The dashboard's read-only
+        display topology, process commands, hoot MCP tool calls, and
+        Owlette updates. Requires an idempotency key for all callers.
+        Capability depends on `type`: `capture_screenshot` needs MACHINE_VIEW
+        (any site member); every other type needs MACHINE_EXEC_COMMAND (site
+        admin or owner; superadmin anywhere). API keys need
+        `machine=<machineId>:write` for every type. A superadmin who is not a
+        member of the site, or their key, may queue only `update_owlette`,
+        `reboot_machine`, `cancel_reboot`, `dismiss_reboot_pending`,
+        `start_process`, `stop_process`, `restart_process`, `kill_process`,
+        `cancel_mcp_tool`, and an `mcp_tool_call` of a tier-1
+        tool other than `capture_screenshot`; any other type is `403`
+        `members_only`. 60/min per caller. The dashboard's read-only
         `check_path` command is not on this allowlist, for any caller: it has a
         session-only route of its own and refuses API keys.
 
@@ -7367,8 +7420,7 @@ paths:
         is `false` — the command is NOT queued.
 
         Once plans apply, after 1 April 2027, every type except `update_owlette`,
-        `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
-        `cancel_mcp_tool` needs the site's plan to include remote
+        `cancel_reboot`, `dismiss_reboot_pending` and `cancel_mcp_tool` needs the site's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
         `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
 
@@ -7426,7 +7478,7 @@ paths:
               properties:
                 type:
                   type: string
-                  enum: [reboot_machine, shutdown_machine, cancel_reboot, dismiss_reboot_pending, capture_screenshot, start_live_view, stop_live_view, restart_process, start_process, stop_process, kill_process, set_launch_mode, apply_display_topology, ack_display_topology, enumerate_display_modes, test_display_apply, mcp_tool_call, cancel_mcp_tool, update_owlette]
+                  enum: [reboot_machine, shutdown_machine, cancel_reboot, dismiss_reboot_pending, capture_screenshot, restart_process, start_process, stop_process, kill_process, set_launch_mode, apply_display_topology, ack_display_topology, enumerate_display_modes, test_display_apply, mcp_tool_call, cancel_mcp_tool, update_owlette]
                 params:
                   type: object
                   description: |
@@ -7483,8 +7535,6 @@ paths:
                       type: object
                       additionalProperties: true
                     chat_id: { type: string }
-                    interval: { type: integer, minimum: 1, description: "`start_live_view` seconds between frames; the agent clamps to 5-60 (default 10)." }
-                    duration: { type: integer, minimum: 1, description: "`start_live_view` seconds; the agent clamps to 60-1800 (default 600)." }
                     target_command_id: { type: string, description: "Required for `cancel_mcp_tool`: the `mcp_tool_call` to cancel." }
                     installer_url: { type: string }
                     deployment_id: { type: string }
@@ -7581,7 +7631,8 @@ paths:
         Returns the current status of a queued command. For completed
         `capture_screenshot` commands, the response includes a freshly-
         minted 1-hour signed read URL under `result.screenshot_url` —
-        the URL is per-request and is never persisted.
+        the URL is per-request and is never persisted. A superadmin who is
+        not a member of the site, or their key, gets the result without it.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -7708,8 +7759,9 @@ paths:
         it with `screenshots/finalize`. Decoupling upload from command
         queueing keeps multi-megabyte image payloads off the web tier.
 
-        30-day retention is enforced via a separate Firebase Storage
-        lifecycle rule (out of scope for this endpoint).
+        Nothing deletes a screenshot by age or count: it is kept until a site
+        owner or admin deletes it, the machine is removed or moved off the
+        site, or the site is deleted.
 
         ### Authentication and scopes
 
@@ -7773,8 +7825,9 @@ paths:
         the image to the signed URL from `screenshots/upload-url`. Verifies the
         object exists at `storagePath` and that the path belongs to this site and
         machine, writes it as the machine's `lastScreenshot`, and appends a
-        history entry; the newest 20 are kept and older entries are pruned with
-        their storage objects. The object stays private: records carry its path
+        history entry. Every capture is kept, by no age or count, until a site
+        owner or admin deletes it, the machine is removed or moved off the site,
+        or the site is deleted. The object stays private: records carry its path
         and a `screenshots/image` url. Not rate limited (each call needs a path
         from an already-counted `upload-url` call) and takes no `Idempotency-Key`.
 
@@ -7864,7 +7917,9 @@ paths:
         `x-api-key`), or a first-party Firebase/session credential.
 
         Required scope: `machine=<machineId>:read`. Sessions need site
-        membership that covers the machine.
+        membership that covers the machine. A superadmin who is not a member
+        of the site, or their key, answers 403: screenshots are for the site's
+        members.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -8187,7 +8242,8 @@ paths:
       description: |
         Machine-level display configuration surface. This stores the
         assigned layout, toggles auto-restore, resets its circuit breaker,
-        or toggles the remote-apply kill switch. Requires
+        or toggles the remote-apply kill switch. Storing a layout when none
+        was stored turns auto-restore off. Requires
         `machine=<machineId>:write` and an idempotency key.
       security:
         - apiKey: []
@@ -8250,8 +8306,8 @@ paths:
       tags: [Machines]
       summary: clear the assigned display layout
       description: |
-        Clears `displays.assigned` while preserving sibling display
-        settings such as auto-restore and remote-apply. Requires
+        Clears `displays.assigned` and turns auto-restore off, keeping
+        remote-apply and the other display settings. Requires
         `machine=<machineId>:write` and an idempotency key.
       security:
         - apiKey: []
@@ -8291,7 +8347,8 @@ paths:
       operationId: setProcessLaunchMode
       tags: [Processes]
       summary: update process launch mode
-      description: Requires `machine=<machineId>:write` and an idempotency key.
+      description: |
+        Requires `machine=<machineId>:write` and an idempotency key.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -8590,6 +8647,10 @@ paths:
         own key, the ICE servers to try, and the signalling room URL. The
         session key is never returned, and no secret is ever placed in a URL —
         the room URL names a room and nothing else.
+
+        A superadmin who is not a member of the site is refused with `403`
+        `capability_missing`, to watch and to control: a site's screens are
+        for its members.
 
         One streamer on a machine serves every viewer, so when the machine is
         already in a session — someone in it still holds a lease they have
@@ -10018,7 +10079,7 @@ paths:
                   deletedCounts:
                     type: object
                     additionalProperties: { type: integer }
-                    description: Per-path document counts (machines, deployments, logs, sites, users, memberSitesRemoved, passkeys, trustedDevices, apiKeys, apiKeyLookups, mfaPending, agentRefreshTokens, chats, chatMessages, storageObjects).
+                    description: Per-path document counts (machines, deployments, logs, sites, users, memberSitesRemoved, passkeys, trustedDevices, verifiedNetworks, apiKeys, apiKeyLookups, mfaPending, alertDigests, agentRefreshTokens, chats, chatMessages, storageObjects).
                   authRevoked: { type: boolean }
                   deletedPaths:
                     type: array
@@ -14685,13 +14746,47 @@ components:
               nullable: true
 
     # machines
+    MachineStatus:
+      description: |
+        A machine's state, as `GET /api/sites?include=machines` lists it. The
+        fields are `MachineSummary`'s and mean the same.
+      type: object
+      required: [id, name, online, asleep]
+      properties:
+        id:     { type: string }
+        name:   { type: string }
+        online:
+          type: boolean
+          description: |
+            True when the agent reports the machine online and its last heartbeat
+            is under 5 minutes old, as the dashboard reads it.
+        asleep:
+          type: boolean
+          description: The agent marked the machine asleep on its way to sleep. `online` is false meanwhile.
+        lastHeartbeat:
+          type: string
+          format: date-time
+          nullable: true
+        agentVersion:
+          type: string
+          nullable: true
     MachineSummary:
       type: object
       required: [id, name, online]
       properties:
         id:     { type: string }
         name:   { type: string }
-        online: { type: boolean }
+        online:
+          type: boolean
+          description: |
+            True when the agent reports the machine online and its last heartbeat
+            is under 5 minutes old, as the dashboard reads it. An agent that stopped
+            without reporting offline still reads false once its heartbeat goes stale.
+        asleep:
+          type: boolean
+          description: |
+            The agent marked the machine asleep on its way to sleep (macOS agents
+            only, so far). `online` is false meanwhile.
         lastHeartbeat:
           type: string
           format: date-time

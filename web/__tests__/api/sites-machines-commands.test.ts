@@ -136,7 +136,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   signedUrlCalls.length = 0;
   mockResolveAuth.mockResolvedValue(authedSession());
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null, member: true });
   mocks.siteDocs.clear();
   mocks.memberDocs.clear();
   mocks.userDocs.clear();
@@ -527,29 +527,84 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     expect(body.code).toBe('unsupported_command_type');
   });
 
-  it('202 happy path: start_live_view accepts interval and duration', async () => {
+  // live view is gone for swoop, so nothing on the web can start one on a fielded
+  // agent that still has the handler, and one under way ends at its own 30 minutes
+  it.each(['start_live_view', 'stop_live_view'])('400 unsupported_command_type for %s, nothing queued', async (type) => {
+    queueIdemOnly();
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `idem-${type}` },
+        body: { type, params: { interval: 5, duration: 60 } },
+      },
+    );
+    const res = await commandsPOST(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('unsupported_command_type');
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('403 — a superadmin who is not a member of the site may not capture_screenshot, nothing queued', async () => {
+    // a site's screens are for its members (adr 0021); the capture is the screen
+    mocks.memberDocs.clear();
+    queueIdemOnly();
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'idem-super-cap' },
+        body: { type: 'capture_screenshot', params: { monitor: 'primary' } },
+      },
+    );
+    const res = await commandsPOST(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail).toBe("screenshots are visible only to the site's members");
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  // the owner's ruling (adr 0021): such a superadmin still updates, restarts and
+  // reboots, but runs no code there, changes nothing it launches and captures nothing
+  it.each([
+    ['a hoot screenshot', { type: 'mcp_tool_call', params: { tool_name: 'capture_screenshot', tool_params: { monitor: 0 } } }],
+    ['a tier-3 tool', { type: 'mcp_tool_call', params: { tool_name: 'run_powershell', tool_params: { script: 'Get-Date' } } }],
+    ['a launch change through a tier-2 tool', { type: 'mcp_tool_call', params: { tool_name: 'update_process', tool_params: { process_name: 'show', exe_path: 'C:/other.exe' } } }],
+    ['a launch mode', { type: 'set_launch_mode', params: { process_name: 'show', mode: 'always' } }],
+  ])('403 — a superadmin who is not a member of the site may not queue %s, nothing queued', async (_label, body) => {
+    mocks.memberDocs.clear();
+    queueIdemOnly();
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+      { method: 'POST', headers: { 'Idempotency-Key': `idem-super-${_label}` }, body },
+    );
+    const res = await commandsPOST(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('members_only');
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('202 — a superadmin who is not a member of the site still reboots, which shows nothing', async () => {
+    mocks.memberDocs.clear();
     queueIdemAndMachine({ online: true });
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
       {
         method: 'POST',
-        headers: { 'Idempotency-Key': 'idem-lv' },
-        body: { type: 'start_live_view', params: { interval: 2, duration: 30 } },
+        headers: { 'Idempotency-Key': 'idem-super-reboot' },
+        body: { type: 'reboot_machine', params: {} },
       },
     );
     const res = await commandsPOST(req, {
       params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
     });
     expect(res.status).toBe(202);
-
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
-    const env = mergeCalls[0][0] as Record<string, Record<string, unknown>>;
-    const cid = Object.keys(env)[0];
-    expect(env[cid].type).toBe('start_live_view');
-    expect(env[cid].interval).toBe(2);
-    expect(env[cid].duration).toBe(30);
+    expect(lastMergedCommand().type).toBe('reboot_machine');
   });
 
   it('400 idempotency_key_required when Idempotency-Key is missing', async () => {
@@ -1323,6 +1378,30 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}', ()
     const body = await res.json();
     expect(body.data.result.screenshot_url).toMatch(/^https:\/\/signed\.example\/read-/);
     expect(fakeBucket.file).toHaveBeenLastCalledWith(storagePath);
+  });
+
+  it('200 completed capture_screenshot signs nothing for a superadmin who is not a member of the site', async () => {
+    mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null, member: false });
+    queueGetSnapshots(null, {
+      [CID]: {
+        type: 'capture_screenshot',
+        status: 'completed',
+        screenshot_path: `screenshots/${SITE}/${MACHINE}/1700000000000-aabbccdd.png`,
+      },
+    });
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands/${CID}`,
+    );
+    const res = await commandStatusGET(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE, commandId: CID }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe('completed');
+    expect(body.data.result?.screenshot_url).toBeUndefined();
+    expect(body.data.result?.expires_at).toBeUndefined();
+    expect(signedUrlCalls).toEqual([]);
   });
 
   it.each([

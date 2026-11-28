@@ -1,16 +1,14 @@
-"""Characterization tests for the THREE screenshot callers in owlette_service.py.
+"""Characterization tests for the TWO screenshot callers in owlette_service.py.
 
-All three now run the one pipeline in ``screenshot_capture`` through
+Both run the one pipeline in ``screenshot_capture`` through
 ``OwletteService._run_capture_pipeline``:
 
   * ``OwletteService._handle_capture_screenshot``  (on-demand / hoot / Cortex IPC)
   * ``OwletteService._capture_crash_screenshot``   (best-effort, on crash)
-  * ``OwletteService._live_view_loop``             (periodic live view)
 
-What they no longer share is what a failure MEANS, and that is what this file
+What they do not share is what a failure MEANS, and that is what this file
 pins: the same ``ScreenshotCaptureError`` becomes an error dict at the on-demand
-site, ``None`` at the crash site, and a DEBUG line plus a live loop at the
-live-view site. The capture, upload and finalize steps themselves are covered by
+site and ``None`` at the crash site. The capture, upload and finalize steps themselves are covered by
 test_screenshot_capture.py -- none of them are re-tested here.
 
 Mocking follows the house style: the real unbound method is bound onto a
@@ -25,7 +23,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import time
 
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -60,7 +57,7 @@ def _upload_envelope(url='https://cdn/x.jpg', size_kb=3, monitor=0,
 
 def _make_service(pipeline_result=None, pipeline_error=None,
                   firebase_client=_UNSET):
-    """A minimal double carrying only the attributes the three sites read."""
+    """A minimal double carrying only the attributes the two sites read."""
     from owlette_service import OwletteService
 
     pipeline = MagicMock(return_value=pipeline_result)
@@ -70,11 +67,8 @@ def _make_service(pipeline_result=None, pipeline_error=None,
     svc = SimpleNamespace(
         _run_capture_pipeline=pipeline,
         firebase_client=MagicMock() if firebase_client is _UNSET else firebase_client,
-        _live_view_active=True,
-        _live_view_stop_time=0.0,
     )
-    for name in ('_handle_capture_screenshot', '_capture_crash_screenshot',
-                 '_live_view_loop'):
+    for name in ('_handle_capture_screenshot', '_capture_crash_screenshot'):
         setattr(svc, name, getattr(OwletteService, name).__get__(svc, OwletteService))
     return svc
 
@@ -88,7 +82,7 @@ def _log_levels(caplog, needle):
     """Level names of every captured record whose message contains `needle`.
 
     Asserting on this rather than on caplog.text pins the LEVEL too -- these
-    three sites deliberately use different levels for the same class of
+    two sites deliberately use different levels for the same class of
     failure, and caplog.text alone would not notice a level change.
     """
     return sorted({r.levelname for r in caplog.records if needle in r.getMessage()})
@@ -145,9 +139,8 @@ class TestRunCapturePipeline:
         }
 
     def test_forwards_the_callers_budget(self):
-        """The crash caller runs inline on the monitor loop and the live-view
-        caller repeats every few seconds; neither can afford the on-demand
-        defaults, so the budget has to reach capture_and_upload."""
+        """The crash caller runs inline on the monitor loop and cannot afford
+        the on-demand defaults, so the budget has to reach capture_and_upload."""
         import owlette_service
 
         svc = _pipeline_service()
@@ -402,125 +395,3 @@ class TestCaptureCrashScreenshot:
 
         assert out is None
         assert 'Crash screenshot captured' not in caplog.text
-
-
-# ---------------------------------------------------------------------------
-# site 3: _live_view_loop
-# ---------------------------------------------------------------------------
-
-
-def _live_service(pipeline_result=None, pipeline_error=None):
-    """A service whose capture ends the loop after a single iteration.
-
-    Clearing _live_view_active inside the call makes both the sleep loop and
-    the outer while fall through, so the test never waits on real time.
-    """
-    svc = _make_service()
-    svc._live_view_stop_time = time.time() + 3600
-
-    def _side_effect(*_a, **_kw):
-        svc._live_view_active = False
-        if pipeline_error is not None:
-            raise pipeline_error
-        return pipeline_result
-
-    svc._run_capture_pipeline = MagicMock(side_effect=_side_effect)
-    return svc
-
-
-class TestLiveViewLoop:
-
-    def test_captures_once_per_iteration_and_returns_none(self):
-        svc = _live_service(pipeline_result=_upload_envelope())
-
-        out = svc._live_view_loop(10)
-
-        assert out is None
-        # A frame is cheap to skip and the next is seconds away: one upload
-        # attempt and 10s caps on the capture and each round-trip, holding the
-        # frame to the ~40s worst case pipeline B had.
-        svc._run_capture_pipeline.assert_called_once_with(
-            max_width=1920, quality=50, capture_timeout_s=10,
-            request_timeout_s=10, max_upload_attempts=1)
-        # The upload result is discarded -- no url is surfaced anywhere, and
-        # this path writes no audit row.
-        svc.firebase_client.log_event.assert_not_called()
-
-    def test_start_and_end_logs(self, caplog):
-        svc = _live_service(pipeline_result=_upload_envelope())
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(7)
-
-        assert _log_levels(caplog, 'Live view loop started (interval=7s)') == ['INFO']
-        assert _log_levels(caplog, 'Live view loop ended') == ['INFO']
-        # No per-capture size log on this path.
-        assert 'Screenshot captured' not in caplog.text
-
-    def test_finally_clears_flag_and_publishes_inactive(self):
-        svc = _live_service(pipeline_result=_upload_envelope())
-        svc.firebase_client.is_connected.return_value = True
-
-        svc._live_view_loop(10)
-
-        assert svc._live_view_active is False
-        svc.firebase_client.set_machine_flag.assert_called_once_with(
-            'liveView', {'active': False})
-
-    def test_finally_skips_flag_when_disconnected(self, caplog):
-        svc = _live_service(pipeline_result=_upload_envelope())
-        svc.firebase_client.is_connected.return_value = False
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(10)
-
-        svc.firebase_client.set_machine_flag.assert_not_called()
-        assert 'Live view loop ended' in caplog.text
-
-    def test_capture_error_logs_debug_and_keeps_the_loop_alive(self, caplog):
-        """A capture that fails on its own terms is routine here -- a dark
-        kiosk with no interactive session fails every single tick."""
-        svc = _live_service(pipeline_error=_capture_error(
-            'capture: no interactive session available'))
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(10)
-
-        assert _log_levels(caplog, 'Live view capture failed: ') == ['DEBUG']
-        assert 'Live view loop ended' in caplog.text
-
-    def test_unexpected_exception_logs_warning_and_keeps_the_loop_alive(self, caplog):
-        svc = _live_service(pipeline_error=RuntimeError('boom'))
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(10)
-
-        assert _log_levels(caplog, 'Live view capture error: boom') == ['WARNING']
-        assert 'Live view loop ended' in caplog.text
-
-    def test_outer_exception_logs_error_and_still_runs_finally(self, caplog):
-        # A non-comparable stop time makes the while condition raise before
-        # the first iteration, exercising the outer handler.
-        svc = _live_service(pipeline_result=_upload_envelope())
-        svc._live_view_stop_time = object()
-        svc.firebase_client.is_connected.return_value = True
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(10)
-
-        assert _log_levels(caplog, 'Live view loop crashed: ') == ['ERROR']
-        assert svc._live_view_active is False
-        svc.firebase_client.set_machine_flag.assert_called_once_with(
-            'liveView', {'active': False})
-        assert 'Live view loop ended' in caplog.text
-        svc._run_capture_pipeline.assert_not_called()
-
-    def test_finally_swallows_flag_publish_failure(self, caplog):
-        svc = _live_service(pipeline_result=_upload_envelope())
-        svc.firebase_client.is_connected.return_value = True
-        svc.firebase_client.set_machine_flag.side_effect = RuntimeError('offline')
-
-        with caplog.at_level(logging.DEBUG):
-            svc._live_view_loop(10)  # must not raise
-
-        assert 'Live view loop ended' in caplog.text

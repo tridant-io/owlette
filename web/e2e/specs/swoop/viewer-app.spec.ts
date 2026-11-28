@@ -7,16 +7,18 @@
  * the session bar is the title bar on top, its buttons its full height; on a
  * side the controls move to a half-height strip across the top that lets
  * presses through everywhere else, so the picture keeps the window's full
- * height. the picker's header and the login page carry the same controls, at
+ * height. the picker's header and every auth page carry the same controls, at
  * full height. in a browser none of it exists. fullscreen in the app says how
  * to leave it from inside the stage; a browser leaves that to chrome.
  *
  * no streamer and no swoop on site-A here: the page refuses the session and
  * stays put with its bar, which is all the title bar needs.
  *
- * the step-up in the app goes through the browser: the app's dialog opens the
- * verify page, a signed-in browser passes a code there, and the app's poll
- * retries the session, which the server now grants without a proof. the app
+ * an account's passkey in the app goes through the browser: the app's dialog
+ * opens the verify page, a signed-in browser passes a code there, and the app's
+ * poll retries the session, which the server now grants without a proof. an
+ * account with no passkey enters its code in the app, and one with no
+ * authenticator app is never asked for an authenticator code. the app
  * is a fresh context with the app's ua, signed in through app-link as the real
  * one is; its popup only gives up the url the real app hands the system browser.
  * a second factor the browser passed under five minutes ago is itself the
@@ -25,7 +27,7 @@
  */
 
 import crypto from 'crypto';
-import { test, expect, devices, type Page } from '@playwright/test';
+import { test, expect, devices, type Browser, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { E2E_BASE_URL, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -73,6 +75,21 @@ async function fakeBridge(page: Page): Promise<void> {
     });
   });
 }
+
+/**
+ * whether a press at x, y moves the window, by tauri's drag script: it lands on
+ * an element marked to drag itself, or anywhere under one marked `deep`. the
+ * points asked about here are never on a control, which would block it.
+ */
+const dragsAt = (page: Page, x: number, y: number) =>
+  page.evaluate(
+    ([px, py]) => {
+      const hit = document.elementFromPoint(px, py);
+      const own = hit?.getAttribute('data-tauri-drag-region');
+      return own === '' || own === 'true' || hit?.closest('[data-tauri-drag-region="deep"]') != null;
+    },
+    [x, y] as const,
+  );
 
 const bridgeCalls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __tauriCalls: string[] }).__tauriCalls);
@@ -303,13 +320,8 @@ test.describe('inside owlette swoop — signed out', () => {
     await expect(page.locator('img[src*="owlette-swoop-icon.png"]')).toBeVisible();
 
     // a press on the page's background lands on the window's drag surface
-    const dragsAt = (x: number, y: number) =>
-      page.evaluate(
-        ([px, py]) => document.elementFromPoint(px, py)?.closest('[data-tauri-drag-region="deep"]') != null,
-        [x, y] as const,
-      );
-    expect(await dragsAt(20, 340)).toBe(true);
-    expect(await dragsAt(1040, 660)).toBe(true);
+    expect(await dragsAt(page, 20, 340)).toBe(true);
+    expect(await dragsAt(page, 1040, 660)).toBe(true);
 
     for (const colorScheme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme });
@@ -346,6 +358,198 @@ test.describe('inside owlette swoop on a mac — signed out', () => {
     await expect(heading.getByText('owlette swoop')).toHaveClass(/sr-only/);
     await expect(page.getByTestId('swoop-login-mark')).toHaveCount(0);
     await test.info().attach('mac login', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
+  });
+});
+
+/**
+ * the auth card's gaps to the window's top and bottom edges match. in a browser
+ * the card keeps clear of the site footer, which owlette swoop does not show.
+ */
+async function expectCardCentred(page: Page, name: string) {
+  const box = await page.locator('main > [data-slot="card"]').boundingBox();
+  expect(box).not.toBeNull();
+  const top = box!.y;
+  const bottom = page.viewportSize()!.height - (box!.y + box!.height);
+  const path = test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path, animations: 'disabled' });
+  await test.info().attach(name, { path, contentType: 'image/png' });
+  expect(Math.abs(top - bottom), `top gap ${top}px, bottom gap ${bottom}px`).toBeLessThanOrEqual(2);
+}
+
+/**
+ * the title bar the login draws, on every auth page: windows' three buttons at
+ * the strip's full height, or on a mac only the traffic lights' room. a press
+ * on the background around the card drags the window; nothing in the card is
+ * under a drag surface, so its text selects and its controls click.
+ */
+async function expectTitleBar(page: Page, platform: 'windows' | 'mac') {
+  const strip = page.getByTestId('swoop-window-strip');
+  await expect(strip).toHaveCSS('height', '32px');
+  if (platform === 'windows') {
+    for (const name of ['minimize', 'maximize', 'close']) {
+      await expect(strip.getByRole('button', { name })).toBeVisible();
+    }
+  } else {
+    await expect(strip.getByRole('button')).toHaveCount(0);
+    await expect(strip.locator('[data-tauri-drag-region]')).toHaveCSS('width', '86px');
+  }
+  expect(await dragsAt(page, 20, 340)).toBe(true);
+  const outsideDrag = await page
+    .locator('main > [data-slot="card"]')
+    .evaluate(
+      (card) =>
+        !card.hasAttribute('data-tauri-drag-region') &&
+        card.closest('[data-tauri-drag-region="deep"]') === null &&
+        card.querySelector('[data-tauri-drag-region]') === null,
+    );
+  expect(outsideDrag).toBe(true);
+}
+
+/**
+ * records every toast the page shows from its first paint, so a toast that has
+ * timed out by the time the page is checked still counts. call before `goto`.
+ */
+async function watchToasts(page: Page) {
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    Object.assign(window, { __toastsSeen: seen });
+    new MutationObserver(() => {
+      for (const toast of document.querySelectorAll('[data-sonner-toast]')) {
+        const text = toast.textContent ?? '';
+        if (!seen.includes(text)) seen.push(text);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  });
+}
+
+/** the two-factor screen, rendered, says what it wants in its title: no toast repeats it, now or on the way. */
+async function expectNoToast(page: Page) {
+  await expect(page.getByPlaceholder('000000')).toBeVisible();
+  await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __toastsSeen: string[] }).__toastsSeen)).toEqual([]);
+}
+
+/** owlette swoop's email sign-in, which waits behind its link. */
+async function appEmailSignIn(page: Page, user: { email: string; password: string }) {
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'or use your email and password' }).click();
+  await page.getByLabel('email').fill(user.email);
+  await page.getByLabel('password').fill(user.password);
+  await page.getByRole('button', { name: 'sign in with email' }).click();
+}
+
+for (const [platform, userAgent] of [
+  ['windows', APP_UA],
+  ['mac', MAC_APP_UA],
+] as const) {
+  test.describe(`inside owlette swoop on ${platform} — the auth screens after the login`, () => {
+    test.use({ storageState: { cookies: [], origins: [] }, userAgent, colorScheme: 'dark' });
+    // a sign-in, then a code that may wait out the end of its 30 s step
+    test.setTimeout(90_000);
+
+    test.beforeEach(async ({ page }) => {
+      // the window the card was reported off-centre in
+      await page.setViewportSize({ width: 1190, height: 730 });
+    });
+
+    test('the two-factor screen: in the middle of the window, under the title bar, no passkey, and a code signs in', async ({
+      page,
+    }) => {
+      const user = await seedDedicatedUser(dedicatedUser('member', `swoop-centred-${platform}-${Date.now()}`));
+      const secret = authenticator.generateSecret();
+      await getAdminDb().collection('users').doc(user.uid).set(
+        { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret },
+        { merge: true },
+      );
+      await watchToasts(page);
+      await appEmailSignIn(page, user);
+      await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+      await expect(page.getByPlaceholder('000000')).toBeVisible();
+      await expectNoToast(page);
+      await expectCardCentred(page, `swoop-verify-2fa-${platform}`);
+      await expectTitleBar(page, platform);
+      // passkeys do not run inside the app (adr 0012), as its login knows
+      await expect(page.getByRole('button', { name: /passkey/ })).toHaveCount(0);
+
+      if (authenticator.timeRemaining() <= 5) await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
+      await page.getByPlaceholder('000000').fill(authenticator.generate(secret));
+      await page.getByRole('button', { name: 'verify', exact: true }).click();
+      await expect(page).not.toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    });
+
+    test('a sign-in link that no longer works sits in the middle of the window, under the title bar', async ({ page }) => {
+      await page.goto(`/app-link?code=${'x'.repeat(24)}&next=${encodeURIComponent('/swoop')}`);
+      await expect(page.getByRole('alert').filter({ hasText: 'that sign-in link is no longer valid' })).toBeVisible({
+        timeout: 20_000,
+      });
+      await expectCardCentred(page, `swoop-app-link-${platform}`);
+      await expectTitleBar(page, platform);
+    });
+
+    test('sign up, forgot password and two-factor setup: in the middle of the window, under the title bar; setup offers no passkey, and its backup codes select', async ({
+      page,
+    }) => {
+      const user = await seedDedicatedUser(dedicatedUser('member', `swoop-setup-${platform}-${Date.now()}`));
+      // the first two are for the signed out, so they come before the sign-in the third needs
+      for (const path of ['/register', '/forgot-password', '/setup-2fa']) {
+        if (path === '/setup-2fa') {
+          await appEmailSignIn(page, user);
+          await expect(page).not.toHaveURL(/\/login/, { timeout: 20_000 });
+        }
+        await page.goto(path);
+        await expect(page.locator('main > [data-slot="card"]')).toBeVisible();
+        await expectCardCentred(page, `swoop-${path.slice(1)}-${platform}`);
+        await expectTitleBar(page, platform);
+      }
+
+      await expect(page.getByRole('button', { name: /passkey/ })).toHaveCount(0);
+      await expect(page.getByText('passkeys cannot be created inside owlette swoop')).toBeVisible();
+
+      await page.getByRole('button', { name: /authenticator app/ }).click();
+      // the secret is minted with the qr code, so it is only there once the code shows
+      await expect(page.getByAltText(/2FA QR Code/i)).toBeVisible();
+      const secret = await page.locator('input[readonly]').inputValue();
+      await page.getByRole('button', { name: /continue to verification/i }).click();
+      if (authenticator.timeRemaining() <= 5) await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
+      await page.getByPlaceholder('000000').fill(authenticator.generate(secret));
+      await page.getByRole('button', { name: /verify & enable 2FA/i }).click();
+      await expect(page.getByText(/save backup codes/i)).toBeVisible();
+
+      // copy all codes falls back to "select the codes and copy": a press on a code selects it
+      const code = page.getByText(/^[0-9A-F]{8,}$/).first();
+      await code.scrollIntoViewIfNeeded();
+      const box = (await code.boundingBox())!;
+      expect(await dragsAt(page, box.x + box.width / 2, box.y + box.height / 2)).toBe(false);
+      await code.click({ clickCount: 3 });
+      expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(await code.textContent());
+    });
+  });
+}
+
+test.describe('in a browser — signed out', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('the two-factor screen offers a passkey, with no title bar and no toast', async ({ page }) => {
+    const user = await seedDedicatedUser(dedicatedUser('member', `browser-passkey-${Date.now()}`));
+    await getAdminDb().collection('users').doc(user.uid).set(
+      {
+        mfaEnrolled: true,
+        requiresMfaSetup: false,
+        mfaSecret: authenticator.generateSecret(),
+        mfaFactors: { totp: true, passkeys: 1 },
+      },
+      { merge: true },
+    );
+    await watchToasts(page);
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await expectNoToast(page);
+    await expect(page.getByTestId('swoop-window-strip')).toHaveCount(0);
+    await expect(page.locator('[data-tauri-drag-region]')).toHaveCount(0);
   });
 });
 
@@ -391,12 +595,12 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     await getAdminDb().doc(`sites/${STEP_SITE}/settings/swoop`).set({ enabled: true }, { merge: true });
   });
 
-  /** a totp admin of the step-up site, and its secret. */
-  async function seedTotpAdmin(tag: string) {
+  /** a totp admin of the step-up site, with `passkeys` passkeys beside it, and its secret. */
+  async function seedTotpAdmin(tag: string, passkeys = 0) {
     const user = await seedDedicatedUser(dedicatedUser('member', `${tag}-${SUFFIX}`));
     const secret = authenticator.generateSecret();
     await getAdminDb().collection('users').doc(user.uid).set(
-      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys: 0 } },
+      { mfaEnrolled: true, requiresMfaSetup: false, mfaSecret: secret, mfaFactors: { totp: true, passkeys } },
       { merge: true },
     );
     await grantMembership(STEP_SITE, user.uid, 'admin');
@@ -525,7 +729,8 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
     page,
     browser,
   }) => {
-    const { user, secret } = await seedTotpAdmin('stepup');
+    // the browser check stands in for a passkey, so the account holds one beside its authenticator
+    const { user, secret } = await seedTotpAdmin('stepup', 1);
     const spent = await browserSignIn(page, user, secret);
 
     // the app, signed in from that browser, carrying its second factor, passed
@@ -576,6 +781,106 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       expect(grant.request().postDataJSON()).not.toHaveProperty('mfaProof');
       expect(((await grant.json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
       await expect(dialog).toBeHidden();
+    } finally {
+      await app.close();
+    }
+  });
+
+  /** the app, signed in from `page`'s browser, its second factor dated past standing in for the step-up. */
+  async function openAgedApp(page: Page, browser: Browser) {
+    const code = await mintAppLink(page);
+    await getAdminDb()
+      .doc(`app_links/${crypto.createHash('sha256').update(code).digest('hex')}`)
+      .update({ mfaCompletedAt: Date.now() - 10 * 60 * 1000 });
+    const app = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
+    const appPage = await app.newPage();
+    await fakeBridge(appPage);
+    await appPage.goto(`/app-link?code=${code}&next=${encodeURIComponent(STEP_SESSION)}`);
+    await expect(appPage).toHaveURL(new RegExp(`${STEP_SESSION}$`), { timeout: 20_000 });
+    return { app, appPage };
+  }
+
+  test('an authenticator-only account enters its code in the app, with no browser check offered', async ({ page, browser }) => {
+    const { user, secret } = await seedTotpAdmin('stepup-totp');
+    const spent = await browserSignIn(page, user, secret);
+    const { app, appPage } = await openAgedApp(page, browser);
+    try {
+      const dialog = appPage.getByRole('dialog');
+      await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+      await expect(dialog.getByRole('button', { name: 'verify in your browser' })).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: 'use a passkey' })).toHaveCount(0);
+
+      const granted = appPage.waitForResponse(
+        (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 45_000 },
+      );
+      await dialog.getByLabel('authenticator code').fill(await freshTotp(appPage, secret, spent));
+      await dialog.getByRole('button', { name: 'confirm' }).click();
+      expect(((await (await granted).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
+      await expect(dialog).toBeHidden();
+    } finally {
+      await app.close();
+    }
+  });
+
+  test('a passkey-only account: the app signs in with a backup code and says how to use the passkey, and its step-up goes to the browser, never to an authenticator code', async ({
+    page,
+    browser,
+  }) => {
+    const user = await seedDedicatedUser(dedicatedUser('member', `stepup-passkey-${SUFFIX}`));
+    const hash = (code: string) => crypto.createHash('sha256').update(code).digest('hex');
+    await getAdminDb().collection('users').doc(user.uid).set(
+      {
+        mfaEnrolled: true,
+        requiresMfaSetup: false,
+        // the two sign-ins below spend two; the third is the one the dialog offers
+        mfaFactors: { totp: false, passkeys: 1, backupCodes: 3 },
+        backupCodes: [hash('ABCDEF12'), hash('BCDEF123'), hash('CDEF1234')],
+      },
+      { merge: true },
+    );
+    await grantMembership(STEP_SITE, user.uid, 'admin');
+
+    // signing in to the app by email: its two-factor screen
+    const emailApp = await browser.newContext({ baseURL: E2E_BASE_URL, storageState: { cookies: [], origins: [] }, userAgent: APP_UA });
+    try {
+      const appPage = await emailApp.newPage();
+      await fakeBridge(appPage);
+      await appEmailSignIn(appPage, user);
+      await expect(appPage).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+      await expect(
+        appPage.getByText('passkeys cannot be used inside owlette swoop — sign in with your browser to use yours.'),
+      ).toBeVisible();
+      await expect(appPage.getByRole('button', { name: /passkey/ })).toHaveCount(0);
+      await expect(appPage.getByPlaceholder('000000')).toHaveCount(0);
+      await expect(appPage.getByRole('button', { name: 'use authenticator app instead' })).toHaveCount(0);
+      await appPage.getByPlaceholder('backup code').fill('ABCDEF12');
+      await appPage.getByRole('button', { name: 'verify', exact: true }).click();
+      await expect(appPage).not.toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    } finally {
+      await emailApp.close();
+    }
+
+    // signing in in the browser: the passkey, or a backup code behind its link
+    await page.goto('/login');
+    await page.getByLabel(/email/i).fill(user.email);
+    await page.getByLabel(/password/i).first().fill(user.password);
+    await page.getByRole('button', { name: /sign in with email/i }).click();
+    await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
+    await expect(page.getByRole('button', { name: 'use a passkey' })).toBeVisible();
+    await page.getByRole('button', { name: 'use a backup code instead' }).click();
+    await page.getByPlaceholder('backup code').fill('BCDEF123');
+    await page.getByRole('button', { name: /^verify$/i }).click();
+    await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+
+    const { app, appPage } = await openAgedApp(page, browser);
+    try {
+      const dialog = appPage.getByRole('dialog');
+      await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+      await expect(dialog.getByRole('button', { name: 'verify in your browser' })).toBeVisible();
+      await expect(dialog.getByLabel('authenticator code')).toHaveCount(0);
+      await expect(dialog.getByText('or enter a code')).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: 'use a backup code instead' })).toBeVisible();
     } finally {
       await app.close();
     }

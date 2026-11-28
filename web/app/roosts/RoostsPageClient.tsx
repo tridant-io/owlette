@@ -37,6 +37,7 @@ import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { RoostDetailPanel } from '@/components/roost/RoostDetailPanel';
 import { RoostMobileSheet } from '@/components/roost/RoostMobileSheet';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 const DESCRIPTION_PREVIEW_CAP = 40;
 
@@ -58,6 +59,8 @@ export default function RoostsPageClient() {
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
   const roostGated = usePlanGated('roost', currentSiteId);
+  // a superadmin without a member row reads the roosts and changes none (adr 0021)
+  const memberLocked = useMemberLock(currentSiteId);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
@@ -335,6 +338,7 @@ export default function RoostsPageClient() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
+            {!memberLocked && (
             <UpgradeGate flag="roost" siteId={currentSiteId} variant="inline">
               <Button
                 onClick={() => {
@@ -347,6 +351,7 @@ export default function RoostsPageClient() {
                 new roost
               </Button>
             </UpgradeGate>
+            )}
           </div>
         </div>
 
@@ -379,7 +384,7 @@ export default function RoostsPageClient() {
               <EmptyStateUpload
                 machineCount={machines.length}
                 // the header already carries the upgrade note
-                onNewRoost={roostGated ? undefined : () => {
+                onNewRoost={roostGated || memberLocked ? undefined : () => {
                   setNewVersionContext(null);
                   setDistributionDialogOpen(true);
                 }}
@@ -566,7 +571,7 @@ export default function RoostsPageClient() {
                     machines={machines}
                     headingId="roost-detail-heading"
                     onClose={() => setSelectedRoostId(null)}
-                    onNewVersion={roostGated ? undefined : openNewVersionDialog}
+                    onNewVersion={roostGated || memberLocked ? undefined : openNewVersionDialog}
                     onResync={() => {
                       if (
                         displayRoost.currentVersionId &&
@@ -621,7 +626,7 @@ export default function RoostsPageClient() {
                 machines={machines}
                 headingId="roost-detail-heading"
                 onClose={() => setSelectedRoostId(null)}
-                onNewVersion={roostGated ? undefined : openNewVersionDialog}
+                onNewVersion={roostGated || memberLocked ? undefined : openNewVersionDialog}
                 onResync={() => {
                   if (
                     selectedRoost.currentVersionId &&

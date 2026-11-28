@@ -34,8 +34,12 @@ jest.mock('@/lib/machineMoves.server', () => ({
 }));
 
 const mockRemoveMachineData = jest.fn(async (..._a: unknown[]) => ({}));
+const mockRemoveMachineScreenshots = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('@/lib/actions/removeMachine.server', () => ({
   removeMachineData: (...a: unknown[]) => mockRemoveMachineData(...a),
+}));
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  deleteScreenshotsBestEffort: (...a: unknown[]) => mockRemoveMachineScreenshots(...a),
 }));
 
 const mockRecordPairing = jest.fn(async (..._a: unknown[]) => undefined);
@@ -235,7 +239,9 @@ describe('POST /api/agent/auth/move/confirm — success', () => {
     ]);
   });
 
-  it('cleans the source before it records the target', async () => {
+  // the screenshots stay with the source site, and their delete has no bound,
+  // so it is the last step: nothing the move needs waits on it
+  it('cleans the source, records the target, audits, and only then deletes the source screenshots', async () => {
     const order: string[] = [];
     mockRemoveMachineData.mockImplementationOnce(async () => {
       order.push('source-cleaned');
@@ -244,10 +250,17 @@ describe('POST /api/agent/auth/move/confirm — success', () => {
     mockRecordPairing.mockImplementationOnce(async () => {
       order.push('pairing-recorded');
     });
+    mockEmitMutation.mockImplementation(() => {
+      order.push('audited');
+    });
+    mockRemoveMachineScreenshots.mockImplementationOnce(async () => {
+      order.push('screenshots-deleted');
+    });
 
     await confirm();
 
-    expect(order).toEqual(['source-cleaned', 'pairing-recorded']);
+    expect(order).toEqual(['source-cleaned', 'pairing-recorded', 'audited', 'audited', 'audited', 'screenshots-deleted']);
+    expect(mockRemoveMachineScreenshots).toHaveBeenCalledWith('site-src', 'TEC-A4D', 'moveConfirm', expect.anything());
   });
 
   // the actor only labels the swoop sessions the cleanup ends; a requester who

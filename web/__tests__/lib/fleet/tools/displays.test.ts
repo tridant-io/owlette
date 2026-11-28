@@ -118,6 +118,24 @@ describe('get_saved_display_layout', () => {
     expect(result.note).toMatch(/no display layout/);
   });
 
+  it('reports auto-restore off with no layout stored, whatever the flag says', async () => {
+    // a machine cleared before clear turned auto-restore off: the flag on, no layout
+    docs.set('config/site-a/machines/kiosk-1', { displays: { autoRestore: { enabled: true, enabledBy: 'bob' } } });
+    const result = await layout('kiosk-1');
+    expect(result.assigned).toBeNull();
+    expect(result.autoRestore.enabled).toBe(false);
+  });
+
+  it('treats an empty monitor list as no layout', async () => {
+    docs.set('config/site-a/machines/kiosk-1', {
+      displays: { assigned: { monitors: [], capturedBy: 'bob' }, autoRestore: { enabled: true } },
+    });
+    const result = await layout('kiosk-1');
+    expect(result.assigned).toBeNull();
+    expect(result.note).toMatch(/no display layout/);
+    expect(result.autoRestore.enabled).toBe(false);
+  });
+
   it('returns only the display fields, none of the rest of the config document', async () => {
     docs.set('config/site-a/machines/kiosk-1', {
       processes: [{ name: 'secret-app', exe_path: 'C:/secret.exe' }],

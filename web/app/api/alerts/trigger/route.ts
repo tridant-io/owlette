@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
-import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
-import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
+import { ENV_LABEL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS, SEVERITY_COLORS, METRIC_LABELS, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
+import { alertEmailDelivery, type DigestEvent, type DigestSeverity } from '@/lib/alerts/digest.server';
+import { sendAlertEmailNow } from '@/lib/alerts/sendNow.server';
 import { fireWebhooks } from '@/lib/webhookSender.server';
 import { tapTalonMatcher } from '@/lib/talons/matcher.server';
 import { apiError } from '@/lib/apiErrorResponse';
@@ -13,7 +14,8 @@ import { sanitizeForLog } from '@/lib/logSanitize';
 
 /**
  * POST /api/alerts/trigger — internal endpoint the Cloud Function calls on a
- * breached threshold rule; sends email and/or webhook notifications.
+ * breached threshold rule; sends email (or queues it for each recipient's digest)
+ * and/or webhook notifications.
  *
  * Auth: `x-internal-secret` matching the hoot internal secret (env var
  * CORTEX_INTERNAL_SECRET — see lib/hootInternalSecret.ts).
@@ -49,66 +51,68 @@ export async function POST(request: NextRequest) {
 
     const db = getAdminDb();
     let emailSent = false;
+    let digested = 0;
     let webhooksFired = 0;
 
     if (channels.includes('email')) {
-      const resendClient = getResend();
-      if (resendClient) {
-        const recipients = await getSiteAlertRecipients(siteId, 'thresholdAlerts');
+      const recipients = await getSiteAlertRecipients(siteId, 'thresholdAlerts');
+
+      if (recipients.length > 0) {
         const tz = await getMachineTimezone(siteId, machineId);
         const baseUrl = publicOrigin(request);
         const siteLabel = await getSiteLabel(siteId);
+        const severityLabel = severity.toUpperCase();
+        const subject = safeEmailSubject(`[${severityLabel}] ${ruleName} — ${machineId}`);
+        // posted once per breach (the function stamps the rule's cooldown first), so no source key
+        const digestEvent: DigestEvent = {
+          sourceKey: null,
+          siteId,
+          machineId,
+          category: 'thresholdAlerts',
+          kind: 'threshold',
+          severity: (['info', 'warning', 'critical'].includes(severity) ? severity : 'warning') as DigestSeverity,
+          title: ruleName,
+          data: { metric, operator, threshold: Number(threshold), value: Number(value) },
+          at: Date.now(),
+        };
+        const delivery = alertEmailDelivery();
 
-        if (recipients.length > 0) {
-          const severityLabel = severity.toUpperCase();
-          const subject = safeEmailSubject(`[${severityLabel}] ${ruleName} — ${machineId}`);
+        for (const recipient of recipients) {
+          // Skip if user has muted this machine or their machine scope does not reach it
+          if (!recipientWantsMachine(recipient, machineId)) continue;
 
-          for (const recipient of recipients) {
-            // Skip if user has muted this machine or their machine scope does not reach it
-            if (!recipientWantsMachine(recipient, machineId)) continue;
-
-            try {
-              const unsubscribeUrl = recipient.userId !== 'fallback'
-                ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
-                : undefined;
-
-              const html = buildThresholdAlertEmail({
-                siteLabel,
-                machineId,
-                ruleName,
-                metric,
-                value,
-                threshold,
-                operator,
-                severity,
-                unsubscribeUrl,
-                timezone: tz,
-              });
-
-              const result = await resendClient.emails.send({
-                from: FROM_EMAIL,
-                to: [recipient.email],
-                ...(recipient.ccEmails.length > 0 ? { cc: recipient.ccEmails } : {}),
+          try {
+            const outcome = await delivery.deliver(recipient, [digestEvent], () =>
+              sendAlertEmailNow({
+                log: '[alerts/trigger]',
+                recipient,
+                baseUrl,
                 subject,
-                html,
-              });
-
-              if (result.error) {
-                console.error(`[alerts/trigger] Resend error for ${sanitizeForLog(recipient.email)}:`, result.error);
-              } else {
-                emailSent = true;
-              }
-            } catch (emailError) {
-              console.error(`[alerts/trigger] Failed to send to ${sanitizeForLog(recipient.email)}:`, emailError);
-            }
-          }
-
-          if (emailSent) {
-            console.log(`[alerts/trigger] Email sent to ${recipients.length} recipient(s) for ${sanitizeForLog(ruleName)}`);
+                html: (unsubscribeUrl) =>
+                  buildThresholdAlertEmail({
+                    siteLabel,
+                    machineId,
+                    ruleName,
+                    metric,
+                    value,
+                    threshold,
+                    operator,
+                    severity,
+                    unsubscribeUrl,
+                    timezone: tz,
+                  }),
+              }),
+            );
+            if (outcome === 'sent') emailSent = true;
+            else if (outcome === 'queued') digested++;
+          } catch (emailError) {
+            console.error(`[alerts/trigger] Failed to send to ${sanitizeForLog(recipient.email)}:`, emailError);
           }
         }
-      } else {
-        console.warn('[alerts/trigger] RESEND_API_KEY not configured — email skipped');
+
+        if (emailSent || digested > 0) {
+          console.log(`[alerts/trigger] Email handled for ${sanitizeForLog(ruleName)}: ${recipients.length} recipient(s), ${digested} queued for a digest`);
+        }
       }
     }
 
@@ -136,12 +140,13 @@ export async function POST(request: NextRequest) {
 
     console.log(
       `[alerts/trigger] Processed threshold alert: ${sanitizeForLog(ruleName)} on ${sanitizeForLog(machineId)} ` +
-      `(email=${emailSent}, webhooks=${webhooksFired})`
+      `(email=${emailSent}, digested=${digested}, webhooks=${webhooksFired})`
     );
 
     return NextResponse.json({
       success: true,
       emailSent,
+      digested,
       webhooksFired,
     });
   } catch (error: unknown) {

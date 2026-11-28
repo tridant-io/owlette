@@ -34,12 +34,6 @@ interface JoinSiteDialogProps {
   /** Closes the dialog. Any run still in flight is cancelled first. */
   onClose: () => void
   /**
-   * Called on success with the joined site's id — an id, not a label: the
-   * display name is unknown here until the service connects and publishes it.
-   * Treat it as a signal, never as copy.
-   */
-  onJoined: (siteId: string) => void
-  /**
    * Whether the service is currently reaching owlette. Read only after pairing,
    * to settle the "restarting" line onto a real outcome — an operator must never
    * be left watching a progress sentence that can no longer change.
@@ -82,7 +76,6 @@ export function JoinSiteDialog({
   wantsHoot,
   serviceConnected,
   onClose,
-  onJoined,
 }: JoinSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('starting')
   const [phrase, setPhrase] = useState<PairPhrase | null>(null)
@@ -103,11 +96,6 @@ export function JoinSiteDialog({
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const titleClicks = useRef(0)
   const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // In a ref so an inline parent callback can't re-run the effect and start a
-  // second pairing attempt.
-  const joined = useRef(onJoined)
-  joined.current = onJoined
 
   useEffect(() => {
     if (!open) return
@@ -146,10 +134,10 @@ export function JoinSiteDialog({
                 : // No restart needed: the running service re-reads the firebase
                   // config every second main-loop iteration and re-initialises
                   // its client on the false → true transition, so the machine
-                  // shows up within ~10s on its own.
-                  'paired — this machine will appear on your dashboard shortly',
+                  // shows up within ~10s on its own. The description already
+                  // says where it will appear, so this line only confirms.
+                  'paired',
             )
-            joined.current(event.value.siteId)
             return
           case 'error':
             settled = true

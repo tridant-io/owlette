@@ -14,7 +14,7 @@ these open for anyone who is an **owner** or **admin** of the whole site on at l
 
 | page | URL | what it does |
 |------|-----|--------------|
-| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, its billing, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
+| sites | `/admin/sites` | list your sites with how many machines each holds and which are offline, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, its billing, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
 | agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
 | swoop | `/admin/swoop` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for each site, see everyone in a swoop session right now, and end a session |
 | hoot | `/admin/hoot` | a site's [hoot](/docs/dashboard/hoot) approval setting and the machines that may act on others through [hoot mcp](/docs/agent/hoot-mcp) |
@@ -22,7 +22,7 @@ these open for anyone who is an **owner** or **admin** of the whole site on at l
 | alerts | `/admin/alerts` | manage a site's threshold alert rules. see [email alerts](/docs/dashboard/admin/email-alerts) |
 | webhooks | `/admin/webhooks` | manage a site's outbound [webhook](/docs/dashboard/admin/webhooks) subscriptions |
 
-**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop page leaves those sites out: neither its switches nor its live sessions list them.
+**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, with each site's machine count and, past ten sites, the header switcher's filter, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop page leaves those sites out: neither its switches nor its live sessions list them.
 
 ---
 
@@ -34,11 +34,11 @@ installers (`/admin/installers`), the template library (`/admin/presets`), users
 
 ## roles
 
-your role is set **per site**: the same person can own one site, administer a second and be a plain member of a third. the role on your owlette account grants nothing on a site by itself. the one exception is owlette's superadmins, who reach every site.
+your role is set **per site**: the same person can own one site, administer a second and be a plain member of a third. the role on your owlette account grants nothing on a site by itself. the one exception is owlette's superadmins, who reach every site. on a site where they are not a member they can read it, update owlette on its machines, start, stop, restart or kill a process, reboot a machine or stop a reboot, cancel a deployment, revoke a machine's token and kill or kick a swoop session, and nothing else: they can't see its screenshots or watch it through swoop, and every other change, from pairing a machine to its settings, waits until they are added. the dashboard hides or locks those controls for them, and a line under the header says "add yourself to this site to change it", with a link to their own site access on the users page. adding one to a site, as anyone is added, is recorded in the site's [audit log](/docs/cli/reference/audit-log), not in the activity log the logs page shows.
 
 | role on a site | what it can do there | admin panel |
 |------|-------------|-------------|
-| **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
+| **member** | read-only: view machines, capture screenshots, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the seven site-scoped pages above, with whole-site access |
 | **owner** | everything an admin can, plus deleting the site, transferring ownership and, once [plans](/docs/plans) apply, changing the site's billing. every site has exactly one | the seven site-scoped pages above |
 
@@ -72,7 +72,7 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | capability | member | admin | owner | scope |
 |-----------|:------:|:-----:|:-----:|-------|
 | read access to the site | yes | yes | yes | site membership |
-| `MACHINE_VIEW` (screenshots, live view) | yes | yes | yes | site, or your machines |
+| `MACHINE_VIEW` (screenshots) | yes | yes | yes | site, or your machines |
 | `MACHINE_REMOTE_VIEW` (watch swoop) | yes | yes | yes | site, or your machines |
 | `MACHINE_EXEC_COMMAND` | no | yes | yes | site, or your machines |
 | `MACHINE_REMOTE_CONTROL` (control swoop) | no | yes | yes | site, or your machines |
@@ -102,7 +102,7 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | `ISSUE_MANAGE` (issue triage status) | no | no | no | platform |
 | `GLOBAL_SETTINGS_WRITE` | no | no | no | platform |
 
-the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site. `SITE_BILLING_MANAGE` still stops at the owner: a site is billed to its owner, so nobody else can change its billing, a superadmin included.
+the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site they are a member of, and on the rest only the changes listed under [roles](#roles). `SITE_BILLING_MANAGE` still stops at the owner: a site is billed to its owner, so nobody else can change its billing, a superadmin included.
 
 **your machines**: someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site holds the five capabilities marked so only on those machines, at their role, and holds no other capability of that site, whatever their role. a machine outside their access answers `404`, the same answer whether it exists or not; anything that spans the site answers `403`. everyone else holds them on the whole site.
 

@@ -4,7 +4,7 @@ description: "swoop is the dashboard's remote desktop: a live, interactive view 
 keywords: ["remote control", "remote desktop", "screen sharing", "swoop settings", "turn on swoop", "swoop switch", "live sessions", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers", "blurry text", "jagged text", "pixelated", "sharp", "scaling", "smooth scaling", "display scaling", "dpi"]
 ---
 
-swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
+swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaced the old screenshot slideshow, live view, which is gone.
 
 two things are true of every session and worth knowing before you turn it on:
 
@@ -23,9 +23,9 @@ you can watch and control from any computer with a current browser, or from [owl
 |---|---|---|
 | Windows | yes | agent 4.0.0 or later. an NVIDIA GPU gives the best picture; without one see [below](#which-machines-can-host-it). some features need a later agent; see [agent versions](#agent-versions) |
 | macOS | yes | Apple silicon, macOS 15 or later, agent 4.1.0 or later, someone logged in, and the owlette app running. see [on macOS](#on-macos) |
-| Linux | no | the Linux package ships no streamer, so the agent reports `capabilities.swoop: 0`. the menu keeps live view and screenshot, but both fail on Linux for now |
+| Linux | no | the Linux package ships no streamer, so the agent reports `capabilities.swoop: 0`. the menu keeps screenshot, which fails on Linux for now |
 
-a machine whose agent cannot stream never offers swoop: its menu keeps the live-view entry instead. on Linux that entry, and **screenshot** beside it, still fail for now — a Linux machine cannot capture its screen yet (see [platform support](/docs/reference/platform-support#screens)).
+a machine whose agent cannot stream never offers swoop: its menu keeps **screenshot**. on Linux that fails for now — a Linux machine cannot capture its screen yet (see [platform support](/docs/reference/platform-support#screens)).
 
 the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one: it gives the best picture, in h264 or HEVC, at full size. without it, the streamer encodes through Media Foundation, which is part of Windows: on the GPU's own hardware encoder (Intel or AMD), in h264; or, with no hardware encoder at all — a virtual machine, say — on the CPU, in h264 at up to 1280x720 and 30 frames a second, on two threads, so the machine's own work keeps the rest. a bigger screen is scaled down to fit. a Windows N edition without the Media Feature Pack has no Media Foundation, so there a session needs an NVIDIA GPU; without one the streamer finds no encoder and exits, and the viewer reports that the machine did not answer. agents before 4.1.9 encode on NVENC only.
 
@@ -37,7 +37,7 @@ swoop is **off** until a site turns it on: that is the default, and it is per si
 
 a site owner or admin flips the site's **swoop** switch on admin panel → **swoop** (`/admin/swoop`): one table, with a row for each site you own or administer with access to the whole site. the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease. by default, owners and admins watch and control, and members watch unless the site's policy says they don't; a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) changes that for them.
 
-while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens the admin panel's swoop page, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime. **open swoop settings** in the swoop picker and the viewer opens them too.
+while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens the admin panel's swoop page, and tells a member that swoop is off and to ask a site owner or admin. both keep **screenshot** in the meantime. **open swoop settings** in the swoop picker and the viewer opens them too.
 
 the rest of the site policy is still API-only: `PATCH /api/sites/{siteId}/swoop-settings`, from a signed-in session as a site owner or admin; an API key is refused here too. a person's own swoop mode is set in the site's [members section](/docs/dashboard/admin/member-management#swoop-mode).
 
@@ -52,7 +52,7 @@ the rest of the site policy is still API-only: `PATCH /api/sites/{siteId}/swoop-
 
 ## starting a session
 
-the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, the old live-view entry stays instead: exactly one of the two is ever offered. someone who gets no swoop on the site sees live view too: their [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) is **no swoop**, or they are a member with no swoop mode of their own on a site that does not let members watch.
+the **swoop** entry appears in a machine's context menu once that machine's agent reports it can stream. on a machine that cannot, there is none. someone who gets no swoop on the site gets no entry either: their [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) is **no swoop**, they are a member with no swoop mode of their own on a site that does not let members watch, or they are one of owlette's superadmins and not a member of the site, whose screens are for its members.
 
 the viewer opens in a new browser tab at `/swoop/<siteId>/<machineId>`. the monitor icon beside **swoop** opens it in [owlette swoop](#owlette-swoop) instead. `/swoop` lists the machines of a site that your access covers as cards, each one click from a session, with the same icon. you can also get there from a terminal with [`owlette swoop`](/docs/cli/reference/swoop), which opens the page in owlette swoop when it is installed and in your browser otherwise; the session itself starts in the page.
 
@@ -79,11 +79,13 @@ a viewer that started watch-only stays watch-only. renewing its lease cannot pro
 
 ### the second factor
 
-control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, that covers that machine for 7 days, reconnects included. any of your factors answers it:
+control is gated on a **step-up**: a fresh second-factor check, prompted in the viewer, that covers that machine for 7 days, reconnects included. the prompt offers only the factors your account has, and any of them answers it:
 
-- a **passkey** (**use a passkey**), with user verification
-- an **authenticator code**, the 6 digits from your authenticator app
-- a **backup code** (**use a backup code instead**). each one works once
+- a **passkey** (**use a passkey**), with user verification, if you have one
+- an **authenticator code**, the 6 digits from your authenticator app, if you have one
+- a **backup code** (**use a backup code instead**), while you have one left. each one works once
+
+a code the check refuses, or too many tries, is said in the prompt, which stays open for the next try. cancelling it leaves **try again** on the viewer, which asks again for the same machine.
 
 a second factor you passed in the last five minutes, signing in here or in the browser that signs owlette swoop in, counts as the check for the machines you open in those five minutes, so the first machine after signing in does not ask again. approving owlette swoop from a browser that signed in earlier passes no second factor, so the app still asks.
 
@@ -91,7 +93,7 @@ the 7 days run from the check itself, and using the window does not extend it. t
 
 control is also tied to the networks you verified. every second factor you pass, signing in or at the prompt, verifies the network you passed it on for 7 days: your internet provider or mobile carrier, not your exact address. an open window counts only from a verified network, so a new network asks once, and passing the check adds it; a second factor passed at sign-in counts as the check only from the network it was passed on. watching is never affected, and the first time a network is verified you get an email naming it. this is rolling out: for now owlette only records which network each control request came from, and asks nothing new.
 
-in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of a passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so, and an authenticator or backup code in the app does the job.
+in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of your passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so. an authenticator code, or a backup code while you have one left, works in the app instead; with only a passkey, sign out of the app and sign in again with your browser, from a browser that asks for your passkey.
 
 an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, anyone in that state whose site role or swoop mode includes control cannot open the viewer to watch either. anyone else who may watch, an admin held to watch included, is never asked for a second factor: the viewer falls back to watching, which needs none.
 
@@ -233,7 +235,7 @@ the app keeps its own sign-in, apart from your browser's, and you rarely meet it
 
 - opened from the dashboard's monitor icon, it arrives signed in as you, carrying over your browser's second-factor check
 - started any other way, its sign-in page offers **sign in with your browser**: your browser opens owlette, you choose **approve** there, and the app signs in the same way. Google and passkey sign-in are not offered in the app, because neither works inside it; your email and password still do
-- taking control asks for the [second factor](#the-second-factor) as in a browser, with **verify in your browser** in place of a passkey
+- taking control asks for the [second factor](#the-second-factor) as in a browser, with **verify in your browser** in place of your passkey
 
 ### known gaps
 
@@ -370,6 +372,7 @@ a refused session arrives as a [problem](/docs/api/errors) with a `code`. the vi
 | `machine_excluded` | 403 | the machine is in `excludedMachineIds` | stops |
 | `capability_missing` | 403 | at the start of a session: your site role or swoop mode doesn't include what was asked. a control ask then asks to watch instead; a watch ask stops, and the viewer says **you can't use swoop on this site** | asks to watch instead, then stops |
 | `capability_missing` | 403 | the same, caught at a lease renewal: you lost control or access during the session | stops |
+| `members_only` | 403 | you are an owlette superadmin who is not a member of the site, at the start of a session or at a lease renewal ([why](/docs/api/errors#members_only)) | stops |
 | `members_may_not_watch` | 403 | you are a member with no swoop mode of your own, and `membersMayWatch` is off | stops |
 | `step_up_required` | 401 | control needs a second factor and no window is open, or your account has none enrolled | opens the second-factor prompt |
 | `machine_offline` | 409 | the machine is not connected | retries until it is |

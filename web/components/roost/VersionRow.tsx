@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { useMemberLock } from '@/hooks/useMemberLock';
 
 const MAX_DESCRIPTION_LENGTH = 500;
 
@@ -71,6 +72,8 @@ export function VersionRow({
   isCurrent,
   onChanged,
 }: VersionRowProps) {
+  // a superadmin without a member row reads it and changes nothing (adr 0021)
+  const memberLocked = useMemberLock(siteId);
   const [confirmRollbackOpen, setConfirmRollbackOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(version.description ?? '');
@@ -222,6 +225,14 @@ export function VersionRow({
             disabled={saving}
             className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-cyan resize-y disabled:opacity-50"
           />
+        ) : memberLocked ? (
+          <span className="block text-sm">
+            {version.description ? (
+              <span className="text-foreground select-text">{version.description}</span>
+            ) : (
+              <span className="text-muted-foreground italic">(no description)</span>
+            )}
+          </span>
         ) : (
           <button
             type="button"
@@ -264,6 +275,8 @@ export function VersionRow({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {!memberLocked && (
+            <>
           <DropdownMenuItem
             onClick={() => setEditing(true)}
             className="cursor-pointer"
@@ -280,6 +293,8 @@ export function VersionRow({
             rollback to this version
           </DropdownMenuItem>
           <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem onClick={handleCopyId} className="cursor-pointer">
             <Copy className="h-3.5 w-3.5 mr-2" />
             copy version id

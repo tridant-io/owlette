@@ -163,9 +163,7 @@ export const SITE_TIME_MIN_AGENT_VERSION = '3.2.3';
  * (api/agent/swoop/bundle) refuses an older agent with 403 `agent_too_old`.
  * The dashboard's entry is still gated by the machine's own
  * `capabilities.swoop == 1` heartbeat key, never by this string — a version
- * number cannot see an upgrade that is still waiting on a reboot, and the
- * dashboard must keep offering legacy live view to every machine that has no
- * swoop. 3.3.7 is the first installer that ships the streamer and
+ * number cannot see an upgrade that is still waiting on a reboot. 3.3.7 is the first installer that ships the streamer and
  * `websocket-client` (owner ruling, 2026-09-23); a release that changes the
  * bundle contract raises it.
  */

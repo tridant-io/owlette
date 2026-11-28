@@ -18,7 +18,7 @@ export function fromSwoopChoice(choice: SwoopChoice): SwoopMode | null {
 }
 
 const ROLE_HINTS: Record<AddableSiteMemberRole, string> = {
-  member: 'views machines, takes screenshots and opens live view. no commands and no configuration.',
+  member: 'views machines and takes screenshots. no commands and no configuration.',
   admin:
     'runs the site: everything a member can, plus commands and configuration, swoop settings, deployments, roosts, talons, webhooks, alert rules, pairing machines and managing members.',
 };

@@ -32,6 +32,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { issueBackupCodes, BACKUP_CODE_COUNT } from '@/lib/backupCodes.server';
+import { backupCodeCountUpdate } from '@/lib/mfaFactors.server';
 import {
   mfaProofErrorResponse,
   parseMfaProof,
@@ -64,9 +65,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     // Wholesale replacement, never a merge — a new sheet must retire the old one.
     // Deliberately does not touch `mfaEnrolled` / `requiresMfaSetup` (owned by
-    // lib/mfaFactors.server.ts): codes are recovery material, not a factor.
+    // lib/mfaFactors.server.ts): codes are recovery material, not a factor. Only
+    // their count rides along, so a second-factor screen knows there is one.
     await getAdminDb().collection('users').doc(userId).update({
       backupCodes: hashed,
+      ...backupCodeCountUpdate(hashed),
       backupCodesGeneratedAt: FieldValue.serverTimestamp(),
     });
 

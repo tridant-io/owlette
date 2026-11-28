@@ -80,7 +80,14 @@ import {
   type StallTick,
   type SwoopStallReport,
 } from '@/lib/swoop/video/stall';
-import type { SwoopStepUpAnswer, SwoopStepUpProof } from '@/lib/swoop/stepUp';
+import {
+  stepUpRefusal,
+  SwoopStepUpError,
+  type SwoopStepUpAnswer,
+  type SwoopStepUpProof,
+} from '@/lib/swoop/stepUp';
+// type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the client bundle
+import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import { smoothActive } from '@/hooks/useSwoopView';
 
@@ -174,10 +181,13 @@ export interface SwoopStats {
 
 export interface SwoopStepUpControls {
   required: boolean;
-  /** false when the account holds no second factor — it cannot take control. */
-  enrolled: boolean;
+  /** the account's second factors; none at all means it cannot take control. */
+  factors: MfaFactorInventory;
+  /** settles once the create it rides on answers; rejects with what to say in the dialog. */
   submitProof: (answer: SwoopStepUpAnswer) => Promise<void>;
   cancel: () => void;
+  /** the operator cancelled the step-up, and the page waits on them to try again. */
+  cancelled: boolean;
 }
 
 export interface UseSwoopSession {
@@ -216,6 +226,8 @@ export interface UseSwoopSession {
   noPath: SwoopNoPath | null;
   /** the machine said it is restarting or updating, and the reconnects are waiting for it. */
   restarting: boolean;
+  /** the api no longer takes this browser's sign-in, so the way on is signing in again. */
+  signedOut: boolean;
 }
 
 /** how a session's record says it ended: why, and whom a revocation was for. */
@@ -326,7 +338,6 @@ export function useSwoopSession(
 ): UseSwoopSession {
   const control = options?.control ?? true;
   const { mfaFactors, user } = useAuth();
-  const enrolled = mfaFactors.totp || mfaFactors.passkeys > 0;
   // a run's callbacks outlive the render they were made in, so they read whose page this is here
   const uid = user?.uid ?? null;
   const uidRef = useRef(uid);
@@ -343,6 +354,8 @@ export function useSwoopSession(
   const [refusal, setRefusal] = useState<string | null>(null);
   const [stats, setStats] = useState<SwoopStats>(EMPTY_STATS);
   const [stepUpRequired, setStepUpRequired] = useState(false);
+  const [stepUpCancelled, setStepUpCancelled] = useState(false);
+  const [signedOut, setSignedOut] = useState(false);
   const [session, setSession] = useState<SwoopSession | null>(null);
   const [noPath, setNoPath] = useState<SwoopNoPath | null>(null);
   // bumping this is what re-runs the sequence after a step-up ceremony.
@@ -385,21 +398,42 @@ export function useSwoopSession(
   const abandonRef = useRef<() => void>(() => {});
   const stoppedRef = useRef(false);
 
-  const submitProof = useCallback(async (answer: SwoopStepUpAnswer) => {
-    // a window opened in the browser is the server's to find: that retry sends no proof
-    proofRef.current = 'kind' in answer ? null : answer;
-    setStepUpRequired(false);
-    // exactly one retry, never a loop: a second `step_up_required` re-opens the
-    // dialog through the same path and the operator decides again.
-    setAttempt((n) => n + 1);
+  // the dialog's answer in flight: the create it rides on settles it, and the
+  // dialog stays open until then, so a refusal is said there and not on a page.
+  const answerRef = useRef<{ resolve: () => void; reject: (err: Error) => void } | null>(null);
+  const settleAnswer = useCallback((refusal?: string) => {
+    const answer = answerRef.current;
+    answerRef.current = null;
+    if (!answer) return;
+    if (refusal === undefined) answer.resolve();
+    else answer.reject(new SwoopStepUpError(refusal));
   }, []);
 
+  const submitProof = useCallback(
+    (answer: SwoopStepUpAnswer) =>
+      new Promise<void>((resolve, reject) => {
+        // a window opened in the browser is the server's to find: that retry sends no proof
+        proofRef.current = 'kind' in answer ? null : answer;
+        answerRef.current = { resolve, reject };
+        // exactly one retry, never a loop: a refused one is said in the dialog,
+        // and the operator decides again.
+        setAttempt((n) => n + 1);
+      }),
+    [],
+  );
+
   const cancel = useCallback(() => {
+    // a check still in flight is let go of: its run is torn down, so a create
+    // that hangs never holds the dialog open
+    const inFlight = answerRef.current !== null;
+    settleAnswer();
     stoppedRef.current = true;
     setRestarting(false);
     setStepUpRequired(false);
+    setStepUpCancelled(true);
     setState('ended');
-  }, []);
+    if (inFlight) setAttempt((n) => n + 1);
+  }, [settleAnswer]);
 
   /**
    * a fresh session to the same machine from the ended or failed state. the
@@ -420,6 +454,8 @@ export function useSwoopSession(
     proofRef.current = null;
     setError(null);
     setStepUpRequired(false);
+    setStepUpCancelled(false);
+    setSignedOut(false);
     // a stall recovery ends here: from now on the page is simply connecting.
     setStall({ recovery: 'none' });
     setState('connecting');
@@ -571,6 +607,10 @@ export function useSwoopSession(
     if (stoppedRef.current) return;
 
     let disposed = false;
+    // the step-up answer this run rides on: the dialog stays open, waiting on
+    // its create, and no other run may settle it.
+    const runAnswer = answerRef.current;
+    const answersDialog = () => runAnswer !== null && answerRef.current === runAnswer;
     let signaling: SwoopSignaling | null = null;
     let peer: SwoopPeer | null = null;
     let receiver: SwoopReceiver | null = null;
@@ -746,25 +786,33 @@ export function useSwoopSession(
       // attempt cannot have one.
       const proof = attempt > 0 ? proofRef.current : null;
       proofRef.current = null;
+      const answering = answersDialog();
       // no proof in hand: the last control session's continuity stands in,
       // and the server decides whether it still counts.
       const continuity = proof || !wantControl ? null : readContinuity(siteId, machineId);
 
-      const res = await fetch(
-        `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // the proof crosses exactly as the ceremony produced it.
-          body: JSON.stringify({
-            control: wantControl,
-            fp,
-            clientCaps,
-            ...(proof ? { mfaProof: proof } : {}),
-            ...(continuity ? { continuity } : {}),
-          }),
-        },
-      );
+      let res: Response;
+      try {
+        res = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // the proof crosses exactly as the ceremony produced it.
+            body: JSON.stringify({
+              control: wantControl,
+              fp,
+              clientCaps,
+              ...(proof ? { mfaProof: proof } : {}),
+              ...(continuity ? { continuity } : {}),
+            }),
+          },
+        );
+      } catch (err) {
+        if (!answering) throw err;
+        settleAnswer("that didn't go through. check your connection and try again.");
+        return null;
+      }
       if (!res.ok) {
         // one read of the body: every branch below wants both the code and the
         // sentence.
@@ -775,6 +823,17 @@ export function useSwoopSession(
           errors?: Record<string, unknown>;
         };
         const code = typeof problem.code === 'string' ? problem.code : null;
+        if (answering) {
+          // a refused answer is said in the dialog, which stays open for another
+          const refused = stepUpRefusal(res.status, problem);
+          if (refused !== null) {
+            settleAnswer(refused);
+            return null;
+          }
+          // any other refusal is the stage's to say, so the dialog steps aside
+          if (!disposed) setStepUpRequired(false);
+          settleAnswer();
+        }
         // a machine id the api refuses outright (a hostname with a dot, seeded
         // before the agent trimmed them) is fixed by pairing again, not by
         // the api's sentence about its format.
@@ -813,11 +872,18 @@ export function useSwoopSession(
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
         if (final && !disposed) setRefusal(code);
         // the operator has something to do, which a restart notice would hide.
-        if (res.status === 401 && !disposed) setRestarting(false);
+        if (res.status === 401 && !disposed) {
+          setRestarting(false);
+          setSignedOut(true);
+        }
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
+      if (answering) {
+        if (!disposed) setStepUpRequired(false);
+        settleAnswer();
+      }
       revokedRef.current = false;
       // a fresh token per session; a watch grant carries none and clears it.
       writeContinuity(siteId, machineId, body.data.continuity ?? null);
@@ -1308,16 +1374,21 @@ export function useSwoopSession(
     };
 
     void run().catch((err: unknown) => {
+      // a dialog still waiting on this run says so itself, and stays open
+      if (answersDialog()) {
+        settleAnswer("that didn't go through. try again.");
+        return;
+      }
       fail(err instanceof Error ? err.message : 'this swoop session could not be started.', true);
     });
 
     return () => teardown('unmounted');
-  }, [siteId, machineId, control, attempt, recordedEnd, scheduleReconnect, clearRetry, startNext, setStall]);
+  }, [siteId, machineId, control, attempt, recordedEnd, scheduleReconnect, clearRetry, startNext, setStall, settleAnswer]);
 
   const stepUp = useMemo<SwoopStepUpControls>(
-    () => ({ required: stepUpRequired, enrolled, submitProof, cancel }),
-    [stepUpRequired, enrolled, submitProof, cancel],
+    () => ({ required: stepUpRequired, factors: mfaFactors, submitProof, cancel, cancelled: stepUpCancelled }),
+    [stepUpRequired, mfaFactors, submitProof, cancel, stepUpCancelled],
   );
 
-  return { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting };
+  return { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting, signedOut };
 }

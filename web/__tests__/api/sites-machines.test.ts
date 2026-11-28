@@ -199,6 +199,7 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminStorage: () => ({ bucket: () => ({}) }),
 }));
 
+import { Timestamp } from 'firebase-admin/firestore';
 import { GET as listMachinesGET } from '@/app/api/sites/[siteId]/machines/route';
 import {
   DELETE as machineDELETE,
@@ -279,7 +280,7 @@ function seedMachine(machineId = MACHINE, data: Record<string, unknown> = {}): v
   putDoc(`sites/${SITE}/machines/${machineId}`, {
     name: machineId,
     online: true,
-    lastHeartbeat: 1_700_000_000_000,
+    lastHeartbeat: Timestamp.fromDate(new Date()),
     ...data,
   });
 }
@@ -513,6 +514,50 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
   });
 });
 
+// the settings tab and the api read `online` and `asleep` as the dashboard's
+// pill does: an agent that died without writing online: false leaves the flag
+// stuck true, and only the heartbeat age shows it is gone.
+describe('online and asleep on the machines list and detail', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const heartbeat = (ageMs: number) => Timestamp.fromDate(new Date(Date.now() - ageMs));
+  const listMachines = async () => {
+    const res = await listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    expect(res.status).toBe(200);
+    return (await res.json()).machines as Array<Record<string, unknown>>;
+  };
+  const detail = async (machineId: string) => {
+    const res = await machineGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}`),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, unknown>;
+  };
+
+  beforeEach(() => {
+    seedSite();
+    authedKey([siteScope('read')]);
+  });
+
+  it.each([
+    ['a fresh heartbeat', { online: true, lastHeartbeat: heartbeat(30_000) }, { online: true, asleep: false }],
+    ['a flag stuck true and an 18-day-old heartbeat', { online: true, lastHeartbeat: heartbeat(18 * DAY_MS) }, { online: false, asleep: false }],
+    ['a flag and no heartbeat', { online: true, lastHeartbeat: undefined }, { online: false, asleep: false }],
+    ['a fresh heartbeat in unix seconds', { online: true, lastHeartbeat: Math.floor(Date.now() / 1000) - 30 }, { online: true, asleep: false }],
+    ['a stale ISO heartbeat', { online: true, lastHeartbeat: new Date(Date.now() - DAY_MS).toISOString() }, { online: false, asleep: false }],
+    ['the agent marked it asleep', { online: true, asleep: true, lastHeartbeat: heartbeat(30_000) }, { online: false, asleep: true }],
+    ['online: false after asleep', { online: false, asleep: true, lastHeartbeat: heartbeat(30_000) }, { online: false, asleep: false }],
+  ])('reads %s', async (_label, doc, expected) => {
+    seedMachine(MACHINE, doc);
+
+    expect((await listMachines())[0]).toMatchObject(expected);
+    expect(await detail(MACHINE)).toMatchObject(expected);
+  });
+});
+
 describe('GET /api/sites/{siteId}/machines/{machineId}/deployments', () => {
   it('returns current per-roost deployment state for the machine', async () => {
     seedSite();
@@ -552,9 +597,14 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/deployments', () => {
 });
 
 describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
+  // a superadmin removes a machine only from a site they hold a member row on (adr 0021)
+  const superadminRow = () =>
+    putDoc(`sites/${SITE}/members/admin-uid`, { uid: 'admin-uid', role: 'member', status: 'active' });
+
   it('removes the machine, config, and command maps for a superadmin caller', async () => {
     seedSite();
     authedSession();
+    superadminRow();
     seedMachine();
     putDoc(`config/${SITE}/machines/${MACHINE}`, { machineId: MACHINE });
     putDoc(`sites/${SITE}/machines/${MACHINE}/commands/pending`, { cmd_a: {} });
@@ -586,6 +636,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
   it('requires Idempotency-Key for machine removal', async () => {
     seedSite();
     authedSession();
+    superadminRow();
     seedMachine();
 
     const res = await machineDELETE(
@@ -621,6 +672,7 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
   it('rejects API keys without machine write scope', async () => {
     seedSite();
     authedKey([machineScope('read')]);
+    superadminRow();
     seedMachine();
 
     const res = await machineDELETE(
